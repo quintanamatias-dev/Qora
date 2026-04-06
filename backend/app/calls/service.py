@@ -24,7 +24,7 @@ async def create_session(
     session: AsyncSession,
     *,
     client_id: str,
-    lead_id: str,
+    lead_id: str | None,
     elevenlabs_conversation_id: str | None = None,
     session_id: str | None = None,
 ) -> CallSession:

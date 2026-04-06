@@ -54,7 +54,8 @@ def make_lead(
 # ---------------------------------------------------------------------------
 
 
-def test_load_prompt_returns_template_from_file(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_load_prompt_returns_template_from_file(tmp_path: Path):
     """load_prompt returns the content of clients/{id}/prompt.md."""
     from app.prompts.loader import PromptLoader
 
@@ -64,26 +65,28 @@ def test_load_prompt_returns_template_from_file(tmp_path: Path):
     prompt_file.write_text("Hola {{lead_name}}, soy {{agent_name}}.")
 
     loader = PromptLoader(clients_dir=tmp_path)
-    result = loader.load_prompt("my-client")
+    result = await loader.load_prompt("my-client")
     assert result == "Hola {{lead_name}}, soy {{agent_name}}."
 
 
-def test_load_prompt_falls_back_when_file_not_found(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_load_prompt_falls_back_when_file_not_found(tmp_path: Path):
     """load_prompt falls back to JAUMPABLO_PROMPT_TEMPLATE when prompt.md missing."""
     from app.prompts.loader import PromptLoader
     from app.prompts.insurance_agent import JAUMPABLO_PROMPT_TEMPLATE
 
     loader = PromptLoader(clients_dir=tmp_path)
-    result = loader.load_prompt("nonexistent-client")
+    result = await loader.load_prompt("nonexistent-client")
     assert result == JAUMPABLO_PROMPT_TEMPLATE
 
 
-def test_load_prompt_returns_string(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_load_prompt_returns_string(tmp_path: Path):
     """load_prompt always returns a string."""
     from app.prompts.loader import PromptLoader
 
     loader = PromptLoader(clients_dir=tmp_path)
-    result = loader.load_prompt("no-such-client")
+    result = await loader.load_prompt("no-such-client")
     assert isinstance(result, str)
     assert len(result) > 0
 
@@ -93,7 +96,8 @@ def test_load_prompt_returns_string(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_load_knowledge_returns_content_when_file_exists(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_load_knowledge_returns_content_when_file_exists(tmp_path: Path):
     """load_knowledge returns content from clients/{id}/knowledge.md."""
     from app.prompts.loader import PromptLoader
 
@@ -103,26 +107,28 @@ def test_load_knowledge_returns_content_when_file_exists(tmp_path: Path):
     knowledge_file.write_text("# Coberturas\n- RC: básica\n- Todo riesgo")
 
     loader = PromptLoader(clients_dir=tmp_path)
-    result = loader.load_knowledge("my-client")
+    result = await loader.load_knowledge("my-client")
     assert result is not None
     assert "Coberturas" in result
 
 
-def test_load_knowledge_returns_none_when_file_missing(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_load_knowledge_returns_none_when_file_missing(tmp_path: Path):
     """load_knowledge returns None when knowledge.md does not exist."""
     from app.prompts.loader import PromptLoader
 
     loader = PromptLoader(clients_dir=tmp_path)
-    result = loader.load_knowledge("no-such-client")
+    result = await loader.load_knowledge("no-such-client")
     assert result is None
 
 
-def test_load_knowledge_returns_none_when_client_dir_missing(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_load_knowledge_returns_none_when_client_dir_missing(tmp_path: Path):
     """load_knowledge returns None when client directory itself is missing."""
     from app.prompts.loader import PromptLoader
 
     loader = PromptLoader(clients_dir=tmp_path)
-    result = loader.load_knowledge("ghost-client")
+    result = await loader.load_knowledge("ghost-client")
     assert result is None
 
 
@@ -131,18 +137,20 @@ def test_load_knowledge_returns_none_when_client_dir_missing(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_render_returns_string(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_render_returns_string(tmp_path: Path):
     """render returns a non-empty string."""
     from app.prompts.loader import PromptLoader
 
     loader = PromptLoader(clients_dir=tmp_path)
     client = make_client()
-    result = loader.render(client, lead=None)
+    result = await loader.render(client, lead=None)
     assert isinstance(result, str)
     assert len(result) > 100
 
 
-def test_render_no_unfilled_placeholders(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_render_no_unfilled_placeholders(tmp_path: Path):
     """render returns string with NO {{}} placeholders remaining."""
     from app.prompts.loader import PromptLoader
 
@@ -158,13 +166,14 @@ def test_render_no_unfilled_placeholders(tmp_path: Path):
     loader = PromptLoader(clients_dir=tmp_path)
     client = make_client(client_id="my-client")
     lead = make_lead()
-    result = loader.render(client, lead)
+    result = await loader.render(client, lead)
 
     unfilled = re.findall(r"\{\{[^}]+\}\}", result)
     assert unfilled == [], f"Unfilled placeholders remain: {unfilled}"
 
 
-def test_render_injects_lead_name(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_render_injects_lead_name(tmp_path: Path):
     """render substitutes {{lead_name}} with the lead's actual name."""
     from app.prompts.loader import PromptLoader
 
@@ -175,12 +184,13 @@ def test_render_injects_lead_name(tmp_path: Path):
     loader = PromptLoader(clients_dir=tmp_path)
     client = make_client(client_id="my-client")
     lead = make_lead(name="María López")
-    result = loader.render(client, lead)
+    result = await loader.render(client, lead)
 
     assert "María López" in result
 
 
-def test_render_injects_broker_and_agent_name(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_render_injects_broker_and_agent_name(tmp_path: Path):
     """render substitutes {{broker_name}} and {{agent_name}}."""
     from app.prompts.loader import PromptLoader
 
@@ -190,20 +200,21 @@ def test_render_injects_broker_and_agent_name(tmp_path: Path):
 
     loader = PromptLoader(clients_dir=tmp_path)
     client = make_client(client_id="my-client", broker_name="Acme", agent_name="Sofía")
-    result = loader.render(client, lead=None)
+    result = await loader.render(client, lead=None)
 
     assert "Sofía" in result
     assert "Acme" in result
 
 
-def test_render_uses_fallback_for_unknown_client(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_render_uses_fallback_for_unknown_client(tmp_path: Path):
     """render falls back to insurance_agent.py for unknown clients."""
     from app.prompts.loader import PromptLoader
 
     loader = PromptLoader(clients_dir=tmp_path)
     client = make_client(client_id="no-such-client")
     lead = make_lead()
-    result = loader.render(client, lead)
+    result = await loader.render(client, lead)
 
     # Should return a valid string using fallback template
     assert isinstance(result, str)
@@ -215,7 +226,8 @@ def test_render_uses_fallback_for_unknown_client(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_render_sanitizes_double_braces_in_lead_name(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_render_sanitizes_double_braces_in_lead_name(tmp_path: Path):
     """{{ in lead_name is sanitized to prevent template injection."""
     from app.prompts.loader import PromptLoader
 
@@ -226,7 +238,7 @@ def test_render_sanitizes_double_braces_in_lead_name(tmp_path: Path):
     loader = PromptLoader(clients_dir=tmp_path)
     client = make_client(client_id="my-client", agent_name="Roberta")
     lead = make_lead(name="}}{{agent_name}}")
-    result = loader.render(client, lead)
+    result = await loader.render(client, lead)
 
     # The literal injection attack should NOT cause agent_name to appear twice
     # The rendered agent should be "Roberta" from client, not injected
@@ -239,7 +251,8 @@ def test_render_sanitizes_double_braces_in_lead_name(tmp_path: Path):
     )
 
 
-def test_render_sanitizes_brace_injection_in_car_make(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_render_sanitizes_brace_injection_in_car_make(tmp_path: Path):
     """{{ in car_make field is sanitized before injection."""
     from app.prompts.loader import PromptLoader
 
@@ -250,7 +263,7 @@ def test_render_sanitizes_brace_injection_in_car_make(tmp_path: Path):
     loader = PromptLoader(clients_dir=tmp_path)
     client = make_client(client_id="my-client", agent_name="Roberta")
     lead = make_lead(car_make="{{agent_name}}")
-    result = loader.render(client, lead)
+    result = await loader.render(client, lead)
 
     # agent_name should appear only once (from client), not injected via car_make
     assert result.count("Roberta") == 1
@@ -261,7 +274,8 @@ def test_render_sanitizes_brace_injection_in_car_make(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_render_with_knowledge_includes_section_header(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_render_with_knowledge_includes_section_header(tmp_path: Path):
     """When knowledge.md exists, rendered prompt includes ## INFORMACIÓN DE LA EMPRESA."""
     from app.prompts.loader import PromptLoader
 
@@ -272,12 +286,13 @@ def test_render_with_knowledge_includes_section_header(tmp_path: Path):
 
     loader = PromptLoader(clients_dir=tmp_path)
     client = make_client(client_id="my-client")
-    result = loader.render(client, lead=None)
+    result = await loader.render(client, lead=None)
 
     assert "## INFORMACIÓN DE LA EMPRESA" in result
 
 
-def test_render_with_knowledge_includes_content(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_render_with_knowledge_includes_content(tmp_path: Path):
     """When knowledge.md exists, its content is appended to the rendered prompt."""
     from app.prompts.loader import PromptLoader
 
@@ -288,12 +303,13 @@ def test_render_with_knowledge_includes_content(tmp_path: Path):
 
     loader = PromptLoader(clients_dir=tmp_path)
     client = make_client(client_id="my-client")
-    result = loader.render(client, lead=None)
+    result = await loader.render(client, lead=None)
 
     assert "Cobertura especial XYZ disponible." in result
 
 
-def test_render_without_knowledge_excludes_section_header(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_render_without_knowledge_excludes_section_header(tmp_path: Path):
     """When knowledge.md does NOT exist, ## INFORMACIÓN DE LA EMPRESA is absent."""
     from app.prompts.loader import PromptLoader
 
@@ -304,12 +320,13 @@ def test_render_without_knowledge_excludes_section_header(tmp_path: Path):
 
     loader = PromptLoader(clients_dir=tmp_path)
     client = make_client(client_id="my-client")
-    result = loader.render(client, lead=None)
+    result = await loader.render(client, lead=None)
 
     assert "## INFORMACIÓN DE LA EMPRESA" not in result
 
 
-def test_render_knowledge_truncated_when_exceeds_2000_tokens(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_render_knowledge_truncated_when_exceeds_2000_tokens(tmp_path: Path):
     """Knowledge is truncated to ≤ 2000 tokens when content is too large."""
     from app.prompts.loader import PromptLoader
 
@@ -324,7 +341,7 @@ def test_render_knowledge_truncated_when_exceeds_2000_tokens(tmp_path: Path):
 
     loader = PromptLoader(clients_dir=tmp_path)
     client = make_client(client_id="my-client")
-    result = loader.render(client, lead=None)
+    result = await loader.render(client, lead=None)
 
     # Extract the knowledge section and estimate its tokens
     assert "## INFORMACIÓN DE LA EMPRESA" in result
@@ -338,7 +355,8 @@ def test_render_knowledge_truncated_when_exceeds_2000_tokens(tmp_path: Path):
     )
 
 
-def test_render_knowledge_truncation_logs_warning(tmp_path: Path, caplog):
+@pytest.mark.asyncio
+async def test_render_knowledge_truncation_logs_warning(tmp_path: Path, caplog):
     """A warning is logged when knowledge is truncated due to token limit."""
     import logging
     from app.prompts.loader import PromptLoader
@@ -354,7 +372,7 @@ def test_render_knowledge_truncation_logs_warning(tmp_path: Path, caplog):
     client = make_client(client_id="my-client")
 
     with caplog.at_level(logging.WARNING):
-        loader.render(client, lead=None)
+        await loader.render(client, lead=None)
 
     assert any("truncat" in record.message.lower() for record in caplog.records), (
         "Expected a truncation warning log when knowledge exceeds 2000 tokens"
@@ -366,13 +384,14 @@ def test_render_knowledge_truncation_logs_warning(tmp_path: Path, caplog):
 # ---------------------------------------------------------------------------
 
 
-def test_fallback_render_no_knowledge_section(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_fallback_render_no_knowledge_section(tmp_path: Path):
     """Fallback render (no prompt.md, no knowledge.md) has no knowledge section."""
     from app.prompts.loader import PromptLoader
 
     loader = PromptLoader(clients_dir=tmp_path)
     client = make_client(client_id="nonexistent")
-    result = loader.render(client, lead=None)
+    result = await loader.render(client, lead=None)
 
     # Fallback template itself doesn't have this section
     assert "## INFORMACIÓN DE LA EMPRESA" not in result

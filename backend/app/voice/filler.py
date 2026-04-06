@@ -61,8 +61,8 @@ class ConversationState:
 
     conversation_id: str
     client_id: str
-    lead_id: str
-    session_id: str  # call_sessions.id in SQLite
+    lead_id: str | None = None
+    session_id: str = ""  # call_sessions.id in SQLite
 
     last_filler: str | None = None  # for dedup — never repeat consecutively
     turn_count: int = 0
@@ -112,7 +112,7 @@ class SessionStore:
         self,
         conversation_id: str,
         client_id: str,
-        lead_id: str,
+        lead_id: str | None,
         session_id: str,
     ) -> ConversationState:
         """Create and store a new ConversationState.

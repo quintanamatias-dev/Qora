@@ -26,8 +26,8 @@ class CallSession(Base):
     client_id: Mapped[str] = mapped_column(
         String, ForeignKey("clients.id"), nullable=False, index=True
     )
-    lead_id: Mapped[str] = mapped_column(
-        String, ForeignKey("leads.id"), nullable=False, index=True
+    lead_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("leads.id"), nullable=True, index=True
     )
     elevenlabs_conversation_id: Mapped[str | None] = mapped_column(
         String, nullable=True

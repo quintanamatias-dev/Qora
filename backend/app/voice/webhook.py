@@ -15,6 +15,7 @@ Covers: CAP-1 SSE stream, CAP-4 tool calls, CAP-5 filler, CAP-6 tenant routing.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -227,76 +228,107 @@ async def _stream_llm_response(
     full_response_text = ""
     tool_executed = False
 
-    async for event in client.stream_events(
-        messages=messages,
-        tools=tools,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    ):
-        if isinstance(event, ContentDelta):
-            full_response_text += event.text
-            yield _sse_chunk(event.text)
-
-        elif isinstance(event, ToolCallDelta):
-            # Tool call detected — execute and continue
-            tool_executed = True
-            try:
-                args = json.loads(event.function_args) if event.function_args else {}
-            except json.JSONDecodeError:
-                args = {}
-
-            tool_result = await _execute_tool(
-                event.function_name,
-                args,
-                client_id=client_id,
-                lead_id=lead_id,
-            )
-
-            # Build follow-up messages with tool result
-            follow_up_messages = list(messages) + [
-                {
-                    "role": "assistant",
-                    "tool_calls": [
-                        {
-                            "id": event.tool_call_id or "call_001",
-                            "type": "function",
-                            "function": {
-                                "name": event.function_name,
-                                "arguments": event.function_args,
-                            },
-                        }
-                    ],
-                },
-                {
-                    "role": "tool",
-                    "tool_call_id": event.tool_call_id or "call_001",
-                    "content": json.dumps(tool_result),
-                },
-            ]
-
-            # Second GPT-4o call for final response
-            async for follow_event in client.stream_events(
-                messages=follow_up_messages,
-                tools=None,  # No more tool calls on follow-up
+    try:
+        async with asyncio.timeout(60.0):  # 60 second max per LLM turn
+            async for event in client.stream_events(
+                messages=messages,
+                tools=tools,
                 temperature=temperature,
                 max_tokens=max_tokens,
             ):
-                if isinstance(follow_event, ContentDelta):
-                    full_response_text += follow_event.text
-                    yield _sse_chunk(follow_event.text)
-                elif isinstance(follow_event, StreamDone):
-                    break
+                if isinstance(event, ContentDelta):
+                    full_response_text += event.text
+                    yield _sse_chunk(event.text)
 
-        elif isinstance(event, StreamDone):
-            break
+                elif isinstance(event, ToolCallDelta):
+                    # Tool call detected — execute and continue
+                    tool_executed = True
+                    try:
+                        args = (
+                            json.loads(event.function_args)
+                            if event.function_args
+                            else {}
+                        )
+                    except json.JSONDecodeError:
+                        args = {}
+
+                    tool_result = await _execute_tool(
+                        event.function_name,
+                        args,
+                        client_id=client_id,
+                        lead_id=lead_id,
+                    )
+
+                    # Build follow-up messages with tool result
+                    follow_up_messages = list(messages) + [
+                        {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": event.tool_call_id or "call_001",
+                                    "type": "function",
+                                    "function": {
+                                        "name": event.function_name,
+                                        "arguments": event.function_args,
+                                    },
+                                }
+                            ],
+                        },
+                        {
+                            "role": "tool",
+                            "tool_call_id": event.tool_call_id or "call_001",
+                            "content": json.dumps(tool_result),
+                        },
+                    ]
+
+                    # Second GPT-4o call for final response
+                    async for follow_event in client.stream_events(
+                        messages=follow_up_messages,
+                        tools=None,  # No more tool calls on follow-up
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    ):
+                        if isinstance(follow_event, ContentDelta):
+                            full_response_text += follow_event.text
+                            yield _sse_chunk(follow_event.text)
+                        elif isinstance(follow_event, StreamDone):
+                            break
+
+                elif isinstance(event, StreamDone):
+                    break
+    except asyncio.TimeoutError:
+        structlog.get_logger().warning(
+            "llm_stream_timeout",
+            session_id=session_id,
+        )
+        # Persist any partial transcript accumulated before the timeout
+        if session_id and full_response_text:
+            try:
+                async with db_session() as db:
+                    await add_transcript_turn(
+                        db, session_id, "agent", full_response_text
+                    )
+            except Exception as exc:  # noqa: BLE001
+                structlog.get_logger().warning(
+                    "transcript_persist_failed",
+                    error=str(exc),
+                    session_id=session_id,
+                )
+        yield _sse_stop()
+        yield _sse_done()
+        return
 
     # Persist transcript turn if we have a session
     if session_id and full_response_text:
         try:
             async with db_session() as db:
                 await add_transcript_turn(db, session_id, "agent", full_response_text)
-        except Exception:
-            pass  # Don't fail the SSE stream on persistence errors
+        except Exception as exc:  # noqa: BLE001
+            structlog.get_logger().warning(
+                "transcript_persist_failed",
+                error=str(exc),
+                session_id=session_id,
+            )
 
     # Update filler tracking
     if conversation_id:
@@ -396,7 +428,7 @@ async def custom_llm_webhook(body: CustomLLMRequest, request: Request):
     system_content = (
         client.system_prompt_override
         if client.system_prompt_override is not None
-        else PromptLoader().render(client, lead)
+        else await PromptLoader().render(client, lead)
     )
 
     # Build messages with system prompt prepended
@@ -441,7 +473,7 @@ async def custom_llm_webhook(body: CustomLLMRequest, request: Request):
             new_session = await create_session(
                 db,
                 client_id=client_id,
-                lead_id=lead_id or "unknown",
+                lead_id=lead_id or None,
             )
         new_session_id = (
             str(new_session.id) if hasattr(new_session, "id") else str(new_session)
@@ -449,7 +481,7 @@ async def custom_llm_webhook(body: CustomLLMRequest, request: Request):
         session_store.create(
             conversation_id=conversation_id,
             client_id=client_id,
-            lead_id=lead_id or "unknown",
+            lead_id=lead_id or None,
             session_id=new_session_id,
         )
         session_id = new_session_id

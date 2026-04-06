@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.leads.models import LeadStatus
 from app.leads.service import (
     InvalidTransitionError,
     create_lead,
@@ -64,7 +65,7 @@ class CreateLeadRequest(BaseModel):
 class PatchStatusRequest(BaseModel):
     """Request body for transitioning lead status."""
 
-    status: str
+    status: LeadStatus
 
 
 # ---------------------------------------------------------------------------

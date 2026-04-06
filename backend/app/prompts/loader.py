@@ -27,6 +27,7 @@ Covers: T1.2, T2.2, T2.3.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from pathlib import Path
@@ -71,7 +72,7 @@ class PromptLoader:
     # Public API
     # ------------------------------------------------------------------
 
-    def load_prompt(self, client_id: str) -> str:
+    async def load_prompt(self, client_id: str) -> str:
         """Return the prompt template for *client_id*.
 
         Loads ``clients/{client_id}/prompt.md``.  Falls back to
@@ -86,11 +87,11 @@ class PromptLoader:
         from app.prompts.insurance_agent import JAUMPABLO_PROMPT_TEMPLATE
 
         prompt_path = self.clients_dir / client_id / "prompt.md"
-        if prompt_path.exists():
-            return prompt_path.read_text(encoding="utf-8")
+        if await asyncio.to_thread(prompt_path.exists):
+            return await asyncio.to_thread(prompt_path.read_text, encoding="utf-8")
         return JAUMPABLO_PROMPT_TEMPLATE
 
-    def load_knowledge(self, client_id: str) -> str | None:
+    async def load_knowledge(self, client_id: str) -> str | None:
         """Return the knowledge base for *client_id*, or ``None``.
 
         Loads ``clients/{client_id}/knowledge.md``.  Returns ``None`` when the
@@ -103,11 +104,11 @@ class PromptLoader:
             Raw knowledge base content, or ``None`` if unavailable.
         """
         knowledge_path = self.clients_dir / client_id / "knowledge.md"
-        if knowledge_path.exists():
-            return knowledge_path.read_text(encoding="utf-8")
+        if await asyncio.to_thread(knowledge_path.exists):
+            return await asyncio.to_thread(knowledge_path.read_text, encoding="utf-8")
         return None
 
-    def render(
+    async def render(
         self,
         client: "Client",
         lead: "Lead | None" = None,
@@ -142,7 +143,7 @@ class PromptLoader:
         )
 
         client_id = client.id if client else "unknown"
-        template = self.load_prompt(client_id)
+        template = await self.load_prompt(client_id)
 
         # ------------------------------------------------------------------
         # Render the prompt body
@@ -156,7 +157,7 @@ class PromptLoader:
         # ------------------------------------------------------------------
         # Knowledge injection
         # ------------------------------------------------------------------
-        knowledge = self.load_knowledge(client_id)
+        knowledge = await self.load_knowledge(client_id)
         if knowledge:
             knowledge = self._truncate_knowledge(knowledge, client_id=client_id)
             prompt_body = f"{prompt_body}\n\n## INFORMACIÓN DE LA EMPRESA\n{knowledge}"

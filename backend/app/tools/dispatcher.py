@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.leads.service import get_lead
 from app.tools.get_lead_details import get_lead_details
 from app.tools.mark_not_interested import mark_not_interested
 from app.tools.register_interest import register_interest
@@ -48,10 +49,24 @@ async def dispatch_tool(
         return {"error": f"unknown_tool: {tool_name}"}
 
     # Resolve lead_id: prefer from tool_args, fall back to conversation context
-    effective_lead_id = tool_args.get("lead_id") or lead_id or ""
+    effective_lead_id = tool_args.get("lead_id") or lead_id or None
+
+    async def _validate_lead_scope(sess: AsyncSession) -> dict | None:
+        """Return an error dict if the lead does not belong to client_id, else None."""
+        if effective_lead_id and client_id:
+            lead = await get_lead(sess, effective_lead_id)
+            if lead and lead.client_id != client_id:
+                return {
+                    "error": "lead_not_found",
+                    "detail": "Lead does not belong to this client",
+                }
+        return None
 
     async def _call_with_session(sess: AsyncSession) -> dict:
         """Call the appropriate handler with the right arguments."""
+        scope_error = await _validate_lead_scope(sess)
+        if scope_error is not None:
+            return scope_error
         if tool_name == "get_lead_details":
             return await get_lead_details(
                 session=sess,
