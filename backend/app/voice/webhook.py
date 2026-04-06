@@ -93,8 +93,9 @@ class ElevenLabsExtraBody(BaseModel):
     """Extra fields injected by ElevenLabs into the custom LLM request.
 
     When using the ElevenLabs WebSocket native protocol (no SDK customLlmExtraBody),
-    ElevenLabs does NOT send this field. client_id defaults to None and is resolved
-    from the server-side DEFAULT_CLIENT_ID fallback in the endpoint.
+    ElevenLabs does NOT send this field. client_id defaults to None; the endpoint
+    tries elevenlabs_extra_body → top-level field → model_extra in that order and
+    returns HTTP 422 if client_id is not found in any source.
     """
 
     client_id: str | None = None

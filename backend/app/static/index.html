@@ -155,7 +155,7 @@
         select.innerHTML = '';
         clients.forEach(c => {
           const opt = document.createElement('option');
-          opt.value = c.id;
+          opt.value = c.client_id;
           opt.textContent = c.broker_name || c.name;
           opt.dataset.brokerName = c.broker_name || '';
           opt.dataset.agentName = c.agent_name || '';

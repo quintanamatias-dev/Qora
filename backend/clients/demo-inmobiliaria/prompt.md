@@ -8,7 +8,7 @@ DATOS DEL LEAD — LOS SABÉS DE ANTEMANO
 ════════════════════════════════════════════════════
 
 Nombre: {{lead_name}}
-Consulta: {{notes}}
+Consulta: consulta registrada en el sistema
 {{returning_caller_context}}
 Este lead dejó sus datos porque quería información sobre propiedades. Te está esperando.
 

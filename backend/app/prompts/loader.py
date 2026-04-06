@@ -46,7 +46,7 @@ MAX_KNOWLEDGE_TOKENS = 2000
 
 # Default clients directory — resolved relative to this file so it works
 # regardless of the working directory.  Tests override this via PromptLoader(clients_dir=…).
-_DEFAULT_CLIENTS_DIR = Path(__file__).resolve().parents[3] / "clients"
+_DEFAULT_CLIENTS_DIR = Path(__file__).resolve().parents[2] / "clients"
 
 
 # ---------------------------------------------------------------------------
