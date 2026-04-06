@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QORA — Demo</title>
+  <!-- Inline favicon — evita el 404 de favicon.ico -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙️</text></svg>">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0d0d0f; --surface: #16161a; --surface-2: #1e1e24;
+      --border: #2a2a35; --accent: #7b5ea7; --accent-glow: rgba(123,94,167,0.3);
+      --text: #e8e8f0; --text-muted: #888899;
+      --green: #4caf82; --red: #e05c5c;
+    }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 2rem 1rem; }
+    .logo { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 2rem; }
+    .logo-icon { width: 44px; height: 44px; background: linear-gradient(135deg, #7b5ea7 0%, #4a90d9 100%); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; }
+    .logo-text { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; }
+    .logo-subtitle { font-size: 0.75rem; color: var(--text-muted); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 1.5rem; width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 1rem; }
+    .card-title { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.25rem; }
+    .form-group { display: flex; flex-direction: column; gap: 0.4rem; }
+    label { font-size: 0.8rem; color: var(--text-muted); }
+    input, select { width: 100%; padding: 0.6rem 0.75rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 0.9rem; outline: none; transition: border-color 0.2s; }
+    input:focus, select:focus { border-color: var(--accent); }
+    .btn { padding: 0.75rem 1.5rem; border-radius: 10px; font-size: 0.9rem; font-weight: 600; cursor: pointer; border: none; transition: all 0.2s; width: 100%; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:not(:disabled):hover { background: #6b4e97; }
+    .btn-danger { background: var(--surface-2); color: var(--red); border: 1px solid var(--red); }
+    .btn-danger:not(:disabled):hover { background: rgba(224,92,92,0.1); }
+    .status-bar { display: flex; align-items: center; gap: 0.5rem; font-size: 0.82rem; color: var(--text-muted); padding: 0.5rem 0; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border); flex-shrink: 0; transition: background 0.3s; }
+    .dot.connected { background: var(--green); box-shadow: 0 0 8px var(--green); }
+    .dot.connecting { background: #f0a030; animation: pulse 1s infinite; }
+    .dot.error { background: var(--red); }
+    @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.4 } }
+    .transcript-container { margin-top: 1.5rem; width: 100%; max-width: 480px; }
+    .transcript-title { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.75rem; }
+    .transcript { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1rem; min-height: 180px; max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; }
+    .transcript:empty::after { content: 'La conversación aparecerá aquí...'; color: var(--text-muted); font-size: 0.85rem; opacity: 0.5; }
+    .message { display: flex; flex-direction: column; max-width: 85%; gap: 0.25rem; }
+    .message.user { align-self: flex-end; align-items: flex-end; }
+    .message.agent { align-self: flex-start; }
+    .bubble { padding: 0.6rem 0.9rem; border-radius: 12px; font-size: 0.875rem; line-height: 1.5; }
+    .message.user .bubble { background: #1e2a3a; color: #b8d4f0; border-radius: 12px 12px 2px 12px; }
+    .message.agent .bubble { background: #1e1e2e; border: 1px solid var(--border); border-radius: 12px 12px 12px 2px; }
+    .role-label { font-size: 0.7rem; color: var(--text-muted); letter-spacing: 0.05em; }
+    .lead-panel { margin-top: 1rem; width: 100%; max-width: 480px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1rem; }
+    .lead-panel-title { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.75rem; }
+    .lead-field { display: flex; justify-content: space-between; align-items: center; padding: 0.35rem 0; border-bottom: 1px solid var(--border); }
+    .lead-field:last-child { border-bottom: none; }
+    .lead-field-key { font-size: 0.78rem; color: var(--text-muted); }
+    .lead-field-value { font-size: 0.82rem; font-weight: 500; }
+    .status-badge { font-size: 0.72rem; padding: 0.2rem 0.6rem; border-radius: 20px; font-weight: 600; }
+    .status-new { background: #1a2035; color: #6080c0; }
+    .status-called { background: #1a2830; color: #4a9090; }
+    .status-interested { background: #1a2e1a; color: var(--green); }
+    .status-not_interested { background: #2e1a1a; color: var(--red); }
+    .status-follow_up { background: #2a2018; color: #d0a040; }
+    ::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+    #muteBtn:focus { outline: none; }
+    #muteBtn:not(:disabled):hover { border-color: var(--text-muted) !important; }
+    #muteBtn.muted { border-color: var(--red) !important; color: var(--red) !important; background: rgba(224,92,92,0.1) !important; }
+    #muteBtn:disabled { opacity: 0.35; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+
+  <div class="logo">
+    <div class="logo-icon">🎙️</div>
+    <div>
+      <div class="logo-text">QORA</div>
+      <div class="logo-subtitle">AI Call Center · Demo</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Configuración del Agente</div>
+    <div class="form-group">
+      <label>ElevenLabs Agent ID</label>
+      <input type="text" id="agentId" placeholder="agent_xxxxxxxxxxxxxxxxxx" value="agent_9401kn60tcbhfwhba7p7q3n5cfca" />
+    </div>
+    <div class="form-group">
+      <label>Lead a simular</label>
+      <select id="leadId">
+        <option value="lead-quintana-001">Carlos Méndez — Toyota Corolla 2021</option>
+        <option value="lead-quintana-002">María López — VW Golf 2019</option>
+        <option value="lead-quintana-003">Juan Pérez — Ford Ranger 2022</option>
+        <option value="lead-quintana-004">Ana García — Fiat Cronos 2023</option>
+        <option value="lead-quintana-005">Roberto Silva — Chevrolet Cruze 2020</option>
+      </select>
+    </div>
+    <button class="btn btn-primary" id="startBtn" onclick="startConversation()">🎙️ Iniciar Conversación</button>
+    <div style="display:flex;gap:0.5rem;align-items:stretch;">
+      <button class="btn btn-danger" id="stopBtn" onclick="stopConversation()" disabled style="flex:1;">⏹ Finalizar</button>
+      <button id="muteBtn" onclick="toggleMute()" disabled title="Silenciar micrófono"
+        style="flex:0 0 48px;height:48px;border-radius:10px;border:1px solid var(--border);background:var(--surface-2);color:var(--text-muted);font-size:1.1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.2s;">
+        🎙️
+      </button>
+    </div>
+    <div class="status-bar">
+      <div class="dot" id="statusDot"></div>
+      <span id="statusText">Listo — completá el Agent ID y dale a Iniciar</span>
+    </div>
+  </div>
+
+  <div class="transcript-container">
+    <div class="transcript-title">Transcript de la Conversación</div>
+    <div class="transcript" id="transcript"></div>
+  </div>
+
+  <div class="lead-panel">
+    <div class="lead-panel-title">Estado del Lead</div>
+    <div class="lead-field"><span class="lead-field-key">Estado</span><span id="leadStatus" class="status-badge status-new">new</span></div>
+    <div class="lead-field"><span class="lead-field-key">Nombre</span><span class="lead-field-value" id="leadName">—</span></div>
+    <div class="lead-field"><span class="lead-field-key">Auto</span><span class="lead-field-value" id="leadCar">—</span></div>
+    <div class="lead-field"><span class="lead-field-key">Última acción</span><span class="lead-field-value" id="lastAction">—</span></div>
+  </div>
+
+  <script>
+    // ── State ──────────────────────────────────────────────────────────────────
+    let ws = null;
+    let audioContext = null;
+    let mediaStream = null;
+    let scriptProcessor = null;
+    let audioQueue = [];
+    let isPlaying = false;
+    let pollInterval = null;
+    let isMuted = false;
+
+    // ── UI helpers ──────────────────────────────────────────────────────────────
+    function setStatus(text, state) {
+      document.getElementById('statusText').textContent = text;
+      const dot = document.getElementById('statusDot');
+      dot.className = 'dot' + (state ? ' ' + state : '');
+    }
+
+    function setButtons(active) {
+      document.getElementById('startBtn').disabled = active;
+      document.getElementById('stopBtn').disabled = !active;
+      const muteBtn = document.getElementById('muteBtn');
+      muteBtn.disabled = !active;
+      if (!active) {
+        isMuted = false;
+        muteBtn.textContent = '🎙️';
+        muteBtn.classList.remove('muted');
+      }
+    }
+
+    function addMessage(role, text) {
+      const c = document.getElementById('transcript');
+      const d = document.createElement('div');
+      d.className = 'message ' + role;
+      d.innerHTML = '<div class="role-label">' + (role === 'user' ? 'VOS' : 'JAUMPABLO') + '</div>' +
+                    '<div class="bubble">' + escapeHtml(text) + '</div>';
+      c.appendChild(d);
+      c.scrollTop = c.scrollHeight;
+    }
+
+    function escapeHtml(t) {
+      const d = document.createElement('div');
+      d.appendChild(document.createTextNode(t));
+      return d.innerHTML;
+    }
+
+    function toggleMute() {
+      isMuted = !isMuted;
+      if (mediaStream) {
+        mediaStream.getAudioTracks().forEach(track => { track.enabled = !isMuted; });
+      }
+      const btn = document.getElementById('muteBtn');
+      btn.textContent = isMuted ? '🔇' : '🎙️';
+      btn.classList.toggle('muted', isMuted);
+      setStatus(isMuted ? '🔇 Micrófono silenciado' : '✓ Conectado — hablá cuando quieras',
+                isMuted ? '' : 'connected');
+    }
+
+    function updateLeadPanel(lead) {
+      document.getElementById('leadStatus').textContent = lead.status;
+      document.getElementById('leadStatus').className = 'status-badge status-' + lead.status;
+      document.getElementById('leadName').textContent = lead.name || '—';
+      const car = [lead.car_make, lead.car_model, lead.car_year].filter(Boolean).join(' ');
+      document.getElementById('leadCar').textContent = car || '—';
+      document.getElementById('lastAction').textContent = lead.updated_at
+        ? new Date(lead.updated_at).toLocaleTimeString('es-AR') : '—';
+    }
+
+    // ── Audio: microphone capture ───────────────────────────────────────────────
+    async function startMicrophone() {
+      audioContext = new AudioContext({ sampleRate: 16000 });
+      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const source = audioContext.createMediaStreamSource(mediaStream);
+      scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+
+      scriptProcessor.onaudioprocess = (e) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN || isMuted) return;
+        const f32 = e.inputBuffer.getChannelData(0);
+        // Convert float32 to int16 PCM
+        const i16 = new Int16Array(f32.length);
+        for (let i = 0; i < f32.length; i++) {
+          i16[i] = Math.max(-32768, Math.min(32767, f32[i] * 32768));
+        }
+        const b64 = btoa(String.fromCharCode(...new Uint8Array(i16.buffer)));
+        ws.send(JSON.stringify({ user_audio_chunk: b64 }));
+      };
+
+      source.connect(scriptProcessor);
+      scriptProcessor.connect(audioContext.destination);
+    }
+
+    function stopMicrophone() {
+      if (scriptProcessor) { scriptProcessor.disconnect(); scriptProcessor = null; }
+      if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+      if (audioContext) { audioContext.close(); audioContext = null; }
+    }
+
+    // ── Audio: playback ─────────────────────────────────────────────────────────
+    async function playAudioChunk(base64pcm) {
+      audioQueue.push(base64pcm);
+      if (!isPlaying) drainQueue();
+    }
+
+    async function drainQueue() {
+      if (audioQueue.length === 0) { isPlaying = false; return; }
+      isPlaying = true;
+      const b64 = audioQueue.shift();
+
+      try {
+        // Decode base64 to ArrayBuffer
+        const raw = atob(b64);
+        const i16 = new Int16Array(raw.length / 2);
+        for (let i = 0; i < i16.length; i++) {
+          i16[i] = (raw.charCodeAt(i * 2)) | (raw.charCodeAt(i * 2 + 1) << 8);
+        }
+        // Convert int16 to float32
+        const f32 = new Float32Array(i16.length);
+        for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
+
+        if (!audioContext) audioContext = new AudioContext({ sampleRate: 16000 });
+        const buf = audioContext.createBuffer(1, f32.length, 16000);
+        buf.copyToChannel(f32, 0);
+        const src = audioContext.createBufferSource();
+        src.buffer = buf;
+        src.connect(audioContext.destination);
+        src.onended = drainQueue;
+        src.start();
+      } catch(e) {
+        console.warn('Audio playback error:', e);
+        drainQueue();
+      }
+    }
+
+    // ── WebSocket conversation ──────────────────────────────────────────────────
+    async function startConversation() {
+      const agentId = document.getElementById('agentId').value.trim();
+      const leadId = document.getElementById('leadId').value;
+
+      if (!agentId) { setStatus('⚠ Ingresá el Agent ID', 'error'); return; }
+
+      hideReconnectButton();
+      setStatus('Pidiendo acceso al micrófono...', 'connecting');
+      setButtons(true);
+      document.getElementById('transcript').innerHTML = '';
+
+      try {
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (e) {
+        setStatus('Micrófono denegado — habilitalo en el navegador', 'error');
+        setButtons(false);
+        return;
+      }
+
+      // Fetch lead data BEFORE connecting to populate dynamic variables
+      let lead = {};
+      try {
+        const r = await fetch('/api/v1/leads/' + leadId);
+        if (r.ok) { lead = await r.json(); updateLeadPanel(lead); }
+      } catch(e) { console.warn('Could not fetch lead:', e); }
+
+      setStatus('Conectando con ElevenLabs...', 'connecting');
+
+      // Direct WebSocket — no SDK, no LiveKit, no WebRTC
+      const wsUrl = 'wss://api.elevenlabs.io/v1/convai/conversation?agent_id=' + agentId;
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = async () => {
+        console.log('✅ WebSocket connected');
+
+        // Send dynamic_variables — ElevenLabs requires ALL variables used in the system prompt.
+        // NOTE: do NOT include custom_llm_extra_body — ElevenLabs rejects it (1008) unless
+        // the agent has that feature explicitly enabled in the dashboard.
+        ws.send(JSON.stringify({
+          type: 'conversation_initiation_client_data',
+          dynamic_variables: {
+            // Underscore-wrapped names match the agent's first-message template: {{_lead_name_}}
+            _lead_name_:         lead.name             || '',
+            lead_name:           lead.name             || '',
+            _car_make_:          lead.car_make          || '',
+            car_make:            lead.car_make          || '',
+            _car_model_:         lead.car_model         || '',
+            car_model:           lead.car_model         || '',
+            _car_year_:          String(lead.car_year   || ''),
+            car_year:            String(lead.car_year   || ''),
+            _current_insurance_: lead.current_insurance || 'no tiene',
+            current_insurance:   lead.current_insurance || 'no tiene',
+            _broker_name_:       'Quintana Seguros',
+            broker_name:         'Quintana Seguros',
+            _agent_name_:        'Jaumpablo',
+            agent_name:          'Jaumpablo'
+          }
+        }));
+
+        // Start microphone
+        await startMicrophone();
+        setStatus('✓ Conectado — hablá cuando quieras', 'connected');
+
+        // Poll lead status
+        pollInterval = setInterval(async () => {
+          try {
+            const r = await fetch('/api/v1/leads/' + leadId);
+            if (r.ok) updateLeadPanel(await r.json());
+          } catch(_) {}
+        }, 5000);
+      };
+
+      ws.onmessage = (event) => {
+        let msg;
+        try { msg = JSON.parse(event.data); } catch(e) { return; }
+
+        switch(msg.type) {
+          case 'conversation_initiation_metadata_event':
+          case 'conversation_initiation_metadata':
+            console.log('Conversation started:', msg);
+            break;
+
+          case 'user_transcript':
+            const userText = msg.user_transcription_event?.user_transcript;
+            if (userText) addMessage('user', userText);
+            break;
+
+          case 'agent_response':
+            const agentText = msg.agent_response_event?.agent_response;
+            if (agentText) addMessage('agent', agentText);
+            break;
+
+          case 'audio':
+            const audioB64 = msg.audio_event?.audio_base_64;
+            if (audioB64) playAudioChunk(audioB64);
+            break;
+
+          case 'ping':
+            ws.send(JSON.stringify({
+              type: 'pong',
+              event_id: msg.ping_event?.event_id
+            }));
+            break;
+
+          case 'interruption':
+            audioQueue = [];
+            isPlaying = false;
+            break;
+
+          default:
+            console.log('ElevenLabs event:', msg.type, msg);
+        }
+      };
+
+      ws.onerror = (e) => {
+        console.error('WebSocket error:', e);
+        setStatus('Error de conexión', 'error');
+        cleanup();
+      };
+
+      ws.onclose = (e) => {
+        console.log('WebSocket closed:', e.code, e.reason);
+        if (e.code === 1000) {
+          // Clean close — agent ended call normally
+          setStatus('✓ Conversación finalizada', '');
+        } else {
+          // Unexpected close (1006, network error, etc.)
+          setStatus('⚠ Se perdió la conexión', 'error');
+          showReconnectButton(agentId, leadId);
+        }
+        cleanup();
+      };
+    }
+
+    function stopConversation() {
+      if (ws) ws.close();
+      cleanup();
+    }
+
+    function cleanup() {
+      stopMicrophone();
+      audioQueue = [];
+      isPlaying = false;
+      if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+      setButtons(false);
+      ws = null;
+    }
+
+    function showReconnectButton(agentId, leadId) {
+      hideReconnectButton(); // remove any existing one first
+      const btn = document.createElement('button');
+      btn.id = 'reconnectBtn';
+      btn.className = 'btn btn-primary';
+      btn.textContent = '🔄 Reconectar';
+      btn.style.marginTop = '0.5rem';
+      btn.onclick = () => {
+        btn.remove();
+        // Restore the values in case they drifted
+        document.getElementById('agentId').value = agentId;
+        document.getElementById('leadId').value = leadId;
+        startConversation();
+      };
+      document.querySelector('.status-bar').appendChild(btn);
+    }
+
+    function hideReconnectButton() {
+      const existing = document.getElementById('reconnectBtn');
+      if (existing) existing.remove();
+    }
+  </script>
+</body>
+</html>

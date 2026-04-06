@@ -1,0 +1,140 @@
+"""QORA Voice — Conversation initiation webhook.
+
+ElevenLabs calls this endpoint before the agent speaks to get lead context.
+The system responds with dynamic_variables that get injected into the agent's
+system prompt via template variables.
+
+Covers: CAP-2 pre-call lead injection.
+"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel
+
+from app.core.database import get_session as db_session
+from app.leads.service import get_lead, transition_lead_status
+from app.leads.service import InvalidTransitionError
+from app.tenants.service import get_client
+
+router = APIRouter(prefix="/voice", tags=["voice"])
+
+
+# ---------------------------------------------------------------------------
+# Request / Response schemas
+# ---------------------------------------------------------------------------
+
+
+class InitiationRequest(BaseModel):
+    """ElevenLabs initiation webhook payload."""
+
+    client_id: str
+    lead_id: str | None = None
+    agent_id: str | None = None
+    called_number: str | None = None
+
+
+class InitiationResponse(BaseModel):
+    """Response expected by ElevenLabs with dynamic variables."""
+
+    type: str = "conversation_initiation_client_data"
+    dynamic_variables: dict[str, str | int]
+
+
+# ---------------------------------------------------------------------------
+# Endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.post("/initiation", response_model=InitiationResponse)
+async def initiation_webhook(
+    request: Request,
+    body: InitiationRequest | None = None,
+    client_id: str | None = Query(default=None),
+    lead_id: str | None = Query(default=None),
+) -> InitiationResponse:
+    """Handle ElevenLabs conversation initiation.
+
+    Supports two ways to pass client_id and lead_id:
+    1. JSON body (for Custom LLM webhook mode)
+    2. Query params ?client_id=...&lead_id=... (for widget mode)
+    """
+    # Resolve from query params first, fall back to body.
+    # Guard against FastAPI Query sentinel objects leaking in direct (test) calls.
+    _client_id_qp = client_id if isinstance(client_id, str) else None
+    _lead_id_qp = lead_id if isinstance(lead_id, str) else None
+
+    # Also support tests that pass InitiationRequest as positional `request` arg
+    _body_fallback = request if isinstance(request, InitiationRequest) else body
+
+    resolved_client_id = _client_id_qp or (
+        _body_fallback.client_id if _body_fallback else None
+    )
+    resolved_lead_id = _lead_id_qp or (
+        _body_fallback.lead_id if _body_fallback else None
+    )
+
+    if not resolved_client_id:
+        raise HTTPException(status_code=422, detail="client_id is required")
+
+    async with db_session() as session:
+        # Load tenant config (if client not found, raise 404)
+        client = await get_client(session, resolved_client_id)
+        if client is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "client not found"},
+            )
+
+        # Default empty variables (CAP-2: unknown lead still gets empty strings)
+        lead_name = ""
+        car_make = ""
+        car_model = ""
+        car_year = ""
+        current_insurance = ""
+        lead_status = ""
+        lead_notes = ""
+
+        # Load lead if lead_id was provided
+        if resolved_lead_id:
+            lead = await get_lead(session, resolved_lead_id)
+
+            if lead is not None:
+                lead_name = lead.name
+                car_make = lead.car_make or ""
+                car_model = lead.car_model or ""
+                car_year = str(lead.car_year) if lead.car_year else ""
+                current_insurance = lead.current_insurance or ""
+                lead_status = lead.status
+                lead_notes = lead.notes or ""
+
+                # Transition lead to 'called' (idempotent if already called)
+                try:
+                    await transition_lead_status(session, lead.id, "called")
+                except InvalidTransitionError:
+                    # Already in a state where 'called' isn't valid (e.g., interested)
+                    pass
+
+        return InitiationResponse(
+            dynamic_variables={
+                # Plain names — kept for backward-compat and existing tests
+                "lead_name": lead_name,
+                "car_make": car_make,
+                "car_model": car_model,
+                "car_year": car_year,
+                "current_insurance": current_insurance,
+                "lead_status": lead_status,
+                "lead_notes": lead_notes,
+                "broker_name": client.broker_name,
+                "agent_name": client.agent_name,
+                # Underscore-wrapped names required by the ElevenLabs agent template.
+                # The agent's first message is: ¡Hola! ¿Hablo con {{_lead_name_}}?
+                "_lead_name_": lead_name,
+                "_car_make_": car_make,
+                "_car_model_": car_model,
+                "_car_year_": car_year,
+                "_current_insurance_": current_insurance,
+                "_broker_name_": client.broker_name,
+                "_agent_name_": client.agent_name,
+            }
+        )
