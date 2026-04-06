@@ -47,7 +47,6 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     default_broker_name: str = "Quintana Seguros"
     default_agent_name: str = "Jaumpablo"
-    default_client_id: str = "quintana-seguros"
 
     model_config = {
         "env_file": ".env",

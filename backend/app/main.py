@@ -8,10 +8,11 @@ Initializes all QORA components during lifespan startup:
 5. Background TTL cleanup for in-memory session store
 
 Registers all domain routers:
+- /api/v1/clients (clients full CRUD router)
 - /api/v1/voice (initiation + custom-llm)
 - /api/v1/leads (leads admin/debug router)
 - /api/v1/calls (calls admin/debug router)
-- /api/v1/tenants (tenants admin/debug router)
+- /api/v1/tenants (backward-compat read-only alias)
 - /api/v1/health
 """
 
@@ -144,11 +145,13 @@ async def lifespan(app: FastAPI):
 
     # 4. Seed data
     async with db_module.async_session_factory() as session:
-        from app.tenants.service import seed_quintana
-        from app.leads.service import seed_leads
+        from app.tenants.service import seed_quintana, seed_demo_inmobiliaria
+        from app.leads.service import seed_leads, seed_inmobiliaria_leads
 
         await seed_quintana(session)
+        await seed_demo_inmobiliaria(session)
         await seed_leads(session)
+        await seed_inmobiliaria_leads(session)
         await session.commit()
 
     logger.info("seed_data_loaded")
@@ -216,12 +219,14 @@ async def health_check():
 
 # Register domain routers
 from app.tenants.router import router as tenants_router  # noqa: E402
+from app.clients.router import router as clients_router  # noqa: E402
 from app.leads.router import router as leads_router  # noqa: E402
 from app.calls.router import router as calls_router  # noqa: E402
 from app.voice.initiation import router as initiation_router  # noqa: E402
 from app.voice.webhook import router as webhook_router  # noqa: E402
 
-api_v1_router.include_router(tenants_router)
+api_v1_router.include_router(clients_router)  # /api/v1/clients — full CRUD
+api_v1_router.include_router(tenants_router)  # /api/v1/tenants — backward-compat alias
 api_v1_router.include_router(leads_router)
 api_v1_router.include_router(calls_router)
 api_v1_router.include_router(initiation_router)

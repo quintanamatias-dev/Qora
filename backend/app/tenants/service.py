@@ -125,3 +125,26 @@ async def seed_quintana(session: AsyncSession) -> None:
         max_tokens=300,
         tools_enabled='["get_lead_details","register_interest","mark_not_interested","schedule_followup"]',
     )
+
+
+async def seed_demo_inmobiliaria(session: AsyncSession) -> None:
+    """Seed the Propiedades del Sur (demo-inmobiliaria) client if it does not already exist.
+
+    Idempotent: calling this multiple times has no effect if the record exists.
+    """
+    existing = await get_client(session, "demo-inmobiliaria")
+    if existing is not None:
+        return  # Already seeded — skip
+
+    await create_client(
+        session,
+        id="demo-inmobiliaria",
+        name="demo-inmobiliaria",
+        broker_name="Propiedades del Sur",
+        agent_name="Valentina",
+        voice_id="pNInz6obpgDQGcFmaJgB",  # Adam — update when Valentina voice is configured
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools_enabled='["get_lead_details","register_interest","mark_not_interested","schedule_followup"]',
+    )

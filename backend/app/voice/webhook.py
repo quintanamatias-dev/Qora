@@ -35,7 +35,7 @@ from app.ai.llm_streaming import (
 from app.calls.service import add_transcript_turn, create_session
 from app.core.database import get_session as db_session
 from app.leads.service import get_lead
-from app.prompts.insurance_agent import render_system_prompt
+from app.prompts.loader import PromptLoader
 from app.tenants.service import get_client
 from app.voice.filler import FALLBACK_FILLER, select_filler, session_store
 
@@ -342,21 +342,18 @@ async def custom_llm_webhook(body: CustomLLMRequest, request: Request):
         else {},
     )
 
-    # Resolve client_id — try multiple sources, fall back to server default.
-    # When using native WebSocket (no SDK), ElevenLabs does NOT send client_id.
-    # We resolve it from: elevenlabs_extra_body → top-level field → server default.
-    try:
-        _default_client_id = request.app.state.settings.default_client_id
-    except AttributeError:
-        _default_client_id = "quintana-seguros"
-
+    # Resolve client_id — try multiple sources.
+    # Sources tried in order: elevenlabs_extra_body → top-level field → model_extra.
+    # If not found in any source, return 422 (client_id is required).
     extra = body.elevenlabs_extra_body
     client_id = (
-        extra.client_id
-        or body.client_id
-        or (body.model_extra or {}).get("client_id")
-        or _default_client_id
+        extra.client_id or body.client_id or (body.model_extra or {}).get("client_id")
     )
+    if not client_id:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "client_id is required"},
+        )
     lead_id = extra.lead_id or body.lead_id or (body.model_extra or {}).get("lead_id")
     conversation_id = (
         extra.conversation_id
@@ -398,7 +395,7 @@ async def custom_llm_webhook(body: CustomLLMRequest, request: Request):
     system_content = (
         client.system_prompt_override
         if client.system_prompt_override is not None
-        else render_system_prompt(client, lead)
+        else PromptLoader().render(client, lead)
     )
 
     # Build messages with system prompt prepended

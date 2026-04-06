@@ -194,11 +194,12 @@ async def test_custom_llm_stream_ends_with_done(app_client: AsyncClient):
 
 
 @respx.mock
-async def test_custom_llm_missing_client_id_uses_default(app_client: AsyncClient):
-    """Missing client_id uses server default (quintana-seguros) — not 422.
+async def test_custom_llm_missing_client_id_returns_422(app_client: AsyncClient):
+    """Missing client_id returns 422 — client_id is now required (CAP-6).
 
-    When ElevenLabs sends a request without client_id (native WebSocket flow),
-    the server falls back to DEFAULT_CLIENT_ID from settings.
+    The server no longer falls back to a default client_id. When client_id is
+    absent from all sources (elevenlabs_extra_body, top-level, model_extra),
+    the endpoint MUST return HTTP 422.
     """
     body = {
         "model": "gpt-4o",
@@ -208,10 +209,10 @@ async def test_custom_llm_missing_client_id_uses_default(app_client: AsyncClient
             "lead_id": "lead-quintana-001",
         },
     }
-    # Should succeed (200) because default client_id is used
-    # (or 404 if the mock DB doesn't have the default client — both are non-422)
     response = await app_client.post("/api/v1/voice/custom-llm", json=body)
-    assert response.status_code != 422
+    assert response.status_code == 422
+    data = response.json()
+    assert data["detail"]["error"] == "client_id is required"
 
 
 @respx.mock
@@ -225,13 +226,13 @@ async def test_custom_llm_unknown_client_returns_404(app_client: AsyncClient):
 
 
 @respx.mock
-async def test_custom_llm_without_extra_body_uses_default(
+async def test_custom_llm_without_extra_body_returns_422(
     app_client: AsyncClient,
 ):
-    """Request without elevenlabs_extra_body uses server default client_id.
+    """Request without client_id anywhere returns 422 (CAP-6).
 
-    ElevenLabs native WebSocket doesn't send elevenlabs_extra_body — the server
-    must handle this gracefully by using the default client_id from settings.
+    When no elevenlabs_extra_body, no top-level client_id, no model_extra —
+    the server MUST return 422 (client_id is required, no default fallback).
     """
     body = {
         "model": "gpt-4o",
@@ -239,7 +240,9 @@ async def test_custom_llm_without_extra_body_uses_default(
         "stream": True,
     }
     response = await app_client.post("/api/v1/voice/custom-llm", json=body)
-    assert response.status_code != 422
+    assert response.status_code == 422
+    data = response.json()
+    assert data["detail"]["error"] == "client_id is required"
 
 
 @respx.mock

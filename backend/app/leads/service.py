@@ -201,3 +201,71 @@ async def seed_leads(session: AsyncSession) -> None:
         session.add(lead)
 
     await session.flush()
+
+
+# ---------------------------------------------------------------------------
+# Seed data — 3 demo-inmobiliaria property inquiry leads
+# ---------------------------------------------------------------------------
+
+_SEED_INMOBILIARIA_LEADS = [
+    {
+        "id": "lead-inmobiliaria-001",
+        "name": "Lucía Fernández",
+        "phone": "+5411155601",
+        "car_make": None,
+        "car_model": None,
+        "car_year": None,
+        "current_insurance": None,
+        "status": LeadStatus.NEW.value,
+        "notes": "Consulta por departamento en Palermo, 2 ambientes",
+    },
+    {
+        "id": "lead-inmobiliaria-002",
+        "name": "Marcos Gutiérrez",
+        "phone": "+5411155602",
+        "car_make": None,
+        "car_model": None,
+        "car_year": None,
+        "current_insurance": None,
+        "status": LeadStatus.NEW.value,
+        "notes": "Interesado en casa en Tigre, jardín, pileta",
+    },
+    {
+        "id": "lead-inmobiliaria-003",
+        "name": "Sofía Ramírez",
+        "phone": "+5411155603",
+        "car_make": None,
+        "car_model": None,
+        "car_year": None,
+        "current_insurance": None,
+        "status": LeadStatus.NEW.value,
+        "notes": "Busca local comercial en Microcentro",
+    },
+]
+
+
+async def seed_inmobiliaria_leads(session: AsyncSession) -> None:
+    """Seed 3 test leads for demo-inmobiliaria if none exist.
+
+    Idempotent: skips if any leads already exist for the client.
+    """
+    existing = await list_leads_for_client(session, "demo-inmobiliaria")
+    if existing:
+        return  # Already seeded — skip
+
+    for data in _SEED_INMOBILIARIA_LEADS:
+        lead = Lead(
+            id=data["id"],
+            client_id="demo-inmobiliaria",
+            name=data["name"],
+            phone=data["phone"],
+            car_make=data.get("car_make"),
+            car_model=data.get("car_model"),
+            car_year=data.get("car_year"),
+            current_insurance=data.get("current_insurance"),
+            status=data["status"],
+            notes=data.get("notes"),
+        )
+        session.add(lead)
+
+    await session.flush()

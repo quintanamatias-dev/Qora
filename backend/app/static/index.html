@@ -84,13 +84,16 @@
       <input type="text" id="agentId" placeholder="agent_xxxxxxxxxxxxxxxxxx" value="agent_9401kn60tcbhfwhba7p7q3n5cfca" />
     </div>
     <div class="form-group">
+      <label>Cliente</label>
+      <select id="clientId" onchange="onClientChange()">
+        <option value="" disabled selected>Cargando clientes...</option>
+      </select>
+      <span id="clientError" style="display:none;color:var(--red);font-size:0.78rem;margin-top:0.2rem;"></span>
+    </div>
+    <div class="form-group">
       <label>Lead a simular</label>
       <select id="leadId">
-        <option value="lead-quintana-001">Carlos Méndez — Toyota Corolla 2021</option>
-        <option value="lead-quintana-002">María López — VW Golf 2019</option>
-        <option value="lead-quintana-003">Juan Pérez — Ford Ranger 2022</option>
-        <option value="lead-quintana-004">Ana García — Fiat Cronos 2023</option>
-        <option value="lead-quintana-005">Roberto Silva — Chevrolet Cruze 2020</option>
+        <option value="" disabled selected>Seleccioná un cliente primero...</option>
       </select>
     </div>
     <button class="btn btn-primary" id="startBtn" onclick="startConversation()">🎙️ Iniciar Conversación</button>
@@ -130,6 +133,104 @@
     let isPlaying = false;
     let pollInterval = null;
     let isMuted = false;
+    let currentClientData = {};  // holds the selected client's broker_name, agent_name, etc.
+
+    // ── Client/Lead loading ─────────────────────────────────────────────────────
+    async function loadClients() {
+      const select = document.getElementById('clientId');
+      const errSpan = document.getElementById('clientError');
+      select.innerHTML = '<option value="" disabled selected>Cargando...</option>';
+      errSpan.style.display = 'none';
+
+      try {
+        const r = await fetch('/api/v1/clients');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const clients = await r.json();
+
+        if (!clients || clients.length === 0) {
+          select.innerHTML = '<option value="" disabled selected>Sin clientes activos</option>';
+          return;
+        }
+
+        select.innerHTML = '';
+        clients.forEach(c => {
+          const opt = document.createElement('option');
+          opt.value = c.id;
+          opt.textContent = c.broker_name || c.name;
+          opt.dataset.brokerName = c.broker_name || '';
+          opt.dataset.agentName = c.agent_name || '';
+          select.appendChild(opt);
+        });
+
+        // Select first by default and trigger lead load
+        select.selectedIndex = 0;
+        await onClientChange();
+
+      } catch (e) {
+        console.error('Failed to load clients:', e);
+        errSpan.textContent = 'Error cargando clientes. Ingresá el ID manualmente:';
+        errSpan.style.display = 'block';
+        // Fallback: show a text input
+        select.innerHTML = '<option value="quintana-seguros">quintana-seguros (fallback)</option>';
+        await onClientChange();
+      }
+    }
+
+    async function onClientChange() {
+      const select = document.getElementById('clientId');
+      const selectedOpt = select.options[select.selectedIndex];
+      const clientId = select.value;
+
+      // Update cached client data from option dataset
+      currentClientData = {
+        broker_name: selectedOpt ? selectedOpt.dataset.brokerName || '' : '',
+        agent_name:  selectedOpt ? selectedOpt.dataset.agentName  || '' : '',
+      };
+
+      await loadLeadsForClient(clientId);
+    }
+
+    async function loadLeadsForClient(clientId) {
+      const leadSelect = document.getElementById('leadId');
+      if (!clientId) {
+        leadSelect.innerHTML = '<option value="" disabled selected>Seleccioná un cliente primero...</option>';
+        return;
+      }
+
+      leadSelect.innerHTML = '<option value="" disabled selected>Cargando leads...</option>';
+
+      try {
+        const r = await fetch('/api/v1/leads?client_id=' + encodeURIComponent(clientId));
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const leads = await r.json();
+
+        if (!leads || leads.length === 0) {
+          leadSelect.innerHTML = '<option value="" disabled selected>Sin leads para este cliente</option>';
+          return;
+        }
+
+        leadSelect.innerHTML = '';
+        leads.forEach(l => {
+          const opt = document.createElement('option');
+          opt.value = l.id;
+          // Build a descriptive label
+          const carInfo = [l.car_make, l.car_model, l.car_year].filter(Boolean).join(' ');
+          const desc = carInfo || (l.notes ? l.notes.substring(0, 40) : l.phone);
+          opt.textContent = l.name + (desc ? ' — ' + desc : '');
+          leadSelect.appendChild(opt);
+        });
+
+        // Select first by default
+        leadSelect.selectedIndex = 0;
+
+      } catch (e) {
+        console.error('Failed to load leads:', e);
+        leadSelect.innerHTML = '<option value="" disabled selected>Error cargando leads</option>';
+      }
+    }
+
+    // Load clients on page ready
+    document.addEventListener('DOMContentLoaded', loadClients);
 
     // ── UI helpers ──────────────────────────────────────────────────────────────
     function setStatus(text, state) {
@@ -257,8 +358,11 @@
     async function startConversation() {
       const agentId = document.getElementById('agentId').value.trim();
       const leadId = document.getElementById('leadId').value;
+      const selectedClientId = document.getElementById('clientId').value;
 
       if (!agentId) { setStatus('⚠ Ingresá el Agent ID', 'error'); return; }
+      if (!selectedClientId) { setStatus('⚠ Seleccioná un cliente', 'error'); return; }
+      if (!leadId) { setStatus('⚠ Seleccioná un lead', 'error'); return; }
 
       hideReconnectButton();
       setStatus('Pidiendo acceso al micrófono...', 'connecting');
@@ -306,10 +410,12 @@
             car_year:            String(lead.car_year   || ''),
             _current_insurance_: lead.current_insurance || 'no tiene',
             current_insurance:   lead.current_insurance || 'no tiene',
-            _broker_name_:       'Quintana Seguros',
-            broker_name:         'Quintana Seguros',
-            _agent_name_:        'Jaumpablo',
-            agent_name:          'Jaumpablo'
+            _broker_name_:       currentClientData.broker_name || '',
+            broker_name:         currentClientData.broker_name || '',
+            _agent_name_:        currentClientData.agent_name  || '',
+            agent_name:          currentClientData.agent_name  || '',
+            notes:               lead.notes            || '',
+            client_id:           selectedClientId,  // explicit client routing
           }
         }));
 
