@@ -22,15 +22,18 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, createMemoryRouter, RouterProvider } from 'react-router'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { routes } from './router'
 import { useClientId } from './hooks/use-client-id'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Helper: render at a given path using the PRODUCTION route config
+// DashboardPage now uses useMetrics (TanStack Query) so QueryClientProvider is required
 // ──────────────────────────────────────────────────────────────────────────────
 function renderAt(initialEntry: string) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
   const r = createMemoryRouter(routes, { initialEntries: [initialEntry] })
-  return render(<RouterProvider router={r} />)
+  return render(<QueryClientProvider client={qc}><RouterProvider router={r} /></QueryClientProvider>)
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

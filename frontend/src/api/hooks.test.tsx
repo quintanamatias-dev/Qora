@@ -259,6 +259,45 @@ describe('useClient', () => {
 })
 
 // ──────────────────────────────────────────────────────────────────────────────
+// useMetrics — staleTime (REQ: staleTime: 60_000 prevents hammering backend)
+// ──────────────────────────────────────────────────────────────────────────────
+describe('useMetrics — staleTime', () => {
+  it('does not refetch within 60s when data is already cached (staleTime = 60_000)', async () => {
+    let fetchCount = 0
+    vi.mocked(callsApi.fetchMetrics).mockImplementation(() => {
+      fetchCount++
+      return Promise.resolve({ ...mockMetrics, total_calls: fetchCount })
+    })
+
+    // Create a shared QueryClient to test staleTime across renders
+    const sharedQC = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 300_000 } },
+    })
+
+    function Comp() {
+      const { data, isLoading } = useMetrics('demo-client', { date_from: '2026-01-01', date_to: '2026-01-07' })
+      if (isLoading) return <span>loading</span>
+      return <span data-testid="fetch-count">{data?.total_calls}</span>
+    }
+
+    function SharedWrapper({ children }: { children: React.ReactNode }) {
+      return <QueryClientProvider client={sharedQC}>{children}</QueryClientProvider>
+    }
+
+    const { unmount } = render(<SharedWrapper><Comp /></SharedWrapper>)
+    await waitFor(() => expect(screen.getByTestId('fetch-count')).toHaveTextContent('1'))
+
+    // Unmount and remount — with staleTime=60_000, data is still fresh → no refetch
+    unmount()
+    render(<SharedWrapper><Comp /></SharedWrapper>)
+    await waitFor(() => expect(screen.getByTestId('fetch-count')).toBeInTheDocument())
+
+    // fetchCount must still be 1 — staleTime prevented the second fetch
+    expect(fetchCount).toBe(1)
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
 // useTranscript
 // ──────────────────────────────────────────────────────────────────────────────
 describe('useTranscript', () => {
