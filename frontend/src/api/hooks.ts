@@ -27,6 +27,7 @@ export function useMetrics(clientId: string, params?: MetricsParams) {
     queryKey: ['metrics', clientId, params],
     queryFn: () => fetchMetrics(clientId, params),
     enabled: Boolean(clientId),
+    staleTime: 60_000,
   })
 }
 

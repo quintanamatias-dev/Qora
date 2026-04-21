@@ -29,7 +29,8 @@ function createTestClient() {
 // REQ-6.4: Route rendering test
 // ──────────────────────────────────────────────────────────────────────────────
 describe('REQ-6.4 Route rendering', () => {
-  it('navigating to /app/demo-client/dashboard renders DashboardPage placeholder', () => {
+  it('navigating to /app/demo-client/dashboard renders DashboardPage', () => {
+    const qc = createTestClient()
     const r = createMemoryRouter(
       [
         {
@@ -40,13 +41,14 @@ describe('REQ-6.4 Route rendering', () => {
       ],
       { initialEntries: ['/app/demo-client/dashboard'] }
     )
-    render(<RouterProvider router={r} />)
+    render(<QueryClientProvider client={qc}><RouterProvider router={r} /></QueryClientProvider>)
 
     expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument()
     expect(screen.getByText('demo-client')).toBeInTheDocument()
   })
 
   it('navigating to /app/test-client/dashboard renders DashboardPage with test-client', () => {
+    const qc = createTestClient()
     const r = createMemoryRouter(
       [
         {
@@ -57,7 +59,7 @@ describe('REQ-6.4 Route rendering', () => {
       ],
       { initialEntries: ['/app/test-client/dashboard'] }
     )
-    render(<RouterProvider router={r} />)
+    render(<QueryClientProvider client={qc}><RouterProvider router={r} /></QueryClientProvider>)
     expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument()
     expect(screen.getByText('test-client')).toBeInTheDocument()
   })
@@ -187,6 +189,7 @@ describe('REQ-6.3 App shell smoke tests', () => {
   })
 
   it('DashboardPage renders heading with client context', () => {
+    const qc = createTestClient()
     const r = createMemoryRouter(
       [
         {
@@ -197,7 +200,7 @@ describe('REQ-6.3 App shell smoke tests', () => {
       ],
       { initialEntries: ['/app/demo-client/dashboard'] }
     )
-    render(<RouterProvider router={r} />)
+    render(<QueryClientProvider client={qc}><RouterProvider router={r} /></QueryClientProvider>)
     expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument()
   })
 })
