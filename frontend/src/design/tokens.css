@@ -1,0 +1,57 @@
+@theme {
+  /* ============================================================
+   * Surface Hierarchy — Obsidian base palette
+   * ============================================================ */
+  --color-background: #0c1324;
+  --color-surface-container-lowest: #070d1f;
+  --color-surface-container-low: #151b2d;
+  --color-surface-container: #191f31;
+  --color-surface-container-highest: #222840;
+  --color-surface-bright: #33394c;
+
+  /* ============================================================
+   * Primary Accents — Technical Emerald & Electric Violet
+   * ============================================================ */
+  --color-primary: #4edea3;
+  --color-primary-container: #10b981;
+  --color-on-primary: #003824;
+  --color-secondary: #d0bcff;
+  --color-secondary-container: #4a3f6b;
+  --color-on-secondary: #1c0d3b;
+
+  /* ============================================================
+   * Text / On-Surface Tokens
+   * ============================================================ */
+  --color-on-surface: #e2e8f0;
+  --color-on-surface-variant: #bbcabf;
+  --color-outline: #86948a;
+  --color-outline-variant: #3c4a42;
+
+  /* ============================================================
+   * Status Colors
+   * ============================================================ */
+  --color-success: #4edea3;
+  --color-warning: #f59e0b;
+  --color-error: #f87171;
+  --color-info: #d0bcff;
+
+  /* ============================================================
+   * Typography
+   * ============================================================ */
+  --font-display: 'Manrope', ui-sans-serif, system-ui, sans-serif;
+  --font-body: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
+
+  /* ============================================================
+   * Border Radius (max 4px — pills prohibited)
+   * ============================================================ */
+  --radius-DEFAULT: 0.25rem;
+  --radius-sm: 0.125rem;
+  --radius-md: 0.25rem;
+
+  /* ============================================================
+   * Spacing
+   * ============================================================ */
+  --spacing-sidebar: 14rem;
+  --spacing-topbar: 3.5rem;
+}
