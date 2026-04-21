@@ -946,3 +946,439 @@ async def test_both_routes_accept_tools_array(
     assert (
         "[DONE]" in response.text
     ), f"Expected [DONE] in SSE stream from {url}, got: {response.text[:300]}"
+
+
+# ---------------------------------------------------------------------------
+# CAP-2: Tool call persistence (transcript turns for tool_call + tool_result)
+# ---------------------------------------------------------------------------
+
+
+def _build_tool_call_stream_with_invalid_args() -> bytes:
+    """Build SSE stream with a tool call that has unparseable JSON args.
+
+    NOTE: The stream MUST end with finish_reason="tool_calls" as the LAST chunk
+    (no content after it) so that OpenAIStreamingClient.stream_events() correctly
+    yields ToolCallDelta. The follow-up content goes in a separate second respx response.
+    """
+    tool_call_chunk = _make_sse_chunk(
+        tool_calls=[
+            {
+                "index": 0,
+                "id": "call_bad_args",
+                "type": "function",
+                "function": {
+                    "name": "get_lead_details",
+                    "arguments": "NOT_VALID_JSON{{{",
+                },
+            }
+        ]
+    )
+    # MUST be the last chunk — no content deltas after this
+    finish_tool = _make_sse_chunk(finish_reason="tool_calls")
+    done = _make_sse_done()
+    return tool_call_chunk + finish_tool + done
+
+
+def _build_proper_tool_call_stream() -> bytes:
+    """Build a proper tool call SSE stream that ends with finish_reason=tool_calls.
+
+    The OpenAIStreamingClient yields ToolCallDelta only when finish_reason="tool_calls"
+    is the LAST finish_reason seen. This stream has no content deltas after the tool call.
+    The follow-up content must come in a separate second respx response.
+    """
+    tool_call_chunk = _make_sse_chunk(
+        tool_calls=[
+            {
+                "index": 0,
+                "id": "call_abc123",
+                "type": "function",
+                "function": {
+                    "name": "get_lead_details",
+                    "arguments": '{"lead_id": "lead-quintana-001"}',
+                },
+            }
+        ]
+    )
+    # MUST be the last chunk — this makes finish_reason="tool_calls" the final value
+    finish_tool = _make_sse_chunk(finish_reason="tool_calls")
+    done = _make_sse_done()
+    return tool_call_chunk + finish_tool + done
+
+
+@respx.mock
+async def test_tool_call_persists_tool_call_and_tool_result_turns(app_client):
+    """After a tool call, transcript must have tool_call and tool_result turns in order.
+
+    CAP-2 spec: tool_call + tool_result persisted BEFORE the final agent turn.
+    """
+    from app.calls.service import get_transcript
+    from app.voice.filler import session_store
+
+    conv_id = "conv-cap2-tool-turns-001"
+
+    # First OpenAI call: proper tool call stream ending with finish_reason="tool_calls"
+    tool_stream = _build_proper_tool_call_stream()
+    # Second call (follow-up after tool result) returns the final response
+    follow_up_stream = _build_simple_stream("Acá tenés los detalles.")
+
+    call_count = 0
+
+    def _openai_side_effect(request):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return Response(
+                200,
+                content=tool_stream,
+                headers={"content-type": "text/event-stream"},
+            )
+        return Response(
+            200,
+            content=follow_up_stream,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=_openai_side_effect
+    )
+
+    body = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Dame info del lead"}],
+        "stream": True,
+        "elevenlabs_extra_body": {
+            "client_id": "quintana-seguros",
+            "lead_id": "lead-quintana-001",
+            "conversation_id": conv_id,
+        },
+    }
+
+    # Import app db module to inspect transcript afterward
+    from app.core import database as db_module
+
+    response = await app_client.post("/api/v1/voice/custom-llm", json=body)
+    assert response.status_code == 200
+
+    # Look up the session_id from session_store to query transcript
+    conv_state = session_store.get(("quintana-seguros", conv_id))
+    assert conv_state is not None, "Session must be created in session_store"
+    session_id = conv_state.session_id
+
+    assert db_module.async_session_factory is not None
+    async with db_module.async_session_factory() as sess:
+        turns = await get_transcript(sess, session_id)
+
+    roles = [t.role for t in turns]
+
+    # Must have at least tool_call, tool_result, and agent turns
+    assert "tool_call" in roles, (
+        "A tool_call turn must be persisted after tool invocation — "
+        "CAP-2 spec: 'Tool call and result captured'"
+    )
+    assert "tool_result" in roles, (
+        "A tool_result turn must be persisted after tool execution — "
+        "CAP-2 spec: 'Tool call and result captured'"
+    )
+
+    # tool_call must appear BEFORE tool_result
+    tc_idx = roles.index("tool_call")
+    tr_idx = roles.index("tool_result")
+    assert tc_idx < tr_idx, "tool_call turn must precede tool_result turn in transcript"
+
+    # Both tool turns must appear BEFORE the final clean agent turn (filler_detected=0)
+    # Note: there may also be a filler agent turn (filler_detected=1) — we want the CLEAN one
+    clean_agent_turns = [t for t in turns if t.role == "agent" and not t.filler_detected]
+    assert len(clean_agent_turns) >= 1, (
+        "At least one clean agent turn (filler_detected=0) must exist after tool call"
+    )
+    # Find actual clean agent turn index
+    clean_agent_list_idx = next(
+        i for i, t in enumerate(turns) if t.role == "agent" and not t.filler_detected
+    )
+    assert tr_idx < clean_agent_list_idx, (
+        "tool_result turn must appear before the final clean agent turn — "
+        "CAP-2 spec: 'Tool call turns appear before agent response turn'"
+    )
+
+
+@respx.mock
+async def test_tool_call_invalid_json_args_fallback_to_empty_dict(app_client):
+    """Tool call with invalid JSON args falls back to {} and still persists both turns.
+
+    CAP-2 spec: 'Tool call with invalid JSON args still persists'
+    """
+    import json as _json
+    from app.calls.service import get_transcript
+    from app.voice.filler import session_store
+
+    conv_id = "conv-cap2-invalid-args-001"
+
+    invalid_args_stream = _build_tool_call_stream_with_invalid_args()
+    follow_up_stream = _build_simple_stream("Resultado tras args inválidos.")
+
+    call_count = 0
+
+    def _openai_side_effect(request):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return Response(
+                200,
+                content=invalid_args_stream,
+                headers={"content-type": "text/event-stream"},
+            )
+        return Response(
+            200,
+            content=follow_up_stream,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=_openai_side_effect
+    )
+
+    body = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Dame info con args malos"}],
+        "stream": True,
+        "elevenlabs_extra_body": {
+            "client_id": "quintana-seguros",
+            "lead_id": "lead-quintana-001",
+            "conversation_id": conv_id,
+        },
+    }
+
+    from app.core import database as db_module
+
+    response = await app_client.post("/api/v1/voice/custom-llm", json=body)
+    assert response.status_code == 200
+
+    conv_state = session_store.get(("quintana-seguros", conv_id))
+    assert conv_state is not None
+    session_id = conv_state.session_id
+
+    assert db_module.async_session_factory is not None
+    async with db_module.async_session_factory() as sess:
+        turns = await get_transcript(sess, session_id)
+
+    roles = [t.role for t in turns]
+    assert "tool_call" in roles, "tool_call turn must be persisted even with invalid JSON args"
+    assert "tool_result" in roles, "tool_result turn must be persisted even with invalid JSON args"
+
+    # Verify tool_call content has args={} fallback
+    tool_call_turn = next(t for t in turns if t.role == "tool_call")
+    content = _json.loads(tool_call_turn.content)
+    assert content["function"] == "get_lead_details"
+    assert content["args"] == {}, (
+        "When JSON decode fails, args must fall back to {} — "
+        "CAP-2 spec: 'Tool call with invalid JSON args still persists'"
+    )
+
+
+# ---------------------------------------------------------------------------
+# CAP-3: Filler separation (filler stored as separate turn, agent turn clean)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_filler_stored_as_separate_turn_with_filler_detected(app_client):
+    """Filler is stored as role=agent, filler_detected=1; agent turn is clean.
+
+    CAP-3 spec: 'Filler stored separately, agent turn is clean'
+    """
+    from app.calls.service import get_transcript
+    from app.voice.filler import session_store
+
+    conv_id = "conv-cap3-filler-sep-001"
+    llm_response_stream = _build_simple_stream("El precio es 100.")
+
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=Response(
+            200,
+            content=llm_response_stream,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    body = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "¿Cuánto cuesta el seguro?"}],
+        "stream": True,
+        "elevenlabs_extra_body": {
+            "client_id": "quintana-seguros",
+            "lead_id": "lead-quintana-001",
+            "conversation_id": conv_id,
+        },
+    }
+
+    from app.core import database as db_module
+
+    response = await app_client.post("/api/v1/voice/custom-llm", json=body)
+    assert response.status_code == 200
+
+    conv_state = session_store.get(("quintana-seguros", conv_id))
+    assert conv_state is not None
+    session_id = conv_state.session_id
+
+    assert db_module.async_session_factory is not None
+    async with db_module.async_session_factory() as sess:
+        turns = await get_transcript(sess, session_id)
+
+    agent_turns = [t for t in turns if t.role == "agent"]
+    filler_turns = [t for t in agent_turns if t.filler_detected == 1]
+    clean_turns = [t for t in agent_turns if t.filler_detected == 0]
+
+    # CAP-3: filler MUST be stored as a separate turn
+    assert len(filler_turns) == 1, (
+        f"Expected 1 filler turn (filler_detected=1), got {len(filler_turns)} — "
+        "CAP-3 spec: 'Filler stored separately, agent turn is clean'"
+    )
+
+    # CAP-3: clean agent turn must contain LLM-generated content (not filler)
+    assert len(clean_turns) == 1, (
+        f"Expected 1 clean agent turn (filler_detected=0), got {len(clean_turns)} — "
+        "CAP-3 spec: 'Filler stored separately, agent turn is clean'"
+    )
+
+    # The filler content must NOT appear in the clean agent turn
+    filler_content = filler_turns[0].content.strip()
+    clean_content = clean_turns[0].content
+    assert filler_content not in clean_content, (
+        "Filler text must NOT appear in the clean agent turn — "
+        "CAP-3 spec: 'agent turn is clean'"
+    )
+
+    # Clean turn must have real LLM content
+    assert "100" in clean_content, (
+        "Clean agent turn must contain LLM-generated content 'El precio es 100.' — "
+        "CAP-3 spec: 'agent turn is clean'"
+    )
+
+
+@respx.mock
+async def test_no_filler_path_stores_single_clean_agent_turn(app_client):
+    """When no filler is emitted, exactly one agent turn with filler_detected=0.
+
+    CAP-3 spec: 'No filler — single agent turn stored as normal'
+    Uses a fresh conversation on turn 2+ where filler might be disabled,
+    or a session where filler is forced to empty.
+    """
+    from app.calls.service import get_transcript
+    from app.voice.filler import session_store
+    from unittest.mock import patch
+
+    conv_id = "conv-cap3-no-filler-001"
+    llm_response_stream = _build_simple_stream("Respuesta sin filler.")
+
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=Response(
+            200,
+            content=llm_response_stream,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    body = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Hola sin filler"}],
+        "stream": True,
+        "elevenlabs_extra_body": {
+            "client_id": "quintana-seguros",
+            "lead_id": "lead-quintana-001",
+            "conversation_id": conv_id,
+        },
+    }
+
+    from app.core import database as db_module
+
+    # Patch select_filler to return empty string (no filler path)
+    with patch("app.voice.webhook.select_filler", return_value=""):
+        response = await app_client.post("/api/v1/voice/custom-llm", json=body)
+
+    assert response.status_code == 200
+
+    conv_state = session_store.get(("quintana-seguros", conv_id))
+    assert conv_state is not None
+    session_id = conv_state.session_id
+
+    assert db_module.async_session_factory is not None
+    async with db_module.async_session_factory() as sess:
+        turns = await get_transcript(sess, session_id)
+
+    agent_turns = [t for t in turns if t.role == "agent"]
+
+    # Without filler, exactly ONE agent turn with filler_detected=0
+    assert len(agent_turns) == 1, (
+        f"Expected 1 agent turn when no filler, got {len(agent_turns)} — "
+        "CAP-3 spec: 'No filler — single agent turn stored as normal'"
+    )
+    assert agent_turns[0].filler_detected == 0, (
+        "Agent turn without filler must have filler_detected=0 — "
+        "CAP-3 spec: 'No filler — single agent turn stored as normal'"
+    )
+
+
+@respx.mock
+async def test_filler_emitted_but_empty_llm_response_stores_only_filler_turn(app_client):
+    """Filler emitted + LLM returns empty response → only filler turn stored, no empty agent turn.
+
+    CAP-3 spec: 'When filler is emitted but LLM returns empty response,
+    only the filler turn should be stored (no empty agent turn).'
+    """
+    from app.calls.service import get_transcript
+    from app.voice.filler import session_store
+    from unittest.mock import patch
+
+    conv_id = "conv-cap3-filler-empty-llm-001"
+
+    # Build an empty LLM stream — stop chunk only, no content tokens
+    empty_llm_stream = _make_sse_chunk(finish_reason="stop") + _make_sse_done()
+
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=Response(
+            200,
+            content=empty_llm_stream,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    body = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Hola"}],
+        "stream": True,
+        "elevenlabs_extra_body": {
+            "client_id": "quintana-seguros",
+            "lead_id": "lead-quintana-001",
+            "conversation_id": conv_id,
+        },
+    }
+
+    from app.core import database as db_module
+
+    # Force filler to a known non-empty value so the filler branch is taken
+    with patch("app.voice.webhook.select_filler", return_value="Un momento..."):
+        response = await app_client.post("/api/v1/voice/custom-llm", json=body)
+
+    assert response.status_code == 200
+
+    conv_state = session_store.get(("quintana-seguros", conv_id))
+    assert conv_state is not None, "Session must be created in session_store"
+    session_id = conv_state.session_id
+
+    assert db_module.async_session_factory is not None
+    async with db_module.async_session_factory() as sess:
+        turns = await get_transcript(sess, session_id)
+
+    agent_turns = [t for t in turns if t.role == "agent"]
+    filler_turns = [t for t in agent_turns if t.filler_detected == 1]
+    clean_turns = [t for t in agent_turns if t.filler_detected == 0]
+
+    # Only the filler turn must be stored — LLM returned empty, so no clean agent turn
+    assert len(filler_turns) == 1, (
+        f"Expected exactly 1 filler turn (filler_detected=1), got {len(filler_turns)} — "
+        "CAP-3 spec: 'When filler is emitted but LLM returns empty, only filler turn stored'"
+    )
+    assert len(clean_turns) == 0, (
+        f"Expected 0 clean agent turns when LLM returns empty content, got {len(clean_turns)} — "
+        "CAP-3 spec: 'No empty agent turn stored when LLM response is empty'"
+    )

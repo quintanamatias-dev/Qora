@@ -1,10 +1,12 @@
 """QORA Calls — Pydantic request/response schemas for call session endpoints.
 
 Phase 2a: End session and ElevenLabs post-call webhook models.
+Transcript storage improvements: TranscriptTurnResponse, SessionTranscriptResponse.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel
@@ -34,6 +36,24 @@ class EndSessionResponse(BaseModel):
     status: str
     duration_seconds: int | None
     closed_reason: str | None
+
+
+class TranscriptTurnResponse(BaseModel):
+    """A single transcript turn returned from GET /calls/{session_id}/transcript."""
+
+    id: str
+    role: str
+    content: str
+    timestamp: datetime
+    filler_detected: bool
+
+
+class SessionTranscriptResponse(BaseModel):
+    """Full transcript response for GET /calls/{session_id}/transcript."""
+
+    session_id: str
+    turn_count: int
+    turns: list[TranscriptTurnResponse]
 
 
 class ElevenLabsPostCallPayload(BaseModel):

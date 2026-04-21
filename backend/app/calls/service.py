@@ -5,6 +5,7 @@ Covers: CAP-7 call session lifecycle, transcript turns, billable minutes.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -421,8 +422,6 @@ def _schedule_summarize(session_id: str) -> None:
     Args:
         session_id: UUID of the call session to summarize.
     """
-    import asyncio
-
     asyncio.create_task(_summarize_in_background(session_id))
 
 
@@ -451,15 +450,43 @@ async def _summarize_in_background(session_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+_USER_TURN_RETRY_BACKOFF_SECONDS: float = 0.5
+
+
 async def _persist_user_turn(session_id: str, content: str) -> None:
-    """Persist a user transcript turn in a new DB session (background task)."""
+    """Persist a user transcript turn in a new DB session (background task).
+
+    Retries exactly once after a 0.5s backoff on transient failure.
+    Successful retry → warning log.
+    Both attempts fail → error log (not warning). No exception propagated.
+    """
     from app.core.database import get_session as db_session
+
+    logger = structlog.get_logger()
 
     try:
         async with db_session() as db:
             await add_transcript_turn(db, session_id, "user", content)
+        return  # Success on first attempt — no retry needed
     except Exception as exc:
-        structlog.get_logger().warning(
+        logger.warning(
+            "user_turn_persist_retrying",
+            session_id=session_id,
+            error=str(exc),
+        )
+
+    # Retry once after backoff
+    await asyncio.sleep(_USER_TURN_RETRY_BACKOFF_SECONDS)
+
+    try:
+        async with db_session() as db:
+            await add_transcript_turn(db, session_id, "user", content)
+        logger.warning(
+            "user_turn_persist_retry_succeeded",
+            session_id=session_id,
+        )
+    except Exception as exc:
+        logger.error(
             "user_turn_persist_failed",
             session_id=session_id,
             error=str(exc),
@@ -476,8 +503,6 @@ def schedule_user_turn_persist(session_id: str, messages: list[dict]) -> None:
         session_id: UUID of the call session.
         messages: Full messages list from the custom LLM request body.
     """
-    import asyncio
-
     if not messages:
         return
 
