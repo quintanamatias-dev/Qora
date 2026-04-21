@@ -497,3 +497,177 @@ async def test_postcall_merges_extra_turns_when_el_has_more(seeded_db, app_clien
         "Summary re-generation must be triggered after transcript merge — "
         "spec CAP-6: 'ElevenLabs post-call webhook merge'"
     )
+
+
+# ---------------------------------------------------------------------------
+# CAP-4: Resilient user turn persistence (_persist_user_turn retry logic)
+# ---------------------------------------------------------------------------
+
+
+def _make_fake_db_session(add_turn_side_effect):
+    """Build a mock db_session context manager that uses a fake add_transcript_turn."""
+    from contextlib import asynccontextmanager
+    from unittest.mock import MagicMock
+
+    @asynccontextmanager
+    async def fake_db_session():
+        yield MagicMock()  # fake AsyncSession — not used directly by _persist_user_turn
+
+    return fake_db_session
+
+
+async def test_persist_user_turn_retries_once_on_transient_failure():
+    """_persist_user_turn retries once after 0.5s backoff when first attempt fails.
+
+    CAP-4 spec: 'Transient DB failure retries successfully'
+    - Second attempt succeeds
+    - WARNING log emitted on first failure (before retry)
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from app.calls.service import _persist_user_turn
+
+    db_write_calls = 0
+
+    async def _fake_add_turn(db, session_id, role, content, **kwargs):
+        nonlocal db_write_calls
+        db_write_calls += 1
+        if db_write_calls == 1:
+            raise RuntimeError("DB transient failure")
+        # Second call succeeds — do nothing
+
+    fake_session = _make_fake_db_session(_fake_add_turn)
+
+    logged_warnings = []
+    logged_errors = []
+
+    class FakeLogger:
+        def warning(self, event, **kwargs):
+            logged_warnings.append(event)
+
+        def error(self, event, **kwargs):
+            logged_errors.append(event)
+
+    with patch("app.calls.service.add_transcript_turn", side_effect=_fake_add_turn):
+        with patch("app.calls.service.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            with patch("app.core.database.get_session", new=fake_session):
+                with patch("structlog.get_logger", return_value=FakeLogger()):
+                    await _persist_user_turn("session-retry-001", "Hola")
+
+    # Must have slept for backoff
+    mock_sleep.assert_called_once_with(0.5)
+
+    # Two DB write attempts
+    assert db_write_calls == 2, (
+        f"Expected 2 DB write attempts (retry once), got {db_write_calls} — "
+        "CAP-4 spec: 'Transient DB failure retries successfully'"
+    )
+
+    # A WARNING log MUST be emitted on first failure (before retry succeeds)
+    assert any(
+        "retrying" in w or "retry" in w.lower() or "persist" in w.lower()
+        for w in logged_warnings
+    ), (
+        f"Expected a WARNING log on first failure before retry, got warnings={logged_warnings} — "
+        "CAP-4 spec: 'Transient DB failure → warning logged on first failure'"
+    )
+
+    # No error log should be emitted (retry succeeded)
+    assert len(logged_errors) == 0, (
+        f"Expected NO error logs when retry succeeds, got errors={logged_errors} — "
+        "CAP-4 spec: 'Retry success → no error log'"
+    )
+
+
+async def test_persist_user_turn_logs_error_on_double_failure():
+    """_persist_user_turn logs error (not warning) when both attempts fail.
+
+    CAP-4 spec: 'Both attempts fail — logged as error'
+    - error-level log emitted
+    - No exception propagated to caller
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from app.calls.service import _persist_user_turn
+
+    async def _always_fail(db, session_id, role, content, **kwargs):
+        raise RuntimeError("DB persistent failure")
+
+    fake_session = _make_fake_db_session(_always_fail)
+
+    logged_errors = []
+    logged_warnings = []
+
+    class FakeLogger:
+        def warning(self, event, **kwargs):
+            logged_warnings.append(event)
+
+        def error(self, event, **kwargs):
+            logged_errors.append(event)
+
+    with patch("app.calls.service.add_transcript_turn", side_effect=_always_fail):
+        with patch("app.calls.service.asyncio.sleep", new_callable=AsyncMock):
+            with patch("app.core.database.get_session", new=fake_session):
+                with patch("structlog.get_logger", return_value=FakeLogger()):
+                    # Must NOT raise — error must be swallowed
+                    await _persist_user_turn("session-double-fail-001", "Hola")
+
+    assert any("user_turn_persist_failed" in e or "persist" in e.lower() for e in logged_errors), (
+        f"Expected error-level log on double failure, got errors={logged_errors}, warnings={logged_warnings} — "
+        "CAP-4 spec: 'Both attempts fail — logged as error'"
+    )
+
+
+async def test_persist_user_turn_no_retry_on_success():
+    """_persist_user_turn does not retry when first attempt succeeds.
+
+    CAP-4 spec: 'First attempt succeeds — no retry'
+    - No sleep / backoff called
+    - NO error or warning logs emitted
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from app.calls.service import _persist_user_turn
+
+    db_write_calls = 0
+
+    async def _succeed_first_try(db, session_id, role, content, **kwargs):
+        nonlocal db_write_calls
+        db_write_calls += 1
+
+    fake_session = _make_fake_db_session(_succeed_first_try)
+
+    logged_warnings = []
+    logged_errors = []
+
+    class FakeLogger:
+        def warning(self, event, **kwargs):
+            logged_warnings.append(event)
+
+        def error(self, event, **kwargs):
+            logged_errors.append(event)
+
+    with patch("app.calls.service.add_transcript_turn", side_effect=_succeed_first_try):
+        with patch("app.calls.service.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            with patch("app.core.database.get_session", new=fake_session):
+                with patch("structlog.get_logger", return_value=FakeLogger()):
+                    await _persist_user_turn("session-success-001", "Hola")
+
+    # No sleep when first attempt succeeds
+    mock_sleep.assert_not_called()
+
+    # Exactly 1 DB write
+    assert db_write_calls == 1, (
+        f"Expected 1 DB write when first attempt succeeds, got {db_write_calls} — "
+        "CAP-4 spec: 'First attempt succeeds — no retry'"
+    )
+
+    # NO error or warning logs when success on first try
+    assert len(logged_warnings) == 0, (
+        f"Expected NO warning logs when first attempt succeeds, got: {logged_warnings} — "
+        "CAP-4 spec: 'First attempt succeeds — no logs emitted'"
+    )
+    assert len(logged_errors) == 0, (
+        f"Expected NO error logs when first attempt succeeds, got: {logged_errors} — "
+        "CAP-4 spec: 'First attempt succeeds — no logs emitted'"
+    )

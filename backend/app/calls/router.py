@@ -18,6 +18,8 @@ from app.calls.schemas import (
     ElevenLabsPostCallPayload,
     EndSessionRequest,
     EndSessionResponse,
+    SessionTranscriptResponse,
+    TranscriptTurnResponse,
 )
 from app.calls.service import (
     add_transcript_turn,
@@ -211,7 +213,7 @@ async def get_call_session(session_id: str):
         }
 
 
-@router.get("/{session_id}/transcript")
+@router.get("/{session_id}/transcript", response_model=SessionTranscriptResponse)
 async def get_call_transcript(session_id: str):
     """Get all transcript turns for a call session — for admin/debug use."""
     async with db_session() as session:
@@ -220,17 +222,17 @@ async def get_call_transcript(session_id: str):
             raise HTTPException(status_code=404, detail="Call session not found")
 
         turns = await get_transcript(session, session_id)
-        return {
-            "session_id": session_id,
-            "turn_count": len(turns),
-            "turns": [
-                {
-                    "id": t.id,
-                    "role": t.role,
-                    "content": t.content,
-                    "timestamp": t.timestamp.isoformat(),
-                    "filler_detected": bool(t.filler_detected),
-                }
+        return SessionTranscriptResponse(
+            session_id=session_id,
+            turn_count=len(turns),
+            turns=[
+                TranscriptTurnResponse(
+                    id=t.id,
+                    role=t.role,
+                    content=t.content,
+                    timestamp=t.timestamp,
+                    filler_detected=bool(t.filler_detected),
+                )
                 for t in turns
             ],
-        }
+        )

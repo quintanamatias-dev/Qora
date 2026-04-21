@@ -203,6 +203,26 @@ async def _execute_tool(
 
 
 # ---------------------------------------------------------------------------
+# Fire-and-forget filler turn persistence (CAP-3)
+# ---------------------------------------------------------------------------
+
+
+async def _persist_filler_turn(session_id: str, filler_text: str) -> None:
+    """Persist filler text as a separate transcript turn (filler_detected=True)."""
+    try:
+        async with db_session() as db:
+            await add_transcript_turn(
+                db, session_id, "agent", filler_text, filler_detected=True
+            )
+    except Exception as exc:  # noqa: BLE001
+        structlog.get_logger().warning(
+            "filler_turn_persist_failed",
+            error=str(exc),
+            session_id=session_id,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Core streaming generator
 # ---------------------------------------------------------------------------
 
@@ -259,6 +279,31 @@ async def _stream_llm_response(
                         client_id=client_id,
                         lead_id=lead_id,
                     )
+
+                    # Persist tool_call and tool_result turns BEFORE follow-up LLM call
+                    if session_id:
+                        try:
+                            async with db_session() as db:
+                                await add_transcript_turn(
+                                    db,
+                                    session_id,
+                                    "tool_call",
+                                    json.dumps(
+                                        {"function": event.function_name, "args": args}
+                                    ),
+                                )
+                                await add_transcript_turn(
+                                    db,
+                                    session_id,
+                                    "tool_result",
+                                    json.dumps(tool_result),
+                                )
+                        except Exception as exc:  # noqa: BLE001
+                            structlog.get_logger().warning(
+                                "tool_turn_persist_failed",
+                                error=str(exc),
+                                session_id=session_id,
+                            )
 
                     # Build follow-up messages with tool result
                     follow_up_messages = list(messages) + [
@@ -647,6 +692,11 @@ async def _process_custom_llm_request(
         # Emit filler immediately as first SSE chunk (before LLM responds)
         if filler:
             yield _sse_chunk(filler + " ")
+            # Persist filler as a separate transcript turn (CAP-3)
+            # await directly — we're in an async generator; this runs between SSE yields
+            # and does NOT block ElevenLabs from receiving the already-yielded filler chunk.
+            if session_id:
+                await _persist_filler_turn(session_id, filler)
 
         try:
             async for chunk in _stream_llm_response(
