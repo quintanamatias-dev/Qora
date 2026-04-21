@@ -8,9 +8,9 @@ QORA is a B2B SaaS platform that replaces traditional call center agents with AI
 
 **The core value proposition**: An AI agent that sounds indistinguishable from a human, knows your product, calls your leads, and never burns out.
 
-## Current State — Phase 0 (MVP Demo) ✅
+## Current State — Phase 2 (Memory Loop) ✅
 
-The core pipeline is working end-to-end. You can have a real voice conversation with Jaumpablo, an AI insurance sales agent, through a web browser — no phone required.
+The agent remembers previous conversations. Cross-call memory is working end-to-end in the browser demo — the agent references prior call summaries, extracted facts, and recognizes returning callers.
 
 ### What works today
 
@@ -21,10 +21,13 @@ The core pipeline is working end-to-end. You can have a real voice conversation 
 | GPT-4o as conversation brain | ✅ Working |
 | Custom LLM webhook (our backend) | ✅ Working |
 | Dynamic lead context injection | ✅ Working |
-| Mock CRM with 5 test leads | ✅ Working |
+| Multi-tenant client routing | ✅ Working |
+| Cross-call memory (summaries + facts) | ✅ Working |
+| Session lifecycle with lead linkage | ✅ Working |
+| Post-call summarization + fact extraction | ✅ Working |
+| Mock CRM with test leads | ✅ Working |
 | Real-time lead status updates | ✅ Working |
-| Mute button + reconnect on disconnect | ✅ Working |
-| 180 passing tests | ✅ |
+| 342+ passing tests | ✅ |
 
 ### Architecture
 
@@ -40,29 +43,32 @@ ELEVENLABS (Voice Layer)
     • Turn-taking — manages conversation flow
     │
     │  Custom LLM Webhook (SSE)
-    │  POST /api/v1/voice/custom-llm/chat/completions
+    │  POST /api/v1/clients/{client_id}/voice/custom-llm/chat/completions
     ▼
 OUR BACKEND (Intelligence Layer — FastAPI)
     • GPT-4o — conversation brain
-    • System prompt — Jaumpablo's personality & sales flow
+    • System prompt with memory injection
     • Dynamic fillers — never silent while thinking
-    • Mock CRM — lead data, status transitions
+    • Memory builder — prior call summaries + extracted facts
+    • Session lifecycle — lead linkage + reconciliation
+    • Summarizer — post-call summary + fact extraction
+    • Multi-tenant routing — per-client isolation
     • Tool calls — register_interest, mark_not_interested, schedule_followup
     │
     ▼
-SQLITE (Mock CRM)
+SQLITE (Data Layer)
     • Leads with state machine (new → called → interested → not_interested)
-    • Call sessions and transcripts
+    • Call sessions with lead_id + conversation_id linkage
+    • Per-session summaries and extracted facts (JSON)
     • Per-client tenant config
 ```
-
-**Key architectural decision**: ElevenLabs owns the audio (STT/TTS/VAD). We own the intelligence (LLM, business logic, CRM). Each layer is independently replaceable.
 
 ### The Agent — Jaumpablo
 
 Jaumpablo is an insurance sales agent for Quintana Seguros (pilot client). He:
 - Speaks Rioplatense Spanish with natural voseo
 - Knows the lead's name and car before the call starts
+- **Remembers previous conversations** — references prior summaries and facts
 - Conducts the conversation actively — doesn't wait for the user to lead
 - Handles objections with specific counter-proposals
 - Uses contextual dynamic fillers (never the same one twice)
@@ -78,24 +84,32 @@ Qora/
 │   ├── app/
 │   │   ├── core/               # Settings, DB, logging
 │   │   ├── voice/              # ElevenLabs webhooks (initiation + custom LLM)
-│   │   ├── prompts/            # Jaumpablo system prompt
-│   │   ├── leads/              # Mock CRM — lead model + state machine
+│   │   ├── prompts/            # System prompt + template renderer
+│   │   ├── leads/              # Lead model + state machine
 │   │   ├── tenants/            # Multi-tenant config (clients)
-│   │   ├── calls/              # Call sessions + transcripts
+│   │   ├── calls/              # Call sessions, lifecycle, /end endpoint
 │   │   ├── tools/              # Agent tools (register_interest, etc.)
+│   │   ├── memory.py           # Shared memory context builder
+│   │   ├── summarizer.py       # Post-call summary + fact extraction
+│   │   ├── sweeper.py          # Stale session cleanup
 │   │   └── static/             # Web demo frontend (index.html)
-│   ├── tests/                  # 180 tests (unit + integration)
+│   ├── clients/                # Per-client prompt templates
+│   │   └── quintana-seguros/   # Pilot client
+│   ├── tests/                  # 342+ tests (unit + integration)
+│   ├── scripts/                # Migration and inspection scripts
 │   ├── pyproject.toml
 │   ├── .env.example
 │   └── README.md               # Backend setup guide
 ├── docs/
 │   ├── architecture.md         # Detailed system architecture
 │   ├── running-locally.md      # Step-by-step local setup
-│   └── elevenlabs-reference.md # ElevenLabs API reference for this project
+│   ├── elevenlabs-setup.md     # ElevenLabs config + session continuity
+│   └── elevenlabs-reference.md # ElevenLabs API reference
 └── .sdd/                       # Spec-Driven Development artifacts
     ├── qora-prd/               # Product Requirements Document
     ├── qora-phase0/            # Phase 0 spec, design, tasks
-    └── qora-cleanup/           # Cleanup phase spec, design, tasks
+    ├── qora-phase2/            # Phase 2 spec, design, tasks
+    └── archive/                # Archived completed changes
 ```
 
 ---
@@ -105,29 +119,28 @@ Qora/
 ### ✅ Phase 0 — MVP Demo (complete)
 Core pipeline working. Web demo with real voice conversation.
 
-### 🔲 Phase 1 — Multi-client Foundation
-- Per-client configuration system (not hardcoded to Quintana Seguros)
-- Knowledge base per client (product docs, FAQs, pricing)
-- Multiple agents with data isolation
-- Admin panel to manage clients
+### ✅ Phase 1 — Multi-client Foundation (complete)
+Per-client configuration, tenant routing, data isolation.
 
-### 🔲 Phase 2 — Complete Orchestration
-- Memory between calls (second call knows about the first)
-- Call recording and full transcript persistence
-- Post-conversation metrics and analysis
-- Proper call lifecycle management
+### ✅ Phase 2 — Memory Loop (complete)
+Cross-call memory: session continuity, tenant resolution, memory injection into prompt. Agent remembers previous conversations.
 
-### 🔲 Phase 3 — Real Phone Calls
+### 🔲 Phase 3 — Call Analytics + Client Dashboard
+- Post-call analysis automation (conversation insights, duration metrics, abandonment reasons)
+- Client-facing dashboard (agent metrics, call history, basic CRM)
+- Internal admin panel for agent configuration
+- Multi-agent concurrency (multiple agents running simultaneously per client)
+
+### 🔲 Phase 4 — Real Phone Calls
 - Deploy to server (Railway/Render)
 - Twilio integration for outbound calls
 - Public webhook URLs (no more ngrok)
-- First real call to a real phone number
 
-### 🔲 Phase 4 — Sellable Product
-- Client dashboard (metrics, leads, call history)
+### 🔲 Phase 5 — Sellable Product
 - Per-minute billing tracking
 - Client onboarding flow
-- n8n + Hume AI for post-call sentiment analysis
+- Real CRM integrations (replacing mock CRM)
+- Hume AI sentiment analysis
 
 ---
 
@@ -168,10 +181,10 @@ ngrok http 8000
 | Backend | Python 3.11 + FastAPI |
 | LLM | OpenAI GPT-4o |
 | Voice | ElevenLabs Conversational AI |
-| Database | SQLite (→ PostgreSQL in Phase 3) |
-| Testing | pytest + pytest-asyncio (180 tests) |
-| Telephony | Twilio (Phase 3+) |
-| Deploy | Railway/Render (Phase 3+) |
+| Database | SQLite (→ PostgreSQL in Phase 4) |
+| Testing | pytest + pytest-asyncio (342+ tests) |
+| Telephony | Twilio (Phase 4+) |
+| Deploy | Railway/Render (Phase 4+) |
 
 ---
 
@@ -181,10 +194,11 @@ Everyone can set up an ElevenLabs agent. What we're building is the **call cente
 
 - **Lead management** — who to call, when, how many times
 - **Agent training** — the agent knows your specific product and handles your specific objections  
+- **Cross-call memory** — the agent remembers every previous conversation
 - **Results tracking** — conversion rate, sentiment, objection patterns
 - **Scale** — 1 agent or 100, same cost per minute
 - **No vendor lock-in** — swap ElevenLabs for another voice provider in one afternoon
 
 ---
 
-*Built with [QORA](https://github.com/quintanamatias-dev/Qora) — Phase 0*
+*Built with [QORA](https://github.com/quintanamatias-dev/Qora)*
