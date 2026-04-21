@@ -101,12 +101,15 @@ def select_filler(state: ConversationState) -> str:
 class SessionStore:
     """In-memory store for active conversation states.
 
+    Keyed by (client_id, conversation_id) tuple to prevent cross-tenant
+    state leakage when two tenants share the same conversation_id value.
+
     Thread-safety: single-threaded async context (FastAPI); no locks needed.
     Crash resilience: filler tracking only; call data persisted to SQLite.
     """
 
     def __init__(self) -> None:
-        self._sessions: dict[str, ConversationState] = {}
+        self._sessions: dict[tuple[str, str], ConversationState] = {}
 
     def create(
         self,
@@ -118,8 +121,8 @@ class SessionStore:
         """Create and store a new ConversationState.
 
         Args:
-            conversation_id: ElevenLabs conversation ID (primary key).
-            client_id: Tenant client id.
+            conversation_id: ElevenLabs conversation ID.
+            client_id: Tenant client id (part of composite key).
             lead_id: Lead being called.
             session_id: call_sessions.id for DB persistence.
 
@@ -132,45 +135,57 @@ class SessionStore:
             lead_id=lead_id,
             session_id=session_id,
         )
-        self._sessions[conversation_id] = state
+        self._sessions[(client_id, conversation_id)] = state
         return state
 
-    def get(self, conversation_id: str) -> ConversationState | None:
-        """Retrieve a ConversationState by conversation ID.
+    def get(self, key: tuple[str, str] | str) -> ConversationState | None:
+        """Retrieve a ConversationState by composite key.
+
+        Args:
+            key: Composite (client_id, conversation_id) tuple.
+                 A bare string is rejected and returns None to prevent
+                 accidental use of the old single-key API.
 
         Returns:
             ConversationState or None if not found.
         """
-        return self._sessions.get(conversation_id)
+        if not isinstance(key, tuple):
+            return None
+        return self._sessions.get(key)
 
-    def update_filler(self, conversation_id: str, filler_text: str) -> None:
+    def update_filler(
+        self, client_id: str, conversation_id: str, filler_text: str
+    ) -> None:
         """Record the last filler used for dedup on next turn.
 
         Args:
+            client_id: Tenant identifier (part of composite key).
             conversation_id: ElevenLabs conversation ID.
             filler_text: The filler phrase just emitted.
         """
-        state = self._sessions.get(conversation_id)
+        state = self._sessions.get((client_id, conversation_id))
         if state is not None:
             state.last_filler = filler_text
 
-    def increment_turn(self, conversation_id: str) -> None:
+    def increment_turn(self, client_id: str, conversation_id: str) -> None:
         """Increment the turn counter for a conversation.
 
         Args:
+            client_id: Tenant identifier (part of composite key).
             conversation_id: ElevenLabs conversation ID.
         """
-        state = self._sessions.get(conversation_id)
+        state = self._sessions.get((client_id, conversation_id))
         if state is not None:
             state.turn_count += 1
 
-    def remove(self, conversation_id: str) -> None:
+    def remove(self, client_id: str, conversation_id: str) -> None:
         """Remove a conversation state (call ended).
 
         Args:
+            client_id: Tenant identifier (part of composite key).
             conversation_id: ElevenLabs conversation ID.
         """
-        self._sessions.pop(conversation_id, None)
+        self._sessions.pop((client_id, conversation_id), None)
 
     def cleanup_expired(self, ttl_seconds: int = 300) -> int:
         """Remove sessions older than ttl_seconds.

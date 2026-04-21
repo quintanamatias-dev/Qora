@@ -14,7 +14,6 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from openai import APIConnectionError, APITimeoutError, RateLimitError
-from openai.types.chat import ChatCompletionMessageParam
 
 logger = logging.getLogger(__name__)
 

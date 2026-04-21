@@ -6,7 +6,6 @@ Tests pure logic only — no DB needed.
 
 from __future__ import annotations
 
-import pytest
 
 from app.leads.models import LeadStatus, VALID_TRANSITIONS
 

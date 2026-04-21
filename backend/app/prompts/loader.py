@@ -22,7 +22,13 @@ Architecture decision (design.md AD-6):
     Variable values are sanitised by replacing ``{{`` with ``{ {`` before
     substitution, preventing template injection via lead data.
 
-Covers: T1.2, T2.2, T2.3.
+CAP-2 (qora-memory-in-prompt):
+    ``_build_variables`` is now async and accepts an optional ``db`` parameter.
+    When ``db`` and ``lead`` are provided, calls ``build_memory_context`` to
+    inject real call_history, confirmed_facts, is_returning_caller, call_number.
+    Falls back to empty defaults on any exception (structured error log emitted).
+
+Covers: T1.2, T2.2, T2.3, T22, T23.
 """
 
 from __future__ import annotations
@@ -30,14 +36,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import structlog
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
     from app.tenants.models import Client
     from app.leads.models import Lead
 
 logger = logging.getLogger(__name__)
+_structlog = structlog.get_logger()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -113,6 +122,7 @@ class PromptLoader:
         client: "Client",
         lead: "Lead | None" = None,
         call_count: int = 1,
+        db: "AsyncSession | None" = None,
     ) -> str:
         """Render the system prompt for *client* with optional *lead* context.
 
@@ -122,8 +132,9 @@ class PromptLoader:
            ``render_system_prompt`` from ``insurance_agent`` — it already
            handles variable substitution for the original ``{variable}``
            format.
-        3. If template is from a file, build the variables dict, sanitise
-           all values, then substitute ``{{variable}}`` placeholders via regex.
+        3. If template is from a file, build the variables dict (async),
+           sanitise all values, then substitute ``{{variable}}`` placeholders
+           via regex.
         4. Load ``knowledge.md``, truncate to ``MAX_KNOWLEDGE_TOKENS``, and
            append under ``## INFORMACIÓN DE LA EMPRESA``.
 
@@ -133,6 +144,9 @@ class PromptLoader:
             lead: Optional lead ORM instance.  ``None`` uses safe defaults.
             call_count: Number of times the lead has been called (>1 = returning
                 caller context).
+            db: Optional async DB session.  When provided together with *lead*,
+                ``build_memory_context`` is called to inject real memory
+                variables (call_history, confirmed_facts, etc.).
 
         Returns:
             Fully rendered system prompt string.  No ``{{}}`` placeholders remain.
@@ -149,10 +163,31 @@ class PromptLoader:
         # Render the prompt body
         # ------------------------------------------------------------------
         if template is JAUMPABLO_PROMPT_TEMPLATE:
-            # Delegate to original renderer — handles the {single-brace} format
-            prompt_body = render_system_prompt(client, lead, call_count)
+            # Delegate to original renderer — handles the {single-brace} format.
+            # REQ-2.8: Build memory context and pass it so render_system_prompt
+            # uses real call_number / is_returning_caller data.
+            fallback_memory = None
+            if db is not None and lead is not None:
+                try:
+                    from app.memory import build_memory_context
+
+                    fallback_memory = await build_memory_context(db, lead)
+                except Exception as exc:
+                    _structlog.error(
+                        "memory_context_failed",
+                        lead_id=getattr(lead, "id", None),
+                        error_type=type(exc).__name__,
+                        error_msg=str(exc),
+                        branch="fallback_jaumpablo",
+                    )
+                    # fallback_memory stays None — render_system_prompt uses call_count
+            prompt_body = render_system_prompt(
+                client, lead, call_count, memory=fallback_memory
+            )
         else:
-            prompt_body = self._render_template(template, client, lead, call_count)
+            prompt_body = await self._render_template(
+                template, client, lead, call_count, db=db
+            )
 
         # ------------------------------------------------------------------
         # Knowledge injection
@@ -168,13 +203,24 @@ class PromptLoader:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _build_variables(
+    async def _build_variables(
         self,
         client: "Client",
         lead: "Lead | None",
         call_count: int,
+        db: "AsyncSession | None" = None,
     ) -> dict[str, str]:
-        """Build the substitution dict from client + lead data."""
+        """Build the substitution dict from client + lead data.
+
+        CAP-2: Now async. Accepts optional ``db`` parameter.
+        When ``db`` and ``lead`` are provided, calls ``build_memory_context``
+        to inject real memory variables. Falls back to empty defaults on
+        any exception, logging ``memory_context_failed``.
+
+        Includes memory variables (call_history, confirmed_facts,
+        is_returning_caller, call_number) — real values when db+lead provided,
+        empty defaults otherwise.
+        """
         from app.prompts.insurance_agent import RETURNING_CALLER_CONTEXT
 
         broker_name = client.broker_name if client else "la aseguradora"
@@ -199,6 +245,39 @@ class PromptLoader:
                 call_count=call_count
             )
 
+        # CAP-6 memory variables — default values per REQ-2.4
+        # call_number defaults to "1" — always comes from build_memory_context when available.
+        # The call_count kwarg is kept for backward compatibility but is NOT used for
+        # call_number when memory cannot be built (db=None or lead=None).
+        call_number_str = "1"  # Default per REQ-2.4
+        call_history = ""
+        confirmed_facts = ""
+        is_returning_caller_str = "false"
+
+        # CAP-2: If db and lead are both provided, try to load real memory
+        if db is not None and lead is not None:
+            try:
+                from app.memory import build_memory_context
+
+                memory = await build_memory_context(db, lead)
+                call_history = memory["call_history"]
+                confirmed_facts = memory["confirmed_facts"]
+                is_returning_caller_str = str(memory["is_returning_caller"]).lower()
+                call_number_str = str(memory["call_number"])
+                # Update returning_caller_context using real call_number
+                if memory["call_number"] > 1:
+                    returning_caller_context = RETURNING_CALLER_CONTEXT.format(
+                        call_count=memory["call_number"]
+                    )
+            except Exception as exc:
+                _structlog.error(
+                    "memory_context_failed",
+                    lead_id=getattr(lead, "id", None),
+                    error_type=type(exc).__name__,
+                    error_msg=str(exc),
+                )
+                # Keep empty defaults already set above
+
         return {
             "lead_name": lead_name,
             "broker_name": broker_name,
@@ -208,6 +287,11 @@ class PromptLoader:
             "car_year": car_year,
             "current_insurance": current_insurance,
             "returning_caller_context": returning_caller_context,
+            # CAP-6/CAP-2: memory injection
+            "call_history": call_history,
+            "confirmed_facts": confirmed_facts,
+            "is_returning_caller": is_returning_caller_str,
+            "call_number": call_number_str,
         }
 
     @staticmethod
@@ -219,19 +303,23 @@ class PromptLoader:
         """
         return value.replace("{{", "{ {").replace("}}", "} }")
 
-    def _render_template(
+    async def _render_template(
         self,
         template: str,
         client: "Client",
         lead: "Lead | None",
         call_count: int,
+        db: "AsyncSession | None" = None,
     ) -> str:
         """Substitute ``{{variable}}`` placeholders in *template*.
 
         All variable values are sanitised before substitution to prevent
         template injection via user-controlled data (design.md AD-6).
+
+        CAP-2: Now async — awaits ``_build_variables`` which may call
+        ``build_memory_context`` when ``db`` is provided.
         """
-        variables = self._build_variables(client, lead, call_count)
+        variables = await self._build_variables(client, lead, call_count, db=db)
         sanitized = {k: self._sanitize_value(v) for k, v in variables.items()}
 
         def _replacer(match: re.Match) -> str:  # type: ignore[type-arg]

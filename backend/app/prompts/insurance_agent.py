@@ -10,6 +10,8 @@ insurance sales agent. Includes:
 Covers: T6.3 (Jaumpablo prompt + render_system_prompt utility).
 AD-1: Filler strategy — system prompt only (Option A).
 CAP-8: Configurable system prompt with full conversation flow.
+CAP-2 (T24): render_system_prompt accepts optional ``memory: MemoryContext | None``
+    kwarg so callers can pass real memory without changing existing call sites.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from app.tenants.models import Client
     from app.leads.models import Lead
+    from app.memory import MemoryContext
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +151,7 @@ def render_system_prompt(
     client: "Client",
     lead: "Lead | None" = None,
     call_count: int = 1,
+    memory: "MemoryContext | None" = None,
 ) -> str:
     """Render the Jaumpablo system prompt with client and lead context.
 
@@ -155,6 +159,9 @@ def render_system_prompt(
         client: Client (tenant) configuration with broker_name and agent_name.
         lead: Lead record with car and personal data. None = use defaults.
         call_count: Number of times this lead has been called (>1 = returning caller).
+        memory: Optional MemoryContext from build_memory_context. When provided,
+            its call_number is used to determine returning caller context instead
+            of call_count. Backward-compatible — existing callers unaffected.
 
     Returns:
         Fully rendered system prompt string with all variables substituted.
@@ -178,11 +185,14 @@ def render_system_prompt(
         lead_car_year = ""
         current_insurance = "no tiene"
 
+    # CAP-2: Use memory's call_number when memory is provided; fall back to call_count
+    effective_call_count = memory["call_number"] if memory is not None else call_count
+
     # Build returning caller context if applicable
     returning_caller_context = ""
-    if call_count > 1:
+    if effective_call_count > 1:
         returning_caller_context = RETURNING_CALLER_CONTEXT.format(
-            call_count=call_count
+            call_count=effective_call_count
         )
 
     # Render prompt by substituting all variables

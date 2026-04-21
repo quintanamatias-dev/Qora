@@ -134,6 +134,7 @@
     let pollInterval = null;
     let isMuted = false;
     let currentClientData = {};  // holds the selected client's broker_name, agent_name, etc.
+    let currentSessionId = null;  // ElevenLabs conversation_id for the active session
 
     // ── Client/Lead loading ─────────────────────────────────────────────────────
     async function loadClients() {
@@ -394,9 +395,12 @@
         console.log('✅ WebSocket connected');
 
         // Send dynamic_variables — ElevenLabs requires ALL variables used in the system prompt.
-        // NOTE: do NOT include custom_llm_extra_body — ElevenLabs rejects it (1008) unless
-        // the agent has that feature explicitly enabled in the dashboard.
-        ws.send(JSON.stringify({
+        // Per ElevenLabs docs (https://elevenlabs.io/docs/eleven-agents/customization/llm/custom-llm),
+        // custom_llm_extra_body is a first-class field on conversation_initiation_client_data
+        // and is forwarded to every custom-LLM request as elevenlabs_extra_body.
+        // We propagate lead_id here so the backend can persist it on the CallSession.
+        // We do NOT include client_id — it's already in the custom-LLM URL path.
+        const initPayload = {
           type: 'conversation_initiation_client_data',
           dynamic_variables: {
             // Underscore-wrapped names match the agent's first-message template: {{_lead_name_}}
@@ -417,7 +421,11 @@
             notes:               lead.notes            || '',
             client_id:           selectedClientId,  // explicit client routing
           }
-        }));
+        };
+        if (leadId) {
+          initPayload.custom_llm_extra_body = { lead_id: leadId };
+        }
+        ws.send(JSON.stringify(initPayload));
 
         // Start microphone
         await startMicrophone();
@@ -440,6 +448,11 @@
           case 'conversation_initiation_metadata_event':
           case 'conversation_initiation_metadata':
             console.log('Conversation started:', msg);
+            // Capture ElevenLabs conversation_id for session lifecycle calls
+            currentSessionId = msg.conversation_initiation_metadata_event?.conversation_id
+              || msg.conversation_id
+              || null;
+            console.log('Session ID captured:', currentSessionId);
             break;
 
           case 'user_transcript':
@@ -482,11 +495,23 @@
 
       ws.onclose = (e) => {
         console.log('WebSocket closed:', e.code, e.reason);
+
+        // CAP-3 compliance: MUST call /end on every WebSocket close.
+        //   - code 1000 → reason="user_hangup"
+        //   - non-1000  → reason="network_drop"
+        // The Reconectar button may later fire a second /end with
+        // reason="reconnect_attempt". That second call is idempotent on the
+        // backend (close_session returns existing record without re-incrementing
+        // Lead.call_count) — closed_reason remains "network_drop", which
+        // preserves diagnostic signal for operators measuring connectivity.
+        const reason = e.code === 1000 ? 'user_hangup' : 'network_drop';
+        if (currentSessionId) {
+          closeSessionOnBackend(currentSessionId, reason, selectedClientId, leadId);
+        }
+
         if (e.code === 1000) {
-          // Clean close — agent ended call normally
           setStatus('✓ Conversación finalizada', '');
         } else {
-          // Unexpected close (1006, network error, etc.)
           setStatus('⚠ Se perdió la conexión', 'error');
           showReconnectButton(agentId, leadId);
         }
@@ -494,9 +519,63 @@
       };
     }
 
+    /**
+     * Close a call session on the backend.
+     *
+     * Handles three response cases:
+     * - 200: Session closed successfully (fresh close or idempotent re-close)
+     * - 404: Session never existed in our DB — this is BENIGN. Happens when
+     *        ElevenLabs custom-LLM webhook failed to fire (e.g. misconfigured
+     *        webhook URL, network issue between EL and our backend). The WebSocket
+     *        connected but the LLM never persisted a CallSession. We log it as
+     *        an integration warning, NOT a user-facing error.
+     * - Other/network error: actual failure — log and continue (fire-and-forget).
+     */
+    async function closeSessionOnBackend(sessionId, reason, clientId, leadId) {
+      try {
+        const resp = await fetch(`/api/v1/calls/${sessionId}/end`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reason: reason,
+            conversation_id: sessionId || undefined, // T30 / REQ-2.2: explicit body match
+            client_id: clientId || undefined,         // for reconciliation fallback
+            lead_id: leadId || undefined,             // for reconciliation fallback
+          })
+        });
+        if (resp.status === 404) {
+          // Benign: session never existed (EL custom-LLM didn't fire).
+          // This is an integration-layer signal, not a user error.
+          console.warn(
+            `[integration] /end 404 for ${sessionId} — CallSession never created. ` +
+            `Likely cause: ElevenLabs custom-LLM webhook did not fire. ` +
+            `Check EL agent config → Custom LLM URL.`
+          );
+        } else if (!resp.ok) {
+          console.error(`/end returned ${resp.status} for ${sessionId}`);
+        }
+      } catch (err) {
+        console.warn('Failed to close session:', err);
+      }
+    }
+
     function stopConversation() {
-      if (ws) ws.close();
+      // Capture session ID and identifiers before cleanup() clears them
+      const sessionIdToClose = currentSessionId;
+      const clientIdToClose = document.getElementById('clientId').value || undefined;
+      const leadIdToClose = document.getElementById('leadId').value || undefined;
+      // CRITICAL: ws.close() without args produces CloseEvent.code=1005
+      // (not 1000). Must specify 1000 explicitly so ws.onclose handler
+      // takes the clean-close branch (shows "✓ Conversación finalizada"),
+      // not the network-drop branch that would display the Reconectar UI.
+      if (ws) ws.close(1000, 'user_hangup');
       cleanup();
+      hideReconnectButton();
+      // Ensure /end is called even if ws.onclose fires after cleanup()
+      // (cleanup nulls currentSessionId, so onclose's guard will skip its own /end call).
+      if (sessionIdToClose) {
+        closeSessionOnBackend(sessionIdToClose, 'user_hangup', clientIdToClose, leadIdToClose);
+      }
     }
 
     function cleanup() {
@@ -506,6 +585,7 @@
       if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
       setButtons(false);
       ws = null;
+      currentSessionId = null;
     }
 
     function showReconnectButton(agentId, leadId) {
@@ -515,8 +595,13 @@
       btn.className = 'btn btn-primary';
       btn.textContent = '🔄 Reconectar';
       btn.style.marginTop = '0.5rem';
-      btn.onclick = () => {
+      const droppedSessionId = currentSessionId; // capture before cleanup clears it
+      btn.onclick = async () => {
         btn.remove();
+        // Close the dropped session before starting a new one
+        if (droppedSessionId) {
+          await closeSessionOnBackend(droppedSessionId, 'reconnect_attempt');
+        }
         // Restore the values in case they drifted
         document.getElementById('agentId').value = agentId;
         document.getElementById('leadId').value = leadId;

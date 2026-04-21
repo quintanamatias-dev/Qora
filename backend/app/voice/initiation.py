@@ -4,18 +4,22 @@ ElevenLabs calls this endpoint before the agent speaks to get lead context.
 The system responds with dynamic_variables that get injected into the agent's
 system prompt via template variables.
 
-Covers: CAP-2 pre-call lead injection.
+Covers: CAP-2 pre-call lead injection, CAP-6 memory injection.
 """
 
 from __future__ import annotations
 
+import structlog
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.core.database import get_session as db_session
 from app.leads.service import get_lead, transition_lead_status
 from app.leads.service import InvalidTransitionError
+from app.memory import build_memory_context
 from app.tenants.service import get_client
+
+logger = structlog.get_logger()
 
 router = APIRouter(prefix="/voice", tags=["voice"])
 
@@ -26,9 +30,15 @@ router = APIRouter(prefix="/voice", tags=["voice"])
 
 
 class InitiationRequest(BaseModel):
-    """ElevenLabs initiation webhook payload."""
+    """ElevenLabs initiation webhook payload.
 
-    client_id: str
+    All fields optional so the endpoint can accept an empty body ({}) from
+    ElevenLabs when client_id/lead_id are passed via query params instead.
+    The handler resolves client_id from query params → body, raising 422
+    only when missing from BOTH sources.
+    """
+
+    client_id: str | None = None
     lead_id: str | None = None
     agent_id: str | None = None
     called_number: str | None = None
@@ -38,7 +48,7 @@ class InitiationResponse(BaseModel):
     """Response expected by ElevenLabs with dynamic variables."""
 
     type: str = "conversation_initiation_client_data"
-    dynamic_variables: dict[str, str | int]
+    dynamic_variables: dict[str, str | int | bool]
 
 
 # ---------------------------------------------------------------------------
@@ -95,11 +105,29 @@ async def initiation_webhook(
         lead_status = ""
         lead_notes = ""
 
+        # CAP-6 memory defaults — safe fallbacks when no lead or no history
+        call_history: str = ""
+        confirmed_facts: str = ""
+        is_returning_caller: bool = False
+        call_number: int = 1
+
         # Load lead if lead_id was provided
         if resolved_lead_id:
             lead = await get_lead(session, resolved_lead_id)
 
             if lead is not None:
+                # CAP-6: Block initiation for do_not_call leads BEFORE any call is made
+                if lead.do_not_call:
+                    logger.info(
+                        "initiation_blocked_do_not_call",
+                        lead_id=lead.id,
+                        client_id=resolved_client_id,
+                    )
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Lead has opted out of calls",
+                    )
+
                 lead_name = lead.name
                 car_make = lead.car_make or ""
                 car_model = lead.car_model or ""
@@ -107,6 +135,14 @@ async def initiation_webhook(
                 current_insurance = lead.current_insurance or ""
                 lead_status = lead.status
                 lead_notes = lead.notes or ""
+
+                # CAP-4: Delegate to shared memory builder (qora-memory-in-prompt)
+                # Replaces inline _format_call_history / _format_confirmed_facts
+                memory = await build_memory_context(session, lead)
+                call_history = memory["call_history"]
+                confirmed_facts = memory["confirmed_facts"]
+                is_returning_caller = memory["is_returning_caller"]
+                call_number = memory["call_number"]
 
                 # Transition lead to 'called' (idempotent if already called)
                 try:
@@ -136,5 +172,15 @@ async def initiation_webhook(
                 "_current_insurance_": current_insurance,
                 "_broker_name_": client.broker_name,
                 "_agent_name_": client.agent_name,
+                # CAP-6: Memory injection variables
+                "call_history": call_history,
+                "confirmed_facts": confirmed_facts,
+                "is_returning_caller": is_returning_caller,
+                "call_number": call_number,
+                # Underscore-wrapped variants for ElevenLabs template syntax
+                "_call_history_": call_history,
+                "_confirmed_facts_": confirmed_facts,
+                "_is_returning_caller_": is_returning_caller,
+                "_call_number_": call_number,
             }
         )

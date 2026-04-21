@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -214,7 +214,7 @@ async def test_cap3_five_seed_leads_with_required_statuses(db_session):
     from app.leads.service import list_leads_for_client
 
     leads = await list_leads_for_client(db_session, "quintana-seguros")
-    statuses = [l.status for l in leads]
+    statuses = [lead.status for lead in leads]
 
     assert statuses.count("new") >= 2
     assert statuses.count("called") >= 1
@@ -374,9 +374,9 @@ def test_cap5_filler_pools_cover_all_contexts():
     """CAP-5: All three context categories are present in filler pools."""
     from app.voice.filler import FILLER_POOLS
 
-    assert len(FILLER_POOLS) >= 3, (
-        "Need at least 3 context groups (thinking, processing, transitioning)"
-    )
+    assert (
+        len(FILLER_POOLS) >= 3
+    ), "Need at least 3 context groups (thinking, processing, transitioning)"
 
     # Flat list of all fillers
     all_fillers = [f for pool in FILLER_POOLS for f in pool]
@@ -392,13 +392,13 @@ def test_cap5_filler_dedup_across_five_turns():
 
     last_filler = None
     for turn in range(5):
-        state = store.get("conv-cap5")
+        state = store.get(("quintana-seguros", "conv-cap5"))
         from app.voice.filler import select_filler
 
         filler = select_filler(state)
         assert filler != last_filler, f"Repeated filler at turn {turn}: '{filler}'"
-        store.update_filler("conv-cap5", filler)
-        store.increment_turn("conv-cap5")
+        store.update_filler("quintana-seguros", "conv-cap5", filler)
+        store.increment_turn("quintana-seguros", "conv-cap5")
         last_filler = filler
 
 
@@ -447,9 +447,9 @@ async def test_cap6_all_db_queries_scoped_by_client_id(db_session):
 
     leads = await list_leads_for_client(db_session, "quintana-seguros")
     for lead in leads:
-        assert lead.client_id == "quintana-seguros", (
-            f"Lead {lead.id} has wrong client_id: {lead.client_id}"
-        )
+        assert (
+            lead.client_id == "quintana-seguros"
+        ), f"Lead {lead.id} has wrong client_id: {lead.client_id}"
 
 
 # ============================================================================
@@ -459,7 +459,7 @@ async def test_cap6_all_db_queries_scoped_by_client_id(db_session):
 
 async def test_cap7_call_record_created_at_start(db_session):
     """CAP-7: call record is created with status=initiated and required fields."""
-    from app.calls.service import create_session, get_session
+    from app.calls.service import create_session
 
     cs = await create_session(
         db_session,
@@ -554,7 +554,6 @@ async def test_cap7_transcript_exact_count(db_session):
 async def test_cap7_billable_minutes_ceil(db_session):
     """CAP-7: billable_minutes = CEIL(duration_seconds / 60)."""
     from app.calls.service import create_session, end_session
-    import math
 
     test_cases = [
         (30.0, 1),  # 30s → 1 min
@@ -576,9 +575,9 @@ async def test_cap7_billable_minutes_ceil(db_session):
             outcome="completed",
             duration_seconds=duration,
         )
-        assert updated.billable_minutes == expected_minutes, (
-            f"For {duration}s expected {expected_minutes} min, got {updated.billable_minutes}"
-        )
+        assert (
+            updated.billable_minutes == expected_minutes
+        ), f"For {duration}s expected {expected_minutes} min, got {updated.billable_minutes}"
 
 
 # ============================================================================
@@ -589,7 +588,6 @@ async def test_cap7_billable_minutes_ceil(db_session):
 def test_cap8_prompt_variables_injected():
     """CAP-8: Warm greeting with known lead — lead_name and car_make injected."""
     from app.prompts.insurance_agent import render_system_prompt
-    from unittest.mock import MagicMock
 
     client = MagicMock()
     client.broker_name = "Quintana Seguros"
@@ -612,7 +610,6 @@ def test_cap8_prompt_variables_injected():
 def test_cap8_prompt_voseo_enforced():
     """CAP-8: Prompt enforces Rioplatense voseo."""
     from app.prompts.insurance_agent import render_system_prompt
-    from unittest.mock import MagicMock
 
     client = MagicMock()
     client.broker_name = "Q"
@@ -626,7 +623,6 @@ def test_cap8_prompt_voseo_enforced():
 def test_cap8_prompt_tool_rules():
     """CAP-8: Prompt includes tool invocation rules — never call without user intent."""
     from app.prompts.insurance_agent import render_system_prompt
-    from unittest.mock import MagicMock
 
     client = MagicMock()
     client.broker_name = "Q"
@@ -644,7 +640,6 @@ def test_cap8_prompt_tool_rules():
 def test_cap8_prompt_conversation_flow_phases():
     """CAP-8: Prompt includes all conversation phases: greeting, qualification, pitch, close."""
     from app.prompts.insurance_agent import render_system_prompt
-    from unittest.mock import MagicMock
 
     client = MagicMock()
     client.broker_name = "Q"
@@ -669,7 +664,6 @@ def test_cap8_no_unfilled_template_variables():
     """CAP-8: No {{ variable }} placeholders remain after render."""
     import re
     from app.prompts.insurance_agent import render_system_prompt
-    from unittest.mock import MagicMock
 
     client = MagicMock()
     client.broker_name = "Quintana Seguros"
@@ -689,7 +683,6 @@ def test_cap8_no_unfilled_template_variables():
 def test_cap8_interest_confirmed_tool_fires():
     """CAP-8: Prompt instructs agent to call register_interest ONLY when lead agrees."""
     from app.prompts.insurance_agent import render_system_prompt
-    from unittest.mock import MagicMock
 
     client = MagicMock()
     client.broker_name = "Q"
@@ -707,7 +700,6 @@ def test_cap8_interest_confirmed_tool_fires():
 def test_cap8_rejection_handled_gracefully():
     """CAP-8: Prompt handles rejection gracefully — calls mark_not_interested with reason."""
     from app.prompts.insurance_agent import render_system_prompt
-    from unittest.mock import MagicMock
 
     client = MagicMock()
     client.broker_name = "Q"

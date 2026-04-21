@@ -196,9 +196,9 @@ def test_call_count_greater_than_1_triggers_returning_context():
     result_returning = render_system_prompt(client, lead, call_count=3)
 
     # Returning call prompt should differ from first call
-    assert result_first != result_returning, (
-        "Prompt should differ for returning callers"
-    )
+    assert (
+        result_first != result_returning
+    ), "Prompt should differ for returning callers"
 
 
 def test_render_without_lead_uses_defaults():

@@ -9,7 +9,6 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-import pytest
 import pytest_asyncio
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession

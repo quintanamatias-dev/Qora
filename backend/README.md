@@ -98,8 +98,13 @@ Browser (Demo UI)
    ngrok http 8000
    ```
 
-   Set the ngrok URL as the Custom LLM base URL in your ElevenLabs agent settings:
-   `https://<your-ngrok-id>.ngrok-free.app/api/v1/voice`
+   Configure your ElevenLabs agent's Custom LLM URL:
+
+   **Recommended (path-based, multi-tenant):**
+   `https://<your-ngrok-id>.ngrok-free.app/api/v1/voice/{client_id}/custom-llm`
+
+   **Legacy (deprecated — use path-based route):**
+   `https://<your-ngrok-id>.ngrok-free.app/api/v1/voice/custom-llm`
 
 ## API Endpoints
 
@@ -107,11 +112,20 @@ Browser (Demo UI)
 |--------|----------|-------------|
 | GET | `/api/v1/health` | Health check |
 | GET | `/api/v1/voice/signed-url` | Generate ElevenLabs signed WebSocket URL |
-| POST | `/api/v1/voice/custom-llm` | ElevenLabs Custom LLM webhook |
-| POST | `/api/v1/voice/custom-llm/chat/completions` | Same (ElevenLabs appends path) |
+| POST | `/api/v1/voice/{client_id}/custom-llm/chat/completions` | **Path-based** multi-tenant Custom LLM webhook (recommended) |
+| POST | `/api/v1/voice/custom-llm` | Legacy Custom LLM webhook (deprecated — use path-based route) |
+| POST | `/api/v1/voice/custom-llm/chat/completions` | Legacy (ElevenLabs appends path — deprecated) |
 | GET | `/api/v1/leads/{lead_id}` | Get lead details |
 | GET | `/demo/` | Browser demo UI |
 | GET | `/docs` | Swagger UI |
+
+## ElevenLabs Agent Configuration
+
+To connect a new ElevenLabs agent to QORA's multi-tenant backend, see the setup guide:
+
+**[`docs/elevenlabs-setup.md`](../docs/elevenlabs-setup.md)**
+
+The guide covers Custom LLM URL configuration, the Initiation Webhook, Post-Call Webhook, common gotchas (ngrok URL changes, HTTPS requirement, `/chat/completions` suffix), and a troubleshooting table.
 
 ## Running Tests
 

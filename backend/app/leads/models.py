@@ -8,7 +8,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -91,6 +91,16 @@ class Lead(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
+    )
+    # Phase 2 additions (CAP-5)
+    summary_last_call: Mapped[str | None] = mapped_column(Text, nullable=True)
+    objections_heard: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    interest_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    extracted_facts: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    do_not_call: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    next_action: Mapped[str | None] = mapped_column(String, nullable=True)
+    next_action_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     def __repr__(self) -> str:  # pragma: no cover

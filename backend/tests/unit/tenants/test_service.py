@@ -6,7 +6,6 @@ These tests define the contract before implementation.
 
 from __future__ import annotations
 
-import pytest
 import pytest_asyncio
 from pathlib import Path
 from pydantic import SecretStr
@@ -47,7 +46,6 @@ async def session(tmp_path: Path):
 async def test_create_client_persists_record(session: AsyncSession):
     """create_client() persists a Client record that can be retrieved by id."""
     from app.tenants.service import create_client, get_client
-    from app.tenants.models import Client
 
     client = await create_client(
         session,
@@ -176,7 +174,7 @@ async def test_seed_quintana_creates_client(session: AsyncSession):
 
 async def test_seed_quintana_is_idempotent(session: AsyncSession):
     """seed_quintana() called twice does not raise and does not duplicate."""
-    from app.tenants.service import seed_quintana, get_client
+    from app.tenants.service import seed_quintana
     from sqlalchemy import select
     from app.tenants.models import Client
 

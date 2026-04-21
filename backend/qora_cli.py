@@ -85,11 +85,11 @@ def create_client(client_id: str, broker_name: str, agent_name: str, voice_id: s
     prompt_path = client_dir / "prompt.md"
     template_path = _TEMPLATE_DIR / "prompt.md"
     if prompt_path.exists():
-        click.echo(f"  ~ prompt.md already exists — skipping (not overwritten)")
+        click.echo("  ~ prompt.md already exists — skipping (not overwritten)")
     else:
         if template_path.exists():
             shutil.copy(template_path, prompt_path)
-            click.echo(f"  ✓ Created prompt.md from template")
+            click.echo("  ✓ Created prompt.md from template")
         else:
             # Write a minimal prompt inline if template is missing
             prompt_path.write_text(
@@ -100,20 +100,20 @@ def create_client(client_id: str, broker_name: str, agent_name: str, voice_id: s
                 encoding="utf-8",
             )
             click.echo(
-                f"  ✓ Created prompt.md (inline template — no _template/prompt.md found)"
+                "  ✓ Created prompt.md (inline template — no _template/prompt.md found)"
             )
 
     # 4. Create empty knowledge.md (if not exists)
     knowledge_path = client_dir / "knowledge.md"
     if knowledge_path.exists():
-        click.echo(f"  ~ knowledge.md already exists — skipping")
+        click.echo("  ~ knowledge.md already exists — skipping")
     else:
         knowledge_path.write_text(
             f"# Información de {broker_name}\n\n"
             "[Agregar aquí información relevante sobre la empresa, productos, precios, FAQs, etc.]\n",
             encoding="utf-8",
         )
-        click.echo(f"  ✓ Created knowledge.md (placeholder)")
+        click.echo("  ✓ Created knowledge.md (placeholder)")
 
     # 5. Insert DB record (idempotent — skip if exists)
     asyncio.run(_upsert_client_db(client_id, broker_name, agent_name, voice_id))

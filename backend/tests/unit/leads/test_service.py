@@ -94,12 +94,12 @@ async def test_seed_leads_covers_required_statuses(seeded_session: AsyncSession)
 
     assert new_count >= 2, f"Expected >= 2 new leads, got {new_count}"
     assert called_count >= 1, f"Expected >= 1 called lead, got {called_count}"
-    assert interested_count >= 1, (
-        f"Expected >= 1 interested lead, got {interested_count}"
-    )
-    assert not_interested_count >= 1, (
-        f"Expected >= 1 not_interested lead, got {not_interested_count}"
-    )
+    assert (
+        interested_count >= 1
+    ), f"Expected >= 1 interested lead, got {interested_count}"
+    assert (
+        not_interested_count >= 1
+    ), f"Expected >= 1 not_interested lead, got {not_interested_count}"
 
 
 async def test_seed_leads_is_idempotent(empty_session: AsyncSession):
@@ -177,9 +177,9 @@ async def test_transition_new_to_called_succeeds(seeded_session: AsyncSession):
     from app.leads.service import list_leads_for_client, transition_lead_status
 
     new_leads = [
-        l
-        for l in await list_leads_for_client(seeded_session, "quintana-seguros")
-        if l.status == "new"
+        item
+        for item in await list_leads_for_client(seeded_session, "quintana-seguros")
+        if item.status == "new"
     ]
     assert new_leads, "Need at least one 'new' lead for this test"
     lead = new_leads[0]
@@ -195,9 +195,9 @@ async def test_transition_invalid_raises_409(seeded_session: AsyncSession):
     from app.leads.service import InvalidTransitionError
 
     new_leads = [
-        l
-        for l in await list_leads_for_client(seeded_session, "quintana-seguros")
-        if l.status == "new"
+        item
+        for item in await list_leads_for_client(seeded_session, "quintana-seguros")
+        if item.status == "new"
     ]
     assert new_leads, "Need at least one 'new' lead"
     lead = new_leads[0]

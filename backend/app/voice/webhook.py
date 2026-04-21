@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 import uuid
 from typing import Any, AsyncGenerator
 
@@ -33,7 +32,11 @@ from app.ai.llm_streaming import (
     StreamDone,
     ToolCallDelta,
 )
-from app.calls.service import add_transcript_turn, create_session
+from app.calls.service import (
+    add_transcript_turn,
+    create_session,
+    schedule_user_turn_persist,
+)
 from app.core.database import get_session as db_session
 from app.leads.service import get_lead
 from app.prompts.loader import PromptLoader
@@ -226,7 +229,6 @@ async def _stream_llm_response(
     5. Yield [DONE].
     """
     full_response_text = ""
-    tool_executed = False
 
     try:
         async with asyncio.timeout(60.0):  # 60 second max per LLM turn
@@ -242,7 +244,6 @@ async def _stream_llm_response(
 
                 elif isinstance(event, ToolCallDelta):
                     # Tool call detected — execute and continue
-                    tool_executed = True
                     try:
                         args = (
                             json.loads(event.function_args)
@@ -331,10 +332,10 @@ async def _stream_llm_response(
             )
 
     # Update filler tracking
-    if conversation_id:
-        conv_state = session_store.get(conversation_id)
+    if conversation_id and client_id:
+        conv_state = session_store.get((client_id, conversation_id))
         if conv_state:
-            session_store.increment_turn(conversation_id)
+            session_store.increment_turn(client_id, conversation_id)
 
     yield _sse_stop()
     yield _sse_done()
@@ -351,7 +352,7 @@ async def _stream_llm_response(
 )  # ElevenLabs appends /chat/completions to base URL
 @router.post("/chat/completions")  # If base URL is /api/v1/voice
 async def custom_llm_webhook(body: CustomLLMRequest, request: Request):
-    """Handle ElevenLabs Custom LLM webhook.
+    """Handle ElevenLabs Custom LLM webhook (legacy route).
 
     Extracts client_id + lead_id from elevenlabs_extra_body.
     Streams GPT-4o response as SSE, handling tool calls mid-stream.
@@ -379,24 +380,146 @@ async def custom_llm_webhook(body: CustomLLMRequest, request: Request):
     # Sources tried in order: elevenlabs_extra_body → top-level field → model_extra.
     # If not found in any source, return 422 (client_id is required).
     extra = body.elevenlabs_extra_body
-    client_id = (
-        extra.client_id or body.client_id or (body.model_extra or {}).get("client_id")
-    )
+    client_id: str | None = None
+    client_id_source: str | None = None
+
+    if extra.client_id:
+        client_id = extra.client_id
+        client_id_source = "elevenlabs_extra_body"
+    elif body.client_id:
+        client_id = body.client_id
+        client_id_source = "top_level"
+    elif (body.model_extra or {}).get("client_id"):
+        client_id = (body.model_extra or {}).get("client_id")
+        client_id_source = "model_extra"
+
     if not client_id:
         raise HTTPException(
             status_code=422,
             detail={"error": "client_id is required"},
         )
-    lead_id = extra.lead_id or body.lead_id or (body.model_extra or {}).get("lead_id")
+
+    # Resolve conversation_id for deprecation log
     conversation_id = (
         extra.conversation_id
         or body.conversation_id
         or (body.model_extra or {}).get("conversation_id")
     )
 
-    # Always ensure conversation_id exists for session tracking
-    if not conversation_id:
-        conversation_id = f"demo-{uuid.uuid4().hex[:12]}"
+    # Emit deprecation warning — every successful legacy route call is logged
+    structlog.get_logger().warning(
+        "custom_llm_legacy_route_used",
+        client_id=client_id,
+        conversation_id=conversation_id,
+        source=client_id_source,
+        migration_hint=f"Use path-based route: /api/v1/voice/{client_id}/custom-llm/chat/completions",
+    )
+
+    return await _process_custom_llm_request(
+        body=body, client_id=client_id, request=request
+    )
+
+
+# ---------------------------------------------------------------------------
+# Path-based route — CAP-1
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{client_id}/custom-llm/chat/completions")
+async def custom_llm_path_route(
+    client_id: str, body: CustomLLMRequest, request: Request
+):
+    """Handle ElevenLabs Custom LLM webhook with client_id in URL path (CAP-1).
+
+    Extracts client_id from the URL path parameter (takes precedence over body).
+    Streams GPT-4o response as SSE, handling tool calls mid-stream.
+
+    Returns:
+        StreamingResponse with Content-Type: text/event-stream.
+
+    Raises:
+        404: If client_id does not match any registered tenant.
+        403: If the tenant exists but is inactive.
+    """
+    logger = structlog.get_logger()
+
+    # Detect client_id mismatch between path and body
+    extra = body.elevenlabs_extra_body
+    body_client_id = (
+        extra.client_id or body.client_id or (body.model_extra or {}).get("client_id")
+    )
+    if body_client_id and body_client_id != client_id:
+        logger.warning(
+            "client_id_mismatch",
+            path_client_id=client_id,
+            body_client_id=body_client_id,
+        )
+
+    # Resolve conversation_id for the log event
+    conversation_id = (
+        body.conversation_id
+        or extra.conversation_id
+        or (body.model_extra or {}).get("conversation_id")
+    )
+
+    # Resolve lead_id for the log event (CAP-3 design: log includes lead_id)
+    extra_for_log = body.elevenlabs_extra_body
+    lead_id_for_log = (
+        extra_for_log.lead_id or body.lead_id or (body.model_extra or {}).get("lead_id")
+    ) or None
+
+    # Emit structured log for path-based requests
+    logger.info(
+        "custom_llm_path_request",
+        client_id=client_id,
+        conversation_id=conversation_id,
+        lead_id=lead_id_for_log,
+        message_count=len(body.messages),
+        model=body.model,
+    )
+
+    return await _process_custom_llm_request(
+        body=body, client_id=client_id, request=request
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shared helper — ALL business logic lives here
+# ---------------------------------------------------------------------------
+
+
+async def _process_custom_llm_request(
+    *, body: CustomLLMRequest, client_id: str, request: Request
+) -> StreamingResponse:
+    """Shared handler for both legacy and path-based routes.
+
+    Performs tenant lookup, prompt loading, session management, and SSE streaming.
+    Both routes call this after resolving client_id.
+
+    Args:
+        body: Parsed CustomLLMRequest from ElevenLabs.
+        client_id: Resolved tenant identifier (from path or body).
+        request: FastAPI Request object (for settings access).
+
+    Returns:
+        StreamingResponse with SSE chunks.
+
+    Raises:
+        404: If client_id does not match any registered tenant.
+        403: If the tenant is inactive.
+    """
+    extra = body.elevenlabs_extra_body
+    lead_id = extra.lead_id or body.lead_id or (body.model_extra or {}).get("lead_id")
+    # Real EL conversation_id — coerce falsy values to None so DB stores NULL (CAP-3 REQ-3.3)
+    raw_conversation_id = (
+        extra.conversation_id
+        or body.conversation_id
+        or (body.model_extra or {}).get("conversation_id")
+    )
+    # persisted_conversation_id: what goes in DB (None when absent/empty)
+    persisted_conversation_id = raw_conversation_id or None
+    # conversation_id: what goes in session_store key (always non-null for tracking)
+    conversation_id = persisted_conversation_id or f"demo-{uuid.uuid4().hex[:12]}"
 
     # Get OpenAI API key from app state or settings
     try:
@@ -413,9 +536,24 @@ async def custom_llm_webhook(body: CustomLLMRequest, request: Request):
     async with db_session() as db:
         client = await get_client(db, client_id)
         if client is None:
+            structlog.get_logger().warning(
+                "tenant_lookup_failed",
+                client_id=client_id,
+                reason="not_found",
+            )
             raise HTTPException(
                 status_code=404,
                 detail={"error": "client not found"},
+            )
+        if not client.is_active:
+            structlog.get_logger().warning(
+                "tenant_lookup_failed",
+                client_id=client_id,
+                reason="inactive",
+            )
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "Tenant disabled"},
             )
 
         # Load lead context (optional)
@@ -423,13 +561,14 @@ async def custom_llm_webhook(body: CustomLLMRequest, request: Request):
         if lead_id:
             lead = await get_lead(db, lead_id)
 
-    # Build system prompt (inject lead context if available)
-    # Use explicit None check so empty string override ("") is respected
-    system_content = (
-        client.system_prompt_override
-        if client.system_prompt_override is not None
-        else await PromptLoader().render(client, lead)
-    )
+        # Build system prompt inside the DB session block so render() can query
+        # memory (call_history, confirmed_facts) via build_memory_context(db, lead).
+        # Use explicit None check so empty string override ("") is respected.
+        system_content = (
+            client.system_prompt_override
+            if client.system_prompt_override is not None
+            else await PromptLoader().render(client, lead, db=db)
+        )
 
     # Build messages with system prompt prepended
     messages = [{"role": "system", "content": system_content}] + list(body.messages)
@@ -462,18 +601,24 @@ async def custom_llm_webhook(body: CustomLLMRequest, request: Request):
             tools = None
 
     # Create or reuse session ID
-    # First pass: check existing conv_state
-    conv_state = session_store.get(conversation_id)
+    # Keyed by (client_id, conversation_id) to prevent cross-tenant state leakage
+    conv_state = (
+        session_store.get((client_id, conversation_id)) if conversation_id else None
+    )
     session_id: str | None = None
     if conversation_id and conv_state:
         session_id = conv_state.session_id
     elif conversation_id and not conv_state:
         # Browser flow: initiation was not called, create DB session + store entry now
+        # Use persisted_conversation_id (NULL when absent/empty) for DB — CAP-3 REQ-3.3
+        # Use conversation_id (demo-* fallback) as session_store key (always non-null)
+        coerced_lead_id = lead_id or None
         async with db_session() as db:
             new_session = await create_session(
                 db,
                 client_id=client_id,
-                lead_id=lead_id or None,
+                lead_id=coerced_lead_id,
+                elevenlabs_conversation_id=persisted_conversation_id,
             )
         new_session_id = (
             str(new_session.id) if hasattr(new_session, "id") else str(new_session)
@@ -481,19 +626,24 @@ async def custom_llm_webhook(body: CustomLLMRequest, request: Request):
         session_store.create(
             conversation_id=conversation_id,
             client_id=client_id,
-            lead_id=lead_id or None,
+            lead_id=coerced_lead_id,
             session_id=new_session_id,
         )
         session_id = new_session_id
-        conv_state = session_store.get(conversation_id)
+        conv_state = session_store.get((client_id, conversation_id))
 
     # Select filler AFTER session creation so conv_state is populated
     filler = select_filler(conv_state) if conv_state else FALLBACK_FILLER
 
     if conversation_id and conv_state:
-        session_store.update_filler(conversation_id, filler)
+        session_store.update_filler(client_id, conversation_id, filler)
 
     async def generate():
+        # Fire-and-forget: persist user turn (CAP-1)
+        # Must not block the SSE stream — schedule_user_turn_persist uses asyncio.create_task
+        if session_id:
+            schedule_user_turn_persist(session_id, body.messages)
+
         # Emit filler immediately as first SSE chunk (before LLM responds)
         if filler:
             yield _sse_chunk(filler + " ")

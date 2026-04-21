@@ -22,7 +22,6 @@ import asyncio
 import time
 from contextlib import asynccontextmanager
 
-import structlog
 from fastapi import APIRouter, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -157,8 +156,13 @@ async def lifespan(app: FastAPI):
     logger.info("seed_data_loaded")
     _APP_START_TIME = time.monotonic()
 
-    # 5. Start background cleanup task
+    # 5. Start background cleanup tasks
     cleanup_task = asyncio.create_task(_session_store_cleanup_task())
+
+    # 6. Start stale session sweeper (CAP-2c)
+    from app.sweeper import stale_session_sweeper
+
+    sweeper_task = asyncio.create_task(stale_session_sweeper())
     logger.info("qora_startup_complete")
 
     yield
@@ -166,8 +170,13 @@ async def lifespan(app: FastAPI):
     # ---- Shutdown ----
     logger.info("qora_shutdown_started")
     cleanup_task.cancel()
+    sweeper_task.cancel()
     try:
         await cleanup_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await sweeper_task
     except asyncio.CancelledError:
         pass
     await db_module.close_db()

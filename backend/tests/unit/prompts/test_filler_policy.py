@@ -80,9 +80,9 @@ def test_select_filler_never_repeats_last():
     for filler in _ALL_FILLERS:
         state = make_state(last_filler=filler)
         result = select_filler(state)
-        assert result != filler, (
-            f"select_filler returned the same filler '{filler}' as last_filler"
-        )
+        assert (
+            result != filler
+        ), f"select_filler returned the same filler '{filler}' as last_filler"
 
 
 def test_select_filler_varies_across_calls():
@@ -116,7 +116,7 @@ def test_session_store_create_and_get():
         session_id="sess-001",
     )
     assert state is not None
-    assert store.get("conv-aaa") is state
+    assert store.get(("quintana-seguros", "conv-aaa")) is state
 
 
 def test_session_store_update_filler():
@@ -128,8 +128,8 @@ def test_session_store_update_filler():
         lead_id="lead-001",
         session_id="sess-001",
     )
-    store.update_filler("conv-bbb", "A ver...")
-    state = store.get("conv-bbb")
+    store.update_filler("quintana-seguros", "conv-bbb", "A ver...")
+    state = store.get(("quintana-seguros", "conv-bbb"))
     assert state.last_filler == "A ver..."
 
 
@@ -142,8 +142,8 @@ def test_session_store_filler_dedup_via_select():
         lead_id="lead-001",
         session_id="sess-001",
     )
-    store.update_filler("conv-ccc", "A ver...")
-    state = store.get("conv-ccc")
+    store.update_filler("quintana-seguros", "conv-ccc", "A ver...")
+    state = store.get(("quintana-seguros", "conv-ccc"))
     result = select_filler(state)
     assert result != "A ver...", "Filler after update must differ from last recorded"
 
@@ -160,12 +160,12 @@ def test_session_store_no_repeat_across_turns():
 
     last_filler = None
     for _ in range(5):
-        state = store.get("conv-multi")
+        state = store.get(("quintana-seguros", "conv-multi"))
         chosen = select_filler(state)
-        assert chosen != last_filler, (
-            f"Consecutive repeat of filler '{chosen}' detected!"
-        )
-        store.update_filler("conv-multi", chosen)
+        assert (
+            chosen != last_filler
+        ), f"Consecutive repeat of filler '{chosen}' detected!"
+        store.update_filler("quintana-seguros", "conv-multi", chosen)
         last_filler = chosen
 
 
@@ -178,9 +178,9 @@ def test_session_store_increment_turn():
         lead_id="lead-001",
         session_id="sess-001",
     )
-    store.increment_turn("conv-turns")
-    store.increment_turn("conv-turns")
-    state = store.get("conv-turns")
+    store.increment_turn("quintana-seguros", "conv-turns")
+    store.increment_turn("quintana-seguros", "conv-turns")
+    state = store.get(("quintana-seguros", "conv-turns"))
     assert state.turn_count == 2
 
 
@@ -193,8 +193,8 @@ def test_session_store_remove():
         lead_id="lead-001",
         session_id="sess-001",
     )
-    store.remove("conv-remove")
-    assert store.get("conv-remove") is None
+    store.remove("quintana-seguros", "conv-remove")
+    assert store.get(("quintana-seguros", "conv-remove")) is None
 
 
 def test_session_store_cleanup_expired():
@@ -213,7 +213,7 @@ def test_session_store_cleanup_expired():
 
     removed = store.cleanup_expired(ttl_seconds=300)
     assert removed == 1
-    assert store.get("conv-old") is None
+    assert store.get(("quintana-seguros", "conv-old")) is None
 
 
 def test_filler_context_groups_are_distinct():
