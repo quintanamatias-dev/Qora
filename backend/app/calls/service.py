@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.calls.models import CallSession, TranscriptTurn
@@ -180,6 +180,73 @@ async def count_turns(session: AsyncSession, session_id: str) -> tuple[int, int]
     )
     counts: dict[str, int] = dict(result.all())
     return counts.get("user", 0), counts.get("agent", 0)
+
+
+async def get_call_metrics(
+    session: AsyncSession,
+    *,
+    client_id: str,
+    lead_id: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> dict:
+    """Return aggregated call metrics for a client in a single query.
+
+    Args:
+        session: Active async DB session.
+        client_id: Tenant client id — scopes all results.
+        lead_id: Optional lead filter.
+        date_from: Optional lower bound on CallSession.started_at (inclusive).
+        date_to: Optional upper bound on CallSession.started_at (inclusive).
+
+    Returns:
+        Dict with keys: total_calls, completed_calls, abandoned_calls,
+        total_duration_seconds, average_duration_seconds, total_billable_minutes.
+    """
+    completed_flag = case((CallSession.status == "completed", 1))
+    abandoned_flag = case((CallSession.status == "abandoned", 1))
+
+    stmt = select(
+        func.count(CallSession.id).label("total_calls"),
+        func.count(completed_flag).label("completed_calls"),
+        func.count(abandoned_flag).label("abandoned_calls"),
+        func.coalesce(
+            func.sum(
+                case((CallSession.status == "completed", CallSession.duration_seconds))
+            ),
+            0.0,
+        ).label("total_duration_seconds"),
+        func.coalesce(
+            func.avg(
+                case((CallSession.status == "completed", CallSession.duration_seconds))
+            ),
+            0.0,
+        ).label("average_duration_seconds"),
+        func.coalesce(
+            func.sum(
+                case((CallSession.status == "completed", CallSession.billable_minutes))
+            ),
+            0,
+        ).label("total_billable_minutes"),
+    ).where(CallSession.client_id == client_id)
+
+    if lead_id is not None:
+        stmt = stmt.where(CallSession.lead_id == lead_id)
+    if date_from is not None:
+        stmt = stmt.where(CallSession.started_at >= date_from)
+    if date_to is not None:
+        stmt = stmt.where(CallSession.started_at <= date_to)
+
+    result = await session.execute(stmt)
+    row = result.one()
+    return {
+        "total_calls": row.total_calls,
+        "completed_calls": row.completed_calls,
+        "abandoned_calls": row.abandoned_calls,
+        "total_duration_seconds": float(row.total_duration_seconds),
+        "average_duration_seconds": float(row.average_duration_seconds),
+        "total_billable_minutes": int(row.total_billable_minutes),
+    }
 
 
 async def get_sessions_for_lead(

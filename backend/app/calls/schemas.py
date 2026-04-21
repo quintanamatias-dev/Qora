@@ -56,6 +56,25 @@ class SessionTranscriptResponse(BaseModel):
     turns: list[TranscriptTurnResponse]
 
 
+class MetricsPeriod(BaseModel):
+    """Period applied to the metrics query — echoes supplied date_from/date_to."""
+
+    date_from: datetime | None = None
+    date_to: datetime | None = None
+
+
+class CallMetricsResponse(BaseModel):
+    """Aggregated call metrics for a client over an optional time window."""
+
+    total_calls: int
+    completed_calls: int
+    abandoned_calls: int
+    total_duration_seconds: float
+    average_duration_seconds: float
+    total_billable_minutes: int
+    period: MetricsPeriod
+
+
 class ElevenLabsPostCallPayload(BaseModel):
     """ElevenLabs post-call webhook payload.
 

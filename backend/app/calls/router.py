@@ -11,29 +11,70 @@ Covers: T3.5 admin/debug router + Phase 2a session lifecycle.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import structlog
 from fastapi import APIRouter, HTTPException
 
 from app.calls.schemas import (
+    CallMetricsResponse,
     ElevenLabsPostCallPayload,
     EndSessionRequest,
     EndSessionResponse,
+    MetricsPeriod,
     SessionTranscriptResponse,
     TranscriptTurnResponse,
 )
 from app.calls.service import (
+    _schedule_summarize,
     add_transcript_turn,
     close_session,
+    get_call_metrics,
     get_session,
     get_session_by_elevenlabs_id,
     get_transcript,
-    _schedule_summarize,
 )
 from app.core.database import get_session as db_session
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
 logger = structlog.get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Metrics endpoint — MUST be registered BEFORE /{session_id} routes
+# (FastAPI matches first-registered; "metrics" would be parsed as a session_id UUID otherwise)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/metrics", response_model=CallMetricsResponse)
+async def get_call_metrics_endpoint(
+    client_id: str,
+    lead_id: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+):
+    """Return aggregated call metrics for a client.
+
+    Query parameters:
+    - **client_id** (required): Tenant client id to scope results.
+    - **lead_id** (optional): Filter to a specific lead.
+    - **date_from** (optional): Lower bound on call start time (inclusive).
+    - **date_to** (optional): Upper bound on call start time (inclusive).
+    """
+    async with db_session() as db:
+        metrics = await get_call_metrics(
+            db,
+            client_id=client_id,
+            lead_id=lead_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+
+    return CallMetricsResponse(
+        **metrics,
+        period=MetricsPeriod(date_from=date_from, date_to=date_to),
+    )
 
 
 # ---------------------------------------------------------------------------
