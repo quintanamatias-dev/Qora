@@ -549,7 +549,9 @@ async def test_persist_user_turn_retries_once_on_transient_failure():
             logged_errors.append(event)
 
     with patch("app.calls.service.add_transcript_turn", side_effect=_fake_add_turn):
-        with patch("app.calls.service.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        with patch(
+            "app.calls.service.asyncio.sleep", new_callable=AsyncMock
+        ) as mock_sleep:
             with patch("app.core.database.get_session", new=fake_session):
                 with patch("structlog.get_logger", return_value=FakeLogger()):
                     await _persist_user_turn("session-retry-001", "Hola")
@@ -612,7 +614,9 @@ async def test_persist_user_turn_logs_error_on_double_failure():
                     # Must NOT raise — error must be swallowed
                     await _persist_user_turn("session-double-fail-001", "Hola")
 
-    assert any("user_turn_persist_failed" in e or "persist" in e.lower() for e in logged_errors), (
+    assert any(
+        "user_turn_persist_failed" in e or "persist" in e.lower() for e in logged_errors
+    ), (
         f"Expected error-level log on double failure, got errors={logged_errors}, warnings={logged_warnings} — "
         "CAP-4 spec: 'Both attempts fail — logged as error'"
     )
@@ -648,7 +652,9 @@ async def test_persist_user_turn_no_retry_on_success():
             logged_errors.append(event)
 
     with patch("app.calls.service.add_transcript_turn", side_effect=_succeed_first_try):
-        with patch("app.calls.service.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        with patch(
+            "app.calls.service.asyncio.sleep", new_callable=AsyncMock
+        ) as mock_sleep:
             with patch("app.core.database.get_session", new=fake_session):
                 with patch("structlog.get_logger", return_value=FakeLogger()):
                     await _persist_user_turn("session-success-001", "Hola")

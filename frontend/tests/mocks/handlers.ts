@@ -50,6 +50,14 @@ const leadsFixture: Lead[] = [
     last_called_at: '2026-01-10T10:00:00Z',
     created_at: '2026-01-01T00:00:00Z',
     updated_at: null,
+    // Phase 2 fields
+    summary_last_call: 'Client interested in full coverage',
+    objections_heard: null,
+    interest_level: 75,
+    extracted_facts: { budget: '50k ARS/month' },
+    do_not_call: false,
+    next_action: 'Send quote',
+    next_action_at: null,
   },
   {
     id: 'lead-2',
@@ -66,19 +74,51 @@ const leadsFixture: Lead[] = [
     last_called_at: '2026-01-12T14:00:00Z',
     created_at: '2026-01-05T00:00:00Z',
     updated_at: '2026-01-12T14:05:00Z',
+    // Phase 2 fields — all null
+    summary_last_call: null,
+    objections_heard: null,
+    interest_level: null,
+    extracted_facts: null,
+    do_not_call: false,
+    next_action: null,
+    next_action_at: null,
   },
 ]
 
-const sessionFixture: CallSession = {
-  id: 'session-abc',
-  client_id: 'demo-client',
-  lead_id: 'lead-1',
-  status: 'completed',
-  started_at: '2026-01-15T10:00:00Z',
-  ended_at: '2026-01-15T10:05:00Z',
-  duration_seconds: 300,
-  summary: 'Customer interested in full coverage.',
-}
+const sessionsFixture: CallSession[] = [
+  {
+    id: 'session-abc',
+    client_id: 'demo-client',
+    lead_id: 'lead-1',
+    status: 'completed',
+    started_at: '2026-01-15T10:00:00Z',
+    ended_at: '2026-01-15T10:05:00Z',
+    duration_seconds: 300,
+    summary: 'Customer interested in full coverage.',
+    outcome: 'completed',
+    closed_reason: 'agent_goodbye',
+    billable_minutes: 5,
+    total_user_turns: 5,
+    total_agent_turns: 6,
+    extracted_facts: null,
+  },
+  {
+    id: 'session-def',
+    client_id: 'demo-client',
+    lead_id: 'lead-1',
+    status: 'completed',
+    started_at: '2026-01-16T11:00:00Z',
+    ended_at: '2026-01-16T11:03:00Z',
+    duration_seconds: 180,
+    summary: 'Follow-up call completed.',
+    outcome: 'completed',
+    closed_reason: 'agent_goodbye',
+    billable_minutes: 3,
+    total_user_turns: 3,
+    total_agent_turns: 4,
+    extracted_facts: { policy: 'full' },
+  },
+]
 
 const transcriptFixture: SessionTranscript = {
   session_id: 'session-abc',
@@ -124,9 +164,14 @@ export const handlers = [
     return HttpResponse.json(lead)
   }),
 
-  // GET /api/v1/calls — returns call sessions
-  http.get('/api/v1/calls', () => {
-    return HttpResponse.json([sessionFixture])
+  // GET /api/v1/calls — returns call sessions (filtered by lead_id if provided)
+  http.get('/api/v1/calls', ({ request }) => {
+    const url = new URL(request.url)
+    const leadId = url.searchParams.get('lead_id')
+    if (leadId) {
+      return HttpResponse.json(sessionsFixture.filter(s => s.lead_id === leadId))
+    }
+    return HttpResponse.json(sessionsFixture)
   }),
 
   // GET /api/v1/calls/:sessionId/transcript — returns transcript

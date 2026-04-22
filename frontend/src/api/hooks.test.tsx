@@ -66,6 +66,14 @@ const mockLead: Lead = {
   last_called_at: null,
   created_at: null,
   updated_at: null,
+  // Phase 2 fields
+  summary_last_call: null,
+  objections_heard: null,
+  interest_level: null,
+  extracted_facts: null,
+  do_not_call: false,
+  next_action: null,
+  next_action_at: null,
 }
 
 const mockSession: CallSession = {
@@ -77,6 +85,13 @@ const mockSession: CallSession = {
   ended_at: null,
   duration_seconds: 60,
   summary: null,
+  // Phase 2 fields
+  outcome: null,
+  closed_reason: null,
+  billable_minutes: null,
+  total_user_turns: null,
+  total_agent_turns: null,
+  extracted_facts: null,
 }
 
 const mockTranscript: SessionTranscript = {

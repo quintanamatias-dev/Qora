@@ -249,6 +249,29 @@ async def get_call_metrics(
     }
 
 
+async def list_sessions_for_client(
+    session: AsyncSession,
+    client_id: str,
+    lead_id: str | None = None,
+) -> list[CallSession]:
+    """Return all call sessions for a client, ordered by started_at DESC.
+
+    Args:
+        session: Active async DB session.
+        client_id: Tenant client id — scopes all results.
+        lead_id: Optional lead filter. If provided, returns only sessions for this lead.
+
+    Returns:
+        List of CallSession instances ordered by started_at descending (most recent first).
+    """
+    q = select(CallSession).where(CallSession.client_id == client_id)
+    if lead_id is not None:
+        q = q.where(CallSession.lead_id == lead_id)
+    q = q.order_by(CallSession.started_at.desc())
+    result = await session.execute(q)
+    return list(result.scalars().all())
+
+
 async def get_sessions_for_lead(
     session: AsyncSession,
     lead_id: str,

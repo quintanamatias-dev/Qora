@@ -74,7 +74,11 @@ class PatchStatusRequest(BaseModel):
 
 
 def _lead_to_dict(lead) -> dict:
-    """Serialize a Lead ORM object to a response dict."""
+    """Serialize a Lead ORM object to a response dict.
+
+    Includes Phase 2 CRM fields (summary_last_call, interest_level, etc.).
+    All Phase 2 fields are null-safe — returned as null if not set.
+    """
     return {
         "id": lead.id,
         "client_id": lead.client_id,
@@ -92,6 +96,16 @@ def _lead_to_dict(lead) -> dict:
         ),
         "created_at": lead.created_at.isoformat() if lead.created_at else None,
         "updated_at": lead.updated_at.isoformat() if lead.updated_at else None,
+        # Phase 2 CRM fields — null-safe
+        "summary_last_call": lead.summary_last_call,
+        "objections_heard": lead.objections_heard,
+        "interest_level": lead.interest_level,
+        "extracted_facts": lead.extracted_facts,
+        "do_not_call": lead.do_not_call,
+        "next_action": lead.next_action,
+        "next_action_at": (
+            lead.next_action_at.isoformat() if lead.next_action_at else None
+        ),
     }
 
 
