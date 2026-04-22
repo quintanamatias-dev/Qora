@@ -479,3 +479,76 @@ async def test_metrics_endpoint_period_null_when_no_filters(seeded_db, app_clien
     period = data["period"]
     assert period["date_from"] is None
     assert period["date_to"] is None
+
+
+# ---------------------------------------------------------------------------
+# Issue #22 — Merged sessions excluded from metrics
+# Spec: Design — get_call_metrics() must filter merged_into_session_id IS NULL
+# ---------------------------------------------------------------------------
+
+
+async def _seed_call_with_merged_into(
+    db_module,
+    *,
+    client_id: str = "quintana-seguros",
+    lead_id: str = "lead-001",
+    status: str = "abandoned",
+    duration_seconds: float | None = None,
+    billable_minutes: int | None = None,
+    merged_into_session_id: str | None = None,
+):
+    """Helper: insert a CallSession with optional merged_into_session_id."""
+    import uuid
+    from app.calls.models import CallSession
+
+    assert db_module.async_session_factory is not None
+    async with db_module.async_session_factory() as sess:
+        cs = CallSession(
+            id=str(uuid.uuid4()),
+            client_id=client_id,
+            lead_id=lead_id,
+            status=status,
+            duration_seconds=duration_seconds,
+            billable_minutes=billable_minutes,
+            started_at=datetime.now(timezone.utc),
+            merged_into_session_id=merged_into_session_id,
+        )
+        sess.add(cs)
+        await sess.commit()
+        return cs.id
+
+
+async def test_metrics_excludes_merged_abandoned_sessions(seeded_db):
+    """Merged abandoned sessions MUST NOT inflate abandoned_calls count.
+
+    Spec: Design — get_call_metrics() add merged_into_session_id IS NULL filter
+    """
+    from app.calls.service import get_call_metrics
+
+    # Completed (authoritative) session
+    completed_id = await _seed_call(
+        seeded_db, status="completed", duration_seconds=120.0, billable_minutes=2
+    )
+
+    # Merged sibling — abandoned, merged_into = completed_id
+    # This session MUST NOT appear in metrics
+    await _seed_call_with_merged_into(
+        seeded_db,
+        status="abandoned",
+        merged_into_session_id=completed_id,
+    )
+
+    assert seeded_db.async_session_factory is not None
+    async with seeded_db.async_session_factory() as sess:
+        result = await get_call_metrics(sess, client_id="quintana-seguros")
+
+    # Only 1 real call (completed); merged sibling must NOT inflate total or abandoned
+    assert result["total_calls"] == 1, (
+        f"Expected 1 total call (merged sibling excluded), got {result['total_calls']}. "
+        f"get_call_metrics() must filter merged_into_session_id IS NULL."
+    )
+    assert result["abandoned_calls"] == 0, (
+        f"Expected 0 abandoned calls (merged sibling excluded), got {result['abandoned_calls']}. "
+        f"Merged sibling must not inflate abandoned_calls count."
+    )
+    assert result["completed_calls"] == 1

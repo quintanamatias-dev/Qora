@@ -55,6 +55,10 @@ class CallSession(Base):
     total_user_turns: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_agent_turns: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     extracted_facts: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Session reconciliation (Issue #22) — nullable String (no FK; SQLite limitation)
+    merged_into_session_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, default=None
+    )
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<CallSession id={self.id!r} status={self.status!r}>"

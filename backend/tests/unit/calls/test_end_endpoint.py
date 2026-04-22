@@ -805,6 +805,200 @@ async def test_end_body_conversation_id_mismatch_logs_warning_uses_path(
     ), f"body_conversation_id wrong: {log}"
 
 
+# ---------------------------------------------------------------------------
+# Issue #22 — Merge siblings in close_session() BEFORE _schedule_summarize()
+# ---------------------------------------------------------------------------
+
+
+async def _create_initiated_session_no_el_id(
+    db_module,
+    *,
+    client_id: str = "quintana-seguros",
+    lead_id: str = "test-lead-end-001",
+    started_at: datetime | None = None,
+):
+    """Helper: create an orphan session with no EL ID (sibling candidate)."""
+    from app.calls.models import CallSession
+    import uuid as _uuid
+
+    assert db_module.async_session_factory is not None
+    async with db_module.async_session_factory() as sess:
+        cs = CallSession(
+            id=str(_uuid.uuid4()),
+            client_id=client_id,
+            lead_id=lead_id,
+            elevenlabs_conversation_id=None,
+            status="initiated",
+            started_at=started_at or datetime.now(timezone.utc),
+        )
+        sess.add(cs)
+        await sess.commit()
+        return cs.id
+
+
+async def test_close_session_merges_siblings_before_summarize(seeded_db, app_client):
+    """close_session() merges sibling turns into completed session before summarize fires.
+
+    Spec: Requirement: Integration with close_session — "Summarizer receives merged transcript"
+    Sibling S has 2 turns; closing primary session C should absorb them.
+    """
+    from app.calls.service import create_session, add_transcript_turn, get_transcript
+    from app.calls.models import CallSession
+    from sqlalchemy import select
+
+    now = datetime.now(timezone.utc)
+    assert seeded_db.async_session_factory is not None
+
+    # Create primary session (will be closed via /end)
+    primary_id = None
+    sibling_id = None
+    async with seeded_db.async_session_factory() as sess:
+        primary = await create_session(
+            sess,
+            client_id="quintana-seguros",
+            lead_id="test-lead-end-001",
+            elevenlabs_conversation_id="el-conv-merge-test-001",
+        )
+        primary.started_at = now
+        await sess.flush()
+
+        # Sibling: no EL ID, same client/lead, 30s earlier
+        sibling = CallSession(
+            id=str(__import__("uuid").uuid4()),
+            client_id="quintana-seguros",
+            lead_id="test-lead-end-001",
+            elevenlabs_conversation_id=None,
+            status="initiated",
+            started_at=now - timedelta(seconds=30),
+        )
+        sess.add(sibling)
+        await sess.flush()
+
+        # Add 1 turn to primary, 2 to sibling
+        await add_transcript_turn(sess, primary.id, "agent", "Primary turn")
+        await add_transcript_turn(sess, sibling.id, "user", "Sibling turn 1")
+        await add_transcript_turn(sess, sibling.id, "user", "Sibling turn 2")
+        await sess.commit()
+
+        primary_id = primary.id
+        sibling_id = sibling.id
+
+    # Close via /end
+    response = await app_client.post(
+        "/api/v1/calls/el-conv-merge-test-001/end",
+        json={"reason": "user_hangup"},
+    )
+    assert (
+        response.status_code == 200
+    ), f"Expected 200, got {response.status_code}: {response.json()}"
+
+    # Verify: primary session should have 3 turns (absorbed sibling turns)
+    async with seeded_db.async_session_factory() as sess:
+        turns = await get_transcript(sess, primary_id)
+        assert len(turns) == 3, (
+            f"Expected 3 turns (1 primary + 2 sibling) after merge, got {len(turns)}. "
+            f"Merge must run inside close_session() before summarize fires."
+        )
+
+        # Sibling must be marked as merged
+        result = await sess.execute(
+            select(CallSession).where(CallSession.id == sibling_id)
+        )
+        sibling_reloaded = result.scalar_one()
+        assert sibling_reloaded.merged_into_session_id == primary_id, (
+            f"Sibling must have merged_into_session_id={primary_id!r}, "
+            f"got {sibling_reloaded.merged_into_session_id!r}"
+        )
+
+
+async def test_close_session_no_siblings_unaffected(seeded_db, app_client):
+    """close_session() with no siblings completes normally — no errors, no side effects.
+
+    Spec: Requirement: Integration with close_session — "No siblings found — close_session unaffected"
+    """
+    el_conv_id = "el-conv-no-siblings-test"
+    await _create_session(seeded_db, elevenlabs_conversation_id=el_conv_id)
+
+    response = await app_client.post(
+        f"/api/v1/calls/{el_conv_id}/end",
+        json={"reason": "user_hangup"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "completed"
+
+
+async def test_reconcile_session_merges_siblings(seeded_db, app_client):
+    """_reconcile_session() also merges sibling turns before scheduling summarize.
+
+    Spec: Design — "_reconcile_session integration: Call _merge_sibling_sessions at end too"
+    When a session is reconciled (no EL ID → matched by client/lead), siblings are absorbed.
+    """
+    from app.calls.models import CallSession
+    from app.calls.service import add_transcript_turn, get_transcript
+    from sqlalchemy import select
+
+    now = datetime.now(timezone.utc)
+    assert seeded_db.async_session_factory is not None
+
+    primary_id = None
+    sibling_id = None
+    async with seeded_db.async_session_factory() as sess:
+        # Primary orphan session (no EL ID, will be reconciled)
+        primary = CallSession(
+            id=str(__import__("uuid").uuid4()),
+            client_id="quintana-seguros",
+            lead_id="test-lead-end-001",
+            elevenlabs_conversation_id=None,
+            status="initiated",
+            started_at=now - timedelta(seconds=20),
+        )
+        # Sibling orphan — also no EL ID, same client/lead/window
+        sibling = CallSession(
+            id=str(__import__("uuid").uuid4()),
+            client_id="quintana-seguros",
+            lead_id="test-lead-end-001",
+            elevenlabs_conversation_id=None,
+            status="abandoned",
+            started_at=now - timedelta(seconds=40),
+        )
+        sess.add_all([primary, sibling])
+        await sess.flush()
+
+        await add_transcript_turn(sess, primary.id, "agent", "Primary turn")
+        await add_transcript_turn(sess, sibling.id, "user", "Sibling turn")
+        await sess.commit()
+
+        primary_id = primary.id
+        sibling_id = sibling.id
+
+    # Trigger reconciliation by using unknown conv_id + hints
+    response = await app_client.post(
+        "/api/v1/calls/conv_reconcile_merge_test/end",
+        json={
+            "reason": "user_hangup",
+            "client_id": "quintana-seguros",
+            "lead_id": "test-lead-end-001",
+        },
+    )
+    assert response.status_code == 200
+
+    # The reconciled session must have absorbed sibling turns
+    async with seeded_db.async_session_factory() as sess:
+        turns = await get_transcript(sess, primary_id)
+        assert len(turns) == 2, (
+            f"Expected 2 turns after reconciliation+merge, got {len(turns)}. "
+            f"_reconcile_session() must call _merge_sibling_sessions()."
+        )
+
+        result = await sess.execute(
+            select(CallSession).where(CallSession.id == sibling_id)
+        )
+        sibling_reloaded = result.scalar_one()
+        assert sibling_reloaded.merged_into_session_id == primary_id
+
+
 async def test_end_reconciliation_duration_seconds_is_integer(seeded_db, app_client):
     """Reconciled session close → response duration_seconds is also an integer.
 

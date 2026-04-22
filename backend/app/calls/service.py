@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import structlog
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.calls.models import CallSession, TranscriptTurn
@@ -206,29 +206,52 @@ async def get_call_metrics(
     completed_flag = case((CallSession.status == "completed", 1))
     abandoned_flag = case((CallSession.status == "abandoned", 1))
 
-    stmt = select(
-        func.count(CallSession.id).label("total_calls"),
-        func.count(completed_flag).label("completed_calls"),
-        func.count(abandoned_flag).label("abandoned_calls"),
-        func.coalesce(
-            func.sum(
-                case((CallSession.status == "completed", CallSession.duration_seconds))
-            ),
-            0.0,
-        ).label("total_duration_seconds"),
-        func.coalesce(
-            func.avg(
-                case((CallSession.status == "completed", CallSession.duration_seconds))
-            ),
-            0.0,
-        ).label("average_duration_seconds"),
-        func.coalesce(
-            func.sum(
-                case((CallSession.status == "completed", CallSession.billable_minutes))
-            ),
-            0,
-        ).label("total_billable_minutes"),
-    ).where(CallSession.client_id == client_id)
+    stmt = (
+        select(
+            func.count(CallSession.id).label("total_calls"),
+            func.count(completed_flag).label("completed_calls"),
+            func.count(abandoned_flag).label("abandoned_calls"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            CallSession.status == "completed",
+                            CallSession.duration_seconds,
+                        )
+                    )
+                ),
+                0.0,
+            ).label("total_duration_seconds"),
+            func.coalesce(
+                func.avg(
+                    case(
+                        (
+                            CallSession.status == "completed",
+                            CallSession.duration_seconds,
+                        )
+                    )
+                ),
+                0.0,
+            ).label("average_duration_seconds"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            CallSession.status == "completed",
+                            CallSession.billable_minutes,
+                        )
+                    )
+                ),
+                0,
+            ).label("total_billable_minutes"),
+        )
+        .where(CallSession.client_id == client_id)
+        .where(
+            CallSession.merged_into_session_id.is_(
+                None
+            )  # exclude merged siblings (Issue #22)
+        )
+    )
 
     if lead_id is not None:
         stmt = stmt.where(CallSession.lead_id == lead_id)
@@ -267,6 +290,8 @@ async def list_sessions_for_client(
     q = select(CallSession).where(CallSession.client_id == client_id)
     if lead_id is not None:
         q = q.where(CallSession.lead_id == lead_id)
+    # Exclude merged sessions — they are absorbed into authoritative sessions (Issue #22)
+    q = q.where(CallSession.merged_into_session_id.is_(None))
     q = q.order_by(CallSession.started_at.desc())
     result = await session.execute(q)
     return list(result.scalars().all())
@@ -312,6 +337,71 @@ async def get_session_by_elevenlabs_id(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def _merge_sibling_sessions(
+    session: AsyncSession,
+    *,
+    completed_session: CallSession,
+) -> list[str]:
+    """Re-assign transcript turns from sibling sessions into the completed one.
+
+    Sibling criteria (ALL must match):
+    - same client_id and lead_id as completed_session
+    - id != completed_session.id
+    - status IN ('initiated', 'abandoned')
+    - elevenlabs_conversation_id IS NULL
+    - started_at within ±RECONCILIATION_WINDOW_SECONDS of completed_session.started_at
+    - merged_into_session_id IS NULL (prevent double-merge)
+
+    Returns list of merged sibling session IDs (empty if none found).
+    Caller MUST flush after — this function does NOT flush.
+    """
+    if completed_session.started_at is None:
+        return []
+
+    started = completed_session.started_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+
+    window_start = started - timedelta(seconds=RECONCILIATION_WINDOW_SECONDS)
+    window_end = started + timedelta(seconds=RECONCILIATION_WINDOW_SECONDS)
+
+    result = await session.execute(
+        select(CallSession)
+        .where(CallSession.client_id == completed_session.client_id)
+        .where(CallSession.lead_id == completed_session.lead_id)
+        .where(CallSession.id != completed_session.id)
+        .where(CallSession.status.in_(["initiated", "abandoned"]))
+        .where(CallSession.elevenlabs_conversation_id.is_(None))
+        .where(CallSession.started_at >= window_start)
+        .where(CallSession.started_at <= window_end)
+        .where(CallSession.merged_into_session_id.is_(None))
+    )
+    siblings = list(result.scalars().all())
+
+    if not siblings:
+        return []
+
+    sibling_ids = [s.id for s in siblings]
+
+    # Bulk-reassign transcript turns from all siblings to completed session
+    await session.execute(
+        update(TranscriptTurn)
+        .where(TranscriptTurn.session_id.in_(sibling_ids))
+        .values(session_id=completed_session.id)
+    )
+
+    # Mark each sibling as merged
+    for sibling in siblings:
+        sibling.merged_into_session_id = completed_session.id
+
+    # Recount turns on completed session using existing count_turns()
+    user_turns, agent_turns = await count_turns(session, completed_session.id)
+    completed_session.total_user_turns = user_turns
+    completed_session.total_agent_turns = agent_turns
+
+    return sibling_ids
 
 
 async def _reconcile_session(
@@ -390,7 +480,17 @@ async def _reconcile_session(
             lead.call_count = (lead.call_count or 0) + 1
             lead.last_called_at = now
 
+    # Merge sibling sessions BEFORE flush (Issue #22)
+    merged_ids = await _merge_sibling_sessions(session, completed_session=cs)
+
     await session.flush()
+
+    if merged_ids:
+        structlog.get_logger().info(
+            "reconcile_session_merged_siblings",
+            reconciled_session_id=cs.id,
+            merged_sibling_ids=merged_ids,
+        )
 
     # Emit reconciliation log
     structlog.get_logger().info(
@@ -488,7 +588,17 @@ async def close_session(
             lead.call_count = (lead.call_count or 0) + 1
             lead.last_called_at = now
 
+    # Merge sibling sessions BEFORE flush so summarizer sees full transcript (Issue #22)
+    merged_ids = await _merge_sibling_sessions(session, completed_session=cs)
+
     await session.flush()
+
+    if merged_ids:
+        structlog.get_logger().info(
+            "close_session_merged_siblings",
+            session_id=session_id,
+            merged_sibling_ids=merged_ids,
+        )
 
     # Fire-and-forget summary generation (CAP-4)
     # Non-blocking — MUST NOT delay session close response.

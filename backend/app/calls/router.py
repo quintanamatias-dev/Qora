@@ -103,6 +103,7 @@ def _session_to_dict(cs) -> dict:
         "total_agent_turns": cs.total_agent_turns,
         "summary": cs.summary,
         "extracted_facts": cs.extracted_facts,
+        "merged_into_session_id": cs.merged_into_session_id,
     }
 
 
