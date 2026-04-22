@@ -26,6 +26,14 @@ export interface Lead {
   last_called_at: string | null
   created_at: string | null
   updated_at: string | null
+  // Phase 2 CRM fields
+  summary_last_call: string | null
+  objections_heard: string[] | null
+  interest_level: number | null
+  extracted_facts: Record<string, unknown> | null
+  do_not_call: boolean
+  next_action: string | null
+  next_action_at: string | null
 }
 
 export interface CreateLeadPayload {
@@ -53,6 +61,13 @@ export interface CallSession {
   ended_at: string | null
   duration_seconds: number | null
   summary: string | null
+  // Phase 2 fields
+  outcome: string | null
+  closed_reason: string | null
+  billable_minutes: number | null
+  total_user_turns: number | null
+  total_agent_turns: number | null
+  extracted_facts: Record<string, unknown> | null
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

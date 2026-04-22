@@ -26,6 +26,14 @@ const mockLead: Lead = {
   last_called_at: null,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: null,
+  // Phase 2 CRM fields
+  summary_last_call: null,
+  objections_heard: null,
+  interest_level: null,
+  extracted_facts: null,
+  do_not_call: false,
+  next_action: null,
+  next_action_at: null,
 }
 
 function mockFetch(status: number, body: unknown) {

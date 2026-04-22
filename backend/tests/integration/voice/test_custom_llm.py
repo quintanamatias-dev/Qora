@@ -1087,10 +1087,12 @@ async def test_tool_call_persists_tool_call_and_tool_result_turns(app_client):
 
     # Both tool turns must appear BEFORE the final clean agent turn (filler_detected=0)
     # Note: there may also be a filler agent turn (filler_detected=1) — we want the CLEAN one
-    clean_agent_turns = [t for t in turns if t.role == "agent" and not t.filler_detected]
-    assert len(clean_agent_turns) >= 1, (
-        "At least one clean agent turn (filler_detected=0) must exist after tool call"
-    )
+    clean_agent_turns = [
+        t for t in turns if t.role == "agent" and not t.filler_detected
+    ]
+    assert (
+        len(clean_agent_turns) >= 1
+    ), "At least one clean agent turn (filler_detected=0) must exist after tool call"
     # Find actual clean agent turn index
     clean_agent_list_idx = next(
         i for i, t in enumerate(turns) if t.role == "agent" and not t.filler_detected
@@ -1162,8 +1164,12 @@ async def test_tool_call_invalid_json_args_fallback_to_empty_dict(app_client):
         turns = await get_transcript(sess, session_id)
 
     roles = [t.role for t in turns]
-    assert "tool_call" in roles, "tool_call turn must be persisted even with invalid JSON args"
-    assert "tool_result" in roles, "tool_result turn must be persisted even with invalid JSON args"
+    assert (
+        "tool_call" in roles
+    ), "tool_call turn must be persisted even with invalid JSON args"
+    assert (
+        "tool_result" in roles
+    ), "tool_result turn must be persisted even with invalid JSON args"
 
     # Verify tool_call content has args={} fallback
     tool_call_turn = next(t for t in turns if t.role == "tool_call")
@@ -1319,7 +1325,9 @@ async def test_no_filler_path_stores_single_clean_agent_turn(app_client):
 
 
 @respx.mock
-async def test_filler_emitted_but_empty_llm_response_stores_only_filler_turn(app_client):
+async def test_filler_emitted_but_empty_llm_response_stores_only_filler_turn(
+    app_client,
+):
     """Filler emitted + LLM returns empty response → only filler turn stored, no empty agent turn.
 
     CAP-3 spec: 'When filler is emitted but LLM returns empty response,

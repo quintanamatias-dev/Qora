@@ -33,6 +33,7 @@ from app.calls.service import (
     get_session,
     get_session_by_elevenlabs_id,
     get_transcript,
+    list_sessions_for_client,
 )
 from app.core.database import get_session as db_session
 
@@ -75,6 +76,58 @@ async def get_call_metrics_endpoint(
         **metrics,
         period=MetricsPeriod(date_from=date_from, date_to=date_to),
     )
+
+
+# ---------------------------------------------------------------------------
+# Session serializer helper — shared by list and detail endpoints
+# ---------------------------------------------------------------------------
+
+
+def _session_to_dict(cs) -> dict:
+    """Serialize a CallSession ORM object to a response dict.
+
+    Includes summary and extracted_facts for CRM use.
+    """
+    return {
+        "id": cs.id,
+        "client_id": cs.client_id,
+        "lead_id": cs.lead_id,
+        "status": cs.status,
+        "outcome": cs.outcome,
+        "closed_reason": cs.closed_reason,
+        "started_at": cs.started_at.isoformat() if cs.started_at else None,
+        "ended_at": cs.ended_at.isoformat() if cs.ended_at else None,
+        "duration_seconds": cs.duration_seconds,
+        "billable_minutes": cs.billable_minutes,
+        "total_user_turns": cs.total_user_turns,
+        "total_agent_turns": cs.total_agent_turns,
+        "summary": cs.summary,
+        "extracted_facts": cs.extracted_facts,
+    }
+
+
+# ---------------------------------------------------------------------------
+# List sessions endpoint — MUST be registered BEFORE /{session_id} routes
+# ---------------------------------------------------------------------------
+
+
+@router.get("")
+async def list_call_sessions(
+    client_id: str,
+    lead_id: str | None = None,
+):
+    """List all call sessions for a client, optionally filtered by lead.
+
+    Query parameters:
+    - **client_id** (required): Tenant client id to scope results.
+    - **lead_id** (optional): Filter to a specific lead.
+
+    Returns sessions ordered by started_at descending (most recent first).
+    """
+    async with db_session() as db:
+        sessions = await list_sessions_for_client(db, client_id, lead_id)
+
+    return [_session_to_dict(cs) for cs in sessions]
 
 
 # ---------------------------------------------------------------------------
@@ -237,21 +290,9 @@ async def get_call_session(session_id: str):
         if cs is None:
             raise HTTPException(status_code=404, detail="Call session not found")
 
-        return {
-            "id": cs.id,
-            "client_id": cs.client_id,
-            "lead_id": cs.lead_id,
-            "status": cs.status,
-            "outcome": cs.outcome,
-            "closed_reason": cs.closed_reason,
-            "started_at": cs.started_at.isoformat() if cs.started_at else None,
-            "ended_at": cs.ended_at.isoformat() if cs.ended_at else None,
-            "duration_seconds": cs.duration_seconds,
-            "billable_minutes": cs.billable_minutes,
-            "total_user_turns": cs.total_user_turns,
-            "total_agent_turns": cs.total_agent_turns,
-            "elevenlabs_conversation_id": cs.elevenlabs_conversation_id,
-        }
+        result = _session_to_dict(cs)
+        result["elevenlabs_conversation_id"] = cs.elevenlabs_conversation_id
+        return result
 
 
 @router.get("/{session_id}/transcript", response_model=SessionTranscriptResponse)

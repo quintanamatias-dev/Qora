@@ -282,3 +282,91 @@ async def test_get_lead_history_unknown_lead_returns_404(leads_client: AsyncClie
     """GET /leads/{id}/history for non-existent lead returns 404."""
     response = await leads_client.get("/api/v1/leads/ghost-lead/history")
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 fields — _lead_to_dict() must include all CRM summary fields
+# REQ: Extend Lead Serializer with Phase 2 Fields
+# ---------------------------------------------------------------------------
+
+
+PHASE2_FIELDS = [
+    "summary_last_call",
+    "objections_heard",
+    "interest_level",
+    "extracted_facts",
+    "do_not_call",
+    "next_action",
+    "next_action_at",
+]
+
+
+async def test_get_lead_includes_phase2_fields(leads_client: AsyncClient):
+    """GET /leads/{id} response includes all 7 Phase 2 CRM fields (null-safe)."""
+    response = await leads_client.get("/api/v1/leads/lead-quintana-001")
+    assert response.status_code == 200
+    data = response.json()
+    for field in PHASE2_FIELDS:
+        assert field in data, f"Missing Phase 2 field: {field!r}"
+
+
+async def test_list_leads_includes_phase2_fields(leads_client: AsyncClient):
+    """GET /leads list response — each lead includes all 7 Phase 2 fields."""
+    response = await leads_client.get("/api/v1/leads?client_id=quintana-seguros")
+    assert response.status_code == 200
+    leads = response.json()
+    assert len(leads) > 0
+    lead = leads[0]
+    for field in PHASE2_FIELDS:
+        assert field in lead, f"Missing Phase 2 field in list: {field!r}"
+
+
+async def test_create_lead_response_includes_phase2_fields(leads_client: AsyncClient):
+    """POST /leads response includes all 7 Phase 2 fields (new leads have nulls)."""
+    response = await leads_client.post(
+        "/api/v1/leads",
+        json={
+            "client_id": "quintana-seguros",
+            "name": "New Phase2 Lead",
+            "phone": "+5411777777",
+        },
+    )
+    assert response.status_code == 201
+    data = response.json()
+    for field in PHASE2_FIELDS:
+        assert field in data, f"Missing Phase 2 field in create response: {field!r}"
+
+
+async def test_patch_status_response_includes_phase2_fields(leads_client: AsyncClient):
+    """PATCH /leads/{id}/status response includes all 7 Phase 2 fields."""
+    response = await leads_client.patch(
+        "/api/v1/leads/lead-quintana-001/status",
+        json={"status": "called"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    for field in PHASE2_FIELDS:
+        assert field in data, f"Missing Phase 2 field in patch response: {field!r}"
+
+
+async def test_new_lead_phase2_fields_are_null_safe(leads_client: AsyncClient):
+    """New leads have null for optional Phase 2 fields and False for do_not_call."""
+    response = await leads_client.post(
+        "/api/v1/leads",
+        json={
+            "client_id": "quintana-seguros",
+            "name": "Null Check Lead",
+            "phone": "+5411666666",
+        },
+    )
+    assert response.status_code == 201
+    data = response.json()
+    # Optional fields must be null, not missing
+    assert data["summary_last_call"] is None
+    assert data["objections_heard"] is None
+    assert data["interest_level"] is None
+    assert data["extracted_facts"] is None
+    assert data["next_action"] is None
+    assert data["next_action_at"] is None
+    # do_not_call must default to False
+    assert data["do_not_call"] is False

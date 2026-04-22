@@ -99,10 +99,18 @@ async def test_get_call_metrics_happy_path(seeded_db):
     from app.calls.service import get_call_metrics
 
     # Seed 3 completed + 1 abandoned
-    await _seed_call(seeded_db, status="completed", duration_seconds=60.0, billable_minutes=1)
-    await _seed_call(seeded_db, status="completed", duration_seconds=120.0, billable_minutes=2)
-    await _seed_call(seeded_db, status="completed", duration_seconds=180.0, billable_minutes=3)
-    await _seed_call(seeded_db, status="abandoned", duration_seconds=None, billable_minutes=None)
+    await _seed_call(
+        seeded_db, status="completed", duration_seconds=60.0, billable_minutes=1
+    )
+    await _seed_call(
+        seeded_db, status="completed", duration_seconds=120.0, billable_minutes=2
+    )
+    await _seed_call(
+        seeded_db, status="completed", duration_seconds=180.0, billable_minutes=3
+    )
+    await _seed_call(
+        seeded_db, status="abandoned", duration_seconds=None, billable_minutes=None
+    )
 
     assert seeded_db.async_session_factory is not None
     async with seeded_db.async_session_factory() as sess:
@@ -148,8 +156,20 @@ async def test_get_call_metrics_date_range_filter(seeded_db):
     early = datetime(2026, 1, 1, tzinfo=timezone.utc)
     late = datetime(2026, 3, 1, tzinfo=timezone.utc)
 
-    await _seed_call(seeded_db, status="completed", duration_seconds=60.0, billable_minutes=1, started_at=early)
-    await _seed_call(seeded_db, status="completed", duration_seconds=90.0, billable_minutes=2, started_at=late)
+    await _seed_call(
+        seeded_db,
+        status="completed",
+        duration_seconds=60.0,
+        billable_minutes=1,
+        started_at=early,
+    )
+    await _seed_call(
+        seeded_db,
+        status="completed",
+        duration_seconds=90.0,
+        billable_minutes=2,
+        started_at=late,
+    )
 
     assert seeded_db.async_session_factory is not None
     async with seeded_db.async_session_factory() as sess:
@@ -170,8 +190,20 @@ async def test_get_call_metrics_lead_filter(seeded_db):
     """lead_id filter scopes aggregates to that lead only (REQ-1 lead scenario)."""
     from app.calls.service import get_call_metrics
 
-    await _seed_call(seeded_db, lead_id="lead-001", status="completed", duration_seconds=60.0, billable_minutes=1)
-    await _seed_call(seeded_db, lead_id="lead-002", status="completed", duration_seconds=120.0, billable_minutes=2)
+    await _seed_call(
+        seeded_db,
+        lead_id="lead-001",
+        status="completed",
+        duration_seconds=60.0,
+        billable_minutes=1,
+    )
+    await _seed_call(
+        seeded_db,
+        lead_id="lead-002",
+        status="completed",
+        duration_seconds=120.0,
+        billable_minutes=2,
+    )
 
     assert seeded_db.async_session_factory is not None
     async with seeded_db.async_session_factory() as sess:
@@ -213,9 +245,30 @@ async def test_get_call_metrics_client_isolation(seeded_db, tmp_path):
         await sess.commit()
 
     # Seed 2 calls for quintana-seguros, 1 for other-client
-    await _seed_call(seeded_db, client_id="quintana-seguros", lead_id="lead-001", status="completed", duration_seconds=60.0, billable_minutes=1)
-    await _seed_call(seeded_db, client_id="quintana-seguros", lead_id="lead-001", status="completed", duration_seconds=60.0, billable_minutes=1)
-    await _seed_call(seeded_db, client_id="other-client", lead_id="lead-other", status="completed", duration_seconds=999.0, billable_minutes=17)
+    await _seed_call(
+        seeded_db,
+        client_id="quintana-seguros",
+        lead_id="lead-001",
+        status="completed",
+        duration_seconds=60.0,
+        billable_minutes=1,
+    )
+    await _seed_call(
+        seeded_db,
+        client_id="quintana-seguros",
+        lead_id="lead-001",
+        status="completed",
+        duration_seconds=60.0,
+        billable_minutes=1,
+    )
+    await _seed_call(
+        seeded_db,
+        client_id="other-client",
+        lead_id="lead-other",
+        status="completed",
+        duration_seconds=999.0,
+        billable_minutes=17,
+    )
 
     async with seeded_db.async_session_factory() as sess:
         result = await get_call_metrics(sess, client_id="quintana-seguros")
@@ -254,7 +307,9 @@ async def test_metrics_endpoint_returns_200_with_data(seeded_db, app_client):
     """GET /calls/metrics?client_id=... returns 200 with populated body (REQ-2 happy path)."""
     from app.calls.schemas import CallMetricsResponse
 
-    await _seed_call(seeded_db, status="completed", duration_seconds=120.0, billable_minutes=2)
+    await _seed_call(
+        seeded_db, status="completed", duration_seconds=120.0, billable_minutes=2
+    )
 
     response = await app_client.get(
         "/api/v1/calls/metrics",

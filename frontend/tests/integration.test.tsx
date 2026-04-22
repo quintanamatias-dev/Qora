@@ -178,12 +178,15 @@ describe('REQ-6.3 App shell smoke tests', () => {
   })
 
   it('LeadsPage renders heading without crashing', () => {
+    const qc = createTestClient()
     render(
-      <MemoryRouter initialEntries={['/app/demo-client/leads']}>
-        <Routes>
-          <Route path="/app/:clientId/*" element={<LeadsPage />} />
-        </Routes>
-      </MemoryRouter>
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/app/demo-client/leads']}>
+          <Routes>
+            <Route path="/app/:clientId/*" element={<LeadsPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
     )
     expect(screen.getByRole('heading', { name: 'Leads' })).toBeInTheDocument()
   })

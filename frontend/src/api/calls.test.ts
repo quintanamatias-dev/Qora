@@ -30,6 +30,13 @@ const mockSession: CallSession = {
   ended_at: '2026-01-15T10:05:00Z',
   duration_seconds: 300,
   summary: 'Customer interested in coverage.',
+  // Phase 2 fields
+  outcome: 'completed',
+  closed_reason: 'agent_goodbye',
+  billable_minutes: 5,
+  total_user_turns: 3,
+  total_agent_turns: 4,
+  extracted_facts: null,
 }
 
 const mockTranscript: SessionTranscript = {
