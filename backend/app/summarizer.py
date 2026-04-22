@@ -1,14 +1,23 @@
-"""QORA — Post-call summarizer and fact extractor (CAP-4, Phase 2b).
+"""QORA — Post-call summarizer and fact extractor (CAP-4, Phase 5).
 
 Generates a concise summary and structured facts from a call transcript
-using a single GPT-4o-mini call (non-streaming, JSON mode).
+using a single GPT-4o-mini call with OpenAI Structured Outputs (parse mode).
+
+Phase 5 changes:
+- Switched from `create()` + JSON mode to `parse(response_format=PostCallAnalysis)`
+- Imports PostCallAnalysis + ANALYSIS_SYSTEM_PROMPT from analysis_schema (N8N boundary)
+- max_tokens increased to 1024 (3 new nested axes need more tokens)
+- _SYSTEM_PROMPT removed — now lives in analysis_schema.ANALYSIS_SYSTEM_PROMPT
+- _call_gpt_summarize updated to use .parse() and return typed Pydantic result
+- _merge_facts_into_lead preserves all existing merge logic + new axes flow naturally
 
 Flow:
 1. Load transcript turns for the session from DB.
 2. If 0 turns → skip (no GPT call, no side-effects).
-3. Single GPT-4o-mini call → summary (<=150 tokens) + extracted_facts.
-4. Persist summary + facts to CallSession.
-5. Merge facts into Lead (objection union, latest values, do_not_call flag).
+3. Single GPT-4o-mini call → PostCallAnalysis Pydantic object.
+4. model_dump() → facts dict (summary popped out).
+5. Persist summary + facts to CallSession.
+6. Merge facts into Lead (objection union, latest values, do_not_call flag).
 
 Failures are always caught and logged — MUST NOT raise, MUST NOT affect
 session close or any other operation.
@@ -24,34 +33,11 @@ from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analysis_schema import ANALYSIS_SYSTEM_PROMPT, PostCallAnalysis
 from app.calls.models import CallSession, TranscriptTurn
 from app.leads.models import Lead
 
 logger = structlog.get_logger(__name__)
-
-# ---------------------------------------------------------------------------
-# System prompt for GPT-4o-mini
-# ---------------------------------------------------------------------------
-
-_SYSTEM_PROMPT = """\
-You are a call center analyst. You receive a transcript from an insurance sales call \
-and must return a JSON object with exactly these fields:
-
-{
-  "summary": "<string, max 150 tokens, plain language summary of the call>",
-  "objections": ["<list of objections the lead raised, or empty list>"],
-  "interest_level": <integer 0-100, estimated interest level of the lead>,
-  "current_insurance": "<current insurance carrier if mentioned, or null>",
-  "next_action_suggested": "<one of: call_again, send_quote, wait, do_not_call>",
-  "misc_facts": {<any other relevant facts extracted, or empty object>}
-}
-
-Rules:
-- summary MUST be concise, max 150 tokens
-- interest_level: 0 = completely uninterested, 100 = very interested and ready to buy
-- next_action_suggested: use do_not_call only if the lead explicitly asked not to be called again
-- Always return valid JSON, nothing else
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -112,13 +98,31 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
     # Build transcript text for GPT
     transcript_text = _format_transcript(turns)
 
-    # Call GPT-4o-mini
-    summary, facts = await _call_gpt_summarize(transcript_text)
-
-    # Persist to CallSession
+    # Call GPT-4o-mini with structured outputs
+    # On failure, persist a partial-analysis marker so the record shows
+    # that analysis was attempted but failed (spec requirement: CRITICAL 1).
     user_turns = sum(1 for t in turns if t.role == "user")
     agent_turns = sum(1 for t in turns if t.role == "agent")
 
+    try:
+        summary, facts = await _call_gpt_summarize(transcript_text)
+    except Exception as gpt_exc:
+        error_msg = str(gpt_exc)
+        logger.warning(
+            "summarizer_analysis_failed_partial_marker",
+            session_id=session_id,
+            error=error_msg,
+        )
+        cs.total_user_turns = user_turns
+        cs.total_agent_turns = agent_turns
+        cs.extracted_facts = {
+            "_analysis_status": "failed",
+            "_analysis_error": error_msg,
+        }
+        await db.flush()
+        return
+
+    # Persist to CallSession
     cs.summary = summary
     cs.extracted_facts = facts
     cs.total_user_turns = user_turns
@@ -138,6 +142,7 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
         agent_turns=agent_turns,
         interest_level=facts.get("interest_level"),
         next_action=facts.get("next_action_suggested"),
+        call_outcome=facts.get("call_outcome", {}).get("classification"),
     )
 
 
@@ -157,11 +162,26 @@ def _format_transcript(turns: list[TranscriptTurn]) -> str:
     return "\n".join(lines)
 
 
-async def _call_gpt_summarize(transcript_text: str) -> tuple[str, dict[str, Any]]:
-    """Make a single GPT-4o-mini call to summarize and extract facts.
+def _get_openai_client() -> tuple[AsyncOpenAI, str]:
+    """Build an OpenAI client from application settings.
 
-    Uses JSON mode to ensure structured output. On failure, raises
-    so the caller (_run_summarizer) can handle it uniformly.
+    Extracted as a separate function so tests can patch it easily.
+    Returns (client, model_name).
+    """
+    from app.core.config import Settings
+
+    settings = Settings()
+    api_key = settings.openai_api_key.get_secret_value()
+    model = settings.openai_model_fast  # gpt-4o-mini
+    client = AsyncOpenAI(api_key=api_key)
+    return client, model
+
+
+async def _call_gpt_summarize(transcript_text: str) -> tuple[str, dict[str, Any]]:
+    """Make a single GPT-4o-mini call using Structured Outputs (parse mode).
+
+    Uses PostCallAnalysis as response_format to guarantee schema compliance.
+    On failure, raises so the caller (_run_summarizer) can handle it uniformly.
 
     Args:
         transcript_text: Formatted call transcript.
@@ -170,51 +190,45 @@ async def _call_gpt_summarize(transcript_text: str) -> tuple[str, dict[str, Any]
         Tuple of (summary_text, extracted_facts_dict).
 
     Raises:
-        Exception: On API failure, JSON parse error, or missing fields.
+        Exception: On API failure, schema parse error, or refusal.
     """
-    from app.core.config import Settings
+    client, model = _get_openai_client()
 
-    settings = Settings()
-    api_key = settings.openai_api_key.get_secret_value()
-    model = settings.openai_model_fast  # gpt-4o-mini
-
-    client = AsyncOpenAI(api_key=api_key)
-
-    response = await client.chat.completions.create(
+    response = await client.chat.completions.parse(
         model=model,
         messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": f"Transcript:\n\n{transcript_text}",
             },
         ],
-        response_format={"type": "json_object"},
-        max_tokens=512,
+        response_format=PostCallAnalysis,
+        max_tokens=1024,
         temperature=0.2,
     )
 
-    raw_content = response.choices[0].message.content or "{}"
+    message = response.choices[0].message
 
-    try:
-        data = json.loads(raw_content)
-    except json.JSONDecodeError as exc:
-        logger.error(
-            "summarizer_json_parse_error",
-            raw_content=raw_content[:500],
-            error=str(exc),
+    # Handle refusal (OpenAI can refuse to analyze certain content)
+    if message.refusal:
+        logger.warning(
+            "summarizer_llm_refusal",
+            refusal=message.refusal[:200],
         )
-        raise
+        raise ValueError(f"LLM refused to analyze transcript: {message.refusal[:100]}")
 
-    summary = str(data.get("summary", ""))
+    if message.parsed is None:
+        logger.error("summarizer_parse_returned_none")
+        raise ValueError("OpenAI parse() returned None — unexpected empty response")
 
-    facts: dict[str, Any] = {
-        "objections": data.get("objections", []),
-        "interest_level": data.get("interest_level", 50),
-        "current_insurance": data.get("current_insurance"),
-        "next_action_suggested": data.get("next_action_suggested", "wait"),
-        "misc_facts": data.get("misc_facts", {}),
-    }
+    analysis: PostCallAnalysis = message.parsed
+
+    # model_dump() gives us the full structured facts dict
+    facts = analysis.model_dump()
+
+    # Pop summary out — it's stored separately on CallSession
+    summary = str(facts.pop("summary", ""))
 
     return summary, facts
 
@@ -237,12 +251,13 @@ async def _merge_facts_into_lead(
     - interest_level ← latest value
     - extracted_facts ← merge: new non-null fields overwrite old
     - do_not_call ← True if next_action_suggested == "do_not_call"
+    - call_outcome, detected_interests, identified_problem ← overwrite (latest wins)
 
     Args:
         db: Active async DB session.
         lead_id: UUID of the lead to update.
         summary: Call summary text.
-        facts: Extracted facts dict from GPT.
+        facts: Extracted facts dict from GPT (already model_dump()'d).
     """
     lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
     lead = lead_result.scalar_one_or_none()
@@ -273,6 +288,8 @@ async def _merge_facts_into_lead(
         lead.interest_level = int(facts["interest_level"])
 
     # extracted_facts ← merge: new non-null fields overwrite old
+    # Analysis axes (call_outcome, detected_interests, identified_problem) use
+    # overwrite strategy (latest call wins — per spec).
     existing_facts: dict[str, Any] = {}
     if lead.extracted_facts:
         if isinstance(lead.extracted_facts, str):

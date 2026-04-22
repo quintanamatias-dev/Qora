@@ -13,8 +13,9 @@ import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router'
 import { useLead, useCallSessions } from '@/api/hooks'
 import { Badge } from '@/design/components/badge'
-import type { LeadStatus } from '@/api/types'
+import type { LeadStatus, DetectedInterests, IdentifiedProblem } from '@/api/types'
 import { CallHistoryList } from './call-history-list'
+import { AnalysisPanel } from './analysis-panel'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Pure helpers
@@ -139,6 +140,14 @@ export function LeadDetailPage() {
             {lead.summary_last_call ?? 'No summary yet'}
           </p>
         </div>
+
+        {/* Phase 5: Analysis panel — interests chips + problem card from last call */}
+        {lead.extracted_facts && (
+          <AnalysisPanel
+            interests={lead.extracted_facts.detected_interests as DetectedInterests | null}
+            problem={lead.extracted_facts.identified_problem as IdentifiedProblem | null}
+          />
+        )}
       </div>
 
       {/* Call History section */}

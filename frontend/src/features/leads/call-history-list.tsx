@@ -9,10 +9,11 @@
  *   - Empty: "No calls yet"
  */
 
-import type { CallSession } from '@/api/types'
+import type { CallSession, CallOutcome } from '@/api/types'
 import { Badge } from '@/design/components/badge'
 import { formatDuration } from '@/lib/format-duration'
 import { TranscriptViewer } from './transcript-viewer'
+import { CallOutcomeBadge } from './call-outcome-badge'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Props
@@ -72,6 +73,8 @@ export function CallHistoryList({
         const statusBadge = session.status === 'completed' ? 'success' : 'neutral'
         const summarySnippet = truncateSummary(session.summary)
 
+        const callOutcome = session.extracted_facts?.call_outcome as CallOutcome | null | undefined
+
         return (
           <div key={session.id} className="border border-outline/10 rounded-md overflow-hidden">
             {/* Session row — clickable */}
@@ -97,12 +100,14 @@ export function CallHistoryList({
                 {session.status}
               </Badge>
 
-              {/* Outcome */}
-              {session.outcome && (
+              {/* Phase 5: Call outcome badge (replaces/augments legacy outcome) */}
+              {callOutcome ? (
+                <CallOutcomeBadge outcome={callOutcome} />
+              ) : session.outcome ? (
                 <span className="text-xs text-on-surface-variant">
                   {session.outcome}
                 </span>
-              )}
+              ) : null}
 
               {/* Summary snippet */}
               {summarySnippet && (
@@ -121,7 +126,7 @@ export function CallHistoryList({
             {isExpanded && (
               <div
                 data-testid="transcript-viewer"
-                className="border-t border-outline/10 bg-surface-container-lowest"
+                className="border-t border-outline/10 bg-surface-container-lowest max-h-[500px] overflow-y-auto"
               >
                 <TranscriptViewer sessionId={session.id} />
               </div>
