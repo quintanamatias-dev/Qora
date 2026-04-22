@@ -460,3 +460,126 @@ def test_urgency_all_values():
     expected = {"high", "medium", "low"}
     actual = {e.value for e in Urgency}
     assert actual == expected
+
+
+# ---------------------------------------------------------------------------
+# Scenario: PostCallAnalysis.data_corrections field (Issue #21)
+# ---------------------------------------------------------------------------
+
+
+def test_post_call_analysis_has_data_corrections_field():
+    """PostCallAnalysis includes data_corrections field of type str with default ''."""
+    from app.analysis_schema import PostCallAnalysis
+
+    schema = PostCallAnalysis.model_json_schema()
+    properties = schema.get("properties", {})
+    assert (
+        "data_corrections" in properties
+    ), "PostCallAnalysis must have data_corrections field — Issue #21"
+
+
+def test_post_call_analysis_data_corrections_defaults_to_empty_string():
+    """PostCallAnalysis.data_corrections defaults to '' (empty string)."""
+    from app.analysis_schema import (
+        PostCallAnalysis,
+        CallOutcome,
+        DetectedInterests,
+        IdentifiedProblem,
+    )
+
+    analysis = PostCallAnalysis(
+        summary="Test.",
+        objections=[],
+        interest_level=50,
+        current_insurance=None,
+        next_action_suggested="wait",
+        misc_notes="",
+        call_outcome=CallOutcome(
+            classification="busy",
+            reason="Lead was driving.",
+            engagement_quality="none",
+        ),
+        detected_interests=DetectedInterests(),
+        identified_problem=IdentifiedProblem(
+            primary_need="Unknown.",
+            urgency="low",
+        ),
+    )
+
+    assert (
+        analysis.data_corrections == ""
+    ), "data_corrections must default to '' — Issue #21"
+
+
+def test_post_call_analysis_data_corrections_accepts_string():
+    """PostCallAnalysis.data_corrections accepts a non-empty string value."""
+    from app.analysis_schema import (
+        PostCallAnalysis,
+        CallOutcome,
+        DetectedInterests,
+        IdentifiedProblem,
+    )
+
+    analysis = PostCallAnalysis(
+        summary="Lead corrected car model.",
+        objections=[],
+        interest_level=70,
+        current_insurance=None,
+        next_action_suggested="call_again",
+        misc_notes="",
+        data_corrections="car_model: Polo Trend",
+        call_outcome=CallOutcome(
+            classification="interested",
+            reason="Lead engaged.",
+            engagement_quality="high",
+        ),
+        detected_interests=DetectedInterests(),
+        identified_problem=IdentifiedProblem(
+            primary_need="Needs coverage.",
+            urgency="medium",
+        ),
+    )
+
+    assert analysis.data_corrections == "car_model: Polo Trend"
+
+
+def test_post_call_analysis_data_corrections_rejects_dict():
+    """PostCallAnalysis.data_corrections is str — raises ValidationError when dict is assigned."""
+    from pydantic import ValidationError
+    from app.analysis_schema import (
+        PostCallAnalysis,
+        CallOutcome,
+        DetectedInterests,
+        IdentifiedProblem,
+    )
+
+    with pytest.raises((ValidationError, Exception)):
+        PostCallAnalysis(
+            summary="Test.",
+            objections=[],
+            interest_level=50,
+            current_insurance=None,
+            next_action_suggested="wait",
+            misc_notes="",
+            data_corrections={"car_model": "Polo Trend"},  # dict — must be rejected
+            call_outcome=CallOutcome(
+                classification="busy",
+                reason="Test.",
+                engagement_quality="none",
+            ),
+            detected_interests=DetectedInterests(),
+            identified_problem=IdentifiedProblem(
+                primary_need="Unknown.",
+                urgency="low",
+            ),
+        )
+
+
+def test_analysis_system_prompt_mentions_data_corrections():
+    """ANALYSIS_SYSTEM_PROMPT instructs LLM about data_corrections field."""
+    from app.analysis_schema import ANALYSIS_SYSTEM_PROMPT
+
+    prompt_lower = ANALYSIS_SYSTEM_PROMPT.lower()
+    assert (
+        "data_corrections" in prompt_lower or "correction" in prompt_lower
+    ), "ANALYSIS_SYSTEM_PROMPT must mention data_corrections — Issue #21"

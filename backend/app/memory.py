@@ -39,12 +39,20 @@ logger = structlog.get_logger()
 
 _TZ_BA = ZoneInfo("America/Argentina/Buenos_Aires")
 
-# Fixed ordering of facts keys — deterministic, not dict-insertion-order dependent.
-_FACTS_FIELDS = [
+# Tier 1: Known keys — fixed order, Spanish labels.
+# These always appear first so existing tests continue to pass.
+_KNOWN_FACTS: list[tuple[str, str]] = [
     ("current_insurance", "Seguro actual"),
     ("interest_level", "Nivel de interés"),
     ("next_action_suggested", "Acción sugerida"),
+    ("misc_notes", "Notas adicionales"),
+    ("data_corrections", "Correcciones de datos"),
+    ("summary", "Resumen"),
 ]
+
+# Build a lookup for fast membership checks
+_KNOWN_FACTS_KEYS: frozenset[str] = frozenset(k for k, _ in _KNOWN_FACTS)
+_KNOWN_FACTS_LABELS: dict[str, str] = {k: label for k, label in _KNOWN_FACTS}
 
 
 # ---------------------------------------------------------------------------
@@ -190,30 +198,130 @@ def _format_call_history(sessions: list[CallSession], tz: ZoneInfo) -> str:
 
 
 def _format_confirmed_facts(extracted_facts: dict | None) -> str:
-    """Format extracted_facts into a bulleted string in fixed field order.
+    """Format extracted_facts into a bulleted string.
+
+    Issue #21: Dynamic two-tier rendering.
+    Tier 1: Known keys in fixed order with Spanish labels (deterministic).
+    Tier 2: Unknown string/scalar keys alphabetically with raw key name as label.
+    Nested dicts: flattened to one-line summaries via _format_axis().
+    Lists: joined with ", ".
+    None/empty values: skipped.
 
     Args:
         extracted_facts: Parsed dict from Lead.extracted_facts, or None.
 
     Returns:
         Multi-line bullet string.
-        Empty string if no facts or no recognised keys.
+        Empty string if no facts or all values are empty/None.
     """
     if not extracted_facts:
         return ""
 
     lines: list[str] = []
 
-    for key, label in _FACTS_FIELDS:
+    # Tier 1: Known keys — fixed order, Spanish labels
+    for key, label in _KNOWN_FACTS:
         value = extracted_facts.get(key)
-        if value is None:
+        if value is None or value == "" or value == [] or value == {}:
             continue
-        if key == "interest_level":
-            lines.append(f"- {label}: {value}/100")
-        else:
-            lines.append(f"- {label}: {value}")
+        rendered = _render_fact_value(key, value)
+        if rendered:
+            lines.append(f"- {label}: {rendered}")
+
+    # Tier 2: Unknown keys — alphabetical, raw key as label
+    unknown_keys = sorted(k for k in extracted_facts if k not in _KNOWN_FACTS_KEYS)
+    for key in unknown_keys:
+        value = extracted_facts[key]
+        if value is None or value == "" or value == [] or value == {}:
+            continue
+        rendered = _render_fact_value(key, value)
+        if rendered:
+            label = key.replace("_", " ").title()
+            lines.append(f"- {label}: {rendered}")
 
     return "\n".join(lines)
+
+
+def _render_fact_value(key: str, value: object) -> str:
+    """Render a single fact value to a display string.
+
+    - interest_level → '{value}/100'
+    - dict → _format_axis(key, value)
+    - list → ', '.join(str(v) for v in value)
+    - other → str(value)
+
+    Returns empty string for None/empty after coercion.
+    """
+    if value is None:
+        return ""
+    if key == "interest_level":
+        return f"{value}/100"
+    if isinstance(value, dict):
+        return _format_axis(key, value)
+    if isinstance(value, list):
+        joined = ", ".join(str(v) for v in value if v is not None and v != "")
+        return joined
+    return str(value)
+
+
+def _format_axis(key: str, axis_dict: dict) -> str:
+    """Flatten a nested axis dict to a one-line summary.
+
+    call_outcome → "interested (high engagement) — reason text"
+    detected_interests → "products=[...], needs=[...], signals=[...]"
+    identified_problem → "primary_need (urgency) — pain_points"
+    Unknown axes → "key: value; key2: value2" format
+
+    Args:
+        key: The fact key (e.g. 'call_outcome').
+        axis_dict: The nested dict value.
+
+    Returns:
+        One-line string summary. Empty string if dict has no useful content.
+    """
+    if not axis_dict:
+        return ""
+
+    if key == "call_outcome":
+        classification = axis_dict.get("classification", "")
+        quality = axis_dict.get("engagement_quality", "")
+        reason = axis_dict.get("reason", "")
+        if classification and quality:
+            core = f"{classification} ({quality} engagement)"
+        elif classification:
+            core = str(classification)
+        else:
+            core = str(quality) if quality else ""
+        return f"{core} — {reason}".strip(" —") if (core and reason) else core or reason
+
+    if key == "detected_interests":
+        products = axis_dict.get("products") or []
+        needs = axis_dict.get("specific_needs") or []
+        signals = axis_dict.get("buying_signals") or []
+        parts = []
+        if products:
+            parts.append(f"products={products}")
+        if needs:
+            parts.append(f"needs={needs}")
+        if signals:
+            parts.append(f"signals={signals}")
+        return ", ".join(parts) if parts else ""
+
+    if key == "identified_problem":
+        primary = axis_dict.get("primary_need", "")
+        urgency = axis_dict.get("urgency", "")
+        pain_points = axis_dict.get("pain_points") or []
+        core = f"{primary} ({urgency})" if (primary and urgency) else primary or urgency
+        if pain_points:
+            core += f" — {', '.join(pain_points)}"
+        return core
+
+    # Generic fallback for unknown nested dicts
+    pairs = []
+    for k, v in axis_dict.items():
+        if v is not None and v != "" and v != [] and v != {}:
+            pairs.append(f"{k}: {v}")
+    return "; ".join(pairs) if pairs else ""
 
 
 def _coerce_extracted_facts(raw: object) -> dict | None:

@@ -615,11 +615,15 @@ async def _process_custom_llm_request(
             else await PromptLoader().render(client, lead, db=db)
         )
 
-    # Build messages with system prompt prepended
-    messages = [{"role": "system", "content": system_content}] + list(body.messages)
-
-    # If lead context available, inject as context note
-    if lead is not None:
+    # Build messages with system prompt prepended.
+    # Issue #21: Do NOT append [CONTEXTO DEL LEAD] block on the TEMPLATE path —
+    # the template already includes all lead data via {{lead_name}}, {{car_make}},
+    # {{confirmed_facts}}, etc. Appending it was reinforcing stale values 3x.
+    #
+    # OVERRIDE PATH: When system_prompt_override is set, the template is NOT rendered,
+    # so {{lead_name}}, {{car_make}}, etc. are never substituted. Append [CONTEXTO DEL LEAD]
+    # to give the LLM access to lead context when an override prompt is in use.
+    if client.system_prompt_override is not None and lead is not None:
         lead_context = (
             f"\n[CONTEXTO DEL LEAD]\n"
             f"Nombre: {lead.name}\n"
@@ -628,7 +632,9 @@ async def _process_custom_llm_request(
             f"Estado: {lead.status}\n"
             f"Notas: {lead.notes or ''}\n"
         )
-        messages[0]["content"] += lead_context
+        system_content = system_content + lead_context
+
+    messages = [{"role": "system", "content": system_content}] + list(body.messages)
 
     # Set up streaming client
     streaming_client = OpenAIStreamingClient(

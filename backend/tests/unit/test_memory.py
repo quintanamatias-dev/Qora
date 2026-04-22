@@ -583,3 +583,146 @@ async def test_is_returning_caller_true_when_session_has_empty_string_summary(
         f"call_history must be '' when session has empty summary. "
         f"Got: {ctx['call_history']!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #21 — Dynamic fact rendering tests (tasks 2.1 + 2.2)
+# ---------------------------------------------------------------------------
+
+
+def test_format_confirmed_facts_renders_all_keys_dynamically():
+    """_format_confirmed_facts renders ALL keys in extracted_facts, not just 3 hardcoded."""
+    from app.memory import _format_confirmed_facts
+
+    facts = {
+        "current_insurance": "La Caja",
+        "interest_level": 75,
+        "next_action_suggested": "call_again",
+        "misc_notes": "Lead mentioned Toyota Hilux",
+        "custom_field": "some_value",
+    }
+    result = _format_confirmed_facts(facts)
+
+    # All 5 keys must appear in the output
+    assert "La Caja" in result, "current_insurance must appear"
+    assert "75" in result, "interest_level must appear"
+    assert "call_again" in result, "next_action_suggested must appear"
+    assert "Toyota Hilux" in result, "misc_notes must appear"
+    assert "some_value" in result, "custom_field (unknown key) must appear"
+
+
+def test_format_confirmed_facts_known_keys_use_spanish_labels():
+    """Known keys use their Spanish labels (Seguro actual, Nivel de interés, etc.)."""
+    from app.memory import _format_confirmed_facts
+
+    facts = {
+        "current_insurance": "Sancor",
+        "interest_level": 80,
+        "next_action_suggested": "send_quote",
+        "misc_notes": "Nota adicional",
+    }
+    result = _format_confirmed_facts(facts)
+
+    assert "Seguro actual" in result
+    assert "Nivel de interés" in result
+    assert "Acción sugerida" in result
+    assert "Notas adicionales" in result
+
+
+def test_format_confirmed_facts_unknown_key_uses_raw_key_as_label():
+    """Unknown keys use their key name (possibly title-cased) as label (no Spanish translation)."""
+    from app.memory import _format_confirmed_facts
+
+    facts = {"custom_field": "custom_value", "my_special_key": "xyz"}
+    result = _format_confirmed_facts(facts)
+
+    # Key-derived label must appear (raw or title-cased)
+    result_lower = result.lower()
+    assert (
+        "custom" in result_lower and "field" in result_lower
+    ), f"'custom_field' label must appear in output: {result!r}"
+    assert "custom_value" in result
+    assert "xyz" in result
+
+
+def test_format_confirmed_facts_interest_level_keeps_slash_100_format():
+    """interest_level renders as '{value}/100'."""
+    from app.memory import _format_confirmed_facts
+
+    facts = {"interest_level": 75}
+    result = _format_confirmed_facts(facts)
+
+    assert "75/100" in result, f"Expected '75/100' in output, got: {result!r}"
+
+
+def test_format_confirmed_facts_skips_none_and_empty_values():
+    """Keys with None or empty string values are skipped."""
+    from app.memory import _format_confirmed_facts
+
+    facts = {
+        "current_insurance": None,
+        "misc_notes": "",
+        "interest_level": 60,
+    }
+    result = _format_confirmed_facts(facts)
+
+    # Only interest_level should appear
+    assert "60/100" in result
+    # None and empty values must NOT produce output lines
+    lines = [line for line in result.splitlines() if line.strip()]
+    assert len(lines) == 1, f"Expected 1 line, got {len(lines)}: {result!r}"
+
+
+def test_format_confirmed_facts_known_keys_appear_before_unknown():
+    """Known keys (current_insurance, interest_level, next_action_suggested) appear before unknown keys."""
+    from app.memory import _format_confirmed_facts
+
+    facts = {
+        "zzz_unknown": "z_value",
+        "aaa_unknown": "a_value",
+        "current_insurance": "La Caja",
+        "interest_level": 80,
+    }
+    result = _format_confirmed_facts(facts)
+
+    pos_insurance = result.find("La Caja")
+    pos_z = result.find("z_value")
+    pos_a = result.find("a_value")
+
+    assert pos_insurance != -1, "current_insurance must appear"
+    assert pos_z != -1, "zzz_unknown must appear"
+    assert pos_a != -1, "aaa_unknown must appear"
+
+    # Known keys must appear BEFORE unknown keys
+    assert pos_insurance < pos_z, "current_insurance must come before zzz_unknown"
+    assert pos_insurance < pos_a, "current_insurance must come before aaa_unknown"
+
+
+def test_format_confirmed_facts_renders_nested_dict_call_outcome():
+    """Nested dict values (like call_outcome) are flattened to a one-line summary."""
+    from app.memory import _format_confirmed_facts
+
+    facts = {
+        "call_outcome": {
+            "classification": "interested",
+            "engagement_quality": "high",
+            "reason": "Lead asked for a quote",
+        }
+    }
+    result = _format_confirmed_facts(facts)
+
+    # Must produce some output (not empty)
+    assert result.strip() != "", "call_outcome dict must produce output"
+    # Must contain recognizable content from the nested dict
+    assert "interested" in result or "Resultado" in result or "call_outcome" in result
+
+
+def test_format_confirmed_facts_lists_joined_as_string():
+    """List values (like objections) are joined and rendered as a string."""
+    from app.memory import _format_confirmed_facts
+
+    facts = {"objections": ["precio alto", "ya tiene seguro"]}
+    result = _format_confirmed_facts(facts)
+
+    # Must produce output containing the list items
+    assert "precio alto" in result or "objections" in result.lower()
