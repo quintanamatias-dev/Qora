@@ -165,6 +165,19 @@ class PostCallAnalysis(BaseModel):
         description="Any other relevant facts or observations not covered by the structured fields above, as a brief text note",
     )
 
+    # ---- Issue #21: data correction tracking (str NOT dict — OpenAI Structured Outputs) ----
+
+    data_corrections: str = Field(
+        default="",
+        description=(
+            "If the lead corrected any personal data during the call "
+            "(car make, car model, car year, name, phone), list each correction "
+            "as 'field_name: corrected_value' on a separate line. "
+            "Example: 'car_model: Polo Trend\\ncar_year: 2022'. "
+            "Empty string if no corrections were made."
+        ),
+    )
+
     # ---- New Phase 5 axes ----
 
     call_outcome: CallOutcome = Field(
@@ -212,6 +225,12 @@ NEW ANALYSIS AXES:
   - primary_need: One sentence — what the lead actually needs
   - pain_points: Current pain points motivating their interest
   - urgency: One of: high, medium, low
+
+NEW FIELD — data_corrections:
+- data_corrections: If the lead explicitly corrected factual data (car model, car make,
+  car year, name, phone), record each correction as 'field_name: corrected_value' on a
+  separate line. Example: 'car_model: Polo Trend\\ncar_year: 2022'.
+  Use empty string "" if no corrections were made.
 
 RULES:
 - next_action_suggested = "do_not_call" ONLY if lead explicitly asked not to be called again

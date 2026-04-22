@@ -310,3 +310,51 @@ async def _merge_facts_into_lead(
     # next_action ← latest suggested action
     if facts.get("next_action_suggested"):
         lead.next_action = facts["next_action_suggested"]
+
+    # data_corrections ← propagate car_make/car_model/car_year to Lead columns (Issue #21)
+    corrections_str = facts.get("data_corrections") or ""
+    if corrections_str:
+        _apply_data_corrections(lead, corrections_str)
+
+
+# ---------------------------------------------------------------------------
+# Correction propagation helper (Issue #21)
+# ---------------------------------------------------------------------------
+
+
+def _apply_data_corrections(lead: "Lead", corrections_str: str) -> None:
+    """Parse 'field: value' lines from data_corrections and update Lead columns.
+
+    Supported fields: car_make, car_model, car_year.
+    Ignores unrecognized fields (forward-compatible).
+    car_year is parsed as int; others as stripped strings.
+
+    Args:
+        lead: Lead ORM instance to update.
+        corrections_str: Free-text string with 'field: value' per line.
+    """
+    if not corrections_str or not corrections_str.strip():
+        return
+
+    _SUPPORTED_FIELDS = {"car_make", "car_model", "car_year"}
+
+    for line in corrections_str.splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        # Split on first colon only
+        field, _, value = line.partition(":")
+        field = field.strip()
+        value = value.strip()
+
+        if field not in _SUPPORTED_FIELDS:
+            continue
+
+        if field == "car_year":
+            try:
+                setattr(lead, field, int(value))
+            except (ValueError, TypeError):
+                pass  # ignore malformed year — forward-compatible
+        else:
+            if value:
+                setattr(lead, field, value)

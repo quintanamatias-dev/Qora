@@ -903,6 +903,97 @@ async def test_summarizer_unknown_extra_fields_ignored(seeded_db):
     assert "unknown_llm_field" not in dumped.get("call_outcome", {})
 
 
+# ---------------------------------------------------------------------------
+# Issue #21 — Car correction propagation via data_corrections
+# ---------------------------------------------------------------------------
+
+
+def test_apply_data_corrections_updates_car_model():
+    """_apply_data_corrections parses 'car_model: Polo Trend' and updates lead.car_model."""
+    from app.summarizer import _apply_data_corrections
+    from unittest.mock import MagicMock
+
+    lead = MagicMock()
+    lead.car_make = "VW"
+    lead.car_model = "Golf"
+    lead.car_year = 2019
+
+    _apply_data_corrections(lead, "car_model: Polo Trend")
+
+    assert (
+        lead.car_model == "Polo Trend"
+    ), "car_model must be updated to 'Polo Trend' from data_corrections"
+    # car_make unchanged
+    assert lead.car_make == "VW"
+
+
+def test_apply_data_corrections_updates_car_make():
+    """_apply_data_corrections parses 'car_make: Ford' and updates lead.car_make."""
+    from app.summarizer import _apply_data_corrections
+    from unittest.mock import MagicMock
+
+    lead = MagicMock()
+    lead.car_make = "VW"
+    lead.car_model = "Golf"
+    lead.car_year = 2019
+
+    _apply_data_corrections(lead, "car_make: Ford")
+
+    assert lead.car_make == "Ford"
+    assert lead.car_model == "Golf"  # unchanged
+
+
+def test_apply_data_corrections_leaves_columns_unchanged_when_no_match():
+    """_apply_data_corrections with empty or irrelevant string leaves car columns unchanged."""
+    from app.summarizer import _apply_data_corrections
+    from unittest.mock import MagicMock
+
+    lead = MagicMock()
+    lead.car_make = "VW"
+    lead.car_model = "Golf"
+    lead.car_year = 2019
+
+    # Empty string — no corrections
+    _apply_data_corrections(lead, "")
+
+    assert lead.car_make == "VW"
+    assert lead.car_model == "Golf"
+    assert lead.car_year == 2019
+
+
+def test_apply_data_corrections_ignores_unrecognized_fields():
+    """_apply_data_corrections with unrecognized field names does not crash or modify lead."""
+    from app.summarizer import _apply_data_corrections
+    from unittest.mock import MagicMock
+
+    lead = MagicMock()
+    lead.car_make = "VW"
+    lead.car_model = "Golf"
+    lead.car_year = 2019
+
+    # Unknown field — should be silently ignored
+    _apply_data_corrections(lead, "unknown_field: some value")
+
+    assert lead.car_make == "VW"
+    assert lead.car_model == "Golf"
+
+
+def test_apply_data_corrections_multiple_lines():
+    """_apply_data_corrections handles multiple corrections on separate lines."""
+    from app.summarizer import _apply_data_corrections
+    from unittest.mock import MagicMock
+
+    lead = MagicMock()
+    lead.car_make = "VW"
+    lead.car_model = "Golf"
+    lead.car_year = 2019
+
+    _apply_data_corrections(lead, "car_make: Toyota\ncar_model: Corolla")
+
+    assert lead.car_make == "Toyota"
+    assert lead.car_model == "Corolla"
+
+
 async def test_summarizer_analysis_axes_flow_to_lead(seeded_db):
     """Phase 5: analysis axes (call_outcome, etc.) are merged into Lead.extracted_facts."""
     from app.summarizer import generate_summary_and_facts

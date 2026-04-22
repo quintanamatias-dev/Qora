@@ -961,6 +961,115 @@ async def test_fallback_call_number_is_1_when_lead_is_none(tmp_path: Path):
     )
 
 
+# ---------------------------------------------------------------------------
+# Issue #21 — Quintana prompt MEMORIA section (Task 3.1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_quintana_prompt_contains_memoria_section(seeded_db_loader, tmp_path):
+    """Task 3.1: Quintana prompt.md renders with MEMORIA DE CONVERSACIONES ANTERIORES section.
+
+    The section must:
+    - Appear AFTER the DATOS DEL LEAD block
+    - Instruct agent to prioritize confirmed_facts over DATOS DEL LEAD
+    """
+    from app.prompts.loader import PromptLoader
+    from app.leads.service import get_lead
+
+    # Use real quintana-seguros clients dir (not tmp_path)
+    import pathlib
+
+    real_clients_dir = pathlib.Path(__file__).parent.parent.parent.parent / "clients"
+
+    loader = PromptLoader(clients_dir=real_clients_dir)
+    client = make_client(client_id="quintana-seguros")
+
+    assert seeded_db_loader.async_session_factory is not None
+    async with seeded_db_loader.async_session_factory() as sess:
+        lead = await get_lead(sess, "test-lead-loader-001")
+        assert lead is not None
+        result = await loader.render(client, lead, db=sess)
+
+    assert (
+        "MEMORIA DE CONVERSACIONES ANTERIORES" in result
+    ), "Quintana prompt must contain 'MEMORIA DE CONVERSACIONES ANTERIORES' section — Issue #21"
+
+
+@pytest.mark.asyncio
+async def test_quintana_prompt_memoria_appears_after_datos_del_lead(
+    seeded_db_loader, tmp_path
+):
+    """Task 3.1: MEMORIA section appears AFTER DATOS DEL LEAD in the rendered prompt."""
+    from app.prompts.loader import PromptLoader
+    from app.leads.service import get_lead
+
+    import pathlib
+
+    real_clients_dir = pathlib.Path(__file__).parent.parent.parent.parent / "clients"
+
+    loader = PromptLoader(clients_dir=real_clients_dir)
+    client = make_client(client_id="quintana-seguros")
+
+    assert seeded_db_loader.async_session_factory is not None
+    async with seeded_db_loader.async_session_factory() as sess:
+        lead = await get_lead(sess, "test-lead-loader-001")
+        assert lead is not None
+        result = await loader.render(client, lead, db=sess)
+
+    pos_datos = result.find("DATOS DEL LEAD")
+    pos_memoria = result.find("MEMORIA DE CONVERSACIONES ANTERIORES")
+    pos_fillers = result.find("FILLERS")
+
+    assert pos_datos != -1, "DATOS DEL LEAD section must be present"
+    assert pos_memoria != -1, "MEMORIA section must be present"
+    assert pos_fillers != -1, "FILLERS section must be present"
+
+    assert pos_datos < pos_memoria, "MEMORIA must appear AFTER DATOS DEL LEAD"
+    assert pos_memoria < pos_fillers, "MEMORIA must appear BEFORE FILLERS"
+
+
+@pytest.mark.asyncio
+async def test_quintana_prompt_memoria_instructs_priority_over_datos_del_lead(
+    seeded_db_loader, tmp_path
+):
+    """Task 3.1: MEMORIA section instructs agent to prioritize confirmed_facts."""
+    from app.prompts.loader import PromptLoader
+    from app.leads.service import get_lead
+
+    import pathlib
+
+    real_clients_dir = pathlib.Path(__file__).parent.parent.parent.parent / "clients"
+
+    loader = PromptLoader(clients_dir=real_clients_dir)
+    client = make_client(client_id="quintana-seguros")
+
+    assert seeded_db_loader.async_session_factory is not None
+    async with seeded_db_loader.async_session_factory() as sess:
+        lead = await get_lead(sess, "test-lead-loader-001")
+        assert lead is not None
+        result = await loader.render(client, lead, db=sess)
+
+    # The MEMORIA section must contain instruction to prioritize confirmed_facts
+    memoria_start = result.find("MEMORIA DE CONVERSACIONES ANTERIORES")
+    fillers_start = result.find("FILLERS")
+    memoria_section = (
+        result[memoria_start:fillers_start]
+        if fillers_start > memoria_start
+        else result[memoria_start:]
+    )
+
+    assert (
+        "confirmed_facts" in memoria_section
+        or "prioritiz" in memoria_section.lower()
+        or "confiá" in memoria_section
+        or "prioridad" in memoria_section.lower()
+    ), (
+        f"MEMORIA section must instruct agent to prioritize confirmed_facts. "
+        f"Got: {memoria_section[:300]!r}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_call_number_comes_from_memory_when_available(seeded_db_loader, tmp_path):
     """REQ-2.4: When db AND lead are provided, call_number = memory["call_number"]
@@ -987,3 +1096,97 @@ async def test_call_number_comes_from_memory_when_available(seeded_db_loader, tm
         f"REQ-2.4: call_number should be '4' (lead.call_count=3 + 1), "
         f"got {vars_dict['call_number']!r}. The call_count kwarg must be ignored."
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #21 — Spec: "No facts — section present but inert" (CRITICAL 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_quintana_prompt_memoria_section_present_when_no_facts(
+    seeded_db_loader, tmp_path
+):
+    """Spec scenario: No facts — section present but inert.
+
+    GIVEN the rendered prompt for a first-time caller with NO extracted_facts
+    WHEN confirmed_facts is empty (no prior call data)
+    THEN the MEMORIA DE CONVERSACIONES ANTERIORES section is still rendered
+    AND confirmed_facts is empty (no bullet lines appear from extracted_facts)
+    AND the section instructs conditional behavior ("Si {{confirmed_facts}} está vacío…")
+
+    This proves the MEMORIA section is structural (always present) not conditional.
+    """
+    from app.prompts.loader import PromptLoader
+    from app.leads.service import get_lead
+
+    import pathlib
+
+    real_clients_dir = pathlib.Path(__file__).parent.parent.parent.parent / "clients"
+
+    loader = PromptLoader(clients_dir=real_clients_dir)
+    client = make_client(client_id="quintana-seguros")
+
+    assert seeded_db_loader.async_session_factory is not None
+    async with seeded_db_loader.async_session_factory() as sess:
+        lead = await get_lead(sess, "test-lead-loader-001")
+        assert lead is not None
+        # Ensure no extracted facts — first-time caller
+        lead.extracted_facts = None
+        result = await loader.render(client, lead, db=sess)
+
+    # Section MUST be present even without facts
+    assert "MEMORIA DE CONVERSACIONES ANTERIORES" in result, (
+        "MEMORIA section must always be present, even when confirmed_facts is empty. "
+        f"Rendered prompt (first 500 chars): {result[:500]!r}"
+    )
+
+    # confirmed_facts placeholder must be resolved (no literal placeholder remaining)
+    assert "{{confirmed_facts}}" not in result, (
+        "{{confirmed_facts}} placeholder must be substituted (to empty string when no facts)."
+    )
+
+    # No fact lines should appear from extracted_facts (since it's None)
+    # The "- Seguro actual:", "- Nivel de interés:" etc. markers come from _format_confirmed_facts
+    # When no facts, confirmed_facts renders to "" — no bullet lines
+    assert "- Seguro actual:" not in result or "- Nivel de interés:" not in result, (
+        "When extracted_facts is None, no confirmed fact bullet lines should appear."
+    )
+
+
+@pytest.mark.asyncio
+async def test_quintana_prompt_memoria_section_present_with_empty_dict_facts(
+    seeded_db_loader, tmp_path
+):
+    """Triangulation: MEMORIA section is present even when extracted_facts is empty dict.
+
+    GIVEN a lead with extracted_facts = {} (empty dict, not None)
+    WHEN the prompt is rendered
+    THEN the MEMORIA section is still present
+    AND confirmed_facts resolves to empty string (no bullet lines)
+    """
+    from app.prompts.loader import PromptLoader
+    from app.leads.service import get_lead
+
+    import pathlib
+
+    real_clients_dir = pathlib.Path(__file__).parent.parent.parent.parent / "clients"
+
+    loader = PromptLoader(clients_dir=real_clients_dir)
+    client = make_client(client_id="quintana-seguros")
+
+    assert seeded_db_loader.async_session_factory is not None
+    async with seeded_db_loader.async_session_factory() as sess:
+        lead = await get_lead(sess, "test-lead-loader-001")
+        assert lead is not None
+        # Empty dict — should also produce empty confirmed_facts
+        lead.extracted_facts = {}
+        result = await loader.render(client, lead, db=sess)
+
+    # Section MUST be present
+    assert "MEMORIA DE CONVERSACIONES ANTERIORES" in result, (
+        "MEMORIA section must always be present, even with empty extracted_facts dict."
+    )
+
+    # No unfilled placeholders
+    assert "{{confirmed_facts}}" not in result
