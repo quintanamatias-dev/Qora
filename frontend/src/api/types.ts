@@ -52,6 +52,41 @@ export interface CreateLeadPayload {
 
 export type CallStatus = 'initiated' | 'in_progress' | 'completed' | 'failed' | 'abandoned'
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Post-Call Analysis Types (Phase 5, Issue #7)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export type OutcomeClassification =
+  | 'interested'
+  | 'not_interested'
+  | 'busy'
+  | 'follow_up'
+  | 'no_answer'
+  | 'hostile'
+  | 'confused'
+
+export type EngagementQuality = 'high' | 'medium' | 'low' | 'none'
+
+export type Urgency = 'high' | 'medium' | 'low'
+
+export interface CallOutcome {
+  classification: OutcomeClassification
+  reason: string
+  engagement_quality: EngagementQuality
+}
+
+export interface DetectedInterests {
+  products: string[]
+  specific_needs: string[]
+  buying_signals: string[]
+}
+
+export interface IdentifiedProblem {
+  primary_need: string
+  pain_points: string[]
+  urgency: Urgency
+}
+
 export interface CallSession {
   id: string
   client_id: string

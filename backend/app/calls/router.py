@@ -127,7 +127,18 @@ async def list_call_sessions(
     async with db_session() as db:
         sessions = await list_sessions_for_client(db, client_id, lead_id)
 
-    return [_session_to_dict(cs) for cs in sessions]
+    # Filter out ghost sessions: "initiated" with no turns and no duration.
+    # These are WebSocket connection attempts that never established a real call.
+    return [
+        _session_to_dict(cs)
+        for cs in sessions
+        if not (
+            cs.status == "initiated"
+            and not cs.duration_seconds
+            and not cs.total_user_turns
+            and not cs.total_agent_turns
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------

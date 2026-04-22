@@ -144,7 +144,9 @@ async def test_get_session_detail_returns_populated_summary_and_facts(app_client
 # ---------------------------------------------------------------------------
 
 
-async def test_get_session_detail_returns_null_summary_and_facts_when_absent(app_client):
+async def test_get_session_detail_returns_null_summary_and_facts_when_absent(
+    app_client,
+):
     """GET /calls/{session_id} returns null for summary and extracted_facts when not set."""
     client, db_module = app_client
     session_id = await _seed_session(
@@ -182,3 +184,126 @@ async def test_get_session_detail_includes_elevenlabs_conversation_id(app_client
     # elevenlabs_conversation_id is included (may be None for sessions
     # not originating from ElevenLabs)
     assert "elevenlabs_conversation_id" in data
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Scenario: Analysis axes flow through API response
+# ---------------------------------------------------------------------------
+
+
+async def test_get_session_detail_returns_analysis_axes_when_present(app_client):
+    """GET /calls/{session_id} returns call_outcome, detected_interests, identified_problem
+    when they are present in extracted_facts."""
+    client, db_module = app_client
+    session_id = await _seed_session(
+        db_module,
+        extracted_facts={
+            "interest_level": 85,
+            "call_outcome": {
+                "classification": "interested",
+                "reason": "Lead requested a quote.",
+                "engagement_quality": "high",
+            },
+            "detected_interests": {
+                "products": ["todo_riesgo"],
+                "specific_needs": ["cobertura_amplia"],
+                "buying_signals": ["asked about price"],
+            },
+            "identified_problem": {
+                "primary_need": "Needs coverage for new car.",
+                "pain_points": ["no current insurance"],
+                "urgency": "high",
+            },
+        },
+    )
+
+    response = await client.get(f"/api/v1/calls/{session_id}")
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["extracted_facts"] is not None
+    facts = data["extracted_facts"]
+
+    # All 3 axes present
+    assert "call_outcome" in facts
+    assert facts["call_outcome"]["classification"] == "interested"
+    assert facts["call_outcome"]["engagement_quality"] == "high"
+
+    assert "detected_interests" in facts
+    assert "todo_riesgo" in facts["detected_interests"]["products"]
+
+    assert "identified_problem" in facts
+    assert facts["identified_problem"]["urgency"] == "high"
+
+
+async def test_get_session_list_returns_analysis_axes_for_sessions(app_client):
+    """GET /calls?client_id=x returns extracted_facts including analysis axes for each session."""
+    client, db_module = app_client
+
+    # Create a session with analysis data
+    await _seed_session(
+        db_module,
+        extracted_facts={
+            "call_outcome": {
+                "classification": "not_interested",
+                "reason": "Lead already has insurance.",
+                "engagement_quality": "low",
+            },
+            "detected_interests": {
+                "products": [],
+                "specific_needs": [],
+                "buying_signals": [],
+            },
+            "identified_problem": {
+                "primary_need": "No need identified.",
+                "pain_points": [],
+                "urgency": "low",
+            },
+        },
+    )
+
+    response = await client.get("/api/v1/calls?client_id=quintana-seguros")
+    assert response.status_code == 200
+
+    sessions = response.json()
+    assert len(sessions) >= 1
+
+    # Find the session with analysis data
+    analyzed = next(
+        (
+            s
+            for s in sessions
+            if s.get("extracted_facts") and "call_outcome" in s["extracted_facts"]
+        ),
+        None,
+    )
+    assert analyzed is not None
+    assert (
+        analyzed["extracted_facts"]["call_outcome"]["classification"]
+        == "not_interested"
+    )
+
+
+async def test_get_session_detail_legacy_session_without_analysis(app_client):
+    """GET /calls/{session_id} for a legacy session without analysis axes returns
+    extracted_facts without call_outcome/detected_interests/identified_problem — no error."""
+    client, db_module = app_client
+    session_id = await _seed_session(
+        db_module,
+        extracted_facts={
+            "interest_level": 50,
+            "objections": ["not interested now"],
+            "next_action_suggested": "wait",
+        },
+    )
+
+    response = await client.get(f"/api/v1/calls/{session_id}")
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["extracted_facts"] is not None
+    # Legacy fields present
+    assert data["extracted_facts"]["interest_level"] == 50
+    # New axes NOT present (this is a legacy session)
+    assert "call_outcome" not in data["extracted_facts"]
+    assert "detected_interests" not in data["extracted_facts"]
