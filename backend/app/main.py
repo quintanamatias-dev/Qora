@@ -163,6 +163,11 @@ async def lifespan(app: FastAPI):
     from app.sweeper import stale_session_sweeper
 
     sweeper_task = asyncio.create_task(stale_session_sweeper())
+
+    # 7. Start scheduler tick (Phase 6)
+    from app.scheduler.service import scheduler_tick
+
+    scheduler_task = asyncio.create_task(scheduler_tick())
     logger.info("qora_startup_complete")
 
     yield
@@ -171,12 +176,17 @@ async def lifespan(app: FastAPI):
     logger.info("qora_shutdown_started")
     cleanup_task.cancel()
     sweeper_task.cancel()
+    scheduler_task.cancel()
     try:
         await cleanup_task
     except asyncio.CancelledError:
         pass
     try:
         await sweeper_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await scheduler_task
     except asyncio.CancelledError:
         pass
     await db_module.close_db()
@@ -233,6 +243,7 @@ from app.leads.router import router as leads_router  # noqa: E402
 from app.calls.router import router as calls_router  # noqa: E402
 from app.voice.initiation import router as initiation_router  # noqa: E402
 from app.voice.webhook import router as webhook_router  # noqa: E402
+from app.scheduler.router import router as scheduler_router  # noqa: E402
 
 api_v1_router.include_router(clients_router)  # /api/v1/clients — full CRUD
 api_v1_router.include_router(tenants_router)  # /api/v1/tenants — backward-compat alias
@@ -240,6 +251,7 @@ api_v1_router.include_router(leads_router)
 api_v1_router.include_router(calls_router)
 api_v1_router.include_router(initiation_router)
 api_v1_router.include_router(webhook_router)
+api_v1_router.include_router(scheduler_router)  # /api/v1/scheduler — Phase 6
 
 app.include_router(api_v1_router)
 

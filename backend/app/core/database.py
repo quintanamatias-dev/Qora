@@ -71,6 +71,7 @@ async def init_db(settings) -> None:
     import app.tenants.models  # noqa: F401
     import app.leads.models  # noqa: F401
     import app.calls.models  # noqa: F401
+    import app.scheduler.models  # noqa: F401
 
     async with engine.begin() as conn:  # type: ignore[union-attr]
         await conn.run_sync(Base.metadata.create_all)
