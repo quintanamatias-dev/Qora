@@ -265,6 +265,124 @@ async def test_list_calls_null_summary_returned_as_null(app_client):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Issue #22 — Merged sessions excluded from list
+# Spec: Requirement: List Call Sessions Endpoint — "Merged sessions excluded from list"
+# ---------------------------------------------------------------------------
+
+
+async def _seed_session_with_merged_into(
+    db_module,
+    *,
+    client_id: str = "quintana-seguros",
+    lead_id: str = "lead-alpha",
+    status: str = "initiated",
+    started_at=None,
+    merged_into_session_id: str | None = None,
+):
+    """Helper: insert a CallSession with an optional merged_into_session_id."""
+    import uuid
+    from app.calls.models import CallSession
+    import datetime as _dt
+
+    assert db_module.async_session_factory is not None
+    async with db_module.async_session_factory() as sess:
+        cs = CallSession(
+            id=str(uuid.uuid4()),
+            client_id=client_id,
+            lead_id=lead_id,
+            status=status,
+            started_at=started_at or _dt.datetime.now(_dt.timezone.utc),
+            merged_into_session_id=merged_into_session_id,
+        )
+        sess.add(cs)
+        await sess.commit()
+        return cs.id
+
+
+async def test_list_calls_excludes_merged_sessions(app_client):
+    """Sessions with merged_into_session_id IS NOT NULL must be excluded.
+
+    Spec: Requirement: List Call Sessions Endpoint — "Merged sessions excluded from list"
+    """
+    client, seeded_db = app_client
+
+    # Seed the completed (authoritative) session
+    completed_id = await _seed_session(seeded_db, status="completed")
+
+    # Seed a merged sibling pointing to the completed session
+    await _seed_session_with_merged_into(
+        seeded_db,
+        status="abandoned",
+        merged_into_session_id=completed_id,
+    )
+
+    response = await client.get(
+        "/api/v1/calls", params={"client_id": "quintana-seguros"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    # Only completed session should appear — merged sibling must be hidden
+    ids_returned = [item["id"] for item in data]
+    assert (
+        completed_id in ids_returned
+    ), "Completed (authoritative) session must be returned"
+    assert len(data) == 1, (
+        f"Expected 1 session (merged sibling excluded), got {len(data)}. "
+        f"list_sessions_for_client() must filter merged_into_session_id IS NULL."
+    )
+
+
+async def test_list_calls_non_merged_abandoned_remains_visible(app_client):
+    """Abandoned sessions with merged_into_session_id IS NULL must still appear.
+
+    Spec: Requirement: List Call Sessions Endpoint — "Non-merged abandoned sessions remain visible"
+    """
+    client, seeded_db = app_client
+
+    # Abandoned session, NOT merged
+    non_merged_id = await _seed_session_with_merged_into(
+        seeded_db,
+        status="abandoned",
+        merged_into_session_id=None,
+    )
+
+    response = await client.get(
+        "/api/v1/calls", params={"client_id": "quintana-seguros"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    ids_returned = [item["id"] for item in data]
+    assert (
+        non_merged_id in ids_returned
+    ), "Abandoned session with merged_into_session_id=NULL must remain visible"
+
+
+async def test_list_calls_response_includes_merged_into_session_id(app_client):
+    """Response shape includes merged_into_session_id field for debug visibility.
+
+    Spec: Design — _session_to_dict() includes merged_into_session_id
+    """
+    client, seeded_db = app_client
+    await _seed_session(seeded_db, status="completed")
+
+    response = await client.get(
+        "/api/v1/calls", params={"client_id": "quintana-seguros"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    item = data[0]
+    # merged_into_session_id must be present in response (even if None)
+    assert "merged_into_session_id" in item, (
+        "Response must include 'merged_into_session_id' field. "
+        "Update _session_to_dict() in router.py."
+    )
+    assert item["merged_into_session_id"] is None
+
+
 async def test_list_calls_no_cross_tenant_leak(app_client):
     """lead_id from another client returns empty array (no data leak)."""
     client, seeded_db = app_client
