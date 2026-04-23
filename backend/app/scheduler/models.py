@@ -74,6 +74,10 @@ class ScheduledCall(Base):
         String, nullable=True, default=None
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    # Phase 7: agent_id FK (nullable for migration safety — backfilled post-migration)
+    agent_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("agents.id"), nullable=True, default=None
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
