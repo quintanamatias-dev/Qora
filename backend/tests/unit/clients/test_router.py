@@ -383,6 +383,118 @@ async def test_delete_client_not_found_returns_404(clients_app: AsyncClient):
     assert response.status_code == 404
 
 
+# ---------------------------------------------------------------------------
+# Round 2 fix: partial PATCH hour validation
+# Issue 2 — Partial PATCH bypasses hour validation
+# ---------------------------------------------------------------------------
+
+
+async def test_patch_client_partial_hours_start_greater_than_stored_end_returns_422(
+    clients_app_seeded: AsyncClient,
+):
+    """PATCH with only start_hour that exceeds stored end_hour must return 422.
+
+    Current stored values: start=9, end=20.
+    Sending start=22 alone should fail because 22 >= 20 (stored end).
+    """
+    response = await clients_app_seeded.patch(
+        "/api/v1/clients/quintana-seguros",
+        json={"scheduler_allowed_hours_start": 22},
+    )
+    assert response.status_code == 422, (
+        f"Expected 422 when partial PATCH sets start=22 > stored end=20, got {response.status_code}"
+    )
+
+
+async def test_patch_client_partial_hours_end_less_than_stored_start_returns_422(
+    clients_app_seeded: AsyncClient,
+):
+    """PATCH with only end_hour less than stored start_hour must return 422.
+
+    Current stored values: start=9, end=20.
+    Sending end=5 alone should fail because 9 (stored start) >= 5.
+    """
+    response = await clients_app_seeded.patch(
+        "/api/v1/clients/quintana-seguros",
+        json={"scheduler_allowed_hours_end": 5},
+    )
+    assert response.status_code == 422, (
+        f"Expected 422 when partial PATCH sets end=5 < stored start=9, got {response.status_code}"
+    )
+
+
+async def test_patch_client_valid_hours_update_succeeds(clients_app_seeded: AsyncClient):
+    """PATCH with valid combined hours (start < end) must succeed."""
+    response = await clients_app_seeded.patch(
+        "/api/v1/clients/quintana-seguros",
+        json={"scheduler_allowed_hours_start": 8, "scheduler_allowed_hours_end": 18},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["scheduler_allowed_hours_start"] == 8
+    assert data["scheduler_allowed_hours_end"] == 18
+
+
+async def test_patch_client_hours_equal_returns_422(clients_app_seeded: AsyncClient):
+    """PATCH with start == end must return 422 (start must be strictly less than end)."""
+    response = await clients_app_seeded.patch(
+        "/api/v1/clients/quintana-seguros",
+        json={"scheduler_allowed_hours_start": 10, "scheduler_allowed_hours_end": 10},
+    )
+    assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — Scheduler config fields in client responses
+# ---------------------------------------------------------------------------
+
+
+async def test_create_client_response_includes_scheduler_fields(
+    clients_app: AsyncClient,
+):
+    """POST /clients response includes scheduler config fields with defaults."""
+    response = await clients_app.post(
+        "/api/v1/clients",
+        json={
+            "client_id": "sched-broker",
+            "broker_name": "Sched Broker SA",
+            "voice_id": "v1",
+        },
+    )
+    assert response.status_code == 201
+    data = response.json()
+    # Scheduler fields with default values
+    assert data["scheduler_enabled"] is False
+    assert data["scheduler_max_attempts"] == 3
+    assert data["scheduler_cooldown_minutes"] == 60
+    assert data["scheduler_allowed_hours_start"] == 9
+    assert data["scheduler_allowed_hours_end"] == 20
+    assert "scheduler_retry_on_outcomes" in data
+    assert data["scheduler_timezone"] == "America/Argentina/Buenos_Aires"
+
+
+async def test_patch_client_enables_scheduler(clients_app_seeded: AsyncClient):
+    """PATCH /clients/{id} with scheduler_enabled=True persists the change."""
+    response = await clients_app_seeded.patch(
+        "/api/v1/clients/quintana-seguros",
+        json={"scheduler_enabled": True},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["scheduler_enabled"] is True
+
+
+async def test_patch_client_scheduler_cooldown(clients_app_seeded: AsyncClient):
+    """PATCH /clients/{id} updates scheduler_cooldown_minutes."""
+    response = await clients_app_seeded.patch(
+        "/api/v1/clients/quintana-seguros",
+        json={"scheduler_cooldown_minutes": 120},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["scheduler_cooldown_minutes"] == 120
+
+
 async def test_delete_does_not_remove_db_record(clients_app: AsyncClient):
     """DELETE soft-deletes: record still exists in DB with is_active=False."""
     await clients_app.post(

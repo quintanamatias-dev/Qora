@@ -1142,16 +1142,16 @@ async def test_quintana_prompt_memoria_section_present_when_no_facts(
     )
 
     # confirmed_facts placeholder must be resolved (no literal placeholder remaining)
-    assert "{{confirmed_facts}}" not in result, (
-        "{{confirmed_facts}} placeholder must be substituted (to empty string when no facts)."
-    )
+    assert (
+        "{{confirmed_facts}}" not in result
+    ), "{{confirmed_facts}} placeholder must be substituted (to empty string when no facts)."
 
     # No fact lines should appear from extracted_facts (since it's None)
     # The "- Seguro actual:", "- Nivel de interés:" etc. markers come from _format_confirmed_facts
     # When no facts, confirmed_facts renders to "" — no bullet lines
-    assert "- Seguro actual:" not in result or "- Nivel de interés:" not in result, (
-        "When extracted_facts is None, no confirmed fact bullet lines should appear."
-    )
+    assert (
+        "- Seguro actual:" not in result or "- Nivel de interés:" not in result
+    ), "When extracted_facts is None, no confirmed fact bullet lines should appear."
 
 
 @pytest.mark.asyncio
@@ -1184,9 +1184,9 @@ async def test_quintana_prompt_memoria_section_present_with_empty_dict_facts(
         result = await loader.render(client, lead, db=sess)
 
     # Section MUST be present
-    assert "MEMORIA DE CONVERSACIONES ANTERIORES" in result, (
-        "MEMORIA section must always be present, even with empty extracted_facts dict."
-    )
+    assert (
+        "MEMORIA DE CONVERSACIONES ANTERIORES" in result
+    ), "MEMORIA section must always be present, even with empty extracted_facts dict."
 
     # No unfilled placeholders
     assert "{{confirmed_facts}}" not in result

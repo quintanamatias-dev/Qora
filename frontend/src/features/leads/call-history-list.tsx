@@ -76,12 +76,12 @@ export function CallHistoryList({
         const callOutcome = session.extracted_facts?.call_outcome as CallOutcome | null | undefined
 
         return (
-          <div key={session.id} className="border border-outline/10 rounded-md overflow-hidden">
+          <div key={session.id} className="border border-outline/10 rounded-md">
             {/* Session row — clickable */}
             <div
               data-testid="call-history-item"
               onClick={() => onToggleSession(session.id)}
-              className="flex items-center gap-4 px-4 py-3 cursor-pointer hover:bg-surface-container-low transition-colors"
+              className="flex items-center gap-4 px-4 py-3 cursor-pointer hover:bg-surface-container-low transition-colors rounded-t-md"
             >
               {/* Date */}
               <span className="text-sm text-on-surface min-w-[140px]">
@@ -126,7 +126,7 @@ export function CallHistoryList({
             {isExpanded && (
               <div
                 data-testid="transcript-viewer"
-                className="border-t border-outline/10 bg-surface-container-lowest max-h-[500px] overflow-y-auto"
+                className="border-t border-outline/10 bg-surface-container-lowest max-h-[500px] overflow-y-auto rounded-b-md"
               >
                 <TranscriptViewer sessionId={session.id} />
               </div>

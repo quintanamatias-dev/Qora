@@ -94,6 +94,7 @@ async def dispatch_tool(
                 lead_id=effective_lead_id,
                 followup_date=tool_args.get("followup_date", ""),
                 note=tool_args.get("note"),
+                client_id=client_id,
             )
         else:
             return {"error": f"unknown_tool: {tool_name}"}

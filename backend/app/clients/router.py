@@ -52,6 +52,13 @@ def _client_to_response(client: Client) -> ClientResponse:
         voice_id=client.voice_id,
         is_active=client.is_active,
         created_at=client.created_at,
+        scheduler_enabled=client.scheduler_enabled,
+        scheduler_max_attempts=client.scheduler_max_attempts,
+        scheduler_cooldown_minutes=client.scheduler_cooldown_minutes,
+        scheduler_allowed_hours_start=client.scheduler_allowed_hours_start,
+        scheduler_allowed_hours_end=client.scheduler_allowed_hours_end,
+        scheduler_retry_on_outcomes=client.scheduler_retry_on_outcomes,
+        scheduler_timezone=client.scheduler_timezone,
     )
 
 
@@ -168,6 +175,27 @@ async def update_client(
         )
 
     update_data = payload.model_dump(exclude_unset=True)
+
+    # Validate combined hour window: merge incoming PATCH values with current DB values
+    # so partial updates like {"scheduler_allowed_hours_start": 22} are caught when
+    # the stored end_hour would create an invalid window (start >= end).
+    patch_start = update_data.get("scheduler_allowed_hours_start")
+    patch_end = update_data.get("scheduler_allowed_hours_end")
+    if patch_start is not None or patch_end is not None:
+        effective_start = patch_start if patch_start is not None else client.scheduler_allowed_hours_start
+        effective_end = patch_end if patch_end is not None else client.scheduler_allowed_hours_end
+        if effective_start >= effective_end:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "invalid_hour_window",
+                    "detail": (
+                        f"scheduler_allowed_hours_start ({effective_start}) must be less than "
+                        f"scheduler_allowed_hours_end ({effective_end})."
+                    ),
+                },
+            )
+
     for field, value in update_data.items():
         if hasattr(client, field):
             setattr(client, field, value)

@@ -132,6 +132,10 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
     if cs.lead_id:
         await _merge_facts_into_lead(db, cs.lead_id, summary, facts)
 
+    # Auto-schedule follow-up call if eligible (Phase 6)
+    if cs.lead_id and cs.client_id:
+        await _auto_schedule_if_needed(db, cs, facts)
+
     await db.flush()
 
     logger.info(
@@ -320,6 +324,40 @@ async def _merge_facts_into_lead(
 # ---------------------------------------------------------------------------
 # Correction propagation helper (Issue #21)
 # ---------------------------------------------------------------------------
+
+
+async def _auto_schedule_if_needed(
+    db: AsyncSession,
+    cs: "CallSession",
+    facts: dict[str, Any],
+) -> None:
+    """Call scheduler_service.auto_schedule() after lead merge.
+
+    Graceful: any exception is caught and logged. MUST NOT re-raise.
+    Lead facts are already persisted when this is called.
+
+    Args:
+        db: Active async DB session.
+        cs: The completed CallSession.
+        facts: Extracted facts from post-call analysis.
+    """
+    try:
+        from app.scheduler.service import auto_schedule
+
+        await auto_schedule(
+            db=db,
+            session_id=cs.id,
+            lead_id=cs.lead_id,
+            client_id=cs.client_id,
+            facts=facts,
+        )
+    except Exception as exc:
+        logger.warning(
+            "auto_schedule_failed",
+            session_id=cs.id,
+            lead_id=cs.lead_id,
+            error=str(exc),
+        )
 
 
 def _apply_data_corrections(lead: "Lead", corrections_str: str) -> None:

@@ -522,7 +522,9 @@ async def test_webhook_override_path_appends_contexto_del_lead_block(
 
     body = {
         "model": "gpt-4o",
-        "messages": [{"role": "user", "content": "hola"},],
+        "messages": [
+            {"role": "user", "content": "hola"},
+        ],
         "stream": True,
         "elevenlabs_extra_body": {
             "lead_id": LEAD_ID,
@@ -618,9 +620,9 @@ async def test_webhook_override_path_without_lead_no_contexto_block(
     system_content = captured_messages[0][0]["content"]
 
     # Override content must still be present
-    assert "Sos un agente de prueba" in system_content, (
-        f"Override content must be present. System prompt: {system_content[:300]!r}"
-    )
+    assert (
+        "Sos un agente de prueba" in system_content
+    ), f"Override content must be present. System prompt: {system_content[:300]!r}"
 
     # Without a lead, [CONTEXTO DEL LEAD] must NOT appear (nothing to inject)
     assert "[CONTEXTO DEL LEAD]" not in system_content, (
