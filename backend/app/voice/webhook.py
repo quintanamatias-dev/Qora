@@ -40,7 +40,7 @@ from app.calls.service import (
 from app.core.database import get_session as db_session
 from app.leads.service import get_lead
 from app.prompts.loader import PromptLoader
-from app.tenants.service import get_client
+from app.tenants.service import get_client, get_default_agent
 from app.voice.filler import FALLBACK_FILLER, select_filler, session_store
 
 router = APIRouter(prefix="/voice", tags=["voice"])
@@ -577,7 +577,8 @@ async def _process_custom_llm_request(
         s = Settings()
         api_key = s.openai_api_key.get_secret_value()
 
-    # Load tenant config
+    # Load tenant config + resolve Agent (DD-6: single resolution point)
+    agent = None
     async with db_session() as db:
         client = await get_client(db, client_id)
         if client is None:
@@ -601,6 +602,9 @@ async def _process_custom_llm_request(
                 detail={"error": "Tenant disabled"},
             )
 
+        # Phase 7: resolve default Agent for this client (DD-6)
+        agent = await get_default_agent(db, client_id)
+
         # Load lead context (optional)
         lead = None
         if lead_id:
@@ -608,22 +612,41 @@ async def _process_custom_llm_request(
 
         # Build system prompt inside the DB session block so render() can query
         # memory (call_history, confirmed_facts) via build_memory_context(db, lead).
+        #
+        # Phase 7 prompt resolution priority:
+        # 1. agent.system_prompt (DB) via render_for_agent()
+        # 2. client.system_prompt_override (legacy, kept for backward compat)
+        # 3. Filesystem prompt.md / JAUMPABLO template
+        #
         # Use explicit None check so empty string override ("") is respected.
-        system_content = (
-            client.system_prompt_override
-            if client.system_prompt_override is not None
-            else await PromptLoader().render(client, lead, db=db)
-        )
+        if agent is not None:
+            system_content = await PromptLoader().render_for_agent(
+                agent, lead, db=db, client=client
+            )
+        else:
+            # No Agent yet (pre-migration path) — fall back to client-based rendering
+            system_content = (
+                client.system_prompt_override
+                if client.system_prompt_override is not None
+                else await PromptLoader().render(client, lead, db=db)
+            )
 
     # Build messages with system prompt prepended.
     # Issue #21: Do NOT append [CONTEXTO DEL LEAD] block on the TEMPLATE path —
     # the template already includes all lead data via {{lead_name}}, {{car_make}},
     # {{confirmed_facts}}, etc. Appending it was reinforcing stale values 3x.
     #
-    # OVERRIDE PATH: When system_prompt_override is set, the template is NOT rendered,
-    # so {{lead_name}}, {{car_make}}, etc. are never substituted. Append [CONTEXTO DEL LEAD]
-    # to give the LLM access to lead context when an override prompt is in use.
-    if client.system_prompt_override is not None and lead is not None:
+    # OVERRIDE PATH: When system_prompt_override is set and no Agent exists,
+    # the template is NOT rendered, so {{lead_name}}, etc. are never substituted.
+    # Append [CONTEXTO DEL LEAD] to give the LLM access to lead context.
+    #
+    # AGENT PATH: agent.system_prompt behaves like override — append lead context
+    # if agent has a DB prompt set.
+    _has_static_prompt = (
+        (agent is not None and agent.system_prompt)
+        or (agent is None and client.system_prompt_override is not None)
+    )
+    if _has_static_prompt and lead is not None:
         lead_context = (
             f"\n[CONTEXTO DEL LEAD]\n"
             f"Nombre: {lead.name}\n"
@@ -636,17 +659,23 @@ async def _process_custom_llm_request(
 
     messages = [{"role": "system", "content": system_content}] + list(body.messages)
 
-    # Set up streaming client
+    # Set up streaming client — use agent config when available (Phase 7)
+    _model = agent.model if agent is not None else client.model
     streaming_client = OpenAIStreamingClient(
         api_key=api_key,
-        model=client.model,
+        model=_model,
     )
 
-    # Parse tools from client config
+    # Parse tools from agent config (Phase 7) or client config (legacy)
+    _tools_enabled_str = (
+        agent.tools_enabled
+        if agent is not None
+        else client.tools_enabled
+    )
     tools = None
-    if client.tools_enabled:
+    if _tools_enabled_str:
         try:
-            enabled_tool_names = json.loads(client.tools_enabled)
+            enabled_tool_names = json.loads(_tools_enabled_str)
             tools = _build_tool_definitions(enabled_tool_names)
         except (json.JSONDecodeError, TypeError):
             tools = None
@@ -664,12 +693,14 @@ async def _process_custom_llm_request(
         # Use persisted_conversation_id (NULL when absent/empty) for DB — CAP-3 REQ-3.3
         # Use conversation_id (demo-* fallback) as session_store key (always non-null)
         coerced_lead_id = lead_id or None
+        _agent_id_for_session = agent.id if agent is not None else None
         async with db_session() as db:
             new_session = await create_session(
                 db,
                 client_id=client_id,
                 lead_id=coerced_lead_id,
                 elevenlabs_conversation_id=persisted_conversation_id,
+                agent_id=_agent_id_for_session,
             )
         new_session_id = (
             str(new_session.id) if hasattr(new_session, "id") else str(new_session)
@@ -704,13 +735,16 @@ async def _process_custom_llm_request(
             if session_id:
                 await _persist_filler_turn(session_id, filler)
 
+        # Use agent config when available (Phase 7), else client config (legacy)
+        _temperature = agent.temperature if agent is not None else client.temperature
+        _max_tokens = agent.max_tokens if agent is not None else client.max_tokens
         try:
             async for chunk in _stream_llm_response(
                 client=streaming_client,
                 messages=messages,
                 tools=tools,
-                temperature=client.temperature,
-                max_tokens=client.max_tokens,
+                temperature=_temperature,
+                max_tokens=_max_tokens,
                 client_id=client_id,
                 lead_id=lead_id,
                 session_id=session_id,

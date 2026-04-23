@@ -463,6 +463,7 @@ async def override_app_client(tmp_path: Path):
             slug="agente-test",
             name="Agente Test",
             voice_id="test-voice-id",
+            system_prompt="Sos un agente de prueba. Vendé seguros.",
             is_default=True,
         )
         await create_lead(
