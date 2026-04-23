@@ -350,6 +350,7 @@ async def _auto_schedule_if_needed(
             lead_id=cs.lead_id,
             client_id=cs.client_id,
             facts=facts,
+            agent_id=getattr(cs, "agent_id", None),
         )
     except Exception as exc:
         logger.warning(

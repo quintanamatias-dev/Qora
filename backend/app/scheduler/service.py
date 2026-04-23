@@ -99,6 +99,7 @@ async def create_scheduled_call(
     attempt_number: int,
     max_attempts: int,
     notes: str | None,
+    agent_id: str | None = None,
 ) -> ScheduledCall:
     """Persist a new ScheduledCall with status=pending.
 
@@ -112,6 +113,7 @@ async def create_scheduled_call(
         attempt_number: Which attempt this is (1-indexed).
         max_attempts: Max attempts copied from client config at creation time.
         notes: Optional free-text note.
+        agent_id: Optional Agent UUID to associate with this scheduled call.
 
     Returns:
         The persisted ScheduledCall instance.
@@ -126,6 +128,7 @@ async def create_scheduled_call(
         attempt_number=attempt_number,
         max_attempts=max_attempts,
         notes=notes,
+        agent_id=agent_id,
     )
     db.add(sc)
     await db.flush()
@@ -315,6 +318,7 @@ async def auto_schedule(
     lead_id: str,
     client_id: str,
     facts: dict,
+    agent_id: str | None = None,
 ) -> ScheduledCall | None:
     """Auto-schedule a call based on post-call analysis facts.
 
@@ -329,10 +333,11 @@ async def auto_schedule(
 
     Args:
         db: Active async DB session.
-        session_id: Source call session ID.
+        session_id: Source call session ID (used to look up agent_id if not provided).
         lead_id: Lead being evaluated.
         client_id: Client tenant ID.
         facts: Extracted facts dict from post-call analysis.
+        agent_id: Optional Agent UUID. When None, resolved from source session or client default.
 
     Returns:
         Created ScheduledCall, or None if any rule blocks creation.
@@ -405,6 +410,28 @@ async def auto_schedule(
         )
         return None
 
+    # Resolve agent_id: prefer explicit > session's agent > client default
+    resolved_agent_id = agent_id
+    if resolved_agent_id is None:
+        # Try to inherit from source session
+        from app.calls.models import CallSession
+        from sqlalchemy import select as _select
+
+        session_result = await db.execute(
+            _select(CallSession).where(CallSession.id == session_id)
+        )
+        source_session = session_result.scalar_one_or_none()
+        if source_session is not None and source_session.agent_id:
+            resolved_agent_id = source_session.agent_id
+
+    if resolved_agent_id is None:
+        # Fall back to client's default agent
+        from app.tenants.service import get_default_agent
+
+        default_agent = await get_default_agent(db, client_id)
+        if default_agent is not None:
+            resolved_agent_id = default_agent.id
+
     # Calculate scheduled_at
     now_utc = datetime.now(timezone.utc)
     scheduled_at = calculate_scheduled_at(
@@ -425,6 +452,7 @@ async def auto_schedule(
         attempt_number=attempt_count + 1,
         max_attempts=max_attempts,
         notes=None,
+        agent_id=resolved_agent_id,
     )
 
     logger.info(

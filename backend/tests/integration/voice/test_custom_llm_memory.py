@@ -456,6 +456,15 @@ async def override_app_client(tmp_path: Path):
             voice_id="test-voice-id",
             system_prompt_override="Sos un agente de prueba. Vendé seguros.",
         )
+        from app.tenants.service import create_agent
+        await create_agent(
+            sess,
+            client_id="override-client",
+            slug="agente-test",
+            name="Agente Test",
+            voice_id="test-voice-id",
+            is_default=True,
+        )
         await create_lead(
             sess,
             client_id="override-client",
