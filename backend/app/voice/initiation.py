@@ -17,7 +17,7 @@ from app.core.database import get_session as db_session
 from app.leads.service import get_lead, transition_lead_status
 from app.leads.service import InvalidTransitionError
 from app.memory import build_memory_context
-from app.tenants.service import get_client
+from app.tenants.service import get_client, get_default_agent
 
 logger = structlog.get_logger()
 
@@ -96,6 +96,9 @@ async def initiation_webhook(
                 detail={"error": "client not found"},
             )
 
+        # Phase 7: resolve default Agent to get agent_name (and other config)
+        agent = await get_default_agent(session, resolved_client_id)
+
         # Default empty variables (CAP-2: unknown lead still gets empty strings)
         lead_name = ""
         car_make = ""
@@ -151,6 +154,11 @@ async def initiation_webhook(
                     # Already in a state where 'called' isn't valid (e.g., interested)
                     pass
 
+        # Phase 7: use agent.name when available, else fall back to client.agent_name
+        resolved_agent_name = (
+            agent.name if agent is not None else client.agent_name
+        )
+
         return InitiationResponse(
             dynamic_variables={
                 # Plain names — kept for backward-compat and existing tests
@@ -162,7 +170,7 @@ async def initiation_webhook(
                 "lead_status": lead_status,
                 "lead_notes": lead_notes,
                 "broker_name": client.broker_name,
-                "agent_name": client.agent_name,
+                "agent_name": resolved_agent_name,
                 # Underscore-wrapped names required by the ElevenLabs agent template.
                 # The agent's first message is: ¡Hola! ¿Hablo con {{_lead_name_}}?
                 "_lead_name_": lead_name,
@@ -171,7 +179,7 @@ async def initiation_webhook(
                 "_car_year_": car_year,
                 "_current_insurance_": current_insurance,
                 "_broker_name_": client.broker_name,
-                "_agent_name_": client.agent_name,
+                "_agent_name_": resolved_agent_name,
                 # CAP-6: Memory injection variables
                 "call_history": call_history,
                 "confirmed_facts": confirmed_facts,

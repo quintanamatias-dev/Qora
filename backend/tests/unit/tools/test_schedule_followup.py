@@ -350,3 +350,127 @@ def test_parse_followup_date_naive_no_seconds_uses_client_tz():
     # 9:00 AM New York (EST, UTC-5) = 14:00 UTC
     assert result.utcoffset().total_seconds() == 0  # stored as UTC
     assert result.hour == 14  # 9AM EST = 14:00 UTC
+
+
+# ---------------------------------------------------------------------------
+# CRITICAL 3: schedule_followup passes agent_id to ScheduledCall
+# ---------------------------------------------------------------------------
+
+
+async def test_schedule_followup_passes_agent_id_when_source_session_has_agent(db):
+    """schedule_followup passes agent_id from the source session to ScheduledCall."""
+    from app.scheduler.service import list_queue
+    from app.tenants.service import get_default_agent
+    from app.calls.service import create_session
+    from app.leads.service import transition_lead_status
+    from sqlalchemy import select as _select
+    from app.leads.models import Lead as _Lead
+
+    # Get the default agent
+    async with db.async_session_factory() as sess:
+        agent = await get_default_agent(sess, "quintana-seguros")
+        agent_id = agent.id
+
+    # Enable scheduler for quintana
+    async with db.async_session_factory() as sess:
+        from app.tenants.models import Client as _Client
+
+        client = await sess.get(_Client, "quintana-seguros")
+        client.scheduler_enabled = True
+        client.scheduler_allowed_hours_start = 0  # allow all hours for test
+        client.scheduler_allowed_hours_end = 24
+        await sess.commit()
+
+    # Get a lead and advance to "called" state (required before follow_up)
+    async with db.async_session_factory() as sess:
+        lead_row = (await sess.execute(_select(_Lead).limit(1))).scalar_one()
+        lead_id = lead_row.id
+        await transition_lead_status(sess, lead_id, "called")
+
+        cs = await create_session(
+            sess,
+            client_id="quintana-seguros",
+            lead_id=lead_id,
+            agent_id=agent_id,
+        )
+        source_session_id = cs.id
+        await sess.commit()
+
+    # Call schedule_followup with source_session_id
+    async with db.async_session_factory() as sess:
+        from app.tools.schedule_followup import schedule_followup
+
+        result = await schedule_followup(
+            session=sess,
+            lead_id=lead_id,
+            followup_date="2099-06-01T15:00:00",
+            client_id="quintana-seguros",
+            source_session_id=source_session_id,
+        )
+        await sess.commit()
+
+    assert "error" not in result, f"schedule_followup failed: {result}"
+
+    async with db.async_session_factory() as sess:
+        scheduled_calls = await list_queue(sess, client_id="quintana-seguros")
+
+    assert len(scheduled_calls) >= 1
+    sc = scheduled_calls[0]
+    assert sc.agent_id == agent_id, (
+        f"Expected agent_id={agent_id!r} on ScheduledCall, got {sc.agent_id!r}"
+    )
+
+
+async def test_schedule_followup_resolves_default_agent_when_no_source_session(db):
+    """schedule_followup resolves default agent when no source_session_id is provided."""
+    from app.scheduler.service import list_queue
+    from app.tenants.service import get_default_agent
+    from app.leads.service import transition_lead_status
+    from sqlalchemy import select as _select
+    from app.leads.models import Lead as _Lead
+
+    # Get the default agent
+    async with db.async_session_factory() as sess:
+        agent = await get_default_agent(sess, "quintana-seguros")
+        agent_id = agent.id
+
+    # Enable scheduler for quintana (allow all hours)
+    async with db.async_session_factory() as sess:
+        from app.tenants.models import Client as _Client
+
+        client = await sess.get(_Client, "quintana-seguros")
+        client.scheduler_enabled = True
+        client.scheduler_allowed_hours_start = 0
+        client.scheduler_allowed_hours_end = 24
+        await sess.commit()
+
+    # Get a lead and advance to "called" state (required before follow_up)
+    async with db.async_session_factory() as sess:
+        lead_row = (await sess.execute(_select(_Lead).limit(1))).scalar_one()
+        lead_id = lead_row.id
+        await transition_lead_status(sess, lead_id, "called")
+        await sess.commit()
+
+    # schedule_followup with NO source_session_id — should use default agent
+    async with db.async_session_factory() as sess:
+        from app.tools.schedule_followup import schedule_followup
+
+        result = await schedule_followup(
+            session=sess,
+            lead_id=lead_id,
+            followup_date="2099-06-01T15:00:00",
+            client_id="quintana-seguros",
+            source_session_id=None,
+        )
+        await sess.commit()
+
+    assert "error" not in result, f"schedule_followup failed: {result}"
+
+    async with db.async_session_factory() as sess:
+        scheduled_calls = await list_queue(sess, client_id="quintana-seguros")
+
+    assert len(scheduled_calls) >= 1
+    sc = scheduled_calls[0]
+    assert sc.agent_id == agent_id, (
+        f"Expected default agent_id={agent_id!r} on ScheduledCall, got {sc.agent_id!r}"
+    )

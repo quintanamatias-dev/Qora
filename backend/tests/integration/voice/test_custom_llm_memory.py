@@ -447,6 +447,7 @@ async def override_app_client(tmp_path: Path):
         from app.leads.service import create_lead
 
         # Create a client WITH system_prompt_override set
+        # create_client() automatically bootstraps a default Agent — no separate create_agent()
         await create_client(
             sess,
             id="override-client",

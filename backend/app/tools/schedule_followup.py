@@ -104,23 +104,9 @@ async def schedule_followup(
     Returns:
         Updated lead dict, or {"error": ...}.
     """
-    # We need the client's timezone to correctly interpret naive datetimes.
-    # Load the client early (before lead) so we can pass the TZ to the parser.
-    # If client_id is not yet known, we'll re-resolve after loading the lead.
-    _early_client_tz: str | None = None
-    if client_id:
-        try:
-            from app.tenants.models import Client as _ClientModel
-
-            _early_client = await session.get(_ClientModel, client_id)
-            if _early_client is not None:
-                _early_client_tz = _early_client.scheduler_timezone
-        except Exception:
-            pass
-
-    # Validate followup_date is parseable (Phase 6: reject invalid AI dates)
-    parsed_dt = _parse_followup_date(followup_date, client_timezone=_early_client_tz)
-    if parsed_dt is None:
+    # First: validate that followup_date is parseable at all (reject invalid AI dates early).
+    # Use a tentative parse without TZ context — only to detect completely invalid strings.
+    if not _parse_followup_date(followup_date):
         logger.warning(
             "schedule_followup_invalid_date",
             lead_id=lead_id,
@@ -128,12 +114,36 @@ async def schedule_followup(
         )
         return {"error": "invalid_date", "field": "followup_date", "value": followup_date}
 
+    # Load the lead to resolve effective_client_id (needed for correct TZ resolution).
     lead = await get_lead(session, lead_id)
     if lead is None:
         return {"error": "lead_not_found"}
 
     # Resolve client_id from lead if not provided
     effective_client_id = client_id or lead.client_id
+
+    # Now re-parse with the correct client timezone (WARNING 6 fix: TZ is resolved AFTER lead).
+    # This ensures naive datetimes use the tenant's local timezone, not UTC.
+    _client_tz: str | None = None
+    if effective_client_id:
+        try:
+            from app.tenants.models import Client as _ClientModel
+
+            _effective_client = await session.get(_ClientModel, effective_client_id)
+            if _effective_client is not None:
+                _client_tz = _effective_client.scheduler_timezone
+        except Exception:
+            pass
+
+    parsed_dt = _parse_followup_date(followup_date, client_timezone=_client_tz)
+    if parsed_dt is None:
+        # Should not happen since we already validated above, but guard defensively
+        logger.warning(
+            "schedule_followup_invalid_date",
+            lead_id=lead_id,
+            followup_date=followup_date,
+        )
+        return {"error": "invalid_date", "field": "followup_date", "value": followup_date}
 
     # Transition to follow_up (enforces state machine)
     # Allow idempotent re-scheduling: if already in follow_up, skip the transition
@@ -166,6 +176,33 @@ async def schedule_followup(
                     )
                 )
                 if existing.scalar_one_or_none() is None:
+                    # Resolve agent_id: prefer source session's agent, fall back to default
+                    resolved_agent_id: str | None = None
+                    if source_session_id:
+                        from app.calls.models import CallSession as _CallSession
+
+                        sess_result = await session.execute(
+                            select(_CallSession).where(
+                                _CallSession.id == source_session_id
+                            )
+                        )
+                        src_session = sess_result.scalar_one_or_none()
+                        if src_session is not None and src_session.agent_id:
+                            resolved_agent_id = src_session.agent_id
+
+                    if resolved_agent_id is None:
+                        from app.tenants.service import get_default_agent as _get_default_agent
+
+                        default_agent = await _get_default_agent(session, effective_client_id)
+                        if default_agent is not None:
+                            resolved_agent_id = default_agent.id
+                        else:
+                            logger.warning(
+                                "schedule_followup_no_default_agent",
+                                client_id=effective_client_id,
+                                lead_id=lead_id,
+                            )
+
                     # Clamp to allowed hours
                     scheduled_at = calculate_scheduled_at(
                         now_utc=parsed_dt,
@@ -184,6 +221,7 @@ async def schedule_followup(
                         attempt_number=1,
                         max_attempts=client.scheduler_max_attempts,
                         notes=note,
+                        agent_id=resolved_agent_id,
                     )
                     sc_created = True
                     logger.info(

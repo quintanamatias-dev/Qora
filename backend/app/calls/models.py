@@ -59,6 +59,10 @@ class CallSession(Base):
     merged_into_session_id: Mapped[str | None] = mapped_column(
         String, nullable=True, default=None
     )
+    # Phase 7: agent_id FK (nullable for migration safety — backfilled post-migration)
+    agent_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("agents.id"), nullable=True, default=None
+    )
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<CallSession id={self.id!r} status={self.status!r}>"

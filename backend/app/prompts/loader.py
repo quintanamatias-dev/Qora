@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
-    from app.tenants.models import Client
+    from app.tenants.models import Agent, Client
     from app.leads.models import Lead
 
 logger = logging.getLogger(__name__)
@@ -57,6 +57,38 @@ MAX_KNOWLEDGE_TOKENS = 2000
 # Default clients directory — resolved relative to this file so it works
 # regardless of the working directory.  Tests override this via PromptLoader(clients_dir=…).
 _DEFAULT_CLIENTS_DIR = Path(__file__).resolve().parents[2] / "clients"
+
+
+# ---------------------------------------------------------------------------
+# Agent → Client adapter for backward-compatible rendering
+# ---------------------------------------------------------------------------
+
+
+class _AgentClientAdapter:
+    """Thin adapter that makes an Agent look like a Client for prompt rendering.
+
+    The original render() and render_system_prompt() functions accept a Client
+    object and read: id, broker_name, agent_name.  This adapter exposes those
+    attributes using Agent data so existing rendering logic works unchanged.
+    """
+
+    def __init__(self, agent: "Agent", client: "Client | None" = None) -> None:
+        self._agent = agent
+        self._client = client
+
+    @property
+    def id(self) -> str:
+        return getattr(self._agent, "client_id", None) or "unknown"
+
+    @property
+    def broker_name(self) -> str:
+        if self._client is not None:
+            return getattr(self._client, "broker_name", "")
+        return ""
+
+    @property
+    def agent_name(self) -> str:
+        return getattr(self._agent, "name", "Jaumpablo")
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +148,99 @@ class PromptLoader:
         if await asyncio.to_thread(knowledge_path.exists):
             return await asyncio.to_thread(knowledge_path.read_text, encoding="utf-8")
         return None
+
+    async def render_for_agent(
+        self,
+        agent: "Agent",
+        lead: "Lead | None" = None,
+        call_count: int = 1,
+        db: "AsyncSession | None" = None,
+        client: "Client | None" = None,
+    ) -> str:
+        """Render the system prompt using Agent as the primary config source.
+
+        Priority order:
+        1. agent.system_prompt (DB) → use directly as the prompt body
+        2. Fallback: filesystem clients/{client_id}/prompt.md or JAUMPABLO_PROMPT_TEMPLATE
+           (same as render() but uses agent.name for {{agent_name}})
+
+        Knowledge base:
+        - agent.knowledge_base (DB) → used if set (takes precedence over filesystem)
+        - Otherwise: no knowledge injection (filesystem knowledge.md is NOT used
+          when agent.knowledge_base is not set, to avoid stale data)
+
+        Args:
+            agent: Agent ORM (or mock) with system_prompt, knowledge_base, name, client_id.
+            lead: Optional lead ORM instance.
+            call_count: How many times the lead has been called.
+            db: Optional async DB session for memory context.
+            client: Optional Client ORM — used for broker_name in template rendering.
+                    If None, broker_name defaults to empty string.
+
+        Returns:
+            Fully rendered system prompt string.
+        """
+        from app.prompts.insurance_agent import (
+            JAUMPABLO_PROMPT_TEMPLATE,
+            render_system_prompt,
+        )
+
+        agent_system_prompt = getattr(agent, "system_prompt", None)
+
+        # ------------------------------------------------------------------
+        # Build prompt body
+        # ------------------------------------------------------------------
+        if agent_system_prompt:
+            # DB prompt takes precedence — use directly as prompt body
+            prompt_body = agent_system_prompt
+        else:
+            # Fallback: load from filesystem or JAUMPABLO template
+            client_id = getattr(agent, "client_id", None) or "unknown"
+            template = await self.load_prompt(client_id)
+
+            if template is JAUMPABLO_PROMPT_TEMPLATE:
+                # Use the original renderer — it handles {single-brace} format
+                # Build a minimal client-like object with agent's name
+                _agent_as_client = _AgentClientAdapter(agent, client)
+                fallback_memory = None
+                if db is not None and lead is not None:
+                    try:
+                        from app.memory import build_memory_context
+
+                        fallback_memory = await build_memory_context(db, lead)
+                    except Exception as exc:
+                        _structlog.error(
+                            "memory_context_failed",
+                            lead_id=getattr(lead, "id", None),
+                            error_type=type(exc).__name__,
+                            error_msg=str(exc),
+                            branch="render_for_agent_fallback",
+                        )
+                prompt_body = render_system_prompt(
+                    _agent_as_client, lead, call_count, memory=fallback_memory
+                )
+            else:
+                prompt_body = await self._render_template(
+                    template,
+                    _AgentClientAdapter(agent, client),
+                    lead,
+                    call_count,
+                    db=db,
+                )
+
+        # ------------------------------------------------------------------
+        # Knowledge injection — DB takes precedence, filesystem is skipped
+        # ------------------------------------------------------------------
+        agent_knowledge = getattr(agent, "knowledge_base", None)
+        if agent_knowledge:
+            knowledge = self._truncate_knowledge(
+                agent_knowledge, client_id=getattr(agent, "client_id", "")
+            )
+            prompt_body = f"{prompt_body}\n\n## INFORMACIÓN DE LA EMPRESA\n{knowledge}"
+        # NOTE: We intentionally do NOT load filesystem knowledge.md here.
+        # agent.knowledge_base=None means "no knowledge" for this agent.
+
+        return prompt_body
 
     async def render(
         self,
