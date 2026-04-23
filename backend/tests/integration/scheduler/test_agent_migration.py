@@ -498,3 +498,144 @@ async def test_migrate_fks_is_idempotent(tmp_path: Path):
         assert row[0] == agent_id
 
     await engine2.dispose()
+
+
+# ---------------------------------------------------------------------------
+# CRITICAL 2: Migration verification — zero NULL agent_id rows after backfill
+# ---------------------------------------------------------------------------
+
+
+async def test_migrate_fks_backfill_leaves_zero_null_rows_when_all_clients_have_agent(
+    tmp_path,
+):
+    """After backfill, migration reports 0 NULL agent_id rows when all clients have a default agent."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/migrate_verify_null_test.db"
+    engine = create_async_engine(db_url, echo=False)
+
+    async with engine.begin() as conn:
+        await _create_base_schema(conn)
+        await _seed_client(conn, "verify-client", "Verify Client")
+        # Agents table with one default agent
+        await conn.execute(
+            sqlalchemy.text(
+                """
+                CREATE TABLE IF NOT EXISTS agents (
+                    id TEXT PRIMARY KEY,
+                    client_id TEXT NOT NULL,
+                    slug TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    voice_id TEXT NOT NULL,
+                    model TEXT NOT NULL DEFAULT 'gpt-4o',
+                    temperature REAL NOT NULL DEFAULT 0.7,
+                    max_tokens INTEGER NOT NULL DEFAULT 300,
+                    tools_enabled TEXT NOT NULL DEFAULT '[]',
+                    is_active BOOLEAN NOT NULL DEFAULT 1,
+                    is_default BOOLEAN NOT NULL DEFAULT 0,
+                    system_prompt TEXT,
+                    knowledge_base TEXT,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        import uuid
+        agent_id = str(uuid.uuid4())
+        await conn.execute(
+            sqlalchemy.text(
+                "INSERT INTO agents (id, client_id, slug, name, voice_id, is_default) "
+                "VALUES (:id, 'verify-client', 'main', 'Main', 'v-main', 1)"
+            ),
+            {"id": agent_id},
+        )
+        # Two sessions — both should get backfilled
+        await _seed_session(conn, "v-sess-1", "verify-client")
+        await _seed_session(conn, "v-sess-2", "verify-client")
+
+    await engine.dispose()
+
+    from scripts.migrate_add_agent_id_fks import run_migration, count_null_agent_rows
+
+    # Run migration and then verify 0 NULLs remain
+    await run_migration(db_url)
+
+    engine2 = create_async_engine(db_url, echo=False)
+    async with engine2.begin() as conn:
+        null_count = await count_null_agent_rows(conn, "call_sessions")
+        assert null_count == 0, (
+            f"Expected 0 NULL agent_id rows after backfill, got {null_count}"
+        )
+    await engine2.dispose()
+
+
+async def test_count_null_agent_rows_returns_correct_count(tmp_path):
+    """count_null_agent_rows() accurately counts NULL agent_id rows in a table."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/count_null_test.db"
+    engine = create_async_engine(db_url, echo=False)
+
+    async with engine.begin() as conn:
+        await _create_base_schema(conn)
+        await _seed_client(conn, "count-client", "Count Client")
+        # Agents table
+        await conn.execute(
+            sqlalchemy.text(
+                """
+                CREATE TABLE IF NOT EXISTS agents (
+                    id TEXT PRIMARY KEY,
+                    client_id TEXT NOT NULL,
+                    slug TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    voice_id TEXT NOT NULL,
+                    is_active BOOLEAN NOT NULL DEFAULT 1,
+                    is_default BOOLEAN NOT NULL DEFAULT 0,
+                    model TEXT NOT NULL DEFAULT 'gpt-4o',
+                    temperature REAL NOT NULL DEFAULT 0.7,
+                    max_tokens INTEGER NOT NULL DEFAULT 300,
+                    tools_enabled TEXT NOT NULL DEFAULT '[]',
+                    system_prompt TEXT,
+                    knowledge_base TEXT,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        # Insert a default agent
+        import uuid
+        agent_id = str(uuid.uuid4())
+        await conn.execute(
+            sqlalchemy.text(
+                "INSERT INTO agents (id, client_id, slug, name, voice_id, is_default) "
+                "VALUES (:id, 'count-client', 'main', 'Main', 'v-m', 1)"
+            ),
+            {"id": agent_id},
+        )
+        # 1 session pre-added (before agent_id column exists)
+        await _seed_session(conn, "count-sess-1", "count-client")
+
+    await engine.dispose()
+
+    from scripts.migrate_add_agent_id_fks import run_migration, count_null_agent_rows
+
+    await run_migration(db_url)
+
+    engine2 = create_async_engine(db_url, echo=False)
+    async with engine2.begin() as conn:
+        # After backfill: 0 NULLs
+        null_count_after = await count_null_agent_rows(conn, "call_sessions")
+        assert null_count_after == 0
+
+        # Manually set one row back to NULL to test the counter
+        await conn.execute(
+            sqlalchemy.text(
+                "UPDATE call_sessions SET agent_id=NULL WHERE id='count-sess-1'"
+            )
+        )
+        null_count_manual = await count_null_agent_rows(conn, "call_sessions")
+        assert null_count_manual == 1, (
+            f"Expected 1 NULL row after manual update, got {null_count_manual}"
+        )
+
+    await engine2.dispose()

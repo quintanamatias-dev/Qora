@@ -44,6 +44,7 @@ class ScheduledCallResponse(BaseModel):
     trigger_reason: str
     outcome_session_id: str | None
     notes: str | None
+    agent_id: str | None = None
     created_at: datetime
     updated_at: datetime
 

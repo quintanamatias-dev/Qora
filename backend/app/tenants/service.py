@@ -226,6 +226,19 @@ async def create_agent(
                 "Only one agent per client may have is_default=True."
             )
 
+    # Validate slug uniqueness per client (before DB flush to give a clean error)
+    existing_slug = await session.execute(
+        select(Agent).where(
+            Agent.client_id == client_id,
+            Agent.slug == slug,
+        )
+    )
+    if existing_slug.scalar_one_or_none() is not None:
+        raise ValueError(
+            f"Agent with slug {slug!r} already exists for client {client_id!r}. "
+            "slug must be unique per client."
+        )
+
     agent = Agent(
         id=str(uuid.uuid4()),
         client_id=client_id,

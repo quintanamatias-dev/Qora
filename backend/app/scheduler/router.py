@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +33,7 @@ from app.scheduler.service import (
 )
 
 router = APIRouter(tags=["scheduler"])
+logger = structlog.get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +137,17 @@ async def create_manual_scheduled_call(
             },
         )
 
+    # Resolve agent_id: use the client's default agent (manual calls have no source session)
+    from app.tenants.service import get_default_agent
+
+    default_agent = await get_default_agent(session, client_id)
+    if default_agent is None:
+        logger.warning(
+            "manual_scheduled_call_no_default_agent",
+            client_id=client_id,
+        )
+    resolved_agent_id = default_agent.id if default_agent is not None else None
+
     sc = await create_scheduled_call(
         session,
         client_id=client_id,
@@ -145,6 +158,7 @@ async def create_manual_scheduled_call(
         attempt_number=1,
         max_attempts=client.scheduler_max_attempts,
         notes=payload.notes,
+        agent_id=resolved_agent_id,
     )
     await session.commit()
     await session.refresh(sc)

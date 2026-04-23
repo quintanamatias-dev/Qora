@@ -332,3 +332,82 @@ async def test_seed_demo_inmobiliaria_creates_default_agent(session: AsyncSessio
     assert agent is not None
     assert agent.is_default is True
     assert agent.name == "Valentina"
+
+
+# ---------------------------------------------------------------------------
+# CRITICAL 1: Agent.slug unique per client — DB constraint + service validation
+# ---------------------------------------------------------------------------
+
+
+async def test_agent_table_has_unique_constraint_on_client_id_slug():
+    """Agent.__table_args__ contains a UniqueConstraint on (client_id, slug)."""
+    from sqlalchemy import UniqueConstraint
+    from app.tenants.models import Agent
+
+    args = Agent.__table_args__
+    unique_constraints = [
+        a for a in args
+        if isinstance(a, UniqueConstraint)
+    ]
+    # At least one UniqueConstraint should cover (client_id, slug)
+    found = any(
+        set(uc.columns.keys()) == {"client_id", "slug"}
+        for uc in unique_constraints
+    )
+    assert found, (
+        f"No UniqueConstraint on (client_id, slug) found. "
+        f"table_args={args}"
+    )
+
+
+async def test_duplicate_slug_same_client_raises_on_create(session: AsyncSession):
+    """create_agent() raises ValueError when slug already exists for the same client."""
+    from app.tenants.service import create_agent
+
+    await _make_client(session, "broker-slug-dup")
+
+    # First agent with slug "sales-bot" — OK
+    await create_agent(
+        session,
+        client_id="broker-slug-dup",
+        slug="sales-bot",
+        name="Sales Bot v1",
+        voice_id="v-sales-1",
+    )
+
+    # Second agent with the same slug for the same client — must raise
+    with pytest.raises(ValueError, match="slug"):
+        await create_agent(
+            session,
+            client_id="broker-slug-dup",
+            slug="sales-bot",
+            name="Sales Bot v2",
+            voice_id="v-sales-2",
+        )
+
+
+async def test_same_slug_different_clients_is_allowed(session: AsyncSession):
+    """The same slug may be used across different clients without error."""
+    from app.tenants.service import create_agent
+
+    await _make_client(session, "client-one")
+    await _make_client(session, "client-two")
+
+    agent_1 = await create_agent(
+        session,
+        client_id="client-one",
+        slug="advisor",
+        name="Advisor for One",
+        voice_id="v-one",
+    )
+    agent_2 = await create_agent(
+        session,
+        client_id="client-two",
+        slug="advisor",
+        name="Advisor for Two",
+        voice_id="v-two",
+    )
+
+    assert agent_1.slug == "advisor"
+    assert agent_2.slug == "advisor"
+    assert agent_1.client_id != agent_2.client_id

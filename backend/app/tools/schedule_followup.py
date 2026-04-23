@@ -166,6 +166,33 @@ async def schedule_followup(
                     )
                 )
                 if existing.scalar_one_or_none() is None:
+                    # Resolve agent_id: prefer source session's agent, fall back to default
+                    resolved_agent_id: str | None = None
+                    if source_session_id:
+                        from app.calls.models import CallSession as _CallSession
+
+                        sess_result = await session.execute(
+                            select(_CallSession).where(
+                                _CallSession.id == source_session_id
+                            )
+                        )
+                        src_session = sess_result.scalar_one_or_none()
+                        if src_session is not None and src_session.agent_id:
+                            resolved_agent_id = src_session.agent_id
+
+                    if resolved_agent_id is None:
+                        from app.tenants.service import get_default_agent as _get_default_agent
+
+                        default_agent = await _get_default_agent(session, effective_client_id)
+                        if default_agent is not None:
+                            resolved_agent_id = default_agent.id
+                        else:
+                            logger.warning(
+                                "schedule_followup_no_default_agent",
+                                client_id=effective_client_id,
+                                lead_id=lead_id,
+                            )
+
                     # Clamp to allowed hours
                     scheduled_at = calculate_scheduled_at(
                         now_utc=parsed_dt,
@@ -184,6 +211,7 @@ async def schedule_followup(
                         attempt_number=1,
                         max_attempts=client.scheduler_max_attempts,
                         notes=note,
+                        agent_id=resolved_agent_id,
                     )
                     sc_created = True
                     logger.info(

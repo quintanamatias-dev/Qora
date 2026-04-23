@@ -56,6 +56,20 @@ async def add_column_if_missing(conn, table: str, column: str, col_def: str) -> 
     return True
 
 
+async def count_null_agent_rows(conn, table: str) -> int:
+    """Count rows in `table` where agent_id IS NULL.
+
+    Returns:
+        Number of rows with NULL agent_id.
+    """
+    import sqlalchemy
+
+    result = await conn.execute(
+        sqlalchemy.text(f"SELECT COUNT(*) FROM {table} WHERE agent_id IS NULL")
+    )
+    return result.scalar() or 0
+
+
 async def backfill_agent_id(conn, table: str) -> int:
     """Backfill agent_id=NULL rows in `table` from each row's client_id default agent.
 
@@ -133,6 +147,30 @@ async def run_migration(database_url: str) -> None:
         print("\nBackfilling agent_id for existing rows...")
         await backfill_agent_id(conn, "call_sessions")
         await backfill_agent_id(conn, "scheduled_calls")
+
+        # ------------------------------------------------------------------
+        # 4. Verify — report remaining NULL rows (cannot enforce NOT NULL
+        #    via ALTER TABLE in SQLite, but we surface the count clearly)
+        # ------------------------------------------------------------------
+        print("\nVerifying backfill completeness...")
+        null_sessions = await count_null_agent_rows(conn, "call_sessions")
+        null_scheduled = await count_null_agent_rows(conn, "scheduled_calls")
+
+        if null_sessions > 0:
+            print(
+                f"  [warn] {null_sessions} call_sessions row(s) still have NULL agent_id "
+                "(client has no default agent — manual assignment required)"
+            )
+        else:
+            print("  [ok]   call_sessions: 0 NULL agent_id rows")
+
+        if null_scheduled > 0:
+            print(
+                f"  [warn] {null_scheduled} scheduled_calls row(s) still have NULL agent_id "
+                "(client has no default agent — manual assignment required)"
+            )
+        else:
+            print("  [ok]   scheduled_calls: 0 NULL agent_id rows")
 
     await engine.dispose()
     print("\nMigration complete.")
