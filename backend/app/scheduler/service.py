@@ -415,10 +415,9 @@ async def auto_schedule(
     if resolved_agent_id is None:
         # Try to inherit from source session
         from app.calls.models import CallSession
-        from sqlalchemy import select as _select
 
         session_result = await db.execute(
-            _select(CallSession).where(CallSession.id == session_id)
+            select(CallSession).where(CallSession.id == session_id)
         )
         source_session = session_result.scalar_one_or_none()
         if source_session is not None and source_session.agent_id:

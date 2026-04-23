@@ -694,13 +694,36 @@ async def _process_custom_llm_request(
         # Use conversation_id (demo-* fallback) as session_store key (always non-null)
         coerced_lead_id = lead_id or None
         _agent_id_for_session = agent.id if agent is not None else None
-        async with db_session() as db:
-            new_session = await create_session(
-                db,
+        try:
+            async with db_session() as db:
+                new_session = await create_session(
+                    db,
+                    client_id=client_id,
+                    lead_id=coerced_lead_id,
+                    elevenlabs_conversation_id=persisted_conversation_id,
+                    agent_id=_agent_id_for_session,
+                )
+        except ValueError as exc:
+            # CRITICAL 1: No default agent for this client — return graceful SSE instead of 500 ISE
+            structlog.get_logger().error(
+                "webhook_create_session_failed",
                 client_id=client_id,
-                lead_id=coerced_lead_id,
-                elevenlabs_conversation_id=persisted_conversation_id,
-                agent_id=_agent_id_for_session,
+                error=str(exc),
+            )
+
+            async def _error_stream():
+                yield _sse_chunk("Lo siento, no hay agente configurado para este cliente.")
+                yield _sse_stop()
+                yield _sse_done()
+
+            return StreamingResponse(
+                _error_stream(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
             )
         new_session_id = (
             str(new_session.id) if hasattr(new_session, "id") else str(new_session)

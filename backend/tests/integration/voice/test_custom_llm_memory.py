@@ -447,6 +447,7 @@ async def override_app_client(tmp_path: Path):
         from app.leads.service import create_lead
 
         # Create a client WITH system_prompt_override set
+        # create_client() automatically bootstraps a default Agent — no separate create_agent()
         await create_client(
             sess,
             id="override-client",
@@ -455,16 +456,6 @@ async def override_app_client(tmp_path: Path):
             agent_name="Agente Test",
             voice_id="test-voice-id",
             system_prompt_override="Sos un agente de prueba. Vendé seguros.",
-        )
-        from app.tenants.service import create_agent
-        await create_agent(
-            sess,
-            client_id="override-client",
-            slug="agente-test",
-            name="Agente Test",
-            voice_id="test-voice-id",
-            system_prompt="Sos un agente de prueba. Vendé seguros.",
-            is_default=True,
         )
         await create_lead(
             sess,

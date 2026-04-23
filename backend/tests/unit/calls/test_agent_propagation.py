@@ -100,10 +100,16 @@ async def test_create_session_without_agent_id_resolves_default(seeded_db):
 
 
 async def test_create_session_no_default_agent_raises(tmp_path: Path):
-    """create_session() without agent_id raises ValueError when client has no default agent."""
+    """create_session() without agent_id raises ValueError when client has no active default agent.
+
+    This simulates a pre-migration client that has no default agent, or a client whose
+    only default agent was deactivated. We force this by deactivating the auto-created
+    default agent before attempting create_session().
+    """
     from pydantic import SecretStr
     from app.core.config import Settings
     from app.core import database as db_module
+    from sqlalchemy import update
 
     settings = Settings(
         openai_api_key=SecretStr("sk-test"),
@@ -113,8 +119,9 @@ async def test_create_session_no_default_agent_raises(tmp_path: Path):
     await db_module.init_db(settings)
 
     async with db_module.async_session_factory() as sess:
-        from app.tenants.service import create_client
+        from app.tenants.service import create_client, get_default_agent
         from app.leads.service import create_lead
+        from app.tenants.models import Agent
 
         await create_client(
             sess,
@@ -131,6 +138,14 @@ async def test_create_session_no_default_agent_raises(tmp_path: Path):
             phone="+549000000",
             lead_id="ghost-lead-001",
         )
+
+        # Deactivate the auto-created default agent to simulate "no default agent"
+        default_agent = await get_default_agent(sess, "no-agent-client")
+        assert default_agent is not None
+        await sess.execute(
+            update(Agent).where(Agent.id == default_agent.id).values(is_active=False)
+        )
+
         await sess.commit()
 
     async with db_module.async_session_factory() as sess:

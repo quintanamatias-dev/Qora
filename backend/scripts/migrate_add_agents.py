@@ -67,7 +67,8 @@ async def run_migration(database_url: str) -> None:
                         tools_enabled TEXT NOT NULL DEFAULT '["get_lead_details","register_interest","mark_not_interested","schedule_followup"]',
                         is_active BOOLEAN NOT NULL DEFAULT 1,
                         is_default BOOLEAN NOT NULL DEFAULT 0,
-                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(client_id, slug)
                     )
                     """
                 )
@@ -77,7 +78,7 @@ async def run_migration(database_url: str) -> None:
                     "CREATE INDEX IF NOT EXISTS ix_agents_client_id ON agents(client_id)"
                 )
             )
-            print("  [create] agents table + ix_agents_client_id")
+            print("  [create] agents table + ix_agents_client_id + UNIQUE(client_id, slug)")
 
         # ------------------------------------------------------------------
         # 2. Seed one default Agent per existing Client (if not already seeded)

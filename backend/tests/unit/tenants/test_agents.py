@@ -115,40 +115,29 @@ async def test_create_agent_with_defaults(session: AsyncSession):
 
 
 async def test_create_agent_as_default(session: AsyncSession):
-    """create_agent() with is_default=True creates a default agent."""
-    from app.tenants.service import create_agent
+    """create_client() auto-creates a default agent; the agent has is_default=True."""
+    from app.tenants.service import get_default_agent
 
     await _make_client(session, "broker-default-flag")
 
-    agent = await create_agent(
-        session,
-        client_id="broker-default-flag",
-        slug="main-agent",
-        name="Main Agent",
-        voice_id="voice-main",
-        is_default=True,
-    )
-
+    # create_client() now auto-bootstraps the default agent
+    agent = await get_default_agent(session, "broker-default-flag")
+    assert agent is not None
     assert agent.is_default is True
 
 
 async def test_duplicate_default_raises(session: AsyncSession):
-    """Creating a second is_default=True agent for the same client raises ValueError."""
+    """Creating a second is_default=True agent for the same client raises ValueError.
+
+    create_client() auto-creates the first default agent; attempting to create
+    a second one must raise ValueError.
+    """
     from app.tenants.service import create_agent
 
     await _make_client(session, "broker-dup-test")
+    # _make_client → create_client already created a default agent
 
-    # First default agent — OK
-    await create_agent(
-        session,
-        client_id="broker-dup-test",
-        slug="agent-one",
-        name="Agent One",
-        voice_id="voice-1",
-        is_default=True,
-    )
-
-    # Second default agent for same client — must raise
+    # Attempt to add a second default — must raise
     with pytest.raises(ValueError, match="default"):
         await create_agent(
             session,
@@ -161,30 +150,20 @@ async def test_duplicate_default_raises(session: AsyncSession):
 
 
 async def test_two_clients_can_each_have_default(session: AsyncSession):
-    """Two different clients may each have their own is_default=True agent."""
-    from app.tenants.service import create_agent
+    """Two different clients may each have their own is_default=True agent.
+
+    create_client() auto-bootstraps a default agent per client.
+    """
+    from app.tenants.service import get_default_agent
 
     await _make_client(session, "broker-alpha")
     await _make_client(session, "broker-beta")
 
-    agent_a = await create_agent(
-        session,
-        client_id="broker-alpha",
-        slug="agent-a",
-        name="Agent A",
-        voice_id="v-a",
-        is_default=True,
-    )
+    agent_a = await get_default_agent(session, "broker-alpha")
+    agent_b = await get_default_agent(session, "broker-beta")
 
-    agent_b = await create_agent(
-        session,
-        client_id="broker-beta",
-        slug="agent-b",
-        name="Agent B",
-        voice_id="v-b",
-        is_default=True,
-    )
-
+    assert agent_a is not None
+    assert agent_b is not None
     assert agent_a.is_default is True
     assert agent_b.is_default is True
     assert agent_a.client_id == "broker-alpha"
@@ -225,11 +204,20 @@ async def test_get_agent_returns_none_for_missing(session: AsyncSession):
 
 
 async def test_get_default_agent_returns_default(session: AsyncSession):
-    """get_default_agent(session, client_id) returns the is_default=True agent."""
+    """get_default_agent(session, client_id) returns the is_default=True agent.
+
+    create_client() auto-creates the default agent. Additional non-default agents
+    must not interfere with get_default_agent().
+    """
     from app.tenants.service import create_agent, get_default_agent
 
     await _make_client(session, "broker-dflt")
 
+    # Auto-created default agent exists — fetch it
+    auto_default = await get_default_agent(session, "broker-dflt")
+    assert auto_default is not None
+
+    # Add a non-default agent — must not change the result
     non_default = await create_agent(
         session,
         client_id="broker-dflt",
@@ -239,29 +227,35 @@ async def test_get_default_agent_returns_default(session: AsyncSession):
         is_default=False,
     )
 
-    default_agent = await create_agent(
-        session,
-        client_id="broker-dflt",
-        slug="is-default",
-        name="Is Default",
-        voice_id="v-d",
-        is_default=True,
-    )
-
     result = await get_default_agent(session, "broker-dflt")
     assert result is not None
-    assert result.id == default_agent.id
+    assert result.id == auto_default.id
     assert result.is_default is True
     # Make sure the non-default was NOT returned
     assert result.id != non_default.id
 
 
 async def test_get_default_agent_returns_none_when_no_default(session: AsyncSession):
-    """get_default_agent() returns None when no agent has is_default=True."""
+    """get_default_agent() returns None when no active agent has is_default=True.
+
+    We deactivate the auto-created default agent then add only a non-default one
+    to confirm the query returns None.
+    """
     from app.tenants.service import create_agent, get_default_agent
+    from app.tenants.models import Agent
+    from sqlalchemy import update
 
     await _make_client(session, "broker-no-default")
 
+    # Deactivate the auto-created default agent (simulate it being disabled)
+    auto_default = await get_default_agent(session, "broker-no-default")
+    assert auto_default is not None
+    await session.execute(
+        update(Agent).where(Agent.id == auto_default.id).values(is_active=False)
+    )
+    await session.flush()
+
+    # Add a non-default agent — should not affect the result
     await create_agent(
         session,
         client_id="broker-no-default",

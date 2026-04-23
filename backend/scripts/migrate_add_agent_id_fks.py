@@ -26,6 +26,19 @@ import asyncio
 import sys
 
 
+async def table_exists(conn, table: str) -> bool:
+    """Return True if the table already exists in the database."""
+    import sqlalchemy
+
+    result = await conn.execute(
+        sqlalchemy.text(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=:table"
+        ),
+        {"table": table},
+    )
+    return result.fetchone() is not None
+
+
 async def column_exists(conn, table: str, column: str) -> bool:
     """Return True if the column already exists in the table."""
     import sqlalchemy
@@ -73,47 +86,41 @@ async def count_null_agent_rows(conn, table: str) -> int:
 async def backfill_agent_id(conn, table: str) -> int:
     """Backfill agent_id=NULL rows in `table` from each row's client_id default agent.
 
+    Uses a single correlated subquery UPDATE (O(1) queries, not O(N)).
+
     Returns:
         Number of rows updated.
     """
     import sqlalchemy
 
-    # Find all rows with NULL agent_id
-    null_rows_result = await conn.execute(
-        sqlalchemy.text(
-            f"SELECT id, client_id FROM {table} WHERE agent_id IS NULL"
-        )
+    # Count NULL rows first to skip early if nothing to do
+    null_count_result = await conn.execute(
+        sqlalchemy.text(f"SELECT COUNT(*) FROM {table} WHERE agent_id IS NULL")
     )
-    null_rows = null_rows_result.fetchall()
+    null_count = null_count_result.scalar() or 0
 
-    if not null_rows:
+    if null_count == 0:
         print(f"  [skip] no NULL agent_id rows in {table}")
         return 0
 
-    updated = 0
-    for row_id, client_id in null_rows:
-        # Find default agent for this client
-        agent_result = await conn.execute(
-            sqlalchemy.text(
-                "SELECT id FROM agents WHERE client_id=:client_id AND is_default=1 LIMIT 1"
-            ),
-            {"client_id": client_id},
+    # Single correlated subquery UPDATE — O(1) queries regardless of row count
+    result = await conn.execute(
+        sqlalchemy.text(
+            f"""
+            UPDATE {table}
+            SET agent_id = (
+                SELECT id FROM agents
+                WHERE client_id = {table}.client_id
+                  AND is_default = 1
+                LIMIT 1
+            )
+            WHERE agent_id IS NULL
+            """
         )
-        agent_row = agent_result.fetchone()
-        if agent_row is None:
-            print(f"  [warn] no default agent for client={client_id!r} — row {table}.{row_id} left NULL")
-            continue
+    )
+    updated = result.rowcount
 
-        agent_id = agent_row[0]
-        await conn.execute(
-            sqlalchemy.text(
-                f"UPDATE {table} SET agent_id=:agent_id WHERE id=:row_id"
-            ),
-            {"agent_id": agent_id, "row_id": row_id},
-        )
-        updated += 1
-
-    print(f"  [backfill] {table}: updated {updated} of {len(null_rows)} rows")
+    print(f"  [backfill] {table}: updated {updated} of {null_count} rows (single correlated UPDATE)")
     return updated
 
 
@@ -125,6 +132,15 @@ async def run_migration(database_url: str) -> None:
     engine = create_async_engine(database_url, echo=False)
 
     async with engine.begin() as conn:
+        # ------------------------------------------------------------------
+        # 0. Pre-flight: agents table must exist (run migrate_add_agents.py first)
+        # ------------------------------------------------------------------
+        if not await table_exists(conn, "agents"):
+            raise RuntimeError(
+                "agents table does not exist. "
+                "Run migrate_add_agents.py before migrate_add_agent_id_fks.py."
+            )
+
         # ------------------------------------------------------------------
         # 1. Add agent_id to call_sessions
         # ------------------------------------------------------------------

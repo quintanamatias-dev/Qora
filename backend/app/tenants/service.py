@@ -26,7 +26,11 @@ async def create_client(
     tools_enabled: str = '["get_lead_details","register_interest","mark_not_interested","schedule_followup"]',
     is_active: bool = True,
 ) -> Client:
-    """Create and persist a new Client record.
+    """Create and persist a new Client record and its default Agent.
+
+    Automatically creates a default Agent for the new client, copying agent
+    configuration fields (agent_name → name, voice_id, model, temperature,
+    max_tokens, tools_enabled, system_prompt_override → system_prompt, knowledge_base).
 
     Args:
         session: Active async DB session.
@@ -56,6 +60,25 @@ async def create_client(
     )
     session.add(client)
     await session.flush()  # Flush to DB within current transaction
+
+    # Bootstrap a default Agent for this client (CRITICAL 1b: every client must have one)
+    slug = (agent_name or "agent").lower().replace(" ", "-")
+    await create_agent(
+        session,
+        client_id=id,
+        slug=slug,
+        name=agent_name,
+        voice_id=voice_id,
+        system_prompt=system_prompt_override,
+        knowledge_base=knowledge_base,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        tools_enabled=tools_enabled,
+        is_active=True,
+        is_default=True,
+    )
+
     return client
 
 
@@ -110,7 +133,7 @@ async def seed_quintana(session: AsyncSession) -> None:
     """Seed the Quintana Seguros client if it does not already exist.
 
     Idempotent: calling this multiple times has no effect if the record exists.
-    Also creates the default Agent for this client if not already present.
+    create_client() automatically creates the default Agent alongside the Client.
     """
     existing = await get_client(session, "quintana-seguros")
     if existing is not None:
@@ -128,19 +151,7 @@ async def seed_quintana(session: AsyncSession) -> None:
         max_tokens=300,
         tools_enabled='["get_lead_details","register_interest","mark_not_interested","schedule_followup"]',
     )
-
-    await create_agent(
-        session,
-        client_id="quintana-seguros",
-        slug="jaumpablo",
-        name="Jaumpablo",
-        voice_id="pNInz6obpgDQGcFmaJgB",
-        model="gpt-4o",
-        temperature=0.7,
-        max_tokens=300,
-        tools_enabled='["get_lead_details","register_interest","mark_not_interested","schedule_followup"]',
-        is_default=True,
-    )
+    # Note: create_client() auto-creates the default Agent — no separate create_agent() needed.
 
 
 async def seed_demo_inmobiliaria(session: AsyncSession) -> None:
@@ -164,19 +175,7 @@ async def seed_demo_inmobiliaria(session: AsyncSession) -> None:
         max_tokens=300,
         tools_enabled='["get_lead_details","register_interest","mark_not_interested","schedule_followup"]',
     )
-
-    await create_agent(
-        session,
-        client_id="demo-inmobiliaria",
-        slug="valentina",
-        name="Valentina",
-        voice_id="pNInz6obpgDQGcFmaJgB",
-        model="gpt-4o",
-        temperature=0.7,
-        max_tokens=300,
-        tools_enabled='["get_lead_details","register_interest","mark_not_interested","schedule_followup"]',
-        is_default=True,
-    )
+    # Note: create_client() auto-creates the default Agent — no separate create_agent() needed.
 
 
 # ---------------------------------------------------------------------------
@@ -273,12 +272,14 @@ async def get_default_agent(session: AsyncSession, client_id: str) -> Agent | No
     """Fetch the default Agent for a client.
 
     Returns:
-        The Agent with is_default=True for the given client_id, or None.
+        The active Agent with is_default=True for the given client_id, or None.
+        Deactivated agents are excluded even if they have is_default=True.
     """
     result = await session.execute(
         select(Agent).where(
             Agent.client_id == client_id,
             Agent.is_default == True,  # noqa: E712
+            Agent.is_active == True,  # noqa: E712
         )
     )
     return result.scalar_one_or_none()
