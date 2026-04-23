@@ -112,6 +112,7 @@ async def backfill_agent_id(conn, table: str) -> int:
                 SELECT id FROM agents
                 WHERE client_id = {table}.client_id
                   AND is_default = 1
+                  AND is_active = 1
                 LIMIT 1
             )
             WHERE agent_id IS NULL

@@ -81,6 +81,19 @@ async def run_migration(database_url: str) -> None:
             print("  [create] agents table + ix_agents_client_id + UNIQUE(client_id, slug)")
 
         # ------------------------------------------------------------------
+        # 1b. Ensure UNIQUE index on (client_id, slug) exists regardless of
+        #     whether the table was just created or already existed from an
+        #     older migration run that lacked the constraint.
+        # ------------------------------------------------------------------
+        await conn.execute(
+            sqlalchemy.text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_agents_client_slug "
+                "ON agents(client_id, slug)"
+            )
+        )
+        print("  [index] uq_agents_client_slug UNIQUE index ensured")
+
+        # ------------------------------------------------------------------
         # 2. Seed one default Agent per existing Client (if not already seeded)
         # ------------------------------------------------------------------
         print("\nSeeding default agents for existing clients...")

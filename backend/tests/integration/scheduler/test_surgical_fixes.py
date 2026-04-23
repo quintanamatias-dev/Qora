@@ -189,9 +189,10 @@ def test_backfill_agent_id_uses_correlated_update():
     # The correlated UPDATE pattern uses a single UPDATE ... WHERE ... subquery
     assert "UPDATE" in source.upper(), "backfill_agent_id must contain an UPDATE statement"
 
-    # The correlated subquery pattern uses a subquery in the UPDATE
-    # It should NOT have a Python for loop processing row-by-row
-    assert "for " not in source or "for row" not in source, (
+    # Strict check: no Python for-loop at all in the function body.
+    # The tautology `"for " not in source or "for row" not in source` was always True.
+    # This assertion is the real check.
+    assert "for " not in source, (
         "backfill_agent_id must NOT use a Python for-loop over rows. "
         "Use a single correlated subquery UPDATE instead."
     )
@@ -370,3 +371,234 @@ async def test_fk_migration_succeeds_when_agents_table_exists(tmp_path: Path):
     # Must not raise
     from scripts.migrate_add_agent_id_fks import run_migration
     await run_migration(db_url)  # should succeed without RuntimeError
+
+
+# ---------------------------------------------------------------------------
+# FIX 1: backfill must ignore inactive agents (is_active = 0)
+# ---------------------------------------------------------------------------
+
+
+async def test_backfill_skips_inactive_agents(tmp_path: Path):
+    """backfill_agent_id must NOT use agents where is_active = 0 as the default.
+
+    A deactivated agent that has is_default=1 must be excluded from backfill.
+    Only agents with is_active=1 AND is_default=1 should be used.
+    """
+    from sqlalchemy.ext.asyncio import create_async_engine
+    import uuid
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/backfill_inactive_test.db"
+    engine = create_async_engine(db_url, echo=False)
+
+    inactive_agent_id = "inactive-default-agent"
+    active_agent_id = "active-default-agent"
+
+    async with engine.begin() as conn:
+        await conn.execute(
+            sqlalchemy.text(
+                """
+                CREATE TABLE agents (
+                    id TEXT PRIMARY KEY,
+                    client_id TEXT NOT NULL,
+                    slug TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    voice_id TEXT NOT NULL,
+                    is_active BOOLEAN NOT NULL DEFAULT 1,
+                    is_default BOOLEAN NOT NULL DEFAULT 0
+                )
+                """
+            )
+        )
+        await conn.execute(
+            sqlalchemy.text(
+                """
+                CREATE TABLE call_sessions (
+                    id TEXT PRIMARY KEY,
+                    client_id TEXT NOT NULL,
+                    agent_id TEXT
+                )
+                """
+            )
+        )
+        # Client c1: has an INACTIVE default agent — must NOT be backfilled
+        await conn.execute(
+            sqlalchemy.text(
+                "INSERT INTO agents (id, client_id, slug, name, voice_id, is_active, is_default) "
+                "VALUES (:id, 'c1', 'inactive-agent', 'Inactive', 'v1', 0, 1)"
+            ),
+            {"id": inactive_agent_id},
+        )
+        # Client c2: has an ACTIVE default agent — MUST be backfilled
+        await conn.execute(
+            sqlalchemy.text(
+                "INSERT INTO agents (id, client_id, slug, name, voice_id, is_active, is_default) "
+                "VALUES (:id, 'c2', 'active-agent', 'Active', 'v2', 1, 1)"
+            ),
+            {"id": active_agent_id},
+        )
+        session_c1 = str(uuid.uuid4())
+        session_c2 = str(uuid.uuid4())
+        await conn.execute(
+            sqlalchemy.text(
+                "INSERT INTO call_sessions (id, client_id) VALUES (:id, 'c1')"
+            ),
+            {"id": session_c1},
+        )
+        await conn.execute(
+            sqlalchemy.text(
+                "INSERT INTO call_sessions (id, client_id) VALUES (:id, 'c2')"
+            ),
+            {"id": session_c2},
+        )
+    await engine.dispose()
+
+    from scripts.migrate_add_agent_id_fks import backfill_agent_id
+
+    engine2 = create_async_engine(db_url, echo=False)
+    async with engine2.begin() as conn:
+        await backfill_agent_id(conn, "call_sessions")
+    await engine2.dispose()
+
+    engine3 = create_async_engine(db_url, echo=False)
+    async with engine3.begin() as conn:
+        # c1's session must remain NULL — inactive agent must NOT be used
+        result_c1 = await conn.execute(
+            sqlalchemy.text(
+                "SELECT agent_id FROM call_sessions WHERE client_id='c1'"
+            )
+        )
+        c1_agent = result_c1.scalar()
+        assert c1_agent is None, (
+            f"Deactivated agent must NOT be used for backfill, but got agent_id={c1_agent!r}"
+        )
+
+        # c2's session must be filled with the active agent
+        result_c2 = await conn.execute(
+            sqlalchemy.text(
+                "SELECT agent_id FROM call_sessions WHERE client_id='c2'"
+            )
+        )
+        c2_agent = result_c2.scalar()
+        assert c2_agent == active_agent_id, (
+            f"Active default agent must be used for backfill, but got agent_id={c2_agent!r}"
+        )
+    await engine3.dispose()
+
+
+# ---------------------------------------------------------------------------
+# FIX 2: strict (non-tautological) assertion for N+1 check
+# ---------------------------------------------------------------------------
+
+
+def test_backfill_agent_id_no_python_for_loop():
+    """backfill_agent_id source must NOT contain a Python for-loop over rows.
+
+    The correct implementation uses a single correlated UPDATE (no Python loop).
+    This replaces the tautological assertion that was always True.
+    """
+    import inspect
+    from scripts.migrate_add_agent_id_fks import backfill_agent_id
+
+    source = inspect.getsource(backfill_agent_id)
+
+    # This is a strict (non-tautological) check: 'for ' must not appear at all
+    assert "for " not in source, (
+        "backfill_agent_id must NOT use a Python for-loop. "
+        "Use a single correlated subquery UPDATE instead."
+    )
+
+
+# ---------------------------------------------------------------------------
+# FIX 3: Migration idempotency — rerun adds missing UNIQUE constraint
+# ---------------------------------------------------------------------------
+
+
+async def test_agents_migration_repairs_missing_unique_index_on_rerun(tmp_path: Path):
+    """migrate_add_agents must add UNIQUE index on (client_id, slug) even when
+    the agents table was already created by an older migration that lacked it.
+
+    Simulates the scenario: user ran old migration → table exists without UNIQUE →
+    reruns new migration → UNIQUE constraint must now exist.
+    """
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/repair_unique_test.db"
+    engine = create_async_engine(db_url, echo=False)
+
+    # Simulate old (broken) migration: agents table WITHOUT UNIQUE constraint
+    async with engine.begin() as conn:
+        await conn.execute(
+            sqlalchemy.text(
+                """
+                CREATE TABLE IF NOT EXISTS clients (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    broker_name TEXT NOT NULL,
+                    agent_name TEXT NOT NULL DEFAULT 'Agent',
+                    voice_id TEXT NOT NULL,
+                    is_active BOOLEAN NOT NULL DEFAULT 1,
+                    model TEXT NOT NULL DEFAULT 'gpt-4o',
+                    temperature REAL NOT NULL DEFAULT 0.7,
+                    max_tokens INTEGER NOT NULL DEFAULT 300,
+                    tools_enabled TEXT NOT NULL DEFAULT '[]',
+                    system_prompt_override TEXT,
+                    knowledge_base TEXT,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        # agents table WITHOUT UNIQUE(client_id, slug)
+        await conn.execute(
+            sqlalchemy.text(
+                """
+                CREATE TABLE IF NOT EXISTS agents (
+                    id TEXT PRIMARY KEY,
+                    client_id TEXT NOT NULL REFERENCES clients(id),
+                    slug TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    voice_id TEXT NOT NULL,
+                    system_prompt TEXT,
+                    knowledge_base TEXT,
+                    model TEXT NOT NULL DEFAULT 'gpt-4o',
+                    temperature REAL NOT NULL DEFAULT 0.7,
+                    max_tokens INTEGER NOT NULL DEFAULT 300,
+                    tools_enabled TEXT NOT NULL DEFAULT '[]',
+                    is_active BOOLEAN NOT NULL DEFAULT 1,
+                    is_default BOOLEAN NOT NULL DEFAULT 0,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+    await engine.dispose()
+
+    # Rerun new migration — table already exists but lacks UNIQUE
+    from scripts.migrate_add_agents import run_migration
+    await run_migration(db_url)
+
+    # Verify that UNIQUE index now exists
+    engine2 = create_async_engine(db_url, echo=False)
+    async with engine2.begin() as conn:
+        idx_result = await conn.execute(
+            sqlalchemy.text("PRAGMA index_list(agents)")
+        )
+        indexes = idx_result.fetchall()
+        found_unique = False
+        for idx in indexes:
+            is_unique = idx[2]
+            idx_name = idx[1]
+            if is_unique:
+                col_result = await conn.execute(
+                    sqlalchemy.text(f"PRAGMA index_info({idx_name!r})")
+                )
+                col_names = {row[2] for row in col_result.fetchall()}
+                if "client_id" in col_names and "slug" in col_names:
+                    found_unique = True
+                    break
+    await engine2.dispose()
+
+    assert found_unique, (
+        "After rerunning migrate_add_agents.py, agents table must have "
+        "UNIQUE index on (client_id, slug) even if the table already existed."
+    )
