@@ -77,8 +77,6 @@ def test_admin_html_client_td_broker_name_escaped():
     html = _read_admin_html()
     # Raw ${c.broker_name} inside <td> innerHTML is forbidden — must be wrapped in escapeHtml(...)
     # textContent assignments are safe (they don't parse HTML) so we only check innerHTML lines.
-    import re
-
     innerHTML_lines = [
         line
         for line in html.splitlines()
@@ -103,8 +101,6 @@ def test_admin_html_client_td_client_id_escaped():
     """admin.html clients table must escape client_id in innerHTML (td) context."""
     html = _read_admin_html()
     # Raw ${c.client_id} inside <td> innerHTML is forbidden. opt.value and textContent are safe.
-    import re
-
     innerHTML_lines = [
         line
         for line in html.splitlines()

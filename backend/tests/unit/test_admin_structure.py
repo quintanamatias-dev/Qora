@@ -122,9 +122,8 @@ def test_admin_html_has_client_form():
     assert (
         'id="c-broker"' in html
     ), "Client form must have a 'c-broker' input for broker name."
-    assert (
-        'id="c-voice"' in html
-    ), "Client form must have a 'c-voice' input for voice ID."
+    # voice_id is configured per-agent, not at client creation
+    assert 'id="c-agent"' in html, "Client form must have a 'c-agent' input for agent name."
 
 
 def test_admin_html_has_agent_form():

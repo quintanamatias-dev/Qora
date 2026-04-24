@@ -110,7 +110,8 @@ async def test_admin_page_contains_client_form(admin_app: AsyncClient):
     html = response.text
     assert 'id="c-id"' in html, "Client form 'c-id' input missing."
     assert 'id="c-broker"' in html, "Client form 'c-broker' input missing."
-    assert 'id="c-voice"' in html, "Client form 'c-voice' input missing."
+    # voice_id is configured per-agent, not at client creation
+    assert 'id="c-agent"' in html, "Client form 'c-agent' input missing."
 
 
 async def test_admin_page_contains_agent_form(admin_app: AsyncClient):

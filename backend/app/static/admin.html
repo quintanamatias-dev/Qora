@@ -121,10 +121,6 @@
         <label>Agent Name</label>
         <input type="text" id="c-agent" placeholder="Jaumpablo" value="Jaumpablo" />
       </div>
-      <div class="form-group">
-        <label>Voice ID</label>
-        <input type="text" id="c-voice" placeholder="pNInz6obpgDQGcFmaJgB" />
-      </div>
     </div>
     <button class="btn btn-primary" onclick="createClient()">+ Create Client</button>
     <div id="c-msg"></div>
@@ -408,18 +404,16 @@ async function createClient() {
   const id = document.getElementById('c-id').value.trim();
   const broker = document.getElementById('c-broker').value.trim();
   const agent = document.getElementById('c-agent').value.trim() || 'Jaumpablo';
-  const voice = document.getElementById('c-voice').value.trim();
-  if (!id || !broker || !voice) { showMsg('c-msg', 'Client ID, Broker Name, and Voice ID are required.', false); return; }
+  if (!id || !broker) { showMsg('c-msg', 'Client ID and Broker Name are required.', false); return; }
 
   const { ok, body } = await apiFetch('/api/v1/clients', {
     method: 'POST',
-    body: JSON.stringify({ client_id: id, broker_name: broker, agent_name: agent, voice_id: voice }),
+    body: JSON.stringify({ client_id: id, broker_name: broker, agent_name: agent }),
   });
   if (ok) {
     showMsg('c-msg', `Client "${id}" created successfully.`);
     document.getElementById('c-id').value = '';
     document.getElementById('c-broker').value = '';
-    document.getElementById('c-voice').value = '';
     loadClients();
   } else {
     const detail = body.detail?.error || JSON.stringify(body);
