@@ -8,7 +8,15 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -38,7 +46,9 @@ class Agent(Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     voice_id: Mapped[str] = mapped_column(String, nullable=False)
     system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
-    knowledge_base: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    knowledge_base: Mapped[str | None] = mapped_column(
+        Text, nullable=True, default=None
+    )
     model: Mapped[str] = mapped_column(String, nullable=False, default="gpt-4o")
     temperature: Mapped[float] = mapped_column(nullable=False, default=0.7)
     max_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=300)

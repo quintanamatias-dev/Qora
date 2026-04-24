@@ -17,47 +17,19 @@ from pydantic import BaseModel, field_validator, model_validator
 _SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
 
 
-class ClientCreate(BaseModel):
-    """Request body for POST /api/v1/clients."""
-
-    client_id: str
-    broker_name: str
-    agent_name: str = "Jaumpablo"
-    voice_id: str = "pNInz6obpgDQGcFmaJgB"  # ElevenLabs Adam voice
-    system_prompt_override: str | None = None
-
-    @field_validator("client_id")
-    @classmethod
-    def validate_slug(cls, v: str) -> str:
-        if not _SLUG_RE.match(v):
-            raise ValueError(
-                "client_id must be a lowercase slug: only letters, digits, and "
-                "hyphens, with no leading or trailing hyphens. "
-                f"Got: {v!r}"
-            )
-        return v
+# ---------------------------------------------------------------------------
+# Shared scheduler validator mixin
+# ---------------------------------------------------------------------------
 
 
-class ClientUpdate(BaseModel):
-    """Request body for PATCH /api/v1/clients/{client_id}.
+class _SchedulerValidatorMixin(BaseModel):
+    """Mixin that provides scheduler field validators for both Create and Update.
 
-    All fields are optional. client_id is NOT updatable.
+    Applied to both ClientCreate and ClientUpdate so validation logic is
+    never duplicated.
     """
 
-    broker_name: str | None = None
-    agent_name: str | None = None
-    voice_id: str | None = None
-    system_prompt_override: str | None = None
-    # Scheduler configuration (Phase 6)
-    scheduler_enabled: bool | None = None
-    scheduler_max_attempts: int | None = None
-    scheduler_cooldown_minutes: int | None = None
-    scheduler_allowed_hours_start: int | None = None
-    scheduler_allowed_hours_end: int | None = None
-    scheduler_retry_on_outcomes: str | None = None
-    scheduler_timezone: str | None = None
-
-    @field_validator("scheduler_timezone")
+    @field_validator("scheduler_timezone", check_fields=False)
     @classmethod
     def validate_timezone(cls, v: str | None) -> str | None:
         """Validate that scheduler_timezone is a valid IANA timezone string."""
@@ -74,27 +46,27 @@ class ClientUpdate(BaseModel):
             )
         return v
 
-    @field_validator("scheduler_max_attempts")
+    @field_validator("scheduler_max_attempts", check_fields=False)
     @classmethod
     def validate_max_attempts(cls, v: int | None) -> int | None:
         """Validate that scheduler_max_attempts is at least 1."""
         if v is not None and v < 1:
-            raise ValueError(
-                f"scheduler_max_attempts must be >= 1, got {v}."
-            )
+            raise ValueError(f"scheduler_max_attempts must be >= 1, got {v}.")
         return v
 
-    @field_validator("scheduler_cooldown_minutes")
+    @field_validator("scheduler_cooldown_minutes", check_fields=False)
     @classmethod
     def validate_cooldown(cls, v: int | None) -> int | None:
         """Validate that scheduler_cooldown_minutes is non-negative."""
         if v is not None and v < 0:
-            raise ValueError(
-                f"scheduler_cooldown_minutes must be >= 0, got {v}."
-            )
+            raise ValueError(f"scheduler_cooldown_minutes must be >= 0, got {v}.")
         return v
 
-    @field_validator("scheduler_allowed_hours_start", "scheduler_allowed_hours_end")
+    @field_validator(
+        "scheduler_allowed_hours_start",
+        "scheduler_allowed_hours_end",
+        check_fields=False,
+    )
     @classmethod
     def validate_hour_range(cls, v: int | None) -> int | None:
         """Validate that hour values are in [0, 23]."""
@@ -104,7 +76,7 @@ class ClientUpdate(BaseModel):
             )
         return v
 
-    @field_validator("scheduler_retry_on_outcomes")
+    @field_validator("scheduler_retry_on_outcomes", check_fields=False)
     @classmethod
     def validate_retry_outcomes(cls, v: str | None) -> str | None:
         """Validate that scheduler_retry_on_outcomes is a valid JSON list of strings."""
@@ -128,7 +100,7 @@ class ClientUpdate(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def validate_hour_window(self) -> "ClientUpdate":
+    def validate_hour_window(self) -> "_SchedulerValidatorMixin":
         """Validate that start_hour < end_hour when both are provided."""
         start = self.scheduler_allowed_hours_start
         end = self.scheduler_allowed_hours_end
@@ -140,6 +112,55 @@ class ClientUpdate(BaseModel):
         return self
 
 
+class ClientCreate(_SchedulerValidatorMixin):
+    """Request body for POST /api/v1/clients."""
+
+    client_id: str
+    broker_name: str
+    agent_name: str = "Jaumpablo"
+    voice_id: str = "pNInz6obpgDQGcFmaJgB"  # ElevenLabs Adam voice (default, configure per-agent)
+    system_prompt_override: str | None = None
+    # Scheduler configuration (Phase 7 — bootstrappable at create time)
+    scheduler_enabled: bool = False
+    scheduler_max_attempts: int = 3
+    scheduler_cooldown_minutes: int = 60
+    scheduler_allowed_hours_start: int = 9
+    scheduler_allowed_hours_end: int = 20
+    scheduler_retry_on_outcomes: str = '["call_again","follow_up"]'
+    scheduler_timezone: str = "America/Argentina/Buenos_Aires"
+
+    @field_validator("client_id")
+    @classmethod
+    def validate_slug(cls, v: str) -> str:
+        if not _SLUG_RE.match(v):
+            raise ValueError(
+                "client_id must be a lowercase slug: only letters, digits, and "
+                "hyphens, with no leading or trailing hyphens. "
+                f"Got: {v!r}"
+            )
+        return v
+
+
+class ClientUpdate(_SchedulerValidatorMixin):
+    """Request body for PATCH /api/v1/clients/{client_id}.
+
+    All fields are optional. client_id is NOT updatable.
+    """
+
+    broker_name: str | None = None
+    agent_name: str | None = None
+    voice_id: str | None = None
+    system_prompt_override: str | None = None
+    # Scheduler configuration (Phase 6)
+    scheduler_enabled: bool | None = None
+    scheduler_max_attempts: int | None = None
+    scheduler_cooldown_minutes: int | None = None
+    scheduler_allowed_hours_start: int | None = None
+    scheduler_allowed_hours_end: int | None = None
+    scheduler_retry_on_outcomes: str | None = None
+    scheduler_timezone: str | None = None
+
+
 class ClientResponse(BaseModel):
     """Response shape for all client endpoints."""
 
@@ -149,6 +170,7 @@ class ClientResponse(BaseModel):
     voice_id: str
     is_active: bool
     created_at: datetime
+    agent_count: int = 0
     # Scheduler configuration (Phase 6)
     scheduler_enabled: bool = False
     scheduler_max_attempts: int = 3

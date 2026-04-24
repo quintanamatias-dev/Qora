@@ -157,9 +157,7 @@ async def test_get_scheduled_call_returns_200(sched_app: AsyncClient):
     )
     sc_id = create_resp.json()["id"]
 
-    response = await sched_app.get(
-        f"/api/v1/scheduler/quintana-seguros/queue/{sc_id}"
-    )
+    response = await sched_app.get(f"/api/v1/scheduler/quintana-seguros/queue/{sc_id}")
     assert response.status_code == 200
     data = response.json()
     assert data["id"] == sc_id
@@ -308,7 +306,9 @@ async def test_patch_cancel_alias_matches_spec(sched_app: AsyncClient):
     assert response.json()["status"] == "cancelled"
 
 
-async def test_reschedule_spec_endpoint_rejects_outside_allowed_hours(sched_app: AsyncClient):
+async def test_reschedule_spec_endpoint_rejects_outside_allowed_hours(
+    sched_app: AsyncClient,
+):
     """Spec path /reschedule returns 422 when datetime is outside client hours."""
     future_dt = datetime(2026, 6, 1, 18, 0, 0, tzinfo=timezone.utc).isoformat()
     create_resp = await sched_app.post(
@@ -341,7 +341,9 @@ async def test_complete_pending_call_via_spec_endpoint(sched_app: AsyncClient):
     assert response.json()["status"] == "completed"
 
 
-async def test_manual_create_allows_new_schedule_after_completion(sched_app: AsyncClient):
+async def test_manual_create_allows_new_schedule_after_completion(
+    sched_app: AsyncClient,
+):
     """Duplicate guard must not block a new schedule after the prior call completed."""
     first_dt = datetime(2026, 6, 1, 18, 0, 0, tzinfo=timezone.utc).isoformat()
     second_dt = datetime(2026, 6, 2, 18, 0, 0, tzinfo=timezone.utc).isoformat()
@@ -365,7 +367,9 @@ async def test_manual_create_allows_new_schedule_after_completion(sched_app: Asy
     assert second.json()["id"] != first.json()["id"]
 
 
-async def test_cancel_completed_call_returns_409_on_spec_endpoint(sched_app: AsyncClient):
+async def test_cancel_completed_call_returns_409_on_spec_endpoint(
+    sched_app: AsyncClient,
+):
     """Completed scheduled calls cannot be cancelled again."""
     future_dt = datetime(2026, 6, 1, 18, 0, 0, tzinfo=timezone.utc).isoformat()
 
@@ -401,12 +405,14 @@ async def test_manual_create_resolves_default_agent(sched_app: AsyncClient):
     assert response.status_code == 201
     data = response.json()
     # The default agent for quintana-seguros should be resolved automatically
-    assert data.get("agent_id") is not None, (
-        "Manual scheduled call must have agent_id resolved from client's default agent"
-    )
+    assert (
+        data.get("agent_id") is not None
+    ), "Manual scheduled call must have agent_id resolved from client's default agent"
 
 
-async def test_manual_create_without_default_agent_still_creates_call(sched_app: AsyncClient):
+async def test_manual_create_without_default_agent_still_creates_call(
+    sched_app: AsyncClient,
+):
     """Manual create works even if client has no default agent (agent_id stays null)."""
     # Create a client with no default agent via DB
     # We can't easily add a new client via sched_app since it's not in fixtures,

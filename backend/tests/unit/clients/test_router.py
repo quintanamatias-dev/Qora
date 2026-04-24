@@ -401,9 +401,9 @@ async def test_patch_client_partial_hours_start_greater_than_stored_end_returns_
         "/api/v1/clients/quintana-seguros",
         json={"scheduler_allowed_hours_start": 22},
     )
-    assert response.status_code == 422, (
-        f"Expected 422 when partial PATCH sets start=22 > stored end=20, got {response.status_code}"
-    )
+    assert (
+        response.status_code == 422
+    ), f"Expected 422 when partial PATCH sets start=22 > stored end=20, got {response.status_code}"
 
 
 async def test_patch_client_partial_hours_end_less_than_stored_start_returns_422(
@@ -418,12 +418,14 @@ async def test_patch_client_partial_hours_end_less_than_stored_start_returns_422
         "/api/v1/clients/quintana-seguros",
         json={"scheduler_allowed_hours_end": 5},
     )
-    assert response.status_code == 422, (
-        f"Expected 422 when partial PATCH sets end=5 < stored start=9, got {response.status_code}"
-    )
+    assert (
+        response.status_code == 422
+    ), f"Expected 422 when partial PATCH sets end=5 < stored start=9, got {response.status_code}"
 
 
-async def test_patch_client_valid_hours_update_succeeds(clients_app_seeded: AsyncClient):
+async def test_patch_client_valid_hours_update_succeeds(
+    clients_app_seeded: AsyncClient,
+):
     """PATCH with valid combined hours (start < end) must succeed."""
     response = await clients_app_seeded.patch(
         "/api/v1/clients/quintana-seguros",
@@ -517,3 +519,109 @@ async def test_delete_does_not_remove_db_record(clients_app: AsyncClient):
         client = await get_client(session, "soft-delete-check")
         assert client is not None
         assert client.is_active is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — Task 1.2: Client POST must bootstrap default Agent via service
+# ---------------------------------------------------------------------------
+
+
+async def test_create_client_bootstraps_default_agent(clients_app: AsyncClient):
+    """POST /clients creates a default Agent row via service.create_client().
+
+    This verifies the regression fix: the router MUST call service.create_client()
+    rather than constructing Client() directly, so Agent bootstrap happens.
+    """
+    response = await clients_app.post(
+        "/api/v1/clients",
+        json={
+            "client_id": "agent-bootstrap-test",
+            "broker_name": "Bootstrap Test",
+            "voice_id": "v-bootstrap",
+        },
+    )
+    assert response.status_code == 201
+
+    # Verify that a default Agent row was created in DB
+    from app.core import database as db_module
+    from app.tenants.service import get_default_agent
+
+    async with db_module.async_session_factory() as session:
+        default_agent = await get_default_agent(session, "agent-bootstrap-test")
+        assert default_agent is not None, (
+            "POST /clients must bootstrap a default Agent via service.create_client(). "
+            "The current router constructs Client() directly, bypassing Agent bootstrap."
+        )
+        assert default_agent.is_default is True
+        assert default_agent.is_active is True
+        assert default_agent.client_id == "agent-bootstrap-test"
+
+
+async def test_create_client_duplicate_via_service_returns_409(
+    clients_app_seeded: AsyncClient,
+):
+    """POST /clients with duplicate client_id returns 409 (regression: via service)."""
+    response = await clients_app_seeded.post(
+        "/api/v1/clients",
+        json={
+            "client_id": "quintana-seguros",
+            "broker_name": "Quintana Seguros Dup",
+            "voice_id": "v1",
+        },
+    )
+    assert response.status_code == 409
+    data = response.json()
+    assert data["detail"]["error"] == "client already exists"
+    assert data["detail"]["client_id"] == "quintana-seguros"
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — Task 1.3: ClientCreate with scheduler fields
+# ---------------------------------------------------------------------------
+
+
+async def test_create_client_with_custom_scheduler_fields(clients_app: AsyncClient):
+    """POST /clients with scheduler fields persists custom scheduler config.
+
+    ClientCreate must accept scheduler fields so clients can be bootstrapped
+    with non-default scheduler settings in a single request.
+    """
+    response = await clients_app.post(
+        "/api/v1/clients",
+        json={
+            "client_id": "sched-custom",
+            "broker_name": "Sched Custom",
+            "voice_id": "v1",
+            "scheduler_enabled": True,
+            "scheduler_max_attempts": 5,
+            "scheduler_cooldown_minutes": 30,
+            "scheduler_allowed_hours_start": 8,
+            "scheduler_allowed_hours_end": 18,
+            "scheduler_timezone": "Europe/Madrid",
+        },
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["scheduler_enabled"] is True
+    assert data["scheduler_max_attempts"] == 5
+    assert data["scheduler_cooldown_minutes"] == 30
+    assert data["scheduler_allowed_hours_start"] == 8
+    assert data["scheduler_allowed_hours_end"] == 18
+    assert data["scheduler_timezone"] == "Europe/Madrid"
+
+
+async def test_create_client_scheduler_defaults_when_omitted(clients_app: AsyncClient):
+    """POST /clients without scheduler fields uses defaults."""
+    response = await clients_app.post(
+        "/api/v1/clients",
+        json={
+            "client_id": "sched-defaults",
+            "broker_name": "Sched Defaults",
+            "voice_id": "v1",
+        },
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["scheduler_enabled"] is False
+    assert data["scheduler_max_attempts"] == 3
+    assert data["scheduler_timezone"] == "America/Argentina/Buenos_Aires"

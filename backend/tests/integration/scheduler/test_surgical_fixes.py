@@ -20,7 +20,9 @@ import sqlalchemy
 # ---------------------------------------------------------------------------
 
 
-async def test_agents_migration_ddl_has_unique_constraint_on_client_slug(tmp_path: Path):
+async def test_agents_migration_ddl_has_unique_constraint_on_client_slug(
+    tmp_path: Path,
+):
     """migrate_add_agents creates agents table with UNIQUE(client_id, slug)."""
     from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -54,6 +56,7 @@ async def test_agents_migration_ddl_has_unique_constraint_on_client_slug(tmp_pat
 
     # Run migration
     from scripts.migrate_add_agents import run_migration
+
     await run_migration(db_url)
 
     # Verify the UNIQUE constraint on (client_id, slug) exists
@@ -76,9 +79,7 @@ async def test_agents_migration_ddl_has_unique_constraint_on_client_slug(tmp_pat
                     break
 
         # Also check via pragma index_list which gives us unique indexes
-        idx_result = await conn.execute(
-            sqlalchemy.text("PRAGMA index_list(agents)")
-        )
+        idx_result = await conn.execute(sqlalchemy.text("PRAGMA index_list(agents)"))
         indexes = idx_result.fetchall()
         for idx in indexes:
             # idx format: (seq, name, unique, origin, partial)
@@ -141,6 +142,7 @@ async def test_agents_migration_enforces_unique_via_insert(tmp_path: Path):
     await engine.dispose()
 
     from scripts.migrate_add_agents import run_migration
+
     await run_migration(db_url)
 
     # Now attempt to insert two agents with the same (client_id, slug)
@@ -187,7 +189,9 @@ def test_backfill_agent_id_uses_correlated_update():
 
     # Must NOT have a for loop iterating over rows with individual updates
     # The correlated UPDATE pattern uses a single UPDATE ... WHERE ... subquery
-    assert "UPDATE" in source.upper(), "backfill_agent_id must contain an UPDATE statement"
+    assert (
+        "UPDATE" in source.upper()
+    ), "backfill_agent_id must contain an UPDATE statement"
 
     # Strict check: no Python for-loop at all in the function body.
     # The tautology `"for " not in source or "for row" not in source` was always True.
@@ -267,10 +271,14 @@ async def test_backfill_agent_id_updates_all_null_rows(tmp_path: Path):
         assert null_count == 0, f"Expected 0 NULL agent_id rows, got {null_count}"
 
         result2 = await conn.execute(
-            sqlalchemy.text("SELECT COUNT(*) FROM call_sessions WHERE agent_id='agent-x'")
+            sqlalchemy.text(
+                "SELECT COUNT(*) FROM call_sessions WHERE agent_id='agent-x'"
+            )
         )
         filled_count = result2.scalar()
-        assert filled_count == 3, f"Expected 3 rows with agent_id='agent-x', got {filled_count}"
+        assert (
+            filled_count == 3
+        ), f"Expected 3 rows with agent_id='agent-x', got {filled_count}"
     await engine3.dispose()
 
 
@@ -370,6 +378,7 @@ async def test_fk_migration_succeeds_when_agents_table_exists(tmp_path: Path):
 
     # Must not raise
     from scripts.migrate_add_agent_id_fks import run_migration
+
     await run_migration(db_url)  # should succeed without RuntimeError
 
 
@@ -463,25 +472,21 @@ async def test_backfill_skips_inactive_agents(tmp_path: Path):
     async with engine3.begin() as conn:
         # c1's session must remain NULL — inactive agent must NOT be used
         result_c1 = await conn.execute(
-            sqlalchemy.text(
-                "SELECT agent_id FROM call_sessions WHERE client_id='c1'"
-            )
+            sqlalchemy.text("SELECT agent_id FROM call_sessions WHERE client_id='c1'")
         )
         c1_agent = result_c1.scalar()
-        assert c1_agent is None, (
-            f"Deactivated agent must NOT be used for backfill, but got agent_id={c1_agent!r}"
-        )
+        assert (
+            c1_agent is None
+        ), f"Deactivated agent must NOT be used for backfill, but got agent_id={c1_agent!r}"
 
         # c2's session must be filled with the active agent
         result_c2 = await conn.execute(
-            sqlalchemy.text(
-                "SELECT agent_id FROM call_sessions WHERE client_id='c2'"
-            )
+            sqlalchemy.text("SELECT agent_id FROM call_sessions WHERE client_id='c2'")
         )
         c2_agent = result_c2.scalar()
-        assert c2_agent == active_agent_id, (
-            f"Active default agent must be used for backfill, but got agent_id={c2_agent!r}"
-        )
+        assert (
+            c2_agent == active_agent_id
+        ), f"Active default agent must be used for backfill, but got agent_id={c2_agent!r}"
     await engine3.dispose()
 
 
@@ -575,14 +580,13 @@ async def test_agents_migration_repairs_missing_unique_index_on_rerun(tmp_path: 
 
     # Rerun new migration — table already exists but lacks UNIQUE
     from scripts.migrate_add_agents import run_migration
+
     await run_migration(db_url)
 
     # Verify that UNIQUE index now exists
     engine2 = create_async_engine(db_url, echo=False)
     async with engine2.begin() as conn:
-        idx_result = await conn.execute(
-            sqlalchemy.text("PRAGMA index_list(agents)")
-        )
+        idx_result = await conn.execute(sqlalchemy.text("PRAGMA index_list(agents)"))
         indexes = idx_result.fetchall()
         found_unique = False
         for idx in indexes:

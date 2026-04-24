@@ -43,9 +43,7 @@ async def column_exists(conn, table: str, column: str) -> bool:
     """Return True if the column already exists in the table."""
     import sqlalchemy
 
-    result = await conn.execute(
-        sqlalchemy.text(f"PRAGMA table_info({table})")
-    )
+    result = await conn.execute(sqlalchemy.text(f"PRAGMA table_info({table})"))
     rows = result.fetchall()
     return any(row[1] == column for row in rows)
 
@@ -121,7 +119,9 @@ async def backfill_agent_id(conn, table: str) -> int:
     )
     updated = result.rowcount
 
-    print(f"  [backfill] {table}: updated {updated} of {null_count} rows (single correlated UPDATE)")
+    print(
+        f"  [backfill] {table}: updated {updated} of {null_count} rows (single correlated UPDATE)"
+    )
     return updated
 
 

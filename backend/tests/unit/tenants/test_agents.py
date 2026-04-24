@@ -77,13 +77,22 @@ async def test_agent_model_has_expected_fields():
     # Check column names exist
     col_names = {c.name for c in Agent.__table__.columns}
     expected = {
-        "id", "client_id", "slug", "name", "voice_id",
-        "system_prompt", "knowledge_base", "model", "temperature",
-        "max_tokens", "tools_enabled", "is_active", "is_default", "created_at",
+        "id",
+        "client_id",
+        "slug",
+        "name",
+        "voice_id",
+        "system_prompt",
+        "knowledge_base",
+        "model",
+        "temperature",
+        "max_tokens",
+        "tools_enabled",
+        "is_active",
+        "is_default",
+        "created_at",
     }
-    assert expected.issubset(col_names), (
-        f"Missing columns: {expected - col_names}"
-    )
+    assert expected.issubset(col_names), f"Missing columns: {expected - col_names}"
 
 
 async def test_create_agent_with_defaults(session: AsyncSession):
@@ -339,18 +348,13 @@ async def test_agent_table_has_unique_constraint_on_client_id_slug():
     from app.tenants.models import Agent
 
     args = Agent.__table_args__
-    unique_constraints = [
-        a for a in args
-        if isinstance(a, UniqueConstraint)
-    ]
+    unique_constraints = [a for a in args if isinstance(a, UniqueConstraint)]
     # At least one UniqueConstraint should cover (client_id, slug)
     found = any(
-        set(uc.columns.keys()) == {"client_id", "slug"}
-        for uc in unique_constraints
+        set(uc.columns.keys()) == {"client_id", "slug"} for uc in unique_constraints
     )
     assert found, (
-        f"No UniqueConstraint on (client_id, slug) found. "
-        f"table_args={args}"
+        f"No UniqueConstraint on (client_id, slug) found. " f"table_args={args}"
     )
 
 

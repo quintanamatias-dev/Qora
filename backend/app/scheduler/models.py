@@ -55,21 +55,13 @@ class ScheduledCall(Base):
     source_session_id: Mapped[str | None] = mapped_column(
         String, nullable=True, default=None
     )
-    status: Mapped[str] = mapped_column(
-        String, nullable=False, default="pending"
-    )
+    status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
     scheduled_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
-    attempt_number: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=1
-    )
-    max_attempts: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=3
-    )
-    trigger_reason: Mapped[str] = mapped_column(
-        String, nullable=False
-    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    trigger_reason: Mapped[str] = mapped_column(String, nullable=False)
     outcome_session_id: Mapped[str | None] = mapped_column(
         String, nullable=True, default=None
     )

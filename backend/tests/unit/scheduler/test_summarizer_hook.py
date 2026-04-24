@@ -55,7 +55,9 @@ async def seeded_db(tmp_path: Path):
 
         client = await sess.get(Client, "quintana-seguros")
         client.scheduler_enabled = True
-        client.scheduler_retry_on_outcomes = '["busy","no_answer","follow_up","call_again"]'
+        client.scheduler_retry_on_outcomes = (
+            '["busy","no_answer","follow_up","call_again"]'
+        )
         await sess.commit()
 
     yield db_module
@@ -192,11 +194,15 @@ async def test_summarizer_auto_schedule_failure_does_not_block_lead_merge(seeded
     )
 
     # Patch auto_schedule to raise
-    with patch(
-        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
-    ), patch(
-        "app.scheduler.service.auto_schedule",
-        side_effect=Exception("Scheduler exploded"),
+    with (
+        patch(
+            "app.summarizer._get_openai_client",
+            return_value=(mock_client, "gpt-4o-mini"),
+        ),
+        patch(
+            "app.scheduler.service.auto_schedule",
+            side_effect=Exception("Scheduler exploded"),
+        ),
     ):
         async with seeded_db.async_session_factory() as db:
             # Must NOT raise
@@ -205,9 +211,7 @@ async def test_summarizer_auto_schedule_failure_does_not_block_lead_merge(seeded
 
     # Lead facts should still be persisted (lead merge happened BEFORE auto_schedule)
     async with seeded_db.async_session_factory() as db:
-        result = await db.execute(
-            select(Lead).where(Lead.id == "hook-lead-001")
-        )
+        result = await db.execute(select(Lead).where(Lead.id == "hook-lead-001"))
         lead = result.scalar_one()
         assert lead.summary_last_call is not None
         assert lead.summary_last_call == "Test summary."

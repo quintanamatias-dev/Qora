@@ -57,7 +57,9 @@ async def sched_agent_db(tmp_path: Path):
         client.scheduler_cooldown_minutes = 60
         client.scheduler_allowed_hours_start = 9
         client.scheduler_allowed_hours_end = 20
-        client.scheduler_retry_on_outcomes = '["call_again","busy","no_answer","follow_up"]'
+        client.scheduler_retry_on_outcomes = (
+            '["call_again","busy","no_answer","follow_up"]'
+        )
         await sess.commit()
 
     yield db_module
@@ -134,7 +136,9 @@ async def test_auto_schedule_propagates_agent_id_from_session(sched_agent_db):
     assert sc.agent_id == agent_id
 
 
-async def test_auto_schedule_falls_back_to_default_agent_when_no_session_agent(sched_agent_db):
+async def test_auto_schedule_falls_back_to_default_agent_when_no_session_agent(
+    sched_agent_db,
+):
     """auto_schedule() falls back to client's default agent when session has no agent_id."""
     from app.calls.service import create_session
     from app.scheduler.service import auto_schedule

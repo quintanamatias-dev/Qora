@@ -13,11 +13,13 @@ Uses existing `tenants` SQLAlchemy models — no new DB models created.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.schemas import ClientCreate, ClientResponse, ClientUpdate
-from app.tenants.models import Client
+from app.tenants.models import Agent, Client
+import app.tenants.service as tenant_service
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
@@ -43,7 +45,7 @@ async def get_db_session() -> AsyncSession:
 # ---------------------------------------------------------------------------
 
 
-def _client_to_response(client: Client) -> ClientResponse:
+def _client_to_response(client: Client, agent_count: int = 0) -> ClientResponse:
     """Map a Client ORM object to a ClientResponse schema."""
     return ClientResponse(
         client_id=client.id,
@@ -52,6 +54,7 @@ def _client_to_response(client: Client) -> ClientResponse:
         voice_id=client.voice_id,
         is_active=client.is_active,
         created_at=client.created_at,
+        agent_count=agent_count,
         scheduler_enabled=client.scheduler_enabled,
         scheduler_max_attempts=client.scheduler_max_attempts,
         scheduler_cooldown_minutes=client.scheduler_cooldown_minutes,
@@ -74,6 +77,10 @@ async def create_client(
 ):
     """Create a new client.
 
+    Delegates to service.create_client() which automatically bootstraps a
+    default Agent for the new client (regression fix — router MUST NOT
+    construct Client() directly).
+
     Returns:
         201: ClientResponse with the created client.
         409: If client_id already exists.
@@ -87,21 +94,42 @@ async def create_client(
             detail={"error": "client already exists", "client_id": payload.client_id},
         )
 
-    client = Client(
-        id=payload.client_id,
-        # name must be unique — use broker_name as display name
-        name=payload.broker_name,
-        broker_name=payload.broker_name,
-        agent_name=payload.agent_name,
-        voice_id=payload.voice_id,
-        system_prompt_override=payload.system_prompt_override,
-        is_active=True,
-    )
-    session.add(client)
-    await session.flush()
-    await session.commit()
+    try:
+        client = await tenant_service.create_client(
+            session,
+            id=payload.client_id,
+            name=payload.broker_name,
+            broker_name=payload.broker_name,
+            agent_name=payload.agent_name,
+            voice_id=payload.voice_id,
+            system_prompt_override=payload.system_prompt_override,
+            scheduler_enabled=payload.scheduler_enabled,
+            scheduler_max_attempts=payload.scheduler_max_attempts,
+            scheduler_cooldown_minutes=payload.scheduler_cooldown_minutes,
+            scheduler_allowed_hours_start=payload.scheduler_allowed_hours_start,
+            scheduler_allowed_hours_end=payload.scheduler_allowed_hours_end,
+            scheduler_retry_on_outcomes=payload.scheduler_retry_on_outcomes,
+            scheduler_timezone=payload.scheduler_timezone,
+        )
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "client name already exists",
+                "broker_name": payload.broker_name,
+            },
+        )
     await session.refresh(client)
-    return _client_to_response(client)
+    count_result = await session.execute(
+        select(func.count(Agent.id)).where(
+            Agent.client_id == client.id,
+            Agent.is_active == True,  # noqa: E712
+        )
+    )
+    agent_count = count_result.scalar_one() or 0
+    return _client_to_response(client, agent_count=agent_count)
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +148,20 @@ async def list_clients(
     """
     result = await session.execute(select(Client).where(Client.is_active == True))  # noqa: E712
     clients = result.scalars().all()
-    return [_client_to_response(c) for c in clients]
+
+    # Query active agent counts for all active clients in one round trip
+    client_ids = [c.id for c in clients]
+    counts_result = await session.execute(
+        select(Agent.client_id, func.count(Agent.id).label("agent_count"))
+        .where(
+            Agent.client_id.in_(client_ids),
+            Agent.is_active == True,  # noqa: E712
+        )
+        .group_by(Agent.client_id)
+    )
+    counts: dict[str, int] = {row.client_id: row.agent_count for row in counts_result}
+
+    return [_client_to_response(c, agent_count=counts.get(c.id, 0)) for c in clients]
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +186,14 @@ async def get_client(
             status_code=404,
             detail={"error": "client not found", "client_id": client_id},
         )
-    return _client_to_response(client)
+    count_result = await session.execute(
+        select(func.count(Agent.id)).where(
+            Agent.client_id == client_id,
+            Agent.is_active == True,  # noqa: E712
+        )
+    )
+    agent_count = count_result.scalar_one() or 0
+    return _client_to_response(client, agent_count=agent_count)
 
 
 # ---------------------------------------------------------------------------
@@ -182,8 +230,14 @@ async def update_client(
     patch_start = update_data.get("scheduler_allowed_hours_start")
     patch_end = update_data.get("scheduler_allowed_hours_end")
     if patch_start is not None or patch_end is not None:
-        effective_start = patch_start if patch_start is not None else client.scheduler_allowed_hours_start
-        effective_end = patch_end if patch_end is not None else client.scheduler_allowed_hours_end
+        effective_start = (
+            patch_start
+            if patch_start is not None
+            else client.scheduler_allowed_hours_start
+        )
+        effective_end = (
+            patch_end if patch_end is not None else client.scheduler_allowed_hours_end
+        )
         if effective_start >= effective_end:
             raise HTTPException(
                 status_code=422,
@@ -203,7 +257,14 @@ async def update_client(
     await session.flush()
     await session.commit()
     await session.refresh(client)
-    return _client_to_response(client)
+    count_result = await session.execute(
+        select(func.count(Agent.id)).where(
+            Agent.client_id == client_id,
+            Agent.is_active == True,  # noqa: E712
+        )
+    )
+    agent_count = count_result.scalar_one() or 0
+    return _client_to_response(client, agent_count=agent_count)
 
 
 # ---------------------------------------------------------------------------
@@ -233,4 +294,11 @@ async def delete_client(
     await session.flush()
     await session.commit()
     await session.refresh(client)
-    return _client_to_response(client)
+    count_result = await session.execute(
+        select(func.count(Agent.id)).where(
+            Agent.client_id == client_id,
+            Agent.is_active == True,  # noqa: E712
+        )
+    )
+    agent_count = count_result.scalar_one() or 0
+    return _client_to_response(client, agent_count=agent_count)
