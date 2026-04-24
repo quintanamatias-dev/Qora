@@ -26,7 +26,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.staticfiles import StaticFiles
 
@@ -263,7 +262,7 @@ api_v1_router.include_router(scheduler_router)  # /api/v1/scheduler — Phase 6
 app.include_router(api_v1_router)
 
 # ---------------------------------------------------------------------------
-# Static files — demo page + admin UI
+# Static files — demo page (voice call simulator)
 # ---------------------------------------------------------------------------
 
 import os  # noqa: E402
@@ -271,9 +270,3 @@ import os  # noqa: E402
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 if os.path.isdir(_STATIC_DIR):
     app.mount("/demo", StaticFiles(directory=_STATIC_DIR, html=True), name="demo")
-
-
-@app.get("/admin", tags=["admin"], include_in_schema=False)
-async def admin_ui() -> FileResponse:
-    """Internal admin UI — manage clients and agents."""
-    return FileResponse(os.path.join(_STATIC_DIR, "admin.html"), media_type="text/html")

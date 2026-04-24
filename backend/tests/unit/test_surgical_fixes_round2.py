@@ -204,55 +204,8 @@ async def test_get_client_includes_agent_count(clients_app: AsyncClient):
 
 
 # ---------------------------------------------------------------------------
-# Fix 3 — XSS: no raw string interpolation in onclick attributes
+# Fix 3 — XSS tests removed (admin.html migrated to React, Issue #29)
 # ---------------------------------------------------------------------------
-
-
-def test_admin_html_no_raw_interpolation_in_onclick():
-    """admin.html must NOT use raw template literals inside onclick= attributes.
-
-    The pattern onclick="someFunc('${...}'" is forbidden (XSS risk).
-    Instead, data-* attributes or an escapeHtml() helper must be used.
-    """
-    import os
-    import re
-
-    backend_dir = os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    )
-    admin_path = os.path.join(backend_dir, "app", "static", "admin.html")
-    with open(admin_path, encoding="utf-8") as f:
-        html = f.read()
-
-    # Look for onclick attributes that contain ${...} template literal interpolation
-    # Pattern: onclick="...${...}..." inside HTML attributes
-    raw_onclick_interpolation = re.findall(
-        r'onclick=["\'][^"\']*\$\{[^}]+\}[^"\']*["\']', html
-    )
-
-    assert len(raw_onclick_interpolation) == 0, (
-        f"admin.html has {len(raw_onclick_interpolation)} onclick attribute(s) with raw "
-        f"template literal interpolation (XSS risk): {raw_onclick_interpolation[:3]!r}\n"
-        "Fix: use an escapeHtml() helper or data-* attributes."
-    )
-
-
-# Triangulation: escapeHtml function must be present
-def test_admin_html_has_escape_html_helper():
-    """admin.html must define an escapeHtml() helper function."""
-    import os
-
-    backend_dir = os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    )
-    admin_path = os.path.join(backend_dir, "app", "static", "admin.html")
-    with open(admin_path, encoding="utf-8") as f:
-        html = f.read()
-
-    assert "escapeHtml" in html, (
-        "admin.html must define an escapeHtml() helper to prevent XSS. "
-        "This function should be called on all user-controlled values before interpolation."
-    )
 
 
 # ---------------------------------------------------------------------------

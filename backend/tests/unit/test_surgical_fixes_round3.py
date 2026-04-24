@@ -1,37 +1,19 @@
 """Surgical fix tests — Round 3 (confirmed issues for feat/10-admin-crud).
 
 Covers:
-1. CRITICAL — XSS in admin.html: TD cells must escape user values, onclick
-   attributes must NOT contain raw template literal interpolation; data-* pattern
-   must be used instead.
+1. (Removed) XSS tests for admin.html — migrated to React in Issue #29.
 2. WARNING — ClientCreate missing validate_hour_window (start < end).
 3. WARNING — POST /api/v1/clients duplicate broker_name (Client.name unique) → 409.
 """
 
 from __future__ import annotations
 
-import os
-import re
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from pydantic import SecretStr
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _read_admin_html() -> str:
-    backend_dir = os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    )
-    admin_path = os.path.join(backend_dir, "app", "static", "admin.html")
-    with open(admin_path, encoding="utf-8") as f:
-        return f.read()
 
 
 # ---------------------------------------------------------------------------
@@ -65,130 +47,6 @@ async def clients_app(tmp_path: Path):
         yield client
 
     await db_module.close_db()
-
-
-# ---------------------------------------------------------------------------
-# Issue 1a — TD cells must use escapeHtml() for all user-controlled values
-# ---------------------------------------------------------------------------
-
-
-def test_admin_html_client_td_broker_name_escaped():
-    """admin.html clients table must escape broker_name in innerHTML (td) context."""
-    html = _read_admin_html()
-    # Raw ${c.broker_name} inside <td> innerHTML is forbidden — must be wrapped in escapeHtml(...)
-    # textContent assignments are safe (they don't parse HTML) so we only check innerHTML lines.
-    innerHTML_lines = [
-        line
-        for line in html.splitlines()
-        if "innerHTML" in line or "<td>" in line or "data-" in line
-    ]
-    for line in innerHTML_lines:
-        assert "${c.broker_name}" not in line, (
-            f"admin.html interpolates raw ${{c.broker_name}} into innerHTML context: {line.strip()}"
-        )
-
-
-def test_admin_html_client_td_agent_name_escaped():
-    """admin.html clients table must escape agent_name via escapeHtml()."""
-    html = _read_admin_html()
-    assert "${c.agent_name}" not in html, (
-        "admin.html interpolates raw ${c.agent_name} into innerHTML (stored XSS risk). "
-        "Use escapeHtml(c.agent_name) instead."
-    )
-
-
-def test_admin_html_client_td_client_id_escaped():
-    """admin.html clients table must escape client_id in innerHTML (td) context."""
-    html = _read_admin_html()
-    # Raw ${c.client_id} inside <td> innerHTML is forbidden. opt.value and textContent are safe.
-    innerHTML_lines = [
-        line
-        for line in html.splitlines()
-        if "<td>" in line or "<code>" in line
-    ]
-    for line in innerHTML_lines:
-        assert "${c.client_id}" not in line, (
-            f"admin.html interpolates raw ${{c.client_id}} into innerHTML context: {line.strip()}"
-        )
-
-
-def test_admin_html_agent_td_name_escaped():
-    """admin.html agents table must escape agent name via escapeHtml()."""
-    html = _read_admin_html()
-    assert "${a.name}" not in html, (
-        "admin.html interpolates raw ${a.name} into innerHTML (stored XSS risk). "
-        "Use escapeHtml(a.name) instead."
-    )
-
-
-def test_admin_html_agent_td_voice_id_escaped():
-    """admin.html agents table must escape voice_id via escapeHtml()."""
-    html = _read_admin_html()
-    assert "${a.voice_id}" not in html, (
-        "admin.html interpolates raw ${a.voice_id} into innerHTML (stored XSS risk). "
-        "Use escapeHtml(a.voice_id) instead."
-    )
-
-
-def test_admin_html_agent_td_slug_escaped():
-    """admin.html agents table must escape slug via escapeHtml()."""
-    html = _read_admin_html()
-    assert "${a.slug}" not in html, (
-        "admin.html interpolates raw ${a.slug} into innerHTML (stored XSS risk). "
-        "Use escapeHtml(a.slug) instead."
-    )
-
-
-def test_admin_html_agent_td_model_escaped():
-    """admin.html agents table must escape model via escapeHtml()."""
-    html = _read_admin_html()
-    assert "${a.model}" not in html, (
-        "admin.html interpolates raw ${a.model} into innerHTML (stored XSS risk). "
-        "Use escapeHtml(a.model) instead."
-    )
-
-
-# ---------------------------------------------------------------------------
-# Issue 1b — onclick attributes must NOT contain raw template literal values
-# ---------------------------------------------------------------------------
-
-
-def test_admin_html_no_raw_interpolation_in_onclick_r3():
-    """admin.html onclick= attributes must NOT contain ${...} interpolation.
-
-    The correct fix is data-* attributes read in the handler, NOT escapeHtml()
-    inside onclick strings (HTML entity decode happens before JS eval — single
-    quotes in values still break JS strings).
-    """
-    html = _read_admin_html()
-    raw_onclick_interpolation = re.findall(
-        r'onclick=["\'][^"\']*\$\{[^}]+\}[^"\']*["\']', html
-    )
-    assert len(raw_onclick_interpolation) == 0, (
-        f"admin.html has {len(raw_onclick_interpolation)} onclick attribute(s) with raw "
-        f"template literal interpolation: {raw_onclick_interpolation[:3]!r}\n"
-        "Fix: use data-* attributes and read them in the JS handler."
-    )
-
-
-def test_admin_html_edit_buttons_use_data_attributes():
-    """admin.html edit buttons must use data-* attributes to pass row data.
-
-    Instead of onclick='showClientEdit(\"${id}\", ...)', the button must have
-    data-client-id='...' (or similar) attributes set via escapeHtml().
-    """
-    html = _read_admin_html()
-    # There must be at least one data-* attribute on action buttons (client or agent)
-    has_data_attrs = (
-        "data-client-id" in html
-        or "data-agent-id" in html
-        or re.search(r'data-[a-z-]+="\$\{escapeHtml\(', html)
-        or re.search(r"data-[a-z]", html)
-    )
-    assert has_data_attrs, (
-        "admin.html must use data-* attributes on action buttons to pass row data safely. "
-        "Edit buttons should store IDs/values in data-* attrs and read them in the handler."
-    )
 
 
 # ---------------------------------------------------------------------------

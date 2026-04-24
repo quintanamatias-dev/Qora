@@ -7,11 +7,23 @@
  * In Phase 4 features they will move to src/hooks/queries/*.
  */
 
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { fetchMetrics, fetchCallSessions, fetchTranscript } from './calls'
 import { fetchLeads, fetchLead } from './leads'
-import { fetchClient } from './clients'
-import type { CallMetricsResponse, Lead, CallSession, SessionTranscript, Client } from './types'
+import { fetchClient, fetchClients, createClient, updateClient, deactivateClient } from './clients'
+import { fetchAgents, createAgent, updateAgent, deactivateAgent, makeAgentDefault } from './agents'
+import type {
+  CallMetricsResponse,
+  Lead,
+  CallSession,
+  SessionTranscript,
+  Client,
+  Agent,
+  CreateClientPayload,
+  UpdateClientPayload,
+  CreateAgentPayload,
+  UpdateAgentPayload,
+} from './types'
 
 interface MetricsParams {
   date_from?: string
@@ -92,5 +104,131 @@ export function useTranscript(sessionId: string) {
     queryKey: ['transcript', sessionId],
     queryFn: () => fetchTranscript(sessionId),
     enabled: Boolean(sessionId),
+  })
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Admin Query Hooks
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * useClients — fetches all clients
+ * queryKey: ['clients']
+ */
+export function useClients() {
+  return useQuery<Client[]>({
+    queryKey: ['clients'],
+    queryFn: fetchClients,
+  })
+}
+
+/**
+ * useAgents — fetches all agents for a client
+ * queryKey: ['agents', clientId]
+ */
+export function useAgents(clientId: string) {
+  return useQuery<Agent[]>({
+    queryKey: ['agents', clientId],
+    queryFn: () => fetchAgents(clientId),
+    enabled: Boolean(clientId),
+  })
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Admin Mutation Hooks — Client
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * useCreateClient — creates a new client, invalidates ['clients'] on success
+ */
+export function useCreateClient() {
+  const queryClient = useQueryClient()
+  return useMutation<Client, Error, CreateClientPayload>({
+    mutationFn: createClient,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clients'] })
+    },
+  })
+}
+
+/**
+ * useUpdateClient — updates a client, invalidates ['clients'] on success
+ */
+export function useUpdateClient() {
+  const queryClient = useQueryClient()
+  return useMutation<Client, Error, { clientId: string; payload: UpdateClientPayload }>({
+    mutationFn: ({ clientId, payload }) => updateClient(clientId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clients'] })
+    },
+  })
+}
+
+/**
+ * useDeactivateClient — deactivates a client, invalidates ['clients'] on success
+ */
+export function useDeactivateClient() {
+  const queryClient = useQueryClient()
+  return useMutation<Client, Error, string>({
+    mutationFn: deactivateClient,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clients'] })
+    },
+  })
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Admin Mutation Hooks — Agent
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * useCreateAgent — creates a new agent, invalidates ['agents', clientId] on success
+ */
+export function useCreateAgent(clientId: string) {
+  const queryClient = useQueryClient()
+  return useMutation<Agent, Error, CreateAgentPayload>({
+    mutationFn: (payload) => createAgent(clientId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents', clientId] })
+    },
+  })
+}
+
+/**
+ * useUpdateAgent — updates an agent, invalidates ['agents', clientId] on success
+ */
+export function useUpdateAgent(clientId: string) {
+  const queryClient = useQueryClient()
+  return useMutation<Agent, Error, { agentId: string; payload: UpdateAgentPayload }>({
+    mutationFn: ({ agentId, payload }) => updateAgent(clientId, agentId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents', clientId] })
+    },
+  })
+}
+
+/**
+ * useDeactivateAgent — deactivates an agent, invalidates ['agents', clientId] on success
+ */
+export function useDeactivateAgent(clientId: string) {
+  const queryClient = useQueryClient()
+  return useMutation<Agent, Error, string>({
+    mutationFn: (agentId) => deactivateAgent(clientId, agentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents', clientId] })
+    },
+  })
+}
+
+/**
+ * useMakeAgentDefault — sets agent as default, invalidates ['agents', clientId] on success
+ */
+export function useMakeAgentDefault(clientId: string) {
+  const queryClient = useQueryClient()
+  return useMutation<Agent, Error, string>({
+    mutationFn: (agentId) => makeAgentDefault(clientId, agentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents', clientId] })
+    },
   })
 }

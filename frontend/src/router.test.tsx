@@ -81,8 +81,14 @@ describe('REQ-4.1 Production route config — correct rendering', () => {
   })
 
   it('production routes config has the correct number of top-level routes', () => {
-    // Structural: routes must have 3 top-level entries (/, /app/:clientId, *)
-    expect(routes).toHaveLength(3)
+    // Structural: routes must have 4 top-level entries (/, /app/:clientId, /admin, *)
+    expect(routes).toHaveLength(4)
+  })
+
+  it('/admin renders AdminLayout with "QORA Admin" header', () => {
+    renderAt('/admin')
+    expect(screen.getByTestId('admin-header')).toBeInTheDocument()
+    expect(screen.getByText('QORA Admin')).toBeInTheDocument()
   })
 
   it('/app/:clientId children include dashboard, leads, leads/:leadId, and import', () => {
