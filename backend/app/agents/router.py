@@ -11,6 +11,8 @@ Endpoints:
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,6 +48,25 @@ async def get_db_session() -> AsyncSession:
 # ---------------------------------------------------------------------------
 
 
+def _deserialize_tools(tools_enabled: str | list | None) -> list[str]:
+    """Deserialize tools_enabled from DB JSON string to list[str].
+
+    The DB stores tools_enabled as a JSON string (e.g., '["get_lead_details"]').
+    The API contract requires list[str] in responses.
+    """
+    if tools_enabled is None:
+        return []
+    if isinstance(tools_enabled, list):
+        return tools_enabled
+    try:
+        parsed = json.loads(tools_enabled)
+        if isinstance(parsed, list):
+            return parsed
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return []
+
+
 def _agent_to_response(agent: Agent) -> AgentResponse:
     """Map an Agent ORM object to an AgentResponse schema."""
     return AgentResponse(
@@ -59,7 +80,7 @@ def _agent_to_response(agent: Agent) -> AgentResponse:
         model=agent.model,
         temperature=agent.temperature,
         max_tokens=agent.max_tokens,
-        tools_enabled=agent.tools_enabled,
+        tools_enabled=_deserialize_tools(agent.tools_enabled),
         is_active=agent.is_active,
         is_default=agent.is_default,
         created_at=agent.created_at,
@@ -132,7 +153,7 @@ async def create_agent(
             model=payload.model,
             temperature=payload.temperature,
             max_tokens=payload.max_tokens,
-            tools_enabled=payload.tools_enabled,
+            tools_enabled=json.dumps(payload.tools_enabled),
             is_active=True,
             is_default=payload.is_default,
         )
@@ -203,6 +224,11 @@ async def update_agent(
     await _require_client(session, client_id)
 
     update_data = payload.model_dump(exclude_unset=True)
+    # Serialize tools_enabled list to JSON string for DB storage
+    if "tools_enabled" in update_data and isinstance(
+        update_data["tools_enabled"], list
+    ):
+        update_data["tools_enabled"] = json.dumps(update_data["tools_enabled"])
     agent = await tenant_service.update_agent(
         session, agent_id, client_id, **update_data
     )

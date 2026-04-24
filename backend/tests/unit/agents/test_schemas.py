@@ -3,16 +3,15 @@
 Covers:
 - AgentCreate field defaults
 - AgentCreate slug validation (^[a-z0-9][a-z0-9-]*[a-z0-9]?$)
-- AgentCreate tools_enabled validation (must be valid JSON list of known tool names)
+- AgentCreate tools_enabled validation (must be list[str] of known tool names)
 - AgentUpdate all fields optional, slug NOT allowed
 - AgentResponse model fields
 
-RED: These tests reference app.agents.schemas which does NOT exist yet.
+tools_enabled is list[str] in the API contract (not a JSON string).
+The service layer serializes to/from JSON string for DB storage.
 """
 
 from __future__ import annotations
-
-import json
 
 import pytest
 from pydantic import ValidationError
@@ -39,9 +38,9 @@ def test_agent_create_minimal_valid():
     assert agent.is_default is False
     assert agent.system_prompt is None
     assert agent.knowledge_base is None
-    # tools_enabled default includes all 4 tools
-    tools = json.loads(agent.tools_enabled)
-    assert set(tools) == {
+    # tools_enabled default is a list with all 4 tools
+    assert isinstance(agent.tools_enabled, list)
+    assert set(agent.tools_enabled) == {
         "get_lead_details",
         "register_interest",
         "mark_not_interested",
@@ -62,7 +61,7 @@ def test_agent_create_custom_values():
         max_tokens=500,
         system_prompt="You are helpful.",
         knowledge_base="kb-content",
-        tools_enabled='["get_lead_details"]',
+        tools_enabled=["get_lead_details"],
         is_default=True,
     )
 
@@ -133,7 +132,7 @@ def test_agent_create_invalid_tool_raises_422():
             slug="test",
             name="Test",
             voice_id="v1",
-            tools_enabled='["get_lead_details","nonexistent_tool"]',
+            tools_enabled=["get_lead_details", "nonexistent_tool"],
         )
 
     # Error message should mention the invalid tool
@@ -148,14 +147,14 @@ def test_agent_create_valid_subset_of_tools():
         slug="test",
         name="Test",
         voice_id="v1",
-        tools_enabled='["get_lead_details","register_interest"]',
+        tools_enabled=["get_lead_details", "register_interest"],
     )
-    tools = json.loads(agent.tools_enabled)
-    assert tools == ["get_lead_details", "register_interest"]
+    assert isinstance(agent.tools_enabled, list)
+    assert agent.tools_enabled == ["get_lead_details", "register_interest"]
 
 
-def test_agent_create_invalid_tools_json_raises_422():
-    """AgentCreate raises ValidationError when tools_enabled is not valid JSON."""
+def test_agent_create_invalid_tool_name_string_raises_422():
+    """AgentCreate raises ValidationError when tools_enabled contains an unknown tool name."""
     from app.agents.schemas import AgentCreate
 
     with pytest.raises(ValidationError):
@@ -163,12 +162,12 @@ def test_agent_create_invalid_tools_json_raises_422():
             slug="test",
             name="Test",
             voice_id="v1",
-            tools_enabled="not-json",
+            tools_enabled=["nonexistent_tool"],
         )
 
 
 def test_agent_create_tools_not_a_list_raises_422():
-    """AgentCreate raises ValidationError when tools_enabled is a JSON object (not list)."""
+    """AgentCreate raises ValidationError when tools_enabled is not a list (e.g. str)."""
     from app.agents.schemas import AgentCreate
 
     with pytest.raises(ValidationError):
@@ -176,7 +175,7 @@ def test_agent_create_tools_not_a_list_raises_422():
             slug="test",
             name="Test",
             voice_id="v1",
-            tools_enabled='{"key": "value"}',
+            tools_enabled="get_lead_details",  # string instead of list
         )
 
 
@@ -212,7 +211,7 @@ def test_agent_update_invalid_tool_raises_422():
     from app.agents.schemas import AgentUpdate
 
     with pytest.raises(ValidationError) as exc_info:
-        AgentUpdate(tools_enabled='["bad_tool_name"]')
+        AgentUpdate(tools_enabled=["bad_tool_name"])
 
     assert "bad_tool_name" in str(exc_info.value)
 
@@ -240,7 +239,7 @@ def test_agent_response_from_dict():
         model="gpt-4o",
         temperature=0.7,
         max_tokens=300,
-        tools_enabled='["get_lead_details"]',
+        tools_enabled=["get_lead_details"],
         is_active=True,
         is_default=True,
         created_at=now,
@@ -251,3 +250,5 @@ def test_agent_response_from_dict():
     assert resp.slug == "main"
     assert resp.is_default is True
     assert resp.is_active is True
+    assert isinstance(resp.tools_enabled, list)
+    assert resp.tools_enabled == ["get_lead_details"]

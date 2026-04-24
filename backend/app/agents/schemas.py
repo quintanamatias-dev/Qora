@@ -3,13 +3,16 @@
 Slug validation: ^[a-z0-9][a-z0-9-]*[a-z0-9]?$ (no leading/trailing hyphens).
 Single-char slugs (all lowercase letters or digits) are also valid.
 
-tools_enabled validation: must be a JSON list containing only keys from
+tools_enabled validation: must be list[str] containing only keys from
 QORA_TOOL_DEFINITIONS in app.voice.webhook.
+
+The service layer is responsible for serializing list[str] → JSON string before
+persisting to the DB, and deserializing JSON string → list[str] when returning
+responses.
 """
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime
 
@@ -19,39 +22,26 @@ from pydantic import BaseModel, field_validator
 # Allows single alphanumeric chars (e.g. "a", "1").
 _SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
 
-# Known tool names from QORA_TOOL_DEFINITIONS (voice/webhook.py).
-# Kept as a module-level constant to avoid circular imports at validation time.
-QORA_TOOL_NAMES: frozenset[str] = frozenset(
-    [
-        "get_lead_details",
-        "register_interest",
-        "mark_not_interested",
-        "schedule_followup",
-    ]
-)
+# Derive known tool names from the canonical QORA_TOOL_DEFINITIONS dict.
+# This avoids duplicating tool names — single source of truth in webhook.py.
+from app.voice.webhook import QORA_TOOL_DEFINITIONS as _TOOL_DEFS  # noqa: E402
 
-_DEFAULT_TOOLS = (
-    '["get_lead_details","register_interest","mark_not_interested","schedule_followup"]'
-)
+QORA_TOOL_NAMES: frozenset[str] = frozenset(_TOOL_DEFS.keys())
+
+_DEFAULT_TOOLS: list[str] = list(_TOOL_DEFS.keys())
 
 
-def _validate_tools_enabled(v: str | None) -> str | None:
-    """Validate that tools_enabled is a JSON list of known tool names."""
+def _validate_tools_list(v: list[str] | None) -> list[str] | None:
+    """Validate that tools_enabled is a list containing only known tool names."""
     if v is None:
         return v
-    try:
-        parsed = json.loads(v)
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise ValueError(
-            f"tools_enabled must be a valid JSON array of tool names, got {v!r}."
-        ) from exc
 
-    if not isinstance(parsed, list):
+    if not isinstance(v, list):
         raise ValueError(
-            f"tools_enabled must be a JSON array, got {type(parsed).__name__}."
+            f"tools_enabled must be a list of tool name strings, got {type(v).__name__}."
         )
 
-    invalid = [item for item in parsed if item not in QORA_TOOL_NAMES]
+    invalid = [item for item in v if item not in QORA_TOOL_NAMES]
     if invalid:
         raise ValueError(
             f"tools_enabled contains unknown tool names: {invalid}. "
@@ -71,7 +61,7 @@ class AgentCreate(BaseModel):
     model: str = "gpt-4o"
     temperature: float = 0.7
     max_tokens: int = 300
-    tools_enabled: str = _DEFAULT_TOOLS
+    tools_enabled: list[str] = _DEFAULT_TOOLS
     is_default: bool = False
 
     @field_validator("slug")
@@ -87,8 +77,8 @@ class AgentCreate(BaseModel):
 
     @field_validator("tools_enabled")
     @classmethod
-    def validate_tools(cls, v: str) -> str:
-        result = _validate_tools_enabled(v)
+    def validate_tools(cls, v: list[str]) -> list[str]:
+        result = _validate_tools_list(v)
         return result  # type: ignore[return-value]
 
 
@@ -105,12 +95,12 @@ class AgentUpdate(BaseModel):
     model: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
-    tools_enabled: str | None = None
+    tools_enabled: list[str] | None = None
 
     @field_validator("tools_enabled")
     @classmethod
-    def validate_tools(cls, v: str | None) -> str | None:
-        return _validate_tools_enabled(v)
+    def validate_tools(cls, v: list[str] | None) -> list[str] | None:
+        return _validate_tools_list(v)
 
 
 class AgentResponse(BaseModel):
@@ -126,7 +116,7 @@ class AgentResponse(BaseModel):
     model: str
     temperature: float
     max_tokens: int
-    tools_enabled: str
+    tools_enabled: list[str]
     is_active: bool
     is_default: bool
     created_at: datetime

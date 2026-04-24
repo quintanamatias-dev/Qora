@@ -139,6 +139,7 @@
     <div id="clients-table-wrap">
       <div class="empty">Loading…</div>
     </div>
+    <div id="clients-table-msg"></div>
   </div>
 
   <!-- Inline edit panel (hidden by default) -->
@@ -197,6 +198,7 @@
       <div id="agents-table-wrap">
         <div class="empty">Select a client to view agents.</div>
       </div>
+      <div id="agents-table-msg"></div>
     </div>
 
     <!-- Create new agent -->
@@ -324,7 +326,7 @@ function getCheckedTools(containerId) {
   const checks = document.querySelectorAll(`#${containerId} input[type=checkbox]`);
   const tools = [];
   checks.forEach(c => { if (c.checked) tools.push(c.value); });
-  return JSON.stringify(tools);
+  return tools;
 }
 
 function setCheckedTools(containerId, toolsJson) {
@@ -344,15 +346,17 @@ async function loadClients() {
   if (!ok) { wrap.innerHTML = '<div class="empty" style="color:var(--red)">Error loading clients.</div>'; return; }
   if (!body.length) { wrap.innerHTML = '<div class="empty">No clients yet.</div>'; return; }
 
-  let html = '<table><thead><tr><th>ID</th><th>Broker</th><th>Agent</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+  let html = '<table><thead><tr><th>ID</th><th>Broker</th><th>Agent</th><th>Agents</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
   body.forEach(c => {
     const badge = c.is_active
       ? '<span class="badge badge-active">active</span>'
       : '<span class="badge badge-inactive">inactive</span>';
+    const agent_count = c.agent_count !== undefined ? c.agent_count : '—';
     html += `<tr>
       <td><code>${c.client_id}</code></td>
       <td>${c.broker_name}</td>
       <td>${c.agent_name}</td>
+      <td>${agent_count}</td>
       <td>${badge}</td>
       <td><div class="actions">
         <button class="btn btn-ghost btn-sm" onclick="showClientEdit('${c.client_id}','${c.broker_name}','${c.agent_name}','${c.voice_id}')">Edit</button>
@@ -429,7 +433,7 @@ async function deactivateClient(id) {
   if (ok) { loadClients(); }
   else {
     const detail = body.detail?.error || JSON.stringify(body);
-    alert(`Error: ${detail}`);
+    showMsg('clients-table-msg', `Error: ${detail}`, false);
   }
 }
 
@@ -472,19 +476,21 @@ async function loadAgents() {
   if (!ok) { wrap.innerHTML = '<div class="empty" style="color:var(--red)">Error loading agents.</div>'; return; }
   if (!body.length) { wrap.innerHTML = '<div class="empty">No agents yet.</div>'; return; }
 
-  let html = '<table><thead><tr><th>Slug</th><th>Name</th><th>Model</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+  let html = '<table><thead><tr><th>Slug</th><th>Name</th><th>Voice ID</th><th>Model</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
   body.forEach(a => {
     const statusBadge = a.is_active
       ? '<span class="badge badge-active">active</span>'
       : '<span class="badge badge-inactive">inactive</span>';
     const defaultBadge = a.is_default ? ' <span class="badge badge-default">default</span>' : '';
+    const toolsJson = JSON.stringify(a.tools_enabled);
     html += `<tr>
       <td><code>${a.slug}</code></td>
       <td>${a.name}</td>
+      <td><code style="font-size:0.78rem">${a.voice_id}</code></td>
       <td><code style="font-size:0.78rem">${a.model}</code></td>
       <td>${statusBadge}${defaultBadge}</td>
       <td><div class="actions">
-        <button class="btn btn-ghost btn-sm" onclick="showAgentEdit('${a.agent_id}','${a.slug}','${a.name}','${a.voice_id}','${a.system_prompt || ''}','${a.tools_enabled}')">Edit</button>
+        <button class="btn btn-ghost btn-sm" onclick="showAgentEdit('${a.agent_id}','${a.slug}','${a.name}','${a.voice_id}','${a.system_prompt || ''}','${toolsJson.replace(/'/g, '&apos;')}')">Edit</button>
         ${!a.is_default ? `<button class="btn btn-success btn-sm" onclick="makeDefault('${a.agent_id}')">★ Default</button>` : ''}
         ${a.is_active ? `<button class="btn btn-danger btn-sm" onclick="deactivateAgent('${a.agent_id}')">Deactivate</button>` : ''}
       </div></td>
@@ -575,7 +581,7 @@ async function makeDefault(agentId) {
   if (ok) { loadAgents(); }
   else {
     const detail = body.detail?.error || JSON.stringify(body);
-    alert(`Error: ${detail}`);
+    showMsg('agents-table-msg', `Error: ${detail}`, false);
   }
 }
 
@@ -589,7 +595,7 @@ async function deactivateAgent(agentId) {
   if (ok) { loadAgents(); }
   else {
     const detail = body.detail?.error || JSON.stringify(body);
-    alert(`Error: ${detail}`);
+    showMsg('agents-table-msg', `Error: ${detail}`, false);
   }
 }
 

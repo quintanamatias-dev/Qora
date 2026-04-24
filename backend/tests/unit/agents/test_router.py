@@ -199,12 +199,12 @@ async def test_create_agent_duplicate_slug_returns_409(agents_app: AsyncClient):
 
 
 async def test_create_agent_invalid_tools_returns_422(agents_app: AsyncClient):
-    """POST with unknown tool name returns 422."""
+    """POST with unknown tool name (as list) returns 422."""
     response = await agents_app.post(
         _BASE,
         json={
             **_VALID_AGENT,
-            "tools_enabled": '["nonexistent_tool"]',
+            "tools_enabled": ["nonexistent_tool"],
         },
     )
     assert response.status_code == 422
