@@ -2,15 +2,16 @@
  * LeadTable — Presentational component
  *
  * Spec: sdd/qora-basic-crm/spec — Requirement: Lead Table Renders Correctly
+ * Spec: sdd/qora-crm-next-action/spec — Requirement: Column Replacement in CRM Table
  * Design: Pure presentational — receives leads array + onSelectLead callback.
- *   Columns: Name, Phone, Status (Badge), Call Count, Last Called, Interest Level
- *   null interest_level → "—"
+ *   Columns: Name, Phone, Status (Badge), Call Count, Last Called, Next Action (Badge)
  *   null last_called_at → "Never"
  *   Row click → onSelectLead(lead.id)
  */
 
 import type { Lead, LeadStatus } from '@/api/types'
 import { Badge } from '@/design/components/badge'
+import { deriveNextAction } from './next-action'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Props
@@ -38,9 +39,13 @@ export function formatLastCalled(isoOrNull: string | null): string {
   }
 }
 
-export function formatInterestLevel(level: number | null): string {
-  if (level === null || level === undefined) return '—'
-  return `${level}%`
+// ──────────────────────────────────────────────────────────────────────────────
+// NextActionCell — pure presentational cell for the Next Action column
+// ──────────────────────────────────────────────────────────────────────────────
+
+function NextActionCell({ lead }: { lead: Lead }) {
+  const { label, badge } = deriveNextAction(lead)
+  return <Badge status={badge}>{label}</Badge>
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -58,7 +63,7 @@ export function LeadTable({ leads, onSelectLead }: LeadTableProps) {
             <th className="py-3 px-4 text-left font-medium">Status</th>
             <th className="py-3 px-4 text-right font-medium">Calls</th>
             <th className="py-3 px-4 text-left font-medium">Last Called</th>
-            <th className="py-3 px-4 text-right font-medium">Interest</th>
+            <th className="py-3 px-4 text-left font-medium">Next Action</th>
           </tr>
         </thead>
         <tbody>
@@ -86,8 +91,8 @@ export function LeadTable({ leads, onSelectLead }: LeadTableProps) {
               <td className="py-3 px-4 text-on-surface-variant">
                 {formatLastCalled(lead.last_called_at)}
               </td>
-              <td className="py-3 px-4 text-right text-on-surface-variant">
-                {formatInterestLevel(lead.interest_level)}
+              <td className="py-3 px-4">
+                <NextActionCell lead={lead} />
               </td>
             </tr>
           ))}

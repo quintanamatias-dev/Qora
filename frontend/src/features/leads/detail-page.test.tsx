@@ -233,6 +233,7 @@ describe('LeadDetailPage — loading state', () => {
           do_not_call: false,
           next_action: null,
           next_action_at: null,
+          next_scheduled_call_at: null,
         })
       })
     )
