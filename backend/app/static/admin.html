@@ -94,8 +94,8 @@
 
 <!-- Tab bar -->
 <div class="tabs">
-  <button class="tab active" onclick="switchTab('clients')">Clients</button>
-  <button class="tab" onclick="switchTab('agents')">Agents</button>
+  <button class="tab active" onclick="switchTab(this, 'clients')">Clients</button>
+  <button class="tab" onclick="switchTab(this, 'agents')">Agents</button>
 </div>
 
 <!-- ===== CLIENTS PANEL ===== -->
@@ -294,11 +294,11 @@ let _selectedClientId = null;
 // ============================================================
 // Tabs
 // ============================================================
-function switchTab(name) {
+function switchTab(el, name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
-  event.target.classList.add('active');
+  el.classList.add('active');
   if (name === 'agents') populateAgentClientSelect();
 }
 
@@ -485,7 +485,7 @@ async function populateAgentClientSelect() {
   body.filter(c => c.is_active).forEach(c => {
     const opt = document.createElement('option');
     opt.value = c.client_id;
-    opt.textContent = `${escapeHtml(c.broker_name)} (${escapeHtml(c.client_id)})`;
+    opt.textContent = `${c.broker_name} (${c.client_id})`;
     if (c.client_id === prev) opt.selected = true;
     sel.appendChild(opt);
   });
