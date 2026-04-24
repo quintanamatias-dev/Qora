@@ -155,4 +155,51 @@ export interface Client {
   voice_id: string
   is_active: boolean
   created_at: string
+  agent_count?: number  // returned by list endpoint
+}
+
+export interface CreateClientPayload {
+  client_id: string
+  broker_name: string
+  agent_name: string
+}
+
+export interface UpdateClientPayload {
+  broker_name?: string
+  agent_name?: string
+  voice_id?: string
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Agent
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface Agent {
+  agent_id: string
+  client_id: string
+  slug: string
+  name: string
+  voice_id: string
+  model: string
+  system_prompt: string | null
+  tools_enabled: string[]
+  is_active: boolean
+  is_default: boolean
+  created_at: string
+}
+
+export interface CreateAgentPayload {
+  slug: string
+  name: string
+  voice_id: string
+  model: string
+  system_prompt?: string | null
+  tools_enabled: string[]
+}
+
+export interface UpdateAgentPayload {
+  name?: string
+  voice_id?: string
+  system_prompt?: string | null
+  tools_enabled?: string[]
 }

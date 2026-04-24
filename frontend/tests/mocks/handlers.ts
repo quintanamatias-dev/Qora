@@ -18,6 +18,8 @@ import type {
   Lead,
   CallSession,
   SessionTranscript,
+  Client,
+  Agent,
 } from '../../src/api/types'
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -135,10 +137,160 @@ const transcriptFixture: SessionTranscript = {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Admin Fixtures
+// ──────────────────────────────────────────────────────────────────────────────
+
+const clientsFixture: Client[] = [
+  {
+    client_id: 'demo-client',
+    broker_name: 'Demo Broker',
+    agent_name: 'Jaumpablo',
+    voice_id: 'voice-001',
+    is_active: true,
+    created_at: '2026-01-01T00:00:00Z',
+    agent_count: 2,
+  },
+  {
+    client_id: 'acme-motors',
+    broker_name: 'Acme Motors',
+    agent_name: 'Jaumpablo',
+    voice_id: 'voice-002',
+    is_active: true,
+    created_at: '2026-01-15T00:00:00Z',
+    agent_count: 1,
+  },
+  {
+    client_id: 'old-client',
+    broker_name: 'Old Corp',
+    agent_name: 'Jaumpablo',
+    voice_id: 'voice-003',
+    is_active: false,
+    created_at: '2025-06-01T00:00:00Z',
+    agent_count: 0,
+  },
+]
+
+const agentsFixture: Agent[] = [
+  {
+    agent_id: 'agent-001',
+    client_id: 'demo-client',
+    slug: 'primary-agent',
+    name: 'Primary Agent',
+    voice_id: 'voice-001',
+    model: 'gpt-4o',
+    system_prompt: 'You are a helpful insurance agent.',
+    tools_enabled: ['get_lead_details', 'register_interest'],
+    is_active: true,
+    is_default: true,
+    created_at: '2026-01-01T00:00:00Z',
+  },
+  {
+    agent_id: 'agent-002',
+    client_id: 'demo-client',
+    slug: 'secondary-agent',
+    name: 'Secondary Agent',
+    voice_id: 'voice-002',
+    model: 'gpt-4o-mini',
+    system_prompt: null,
+    tools_enabled: ['get_lead_details'],
+    is_active: true,
+    is_default: false,
+    created_at: '2026-01-10T00:00:00Z',
+  },
+]
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Handlers
 // ──────────────────────────────────────────────────────────────────────────────
 
 export const handlers = [
+  // ── Admin: Clients ────────────────────────────────────────────────────────
+
+  // GET /api/v1/clients — returns all clients fixture
+  // NOTE: must come BEFORE /api/v1/clients/:clientId to avoid ambiguity
+  http.get('/api/v1/clients', () => {
+    return HttpResponse.json(clientsFixture)
+  }),
+
+  // POST /api/v1/clients — creates a client and returns it
+  http.post('/api/v1/clients', async ({ request }) => {
+    const body = await request.json() as Partial<Client>
+    const newClient: Client = {
+      client_id: body.client_id ?? 'new-client',
+      broker_name: body.broker_name ?? 'New Broker',
+      agent_name: body.agent_name ?? 'Jaumpablo',
+      voice_id: '',
+      is_active: true,
+      created_at: new Date().toISOString(),
+      agent_count: 0,
+    }
+    return HttpResponse.json(newClient, { status: 201 })
+  }),
+
+  // PATCH /api/v1/clients/:clientId — updates a client
+  http.patch('/api/v1/clients/:clientId', async ({ params, request }) => {
+    const client = clientsFixture.find((c) => c.client_id === params.clientId)
+    if (!client) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
+    const body = await request.json() as Partial<Client>
+    return HttpResponse.json({ ...client, ...body })
+  }),
+
+  // DELETE /api/v1/clients/:clientId — deactivates a client
+  http.delete('/api/v1/clients/:clientId', ({ params }) => {
+    const client = clientsFixture.find((c) => c.client_id === params.clientId)
+    if (!client) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
+    return HttpResponse.json({ ...client, is_active: false })
+  }),
+
+  // ── Admin: Agents ─────────────────────────────────────────────────────────
+
+  // GET /api/v1/clients/:clientId/agents — returns agents for client
+  http.get('/api/v1/clients/:clientId/agents', ({ params }) => {
+    const filtered = agentsFixture.filter((a) => a.client_id === params.clientId)
+    return HttpResponse.json(filtered)
+  }),
+
+  // POST /api/v1/clients/:clientId/agents — creates an agent
+  http.post('/api/v1/clients/:clientId/agents', async ({ params, request }) => {
+    const body = await request.json() as Partial<Agent>
+    const newAgent: Agent = {
+      agent_id: `agent-${Date.now()}`,
+      client_id: params.clientId as string,
+      slug: body.slug ?? 'new-agent',
+      name: body.name ?? 'New Agent',
+      voice_id: body.voice_id ?? '',
+      model: body.model ?? 'gpt-4o',
+      system_prompt: body.system_prompt ?? null,
+      tools_enabled: body.tools_enabled ?? [],
+      is_active: true,
+      is_default: false,
+      created_at: new Date().toISOString(),
+    }
+    return HttpResponse.json(newAgent, { status: 201 })
+  }),
+
+  // PATCH /api/v1/clients/:clientId/agents/:agentId — updates an agent
+  http.patch('/api/v1/clients/:clientId/agents/:agentId', async ({ params, request }) => {
+    const agent = agentsFixture.find((a) => a.agent_id === params.agentId)
+    if (!agent) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
+    const body = await request.json() as Partial<Agent>
+    return HttpResponse.json({ ...agent, ...body })
+  }),
+
+  // POST /api/v1/clients/:clientId/agents/:agentId/deactivate
+  http.post('/api/v1/clients/:clientId/agents/:agentId/deactivate', ({ params }) => {
+    const agent = agentsFixture.find((a) => a.agent_id === params.agentId)
+    if (!agent) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
+    return HttpResponse.json({ ...agent, is_active: false })
+  }),
+
+  // POST /api/v1/clients/:clientId/agents/:agentId/make-default
+  http.post('/api/v1/clients/:clientId/agents/:agentId/make-default', ({ params }) => {
+    const agent = agentsFixture.find((a) => a.agent_id === params.agentId)
+    if (!agent) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
+    return HttpResponse.json({ ...agent, is_default: true })
+  }),
+
   // GET /api/v1/calls/metrics — returns 500 for error-client, fixture for others
   http.get('/api/v1/calls/metrics', ({ request }) => {
     const url = new URL(request.url)

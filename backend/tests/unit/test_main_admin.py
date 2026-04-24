@@ -1,8 +1,7 @@
-"""Tests for Task 3.3: agents router registration + /admin route.
+"""Tests for agents router registration via the full app.
 
 Verifies:
 - GET /api/v1/clients/{client_id}/agents is accessible via the full app
-- GET /admin returns 200 and HTML content
 """
 
 from __future__ import annotations
@@ -16,10 +15,10 @@ from pydantic import SecretStr
 
 @pytest_asyncio.fixture
 async def full_app(tmp_path: Path):
-    """Minimal full app fixture that wires agents router + admin route.
+    """Minimal full app fixture that wires agents router.
 
     We do NOT use the real lifespan to avoid seeding / external deps.
-    Instead we initialise DB manually so we get agents endpoint + admin.
+    Instead we initialise DB manually so we get agents endpoint.
     """
     from app.core.config import Settings
     from app.core import database as db_module
@@ -56,21 +55,6 @@ async def full_app(tmp_path: Path):
     api_v1.include_router(agents_router)
     mini_app.include_router(api_v1)
 
-    # Add /admin route (same as Task 3.3)
-    import os
-    from fastapi.responses import FileResponse
-
-    _static_dir = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-        "app",
-        "static",
-    )
-
-    @mini_app.get("/admin")
-    async def admin_page():
-        admin_path = os.path.join(_static_dir, "admin.html")
-        return FileResponse(admin_path, media_type="text/html")
-
     async with AsyncClient(
         transport=ASGITransport(app=mini_app),
         base_url="http://test",
@@ -89,12 +73,3 @@ async def test_agents_endpoint_accessible_via_full_app(full_app: AsyncClient):
     assert isinstance(data, list)
     assert len(data) == 1  # default agent auto-created
     assert data[0]["client_id"] == "admin-test-client"
-
-
-async def test_admin_route_returns_200_html(full_app: AsyncClient):
-    """GET /admin returns 200 with HTML content (admin.html)."""
-    response = await full_app.get("/admin")
-    assert response.status_code == 200
-    assert "text/html" in response.headers["content-type"]
-    # Admin page must contain recognizable QORA admin content
-    assert "QORA" in response.text or "admin" in response.text.lower()

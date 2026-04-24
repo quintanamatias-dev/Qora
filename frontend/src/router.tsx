@@ -23,6 +23,8 @@ import { DashboardPage } from './features/dashboard/page'
 import { LeadsPage } from './features/leads/page'
 import { LeadDetailPage } from './features/leads/detail-page'
 import { ImportPage } from './features/import/page'
+import { AdminLayout } from './features/admin/admin-layout'
+import { AdminPage } from './features/admin/page'
 
 /**
  * Shared route definitions — used by both the production router and test helpers.
@@ -58,6 +60,16 @@ export const routes: RouteObject[] = [
       {
         path: 'import',
         element: <ImportPage />,
+      },
+    ],
+  },
+  {
+    path: '/admin',
+    element: <AdminLayout />,
+    children: [
+      {
+        index: true,
+        element: <AdminPage />,
       },
     ],
   },

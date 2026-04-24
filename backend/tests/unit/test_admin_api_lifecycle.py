@@ -1,12 +1,8 @@
-"""TDD tests for CRITICAL 3: Admin surface behavioral verification.
+"""Tests for admin API lifecycle verification.
 
 Verifies:
-1. GET /admin returns the admin.html with all expected structural elements
-2. Full API lifecycle: client list → agent list → create agent → verify state
-3. Admin HTML contains all required tabs, forms, tool checkboxes
-
-RED: These tests will fail if the admin surface is missing required elements
-or if the API lifecycle doesn't work end-to-end.
+- Full API lifecycle: client list → agent list → create agent → verify state
+- Agent CRUD operations through the API surface
 """
 
 from __future__ import annotations
@@ -25,7 +21,7 @@ from pydantic import SecretStr
 
 @pytest_asyncio.fixture
 async def admin_app(tmp_path: Path):
-    """Full app fixture with admin route + seeded client."""
+    """Full app fixture with seeded client for API lifecycle tests."""
     from app.core.config import Settings
     from app.core import database as db_module
 
@@ -49,9 +45,7 @@ async def admin_app(tmp_path: Path):
         )
         await session.commit()
 
-    import os
     from fastapi import FastAPI, APIRouter
-    from fastapi.responses import FileResponse
     from app.clients.router import router as clients_router
     from app.agents.router import router as agents_router
 
@@ -60,17 +54,6 @@ async def admin_app(tmp_path: Path):
     api_v1.include_router(clients_router)
     api_v1.include_router(agents_router)
     app.include_router(api_v1)
-
-    _static_dir = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-        "app",
-        "static",
-    )
-
-    @app.get("/admin")
-    async def admin_page():
-        admin_path = os.path.join(_static_dir, "admin.html")
-        return FileResponse(admin_path, media_type="text/html")
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -83,90 +66,7 @@ async def admin_app(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# CRITICAL 3a: Admin HTML structure via /admin endpoint
-# ---------------------------------------------------------------------------
-
-
-async def test_admin_page_contains_clients_tab(admin_app: AsyncClient):
-    """GET /admin HTML must contain a Clients tab."""
-    response = await admin_app.get("/admin")
-    assert response.status_code == 200
-    html = response.text
-    assert "Clients" in html, "Admin page must have a Clients tab."
-
-
-async def test_admin_page_contains_agents_tab(admin_app: AsyncClient):
-    """GET /admin HTML must contain an Agents tab."""
-    response = await admin_app.get("/admin")
-    assert response.status_code == 200
-    html = response.text
-    assert "Agents" in html, "Admin page must have an Agents tab."
-
-
-async def test_admin_page_contains_client_form(admin_app: AsyncClient):
-    """GET /admin HTML must contain the client creation form inputs."""
-    response = await admin_app.get("/admin")
-    assert response.status_code == 200
-    html = response.text
-    assert 'id="c-id"' in html, "Client form 'c-id' input missing."
-    assert 'id="c-broker"' in html, "Client form 'c-broker' input missing."
-    # voice_id is configured per-agent, not at client creation
-    assert 'id="c-agent"' in html, "Client form 'c-agent' input missing."
-
-
-async def test_admin_page_contains_agent_form(admin_app: AsyncClient):
-    """GET /admin HTML must contain the agent creation form inputs."""
-    response = await admin_app.get("/admin")
-    assert response.status_code == 200
-    html = response.text
-    assert 'id="a-slug"' in html, "Agent form 'a-slug' input missing."
-    assert 'id="a-name"' in html, "Agent form 'a-name' input missing."
-    assert 'id="a-voice"' in html, "Agent form 'a-voice' input missing."
-
-
-async def test_admin_page_contains_tool_checkboxes(admin_app: AsyncClient):
-    """GET /admin HTML must contain all 4 tool checkboxes."""
-    response = await admin_app.get("/admin")
-    assert response.status_code == 200
-    html = response.text
-    assert 'value="get_lead_details"' in html
-    assert 'value="register_interest"' in html
-    assert 'value="mark_not_interested"' in html
-    assert 'value="schedule_followup"' in html
-
-
-async def test_admin_page_contains_agent_count_column(admin_app: AsyncClient):
-    """GET /admin HTML clients table must include an agent count column."""
-    response = await admin_app.get("/admin")
-    assert response.status_code == 200
-    html = response.text
-    assert (
-        "<th>Agents</th>" in html or "<th>Agent Count</th>" in html
-    ), "Admin clients table must have an agent count column."
-
-
-async def test_admin_page_contains_voice_id_column_for_agents(admin_app: AsyncClient):
-    """GET /admin HTML agents table must include a Voice ID column."""
-    response = await admin_app.get("/admin")
-    assert response.status_code == 200
-    html = response.text
-    assert (
-        "<th>Voice ID</th>" in html or "<th>Voice</th>" in html
-    ), "Admin agents table must have a Voice ID column."
-
-
-async def test_admin_page_no_alert_calls(admin_app: AsyncClient):
-    """GET /admin HTML must not contain alert() error handling."""
-    response = await admin_app.get("/admin")
-    assert response.status_code == 200
-    html = response.text
-    assert (
-        "alert(" not in html
-    ), "Admin page must not use alert() — use inline error messages instead."
-
-
-# ---------------------------------------------------------------------------
-# CRITICAL 3b: Full API lifecycle via admin surface
+# API lifecycle tests
 # ---------------------------------------------------------------------------
 
 
