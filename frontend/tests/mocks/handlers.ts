@@ -58,6 +58,8 @@ const leadsFixture: Lead[] = [
     do_not_call: false,
     next_action: 'Send quote',
     next_action_at: null,
+    // Phase 7
+    next_scheduled_call_at: null,
   },
   {
     id: 'lead-2',
@@ -82,6 +84,8 @@ const leadsFixture: Lead[] = [
     do_not_call: false,
     next_action: null,
     next_action_at: null,
+    // Phase 7
+    next_scheduled_call_at: null,
   },
 ]
 

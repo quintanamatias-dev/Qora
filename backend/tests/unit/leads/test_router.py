@@ -370,3 +370,333 @@ async def test_new_lead_phase2_fields_are_null_safe(leads_client: AsyncClient):
     assert data["next_action_at"] is None
     # do_not_call must default to False
     assert data["do_not_call"] is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — next_scheduled_call_at enrichment (Issue #27)
+# REQ: Lead List API Response must include next_scheduled_call_at
+# ---------------------------------------------------------------------------
+
+
+async def test_list_leads_includes_next_scheduled_call_at_field(
+    leads_client: AsyncClient,
+):
+    """GET /leads list — each lead must include next_scheduled_call_at field (null-safe)."""
+    response = await leads_client.get("/api/v1/leads?client_id=quintana-seguros")
+    assert response.status_code == 200
+    leads = response.json()
+    assert len(leads) > 0
+    for lead in leads:
+        assert "next_scheduled_call_at" in lead, (
+            f"Lead {lead['id']} missing 'next_scheduled_call_at' field"
+        )
+
+
+async def test_list_leads_next_scheduled_call_at_is_null_without_calls(
+    leads_client: AsyncClient,
+):
+    """GET /leads — leads with no pending scheduled calls return next_scheduled_call_at=null."""
+    response = await leads_client.get("/api/v1/leads?client_id=quintana-seguros")
+    assert response.status_code == 200
+    leads = response.json()
+    assert len(leads) > 0
+    # Seeded leads have no ScheduledCalls — all must be null
+    for lead in leads:
+        assert lead["next_scheduled_call_at"] is None, (
+            f"Lead {lead['id']} expected null but got {lead['next_scheduled_call_at']!r}"
+        )
+
+
+async def test_list_leads_next_scheduled_call_at_returns_earliest_pending(
+    leads_client: AsyncClient, tmp_path
+):
+    """GET /leads — returns MIN(scheduled_at) for pending/in_progress calls."""
+    from datetime import datetime, timezone, timedelta
+    from app.core import database as db_module
+    from app.scheduler.models import ScheduledCall
+    import uuid
+
+    lead_id = "lead-quintana-001"
+    now = datetime.now(timezone.utc)
+    earlier = now + timedelta(hours=1)
+    later = now + timedelta(hours=5)
+
+    async with db_module.async_session_factory() as sess:
+        # Seed two pending calls — earlier one should be returned
+        sc1 = ScheduledCall(
+            id=str(uuid.uuid4()),
+            client_id="quintana-seguros",
+            lead_id=lead_id,
+            status="pending",
+            scheduled_at=later,
+            trigger_reason="test",
+        )
+        sc2 = ScheduledCall(
+            id=str(uuid.uuid4()),
+            client_id="quintana-seguros",
+            lead_id=lead_id,
+            status="pending",
+            scheduled_at=earlier,
+            trigger_reason="test",
+        )
+        sess.add(sc1)
+        sess.add(sc2)
+        await sess.commit()
+
+    response = await leads_client.get("/api/v1/leads?client_id=quintana-seguros")
+    assert response.status_code == 200
+    leads_data = response.json()
+
+    target = next(ld for ld in leads_data if ld["id"] == lead_id)
+    assert target["next_scheduled_call_at"] is not None
+    # Must be the earlier time — parse and compare (within 1s tolerance)
+    raw = target["next_scheduled_call_at"]
+    # isoformat may or may not include +00:00 — ensure aware datetime for comparison
+    returned_dt = datetime.fromisoformat(raw)
+    if returned_dt.tzinfo is None:
+        returned_dt = returned_dt.replace(tzinfo=timezone.utc)
+    earlier_naive = earlier.replace(tzinfo=None)
+    returned_naive = returned_dt.replace(tzinfo=None)
+    delta = abs((returned_naive - earlier_naive).total_seconds())
+    assert delta < 1, f"Expected earliest time {earlier!r}, got {returned_dt!r}"
+
+
+async def test_list_leads_skips_scheduled_calls_query_for_empty_list(
+    leads_client: AsyncClient,
+):
+    """GET /leads?client_id=unknown — empty list response, no crash on empty lead_ids."""
+    response = await leads_client.get("/api/v1/leads?client_id=no-such-client")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+async def test_list_leads_next_scheduled_call_at_skips_completed_calls(
+    leads_client: AsyncClient,
+):
+    """GET /leads — completed/cancelled/expired calls are NOT counted as next call."""
+    from datetime import datetime, timezone, timedelta
+    from app.core import database as db_module
+    from app.scheduler.models import ScheduledCall
+    import uuid
+
+    lead_id = "lead-quintana-002"
+    now = datetime.now(timezone.utc)
+    future = now + timedelta(hours=2)
+
+    async with db_module.async_session_factory() as sess:
+        # Add a completed call in the future (should be ignored)
+        sc_done = ScheduledCall(
+            id=str(uuid.uuid4()),
+            client_id="quintana-seguros",
+            lead_id=lead_id,
+            status="completed",
+            scheduled_at=future,
+            trigger_reason="test",
+        )
+        sess.add(sc_done)
+        await sess.commit()
+
+    response = await leads_client.get("/api/v1/leads?client_id=quintana-seguros")
+    assert response.status_code == 200
+    leads_data = response.json()
+    target = next(ld for ld in leads_data if ld["id"] == lead_id)
+    # completed call must not appear as next_scheduled_call_at
+    assert target["next_scheduled_call_at"] is None
+
+
+async def test_list_leads_multiple_leads_with_mixed_scheduled_calls(
+    leads_client: AsyncClient,
+):
+    """TRIANGULATE — multiple leads, each with different scheduled call states.
+
+    Proves no N+1: one batch query populates all leads' next_scheduled_call_at
+    regardless of how many leads are returned.
+    """
+    from datetime import datetime, timezone, timedelta
+    from app.core import database as db_module
+    from app.scheduler.models import ScheduledCall
+    import uuid
+
+    now = datetime.now(timezone.utc)
+    # lead-001: two pending calls → earliest returned
+    future_near = now + timedelta(hours=2)
+    future_far = now + timedelta(hours=8)
+    # lead-002: in_progress call (also a pending-compatible status)
+    future_in_progress = now + timedelta(hours=3)
+    # lead-003: only completed call → null
+    future_completed = now + timedelta(hours=4)
+    # lead-004: overdue pending call (past)
+    past = now - timedelta(hours=2)
+
+    async with db_module.async_session_factory() as sess:
+        sess.add_all([
+            ScheduledCall(
+                id=str(uuid.uuid4()),
+                client_id="quintana-seguros",
+                lead_id="lead-quintana-001",
+                status="pending",
+                scheduled_at=future_near,
+                trigger_reason="test-near",
+            ),
+            ScheduledCall(
+                id=str(uuid.uuid4()),
+                client_id="quintana-seguros",
+                lead_id="lead-quintana-001",
+                status="pending",
+                scheduled_at=future_far,
+                trigger_reason="test-far",
+            ),
+            ScheduledCall(
+                id=str(uuid.uuid4()),
+                client_id="quintana-seguros",
+                lead_id="lead-quintana-002",
+                status="in_progress",
+                scheduled_at=future_in_progress,
+                trigger_reason="test-in-progress",
+            ),
+            ScheduledCall(
+                id=str(uuid.uuid4()),
+                client_id="quintana-seguros",
+                lead_id="lead-quintana-003",
+                status="completed",
+                scheduled_at=future_completed,
+                trigger_reason="test-completed",
+            ),
+            ScheduledCall(
+                id=str(uuid.uuid4()),
+                client_id="quintana-seguros",
+                lead_id="lead-quintana-004",
+                status="pending",
+                scheduled_at=past,
+                trigger_reason="test-overdue",
+            ),
+        ])
+        await sess.commit()
+
+    response = await leads_client.get("/api/v1/leads?client_id=quintana-seguros")
+    assert response.status_code == 200
+    leads_data = response.json()
+
+    # Index by lead_id for easy assertion
+    by_id = {ld["id"]: ld for ld in leads_data}
+
+    # lead-001: must return the nearer pending call (future_near)
+    l001 = by_id["lead-quintana-001"]
+    assert l001["next_scheduled_call_at"] is not None
+    returned_dt = datetime.fromisoformat(l001["next_scheduled_call_at"])
+    if returned_dt.tzinfo is None:
+        returned_dt = returned_dt.replace(tzinfo=timezone.utc)
+    delta = abs((returned_dt - future_near).total_seconds())
+    assert delta < 1, f"lead-001: expected {future_near}, got {returned_dt}"
+
+    # lead-002: in_progress call must be returned
+    l002 = by_id["lead-quintana-002"]
+    assert l002["next_scheduled_call_at"] is not None
+
+    # lead-003: only completed call → null
+    l003 = by_id["lead-quintana-003"]
+    assert l003["next_scheduled_call_at"] is None, (
+        f"lead-003 should be null, got {l003['next_scheduled_call_at']!r}"
+    )
+
+    # lead-004: overdue pending call — still returned (frontend handles display)
+    l004 = by_id["lead-quintana-004"]
+    assert l004["next_scheduled_call_at"] is not None, (
+        "lead-004 overdue pending call should still be returned"
+    )
+
+
+# ---------------------------------------------------------------------------
+# CRITICAL: N+1 proof — query-count assertions (Phase 7 Issue #27 verify fix)
+# ---------------------------------------------------------------------------
+
+
+async def test_list_leads_batch_query_is_exactly_one_scheduled_calls_query(
+    leads_client: AsyncClient,
+):
+    """CRITICAL N+1 proof — GET /leads with 5 leads executes exactly 1 SELECT
+    against scheduled_calls, not N queries (one per lead).
+
+    Uses SQLAlchemy engine event listener to count SQL statements referencing
+    the scheduled_calls table during the HTTP request.
+    """
+    from datetime import datetime, timezone, timedelta
+    from app.core import database as db_module
+    from app.scheduler.models import ScheduledCall
+    from sqlalchemy import event
+    import uuid
+
+    # Seed pending calls for multiple leads so the batch query must actually fire
+    now = datetime.now(timezone.utc)
+    async with db_module.async_session_factory() as sess:
+        for i in range(1, 4):
+            sess.add(ScheduledCall(
+                id=str(uuid.uuid4()),
+                client_id="quintana-seguros",
+                lead_id=f"lead-quintana-00{i}",
+                status="pending",
+                scheduled_at=now + timedelta(hours=i),
+                trigger_reason="n1-proof",
+            ))
+        await sess.commit()
+
+    # Count SQL statements that reference the scheduled_calls table
+    scheduled_calls_query_count = []
+
+    def count_scheduled_calls(conn, cursor, statement, parameters, context, executemany):
+        if "scheduled_calls" in statement.lower():
+            scheduled_calls_query_count.append(statement)
+
+    sync_engine = db_module.engine.sync_engine  # type: ignore[union-attr]
+    event.listen(sync_engine, "before_cursor_execute", count_scheduled_calls)
+    try:
+        response = await leads_client.get("/api/v1/leads?client_id=quintana-seguros")
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", count_scheduled_calls)
+
+    assert response.status_code == 200
+    leads_data = response.json()
+    assert len(leads_data) == 5, f"Expected 5 leads, got {len(leads_data)}"
+
+    # THE CRITICAL ASSERTION: exactly 1 SELECT against scheduled_calls for ALL 5 leads
+    assert len(scheduled_calls_query_count) == 1, (
+        f"Expected exactly 1 scheduled_calls query (batch MIN GROUP BY), "
+        f"got {len(scheduled_calls_query_count)}. "
+        f"Queries: {scheduled_calls_query_count}"
+    )
+
+
+async def test_list_leads_empty_result_executes_zero_scheduled_calls_queries(
+    leads_client: AsyncClient,
+):
+    """CRITICAL empty-list proof — GET /leads for unknown client executes ZERO
+    SELECT statements against scheduled_calls.
+
+    When leads list is empty, _batch_next_scheduled_call_at() must short-circuit
+    (no lead_ids → no query). Proven by query-count event listener.
+    """
+    from app.core import database as db_module
+    from sqlalchemy import event
+
+    scheduled_calls_query_count = []
+
+    def count_scheduled_calls(conn, cursor, statement, parameters, context, executemany):
+        if "scheduled_calls" in statement.lower():
+            scheduled_calls_query_count.append(statement)
+
+    sync_engine = db_module.engine.sync_engine  # type: ignore[union-attr]
+    event.listen(sync_engine, "before_cursor_execute", count_scheduled_calls)
+    try:
+        response = await leads_client.get("/api/v1/leads?client_id=no-such-client-xyz")
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", count_scheduled_calls)
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+    # THE CRITICAL ASSERTION: zero queries against scheduled_calls when leads list is empty
+    assert len(scheduled_calls_query_count) == 0, (
+        f"Expected 0 scheduled_calls queries for empty leads list, "
+        f"got {len(scheduled_calls_query_count)}. "
+        f"Queries fired: {scheduled_calls_query_count}"
+    )

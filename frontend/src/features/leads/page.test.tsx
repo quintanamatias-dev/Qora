@@ -95,19 +95,180 @@ describe('LeadsPage — successful data rendering', () => {
     await waitFor(() => expect(screen.getByText('2')).toBeInTheDocument())
   })
 
-  it('renders interest level when present', async () => {
+  it('renders "Next Action" column header', async () => {
     renderLeadsPage()
-    // lead-1 has interest_level: 75
-    await waitFor(() => expect(screen.getByText('75%')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('Next Action')).toBeInTheDocument()
+    )
   })
 
-  it('renders "—" for null interest level', async () => {
+  it('does NOT render "Interest" column header', async () => {
     renderLeadsPage()
-    // lead-2 has interest_level: null
+    await waitFor(() => expect(screen.getByText('John Doe')).toBeInTheDocument())
+    expect(screen.queryByText('Interest')).not.toBeInTheDocument()
+  })
+
+  it('renders next action badge for lead with no scheduled call and call_count > 0 (Sin agenda)', async () => {
+    renderLeadsPage()
+    // Both leads have call_count > 0 and next_scheduled_call_at: null → both show Sin agenda
     await waitFor(() => {
-      const dashes = screen.getAllByText('—')
-      expect(dashes.length).toBeGreaterThan(0)
+      const badges = screen.getAllByText('Sin agenda')
+      expect(badges.length).toBeGreaterThanOrEqual(1)
     })
+  })
+
+  it('renders next action badge for new lead (Pendiente)', async () => {
+    // Override fixture: lead with call_count 0, next_scheduled_call_at null, status new
+    const { http, HttpResponse } = await import('msw')
+    server.use(
+      http.get('/api/v1/leads', () =>
+        HttpResponse.json([
+          {
+            id: 'lead-new',
+            client_id: 'demo-client',
+            name: 'Fresh Lead',
+            phone: '+1-555-0300',
+            car_make: null,
+            car_model: null,
+            car_year: null,
+            current_insurance: null,
+            status: 'new',
+            notes: null,
+            call_count: 0,
+            last_called_at: null,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: null,
+            summary_last_call: null,
+            objections_heard: null,
+            interest_level: null,
+            extracted_facts: null,
+            do_not_call: false,
+            next_action: null,
+            next_action_at: null,
+            next_scheduled_call_at: null,
+          },
+        ])
+      )
+    )
+    renderLeadsPage()
+    await waitFor(() => expect(screen.getByText('Pendiente')).toBeInTheDocument())
+  })
+
+  it('renders next action badge for closed lead (Cerrado)', async () => {
+    // TRIANGULATE: do_not_call=true → Cerrado / error
+    const { http, HttpResponse } = await import('msw')
+    server.use(
+      http.get('/api/v1/leads', () =>
+        HttpResponse.json([
+          {
+            id: 'lead-closed',
+            client_id: 'demo-client',
+            name: 'Closed Lead',
+            phone: '+1-555-0400',
+            car_make: null,
+            car_model: null,
+            car_year: null,
+            current_insurance: null,
+            status: 'not_interested',
+            notes: null,
+            call_count: 3,
+            last_called_at: '2026-01-15T10:00:00Z',
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: null,
+            summary_last_call: null,
+            objections_heard: null,
+            interest_level: null,
+            extracted_facts: null,
+            do_not_call: true,
+            next_action: null,
+            next_action_at: null,
+            next_scheduled_call_at: '2099-12-31T10:00:00Z', // future, but closed takes priority
+          },
+        ])
+      )
+    )
+    renderLeadsPage()
+    await waitFor(() => expect(screen.getByText('Cerrado')).toBeInTheDocument())
+  })
+
+  it('renders next action badge for lead with future scheduled call (active badge)', async () => {
+    // TRIANGULATE: next_scheduled_call_at in future → active badge with relative time
+    const { http, HttpResponse } = await import('msw')
+    const futureDate = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString() // 2h from now
+    server.use(
+      http.get('/api/v1/leads', () =>
+        HttpResponse.json([
+          {
+            id: 'lead-scheduled',
+            client_id: 'demo-client',
+            name: 'Scheduled Lead',
+            phone: '+1-555-0500',
+            car_make: null,
+            car_model: null,
+            car_year: null,
+            current_insurance: null,
+            status: 'interested',
+            notes: null,
+            call_count: 1,
+            last_called_at: '2026-01-10T10:00:00Z',
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: null,
+            summary_last_call: null,
+            objections_heard: null,
+            interest_level: 60,
+            extracted_facts: null,
+            do_not_call: false,
+            next_action: null,
+            next_action_at: null,
+            next_scheduled_call_at: futureDate,
+          },
+        ])
+      )
+    )
+    renderLeadsPage()
+    // Active state shows relative time label — "En Xh" for 2h from now
+    await waitFor(() => {
+      const labels = screen.getAllByText(/^En \d+h$/)
+      expect(labels.length).toBeGreaterThanOrEqual(1)
+    })
+  })
+
+  it('renders next action badge for overdue scheduled call (Atrasado)', async () => {
+    // TRIANGULATE: next_scheduled_call_at in the past → Atrasado / warning
+    const { http, HttpResponse } = await import('msw')
+    const pastDate = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString() // 3h ago
+    server.use(
+      http.get('/api/v1/leads', () =>
+        HttpResponse.json([
+          {
+            id: 'lead-overdue',
+            client_id: 'demo-client',
+            name: 'Overdue Lead',
+            phone: '+1-555-0600',
+            car_make: null,
+            car_model: null,
+            car_year: null,
+            current_insurance: null,
+            status: 'interested',
+            notes: null,
+            call_count: 1,
+            last_called_at: '2026-01-10T10:00:00Z',
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: null,
+            summary_last_call: null,
+            objections_heard: null,
+            interest_level: 40,
+            extracted_facts: null,
+            do_not_call: false,
+            next_action: null,
+            next_action_at: null,
+            next_scheduled_call_at: pastDate,
+          },
+        ])
+      )
+    )
+    renderLeadsPage()
+    await waitFor(() => expect(screen.getByText('Atrasado')).toBeInTheDocument())
   })
 })
 

@@ -74,6 +74,8 @@ const mockLead: Lead = {
   do_not_call: false,
   next_action: null,
   next_action_at: null,
+  // Phase 7
+  next_scheduled_call_at: null,
 }
 
 const mockSession: CallSession = {

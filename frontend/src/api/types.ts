@@ -34,6 +34,8 @@ export interface Lead {
   do_not_call: boolean
   next_action: string | null
   next_action_at: string | null
+  // Phase 7 — earliest pending/in_progress scheduled call time, or null
+  next_scheduled_call_at: string | null
 }
 
 export interface CreateLeadPayload {

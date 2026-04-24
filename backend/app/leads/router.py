@@ -12,8 +12,11 @@ Covers: T2.4 — GET/PATCH endpoints scope queries by client_id.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.leads.models import LeadStatus
@@ -24,6 +27,7 @@ from app.leads.service import (
     list_leads_for_client,
     transition_lead_status,
 )
+from app.scheduler.models import ScheduledCall
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 
@@ -73,11 +77,46 @@ class PatchStatusRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _lead_to_dict(lead) -> dict:
+async def _batch_next_scheduled_call_at(
+    session: AsyncSession, lead_ids: list[str]
+) -> dict[str, datetime]:
+    """Return {lead_id: earliest_pending_scheduled_at} for the given lead IDs.
+
+    Issues ONE query using MIN(scheduled_at) GROUP BY lead_id, filtered to
+    status IN ('pending', 'in_progress'). Uses the composite index
+    ix_scheduled_calls_lead_status for efficiency.
+
+    Returns an empty dict when lead_ids is empty (avoids unnecessary query).
+    """
+    if not lead_ids:
+        return {}
+
+    stmt = (
+        select(
+            ScheduledCall.lead_id,
+            func.min(ScheduledCall.scheduled_at).label("earliest"),
+        )
+        .where(
+            ScheduledCall.lead_id.in_(lead_ids),
+            ScheduledCall.status.in_(["pending", "in_progress"]),
+        )
+        .group_by(ScheduledCall.lead_id)
+    )
+    result = await session.execute(stmt)
+    return {row.lead_id: row.earliest for row in result}
+
+
+def _lead_to_dict(lead, *, next_scheduled_call_at: datetime | None = None) -> dict:
     """Serialize a Lead ORM object to a response dict.
 
-    Includes Phase 2 CRM fields (summary_last_call, interest_level, etc.).
-    All Phase 2 fields are null-safe — returned as null if not set.
+    Includes Phase 2 CRM fields (summary_last_call, interest_level, etc.) and
+    Phase 7 enrichment field (next_scheduled_call_at).
+    All optional fields are null-safe — returned as null if not set.
+
+    Args:
+        lead: Lead ORM instance.
+        next_scheduled_call_at: Optional datetime from batch enrichment query.
+            Passed by list_leads(); other callers omit it (defaults to None).
     """
     return {
         "id": lead.id,
@@ -106,6 +145,10 @@ def _lead_to_dict(lead) -> dict:
         "next_action_at": (
             lead.next_action_at.isoformat() if lead.next_action_at else None
         ),
+        # Phase 7 enrichment — earliest pending/in_progress scheduled call
+        "next_scheduled_call_at": (
+            next_scheduled_call_at.isoformat() if next_scheduled_call_at else None
+        ),
     }
 
 
@@ -121,6 +164,10 @@ async def list_leads(
 ):
     """List all leads for a given client.
 
+    Returns each lead enriched with next_scheduled_call_at (Phase 7):
+    the earliest pending/in_progress scheduled call time, or null if none.
+    Uses a single batch MIN() query — no N+1.
+
     Returns:
         List of lead objects for the specified client_id.
 
@@ -128,7 +175,14 @@ async def list_leads(
         422: If client_id query parameter is missing.
     """
     leads = await list_leads_for_client(session, client_id)
-    return [_lead_to_dict(lead) for lead in leads]
+    if not leads:
+        return []
+    lead_ids = [lead.id for lead in leads]
+    schedule_map = await _batch_next_scheduled_call_at(session, lead_ids)
+    return [
+        _lead_to_dict(lead, next_scheduled_call_at=schedule_map.get(lead.id))
+        for lead in leads
+    ]
 
 
 @router.get("/{lead_id}")
