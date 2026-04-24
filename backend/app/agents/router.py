@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.schemas import AgentCreate, AgentResponse, AgentUpdate
-from app.tenants.models import Agent
+from app.tenants.models import Agent, Client
 import app.tenants.service as tenant_service
 
 router = APIRouter(
@@ -89,9 +89,7 @@ def _agent_to_response(agent: Agent) -> AgentResponse:
 
 async def _require_client(session: AsyncSession, client_id: str) -> None:
     """Raise 404 if the client does not exist."""
-    client = await session.get(
-        __import__("app.tenants.models", fromlist=["Client"]).Client, client_id
-    )
+    client = await session.get(Client, client_id)
     if client is None:
         raise HTTPException(
             status_code=404,
@@ -263,6 +261,14 @@ async def deactivate_agent(
     """
     await _require_client(session, client_id)
 
+    # Explicit existence check so 404 is reserved for "not found" only
+    _agent_check = await tenant_service.get_agent(session, agent_id)
+    if _agent_check is None or _agent_check.client_id != client_id:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "agent not found", "agent_id": agent_id},
+        )
+
     try:
         agent = await tenant_service.deactivate_agent(session, agent_id, client_id)
     except ValueError as exc:
@@ -272,10 +278,10 @@ async def deactivate_agent(
                 status_code=409,
                 detail={"error": "cannot deactivate sole default agent", "detail": msg},
             ) from exc
-        # Not found
+        # Unexpected ValueError — return 500, not a misleading 404
         raise HTTPException(
-            status_code=404,
-            detail={"error": "agent not found", "agent_id": agent_id},
+            status_code=500,
+            detail={"error": "internal error", "detail": msg},
         ) from exc
 
     await session.commit()
@@ -303,6 +309,14 @@ async def make_default_agent(
     """
     await _require_client(session, client_id)
 
+    # Explicit existence check so 404 is reserved for "not found" only
+    _agent_check = await tenant_service.get_agent(session, agent_id)
+    if _agent_check is None or _agent_check.client_id != client_id:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "agent not found", "agent_id": agent_id},
+        )
+
     try:
         agent = await tenant_service.set_default_agent(session, client_id, agent_id)
     except ValueError as exc:
@@ -312,10 +326,10 @@ async def make_default_agent(
                 status_code=409,
                 detail={"error": "cannot set inactive agent as default", "detail": msg},
             ) from exc
-        # Not found
+        # Unexpected ValueError — return 500, not a misleading 404
         raise HTTPException(
-            status_code=404,
-            detail={"error": "agent not found", "agent_id": agent_id},
+            status_code=500,
+            detail={"error": "internal error", "detail": msg},
         ) from exc
 
     await session.commit()

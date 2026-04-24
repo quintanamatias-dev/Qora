@@ -305,6 +305,21 @@ function switchTab(name) {
 // ============================================================
 // Helpers
 // ============================================================
+
+/**
+ * Escape a value for safe embedding inside a single-quoted HTML attribute.
+ * Prevents XSS when interpolating API data into onclick="..." strings.
+ */
+function escapeHtml(v) {
+  if (v == null) return '';
+  return String(v)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 function showMsg(id, text, ok = true) {
   const el = document.getElementById(id);
   el.textContent = text;
@@ -359,8 +374,8 @@ async function loadClients() {
       <td>${agent_count}</td>
       <td>${badge}</td>
       <td><div class="actions">
-        <button class="btn btn-ghost btn-sm" onclick="showClientEdit('${c.client_id}','${c.broker_name}','${c.agent_name}','${c.voice_id}')">Edit</button>
-        ${c.is_active ? `<button class="btn btn-danger btn-sm" onclick="deactivateClient('${c.client_id}')">Deactivate</button>` : ''}
+        <button class="btn btn-ghost btn-sm" onclick="showClientEdit('${escapeHtml(c.client_id)}','${escapeHtml(c.broker_name)}','${escapeHtml(c.agent_name)}','${escapeHtml(c.voice_id)}')">Edit</button>
+        ${c.is_active ? `<button class="btn btn-danger btn-sm" onclick="deactivateClient('${escapeHtml(c.client_id)}')">Deactivate</button>` : ''}
       </div></td>
     </tr>`;
   });
@@ -490,9 +505,9 @@ async function loadAgents() {
       <td><code style="font-size:0.78rem">${a.model}</code></td>
       <td>${statusBadge}${defaultBadge}</td>
       <td><div class="actions">
-        <button class="btn btn-ghost btn-sm" onclick="showAgentEdit('${a.agent_id}','${a.slug}','${a.name}','${a.voice_id}','${a.system_prompt || ''}','${toolsJson.replace(/'/g, '&apos;')}')">Edit</button>
-        ${!a.is_default ? `<button class="btn btn-success btn-sm" onclick="makeDefault('${a.agent_id}')">★ Default</button>` : ''}
-        ${a.is_active ? `<button class="btn btn-danger btn-sm" onclick="deactivateAgent('${a.agent_id}')">Deactivate</button>` : ''}
+        <button class="btn btn-ghost btn-sm" onclick="showAgentEdit('${escapeHtml(a.agent_id)}','${escapeHtml(a.slug)}','${escapeHtml(a.name)}','${escapeHtml(a.voice_id)}','${escapeHtml(a.system_prompt || '')}','${escapeHtml(toolsJson)}')">Edit</button>
+        ${!a.is_default ? `<button class="btn btn-success btn-sm" onclick="makeDefault('${escapeHtml(a.agent_id)}')">★ Default</button>` : ''}
+        ${a.is_active ? `<button class="btn btn-danger btn-sm" onclick="deactivateAgent('${escapeHtml(a.agent_id)}')">Deactivate</button>` : ''}
       </div></td>
     </tr>`;
   });

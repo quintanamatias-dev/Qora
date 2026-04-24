@@ -77,7 +77,16 @@ async def create_client(
     await session.flush()  # Flush to DB within current transaction
 
     # Bootstrap a default Agent for this client (CRITICAL 1b: every client must have one)
-    slug = (agent_name or "agent").lower().replace(" ", "-")
+    # Sanitize slug: lowercase, keep only [a-z0-9-], collapse consecutive hyphens,
+    # strip leading/trailing hyphens so the slug passes the _SLUG_RE validation.
+    import re as _re
+
+    raw_slug = (agent_name or "agent").lower()
+    raw_slug = _re.sub(r"[^a-z0-9-]", "-", raw_slug)  # replace invalid chars with hyphen
+    raw_slug = _re.sub(r"-+", "-", raw_slug)           # collapse consecutive hyphens
+    raw_slug = raw_slug.strip("-")                      # strip leading/trailing hyphens
+    slug = raw_slug or "agent"                          # fallback if empty after sanitization
+
     await create_agent(
         session,
         client_id=id,

@@ -95,12 +95,13 @@ class AgentUpdate(BaseModel):
     model: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
-    tools_enabled: list[str] | None = None
+    tools_enabled: list[str] = []
 
     @field_validator("tools_enabled")
     @classmethod
-    def validate_tools(cls, v: list[str] | None) -> list[str] | None:
-        return _validate_tools_list(v)
+    def validate_tools(cls, v: list[str]) -> list[str]:
+        result = _validate_tools_list(v)
+        return result  # type: ignore[return-value]
 
 
 class AgentResponse(BaseModel):
