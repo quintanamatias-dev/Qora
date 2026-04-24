@@ -412,9 +412,9 @@ async def test_create_client_invalid_max_attempts_returns_422(clients_app: Async
             "scheduler_max_attempts": 0,
         },
     )
-    assert resp.status_code == 422, (
-        f"ClientCreate must validate scheduler_max_attempts >= 1. Got {resp.status_code}."
-    )
+    assert (
+        resp.status_code == 422
+    ), f"ClientCreate must validate scheduler_max_attempts >= 1. Got {resp.status_code}."
 
 
 async def test_create_client_invalid_cooldown_returns_422(clients_app: AsyncClient):
@@ -428,9 +428,9 @@ async def test_create_client_invalid_cooldown_returns_422(clients_app: AsyncClie
             "scheduler_cooldown_minutes": -1,
         },
     )
-    assert resp.status_code == 422, (
-        f"ClientCreate must validate scheduler_cooldown_minutes >= 0. Got {resp.status_code}."
-    )
+    assert (
+        resp.status_code == 422
+    ), f"ClientCreate must validate scheduler_cooldown_minutes >= 0. Got {resp.status_code}."
 
 
 async def test_create_client_invalid_hour_range_returns_422(clients_app: AsyncClient):
@@ -444,9 +444,9 @@ async def test_create_client_invalid_hour_range_returns_422(clients_app: AsyncCl
             "scheduler_allowed_hours_start": 25,
         },
     )
-    assert resp.status_code == 422, (
-        f"ClientCreate must validate hour values in [0, 23]. Got {resp.status_code}."
-    )
+    assert (
+        resp.status_code == 422
+    ), f"ClientCreate must validate hour values in [0, 23]. Got {resp.status_code}."
 
 
 async def test_create_client_invalid_retry_outcomes_returns_422(

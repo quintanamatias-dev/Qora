@@ -368,19 +368,40 @@ async function loadClients() {
       : '<span class="badge badge-inactive">inactive</span>';
     const agent_count = c.agent_count !== undefined ? c.agent_count : '—';
     html += `<tr>
-      <td><code>${c.client_id}</code></td>
-      <td>${c.broker_name}</td>
-      <td>${c.agent_name}</td>
+      <td><code>${escapeHtml(c.client_id)}</code></td>
+      <td>${escapeHtml(c.broker_name)}</td>
+      <td>${escapeHtml(c.agent_name)}</td>
       <td>${agent_count}</td>
       <td>${badge}</td>
       <td><div class="actions">
-        <button class="btn btn-ghost btn-sm" onclick="showClientEdit('${escapeHtml(c.client_id)}','${escapeHtml(c.broker_name)}','${escapeHtml(c.agent_name)}','${escapeHtml(c.voice_id)}')">Edit</button>
-        ${c.is_active ? `<button class="btn btn-danger btn-sm" onclick="deactivateClient('${escapeHtml(c.client_id)}')">Deactivate</button>` : ''}
+        <button class="btn btn-ghost btn-sm"
+          data-action="edit-client"
+          data-client-id="${escapeHtml(c.client_id)}"
+          data-broker="${escapeHtml(c.broker_name)}"
+          data-agent="${escapeHtml(c.agent_name)}"
+          data-voice="${escapeHtml(c.voice_id)}">Edit</button>
+        ${c.is_active ? `<button class="btn btn-danger btn-sm" data-action="deactivate-client" data-client-id="${escapeHtml(c.client_id)}">Deactivate</button>` : ''}
       </div></td>
     </tr>`;
   });
   html += '</tbody></table>';
   wrap.innerHTML = html;
+  // Attach handlers after innerHTML is set (data-* pattern — no onclick interpolation)
+  wrap.querySelectorAll('[data-action="edit-client"]').forEach(btn => {
+    btn.addEventListener('click', function() {
+      showClientEdit(
+        this.dataset.clientId,
+        this.dataset.broker,
+        this.dataset.agent,
+        this.dataset.voice,
+      );
+    });
+  });
+  wrap.querySelectorAll('[data-action="deactivate-client"]').forEach(btn => {
+    btn.addEventListener('click', function() {
+      deactivateClient(this.dataset.clientId);
+    });
+  });
 }
 
 async function createClient() {
@@ -464,7 +485,7 @@ async function populateAgentClientSelect() {
   body.filter(c => c.is_active).forEach(c => {
     const opt = document.createElement('option');
     opt.value = c.client_id;
-    opt.textContent = `${c.broker_name} (${c.client_id})`;
+    opt.textContent = `${escapeHtml(c.broker_name)} (${escapeHtml(c.client_id)})`;
     if (c.client_id === prev) opt.selected = true;
     sel.appendChild(opt);
   });
@@ -499,20 +520,50 @@ async function loadAgents() {
     const defaultBadge = a.is_default ? ' <span class="badge badge-default">default</span>' : '';
     const toolsJson = JSON.stringify(a.tools_enabled);
     html += `<tr>
-      <td><code>${a.slug}</code></td>
-      <td>${a.name}</td>
-      <td><code style="font-size:0.78rem">${a.voice_id}</code></td>
-      <td><code style="font-size:0.78rem">${a.model}</code></td>
+      <td><code>${escapeHtml(a.slug)}</code></td>
+      <td>${escapeHtml(a.name)}</td>
+      <td><code style="font-size:0.78rem">${escapeHtml(a.voice_id)}</code></td>
+      <td><code style="font-size:0.78rem">${escapeHtml(a.model)}</code></td>
       <td>${statusBadge}${defaultBadge}</td>
       <td><div class="actions">
-        <button class="btn btn-ghost btn-sm" onclick="showAgentEdit('${escapeHtml(a.agent_id)}','${escapeHtml(a.slug)}','${escapeHtml(a.name)}','${escapeHtml(a.voice_id)}','${escapeHtml(a.system_prompt || '')}','${escapeHtml(toolsJson)}')">Edit</button>
-        ${!a.is_default ? `<button class="btn btn-success btn-sm" onclick="makeDefault('${escapeHtml(a.agent_id)}')">★ Default</button>` : ''}
-        ${a.is_active ? `<button class="btn btn-danger btn-sm" onclick="deactivateAgent('${escapeHtml(a.agent_id)}')">Deactivate</button>` : ''}
+        <button class="btn btn-ghost btn-sm"
+          data-action="edit-agent"
+          data-agent-id="${escapeHtml(a.agent_id)}"
+          data-slug="${escapeHtml(a.slug)}"
+          data-name="${escapeHtml(a.name)}"
+          data-voice="${escapeHtml(a.voice_id)}"
+          data-prompt="${escapeHtml(a.system_prompt || '')}"
+          data-tools="${escapeHtml(toolsJson)}">Edit</button>
+        ${!a.is_default ? `<button class="btn btn-success btn-sm" data-action="make-default" data-agent-id="${escapeHtml(a.agent_id)}">★ Default</button>` : ''}
+        ${a.is_active ? `<button class="btn btn-danger btn-sm" data-action="deactivate-agent" data-agent-id="${escapeHtml(a.agent_id)}">Deactivate</button>` : ''}
       </div></td>
     </tr>`;
   });
   html += '</tbody></table>';
   wrap.innerHTML = html;
+  // Attach handlers after innerHTML is set (data-* pattern — no onclick interpolation)
+  wrap.querySelectorAll('[data-action="edit-agent"]').forEach(btn => {
+    btn.addEventListener('click', function() {
+      showAgentEdit(
+        this.dataset.agentId,
+        this.dataset.slug,
+        this.dataset.name,
+        this.dataset.voice,
+        this.dataset.prompt,
+        this.dataset.tools,
+      );
+    });
+  });
+  wrap.querySelectorAll('[data-action="make-default"]').forEach(btn => {
+    btn.addEventListener('click', function() {
+      makeDefault(this.dataset.agentId);
+    });
+  });
+  wrap.querySelectorAll('[data-action="deactivate-agent"]').forEach(btn => {
+    btn.addEventListener('click', function() {
+      deactivateAgent(this.dataset.agentId);
+    });
+  });
 }
 
 async function createAgent() {

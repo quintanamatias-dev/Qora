@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.schemas import ClientCreate, ClientResponse, ClientUpdate
@@ -93,26 +94,39 @@ async def create_client(
             detail={"error": "client already exists", "client_id": payload.client_id},
         )
 
-    client = await tenant_service.create_client(
-        session,
-        id=payload.client_id,
-        name=payload.broker_name,
-        broker_name=payload.broker_name,
-        agent_name=payload.agent_name,
-        voice_id=payload.voice_id,
-        system_prompt_override=payload.system_prompt_override,
-        scheduler_enabled=payload.scheduler_enabled,
-        scheduler_max_attempts=payload.scheduler_max_attempts,
-        scheduler_cooldown_minutes=payload.scheduler_cooldown_minutes,
-        scheduler_allowed_hours_start=payload.scheduler_allowed_hours_start,
-        scheduler_allowed_hours_end=payload.scheduler_allowed_hours_end,
-        scheduler_retry_on_outcomes=payload.scheduler_retry_on_outcomes,
-        scheduler_timezone=payload.scheduler_timezone,
-    )
-    await session.commit()
+    try:
+        client = await tenant_service.create_client(
+            session,
+            id=payload.client_id,
+            name=payload.broker_name,
+            broker_name=payload.broker_name,
+            agent_name=payload.agent_name,
+            voice_id=payload.voice_id,
+            system_prompt_override=payload.system_prompt_override,
+            scheduler_enabled=payload.scheduler_enabled,
+            scheduler_max_attempts=payload.scheduler_max_attempts,
+            scheduler_cooldown_minutes=payload.scheduler_cooldown_minutes,
+            scheduler_allowed_hours_start=payload.scheduler_allowed_hours_start,
+            scheduler_allowed_hours_end=payload.scheduler_allowed_hours_end,
+            scheduler_retry_on_outcomes=payload.scheduler_retry_on_outcomes,
+            scheduler_timezone=payload.scheduler_timezone,
+        )
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "client name already exists",
+                "broker_name": payload.broker_name,
+            },
+        )
     await session.refresh(client)
     count_result = await session.execute(
-        select(func.count(Agent.id)).where(Agent.client_id == client.id)
+        select(func.count(Agent.id)).where(
+            Agent.client_id == client.id,
+            Agent.is_active == True,  # noqa: E712
+        )
     )
     agent_count = count_result.scalar_one() or 0
     return _client_to_response(client, agent_count=agent_count)
@@ -135,11 +149,14 @@ async def list_clients(
     result = await session.execute(select(Client).where(Client.is_active == True))  # noqa: E712
     clients = result.scalars().all()
 
-    # Query agent counts for all active clients in one round trip
+    # Query active agent counts for all active clients in one round trip
     client_ids = [c.id for c in clients]
     counts_result = await session.execute(
         select(Agent.client_id, func.count(Agent.id).label("agent_count"))
-        .where(Agent.client_id.in_(client_ids))
+        .where(
+            Agent.client_id.in_(client_ids),
+            Agent.is_active == True,  # noqa: E712
+        )
         .group_by(Agent.client_id)
     )
     counts: dict[str, int] = {row.client_id: row.agent_count for row in counts_result}
@@ -170,7 +187,10 @@ async def get_client(
             detail={"error": "client not found", "client_id": client_id},
         )
     count_result = await session.execute(
-        select(func.count(Agent.id)).where(Agent.client_id == client_id)
+        select(func.count(Agent.id)).where(
+            Agent.client_id == client_id,
+            Agent.is_active == True,  # noqa: E712
+        )
     )
     agent_count = count_result.scalar_one() or 0
     return _client_to_response(client, agent_count=agent_count)
@@ -238,7 +258,10 @@ async def update_client(
     await session.commit()
     await session.refresh(client)
     count_result = await session.execute(
-        select(func.count(Agent.id)).where(Agent.client_id == client_id)
+        select(func.count(Agent.id)).where(
+            Agent.client_id == client_id,
+            Agent.is_active == True,  # noqa: E712
+        )
     )
     agent_count = count_result.scalar_one() or 0
     return _client_to_response(client, agent_count=agent_count)
@@ -272,7 +295,10 @@ async def delete_client(
     await session.commit()
     await session.refresh(client)
     count_result = await session.execute(
-        select(func.count(Agent.id)).where(Agent.client_id == client_id)
+        select(func.count(Agent.id)).where(
+            Agent.client_id == client_id,
+            Agent.is_active == True,  # noqa: E712
+        )
     )
     agent_count = count_result.scalar_one() or 0
     return _client_to_response(client, agent_count=agent_count)

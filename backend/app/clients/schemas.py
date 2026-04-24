@@ -99,6 +99,18 @@ class _SchedulerValidatorMixin(BaseModel):
                 )
         return v
 
+    @model_validator(mode="after")
+    def validate_hour_window(self) -> "_SchedulerValidatorMixin":
+        """Validate that start_hour < end_hour when both are provided."""
+        start = self.scheduler_allowed_hours_start
+        end = self.scheduler_allowed_hours_end
+        if start is not None and end is not None and start >= end:
+            raise ValueError(
+                f"scheduler_allowed_hours_start ({start}) must be less than "
+                f"scheduler_allowed_hours_end ({end})."
+            )
+        return self
+
 
 class ClientCreate(_SchedulerValidatorMixin):
     """Request body for POST /api/v1/clients."""
@@ -147,18 +159,6 @@ class ClientUpdate(_SchedulerValidatorMixin):
     scheduler_allowed_hours_end: int | None = None
     scheduler_retry_on_outcomes: str | None = None
     scheduler_timezone: str | None = None
-
-    @model_validator(mode="after")
-    def validate_hour_window(self) -> "ClientUpdate":
-        """Validate that start_hour < end_hour when both are provided."""
-        start = self.scheduler_allowed_hours_start
-        end = self.scheduler_allowed_hours_end
-        if start is not None and end is not None and start >= end:
-            raise ValueError(
-                f"scheduler_allowed_hours_start ({start}) must be less than "
-                f"scheduler_allowed_hours_end ({end})."
-            )
-        return self
 
 
 class ClientResponse(BaseModel):
