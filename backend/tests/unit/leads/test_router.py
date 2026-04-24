@@ -604,3 +604,99 @@ async def test_list_leads_multiple_leads_with_mixed_scheduled_calls(
     assert l004["next_scheduled_call_at"] is not None, (
         "lead-004 overdue pending call should still be returned"
     )
+
+
+# ---------------------------------------------------------------------------
+# CRITICAL: N+1 proof — query-count assertions (Phase 7 Issue #27 verify fix)
+# ---------------------------------------------------------------------------
+
+
+async def test_list_leads_batch_query_is_exactly_one_scheduled_calls_query(
+    leads_client: AsyncClient,
+):
+    """CRITICAL N+1 proof — GET /leads with 5 leads executes exactly 1 SELECT
+    against scheduled_calls, not N queries (one per lead).
+
+    Uses SQLAlchemy engine event listener to count SQL statements referencing
+    the scheduled_calls table during the HTTP request.
+    """
+    from datetime import datetime, timezone, timedelta
+    from app.core import database as db_module
+    from app.scheduler.models import ScheduledCall
+    from sqlalchemy import event
+    import uuid
+
+    # Seed pending calls for multiple leads so the batch query must actually fire
+    now = datetime.now(timezone.utc)
+    async with db_module.async_session_factory() as sess:
+        for i in range(1, 4):
+            sess.add(ScheduledCall(
+                id=str(uuid.uuid4()),
+                client_id="quintana-seguros",
+                lead_id=f"lead-quintana-00{i}",
+                status="pending",
+                scheduled_at=now + timedelta(hours=i),
+                trigger_reason="n1-proof",
+            ))
+        await sess.commit()
+
+    # Count SQL statements that reference the scheduled_calls table
+    scheduled_calls_query_count = []
+
+    def count_scheduled_calls(conn, cursor, statement, parameters, context, executemany):
+        if "scheduled_calls" in statement.lower():
+            scheduled_calls_query_count.append(statement)
+
+    sync_engine = db_module.engine.sync_engine  # type: ignore[union-attr]
+    event.listen(sync_engine, "before_cursor_execute", count_scheduled_calls)
+    try:
+        response = await leads_client.get("/api/v1/leads?client_id=quintana-seguros")
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", count_scheduled_calls)
+
+    assert response.status_code == 200
+    leads_data = response.json()
+    assert len(leads_data) == 5, f"Expected 5 leads, got {len(leads_data)}"
+
+    # THE CRITICAL ASSERTION: exactly 1 SELECT against scheduled_calls for ALL 5 leads
+    assert len(scheduled_calls_query_count) == 1, (
+        f"Expected exactly 1 scheduled_calls query (batch MIN GROUP BY), "
+        f"got {len(scheduled_calls_query_count)}. "
+        f"Queries: {scheduled_calls_query_count}"
+    )
+
+
+async def test_list_leads_empty_result_executes_zero_scheduled_calls_queries(
+    leads_client: AsyncClient,
+):
+    """CRITICAL empty-list proof — GET /leads for unknown client executes ZERO
+    SELECT statements against scheduled_calls.
+
+    When leads list is empty, _batch_next_scheduled_call_at() must short-circuit
+    (no lead_ids → no query). Proven by query-count event listener.
+    """
+    from app.core import database as db_module
+    from sqlalchemy import event
+
+    scheduled_calls_query_count = []
+
+    def count_scheduled_calls(conn, cursor, statement, parameters, context, executemany):
+        if "scheduled_calls" in statement.lower():
+            scheduled_calls_query_count.append(statement)
+
+    sync_engine = db_module.engine.sync_engine  # type: ignore[union-attr]
+    event.listen(sync_engine, "before_cursor_execute", count_scheduled_calls)
+    try:
+        response = await leads_client.get("/api/v1/leads?client_id=no-such-client-xyz")
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", count_scheduled_calls)
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+    # THE CRITICAL ASSERTION: zero queries against scheduled_calls when leads list is empty
+    assert len(scheduled_calls_query_count) == 0, (
+        f"Expected 0 scheduled_calls queries for empty leads list, "
+        f"got {len(scheduled_calls_query_count)}. "
+        f"Queries fired: {scheduled_calls_query_count}"
+    )
