@@ -25,6 +25,14 @@ async def create_client(
     max_tokens: int = 300,
     tools_enabled: str = '["get_lead_details","register_interest","mark_not_interested","schedule_followup"]',
     is_active: bool = True,
+    # Scheduler configuration (Phase 7 — bootstrappable at create time)
+    scheduler_enabled: bool = False,
+    scheduler_max_attempts: int = 3,
+    scheduler_cooldown_minutes: int = 60,
+    scheduler_allowed_hours_start: int = 9,
+    scheduler_allowed_hours_end: int = 20,
+    scheduler_retry_on_outcomes: str = '["call_again","follow_up"]',
+    scheduler_timezone: str = "America/Argentina/Buenos_Aires",
 ) -> Client:
     """Create and persist a new Client record and its default Agent.
 
@@ -57,6 +65,13 @@ async def create_client(
         max_tokens=max_tokens,
         tools_enabled=tools_enabled,
         is_active=is_active,
+        scheduler_enabled=scheduler_enabled,
+        scheduler_max_attempts=scheduler_max_attempts,
+        scheduler_cooldown_minutes=scheduler_cooldown_minutes,
+        scheduler_allowed_hours_start=scheduler_allowed_hours_start,
+        scheduler_allowed_hours_end=scheduler_allowed_hours_end,
+        scheduler_retry_on_outcomes=scheduler_retry_on_outcomes,
+        scheduler_timezone=scheduler_timezone,
     )
     session.add(client)
     await session.flush()  # Flush to DB within current transaction
@@ -283,3 +298,181 @@ async def get_default_agent(session: AsyncSession, client_id: str) -> Agent | No
         )
     )
     return result.scalar_one_or_none()
+
+
+# ---------------------------------------------------------------------------
+# New Agent service functions (Phase 7)
+# ---------------------------------------------------------------------------
+
+
+async def list_agents_for_client(
+    session: AsyncSession,
+    client_id: str,
+    *,
+    include_inactive: bool = False,
+) -> list[Agent]:
+    """Return all agents for a client ordered by created_at ascending.
+
+    Args:
+        session: Active async DB session.
+        client_id: The client to query agents for.
+        include_inactive: When False (default), only active agents are returned.
+
+    Returns:
+        List of Agent instances sorted by created_at ascending.
+    """
+    from sqlalchemy import asc
+
+    conditions = [Agent.client_id == client_id]
+    if not include_inactive:
+        conditions.append(Agent.is_active == True)  # noqa: E712
+
+    result = await session.execute(
+        select(Agent).where(*conditions).order_by(asc(Agent.created_at))
+    )
+    return list(result.scalars().all())
+
+
+async def update_agent(
+    session: AsyncSession,
+    agent_id: str,
+    client_id: str,
+    **kwargs: object,
+) -> Agent | None:
+    """Partially update an Agent record. Only provided kwargs are written.
+
+    Enforces client isolation: returns None if the agent_id belongs to a
+    different client than client_id.
+
+    Args:
+        session: Active async DB session.
+        agent_id: UUID of the agent to update.
+        client_id: The owning client (used for cross-client isolation check).
+        **kwargs: Fields to update (e.g., name="New Name", temperature=0.9).
+
+    Returns:
+        Updated Agent instance or None if not found / wrong client.
+    """
+    result = await session.execute(
+        select(Agent).where(
+            Agent.id == agent_id,
+            Agent.client_id == client_id,
+        )
+    )
+    agent = result.scalar_one_or_none()
+    if agent is None:
+        return None
+
+    for key, value in kwargs.items():
+        if hasattr(agent, key):
+            setattr(agent, key, value)
+
+    await session.flush()
+    return agent
+
+
+async def deactivate_agent(
+    session: AsyncSession,
+    agent_id: str,
+    client_id: str,
+) -> Agent:
+    """Soft-delete an agent by setting is_active=False.
+
+    GUARD: Raises ValueError if the agent is the sole active default agent for
+    its client. A client must always have at least one active default agent.
+
+    Args:
+        session: Active async DB session.
+        agent_id: UUID of the agent to deactivate.
+        client_id: Owning client (for isolation check).
+
+    Returns:
+        The updated Agent with is_active=False.
+
+    Raises:
+        ValueError: If agent not found, or if it is the sole active default.
+    """
+    result = await session.execute(
+        select(Agent).where(
+            Agent.id == agent_id,
+            Agent.client_id == client_id,
+        )
+    )
+    agent = result.scalar_one_or_none()
+    if agent is None:
+        raise ValueError(f"Agent {agent_id!r} not found for client {client_id!r}.")
+
+    # Sole-default guard: if this agent is the ONLY active default, block deactivation
+    if agent.is_default and agent.is_active:
+        active_defaults_result = await session.execute(
+            select(Agent).where(
+                Agent.client_id == client_id,
+                Agent.is_default == True,  # noqa: E712
+                Agent.is_active == True,  # noqa: E712
+            )
+        )
+        active_defaults = list(active_defaults_result.scalars().all())
+        if len(active_defaults) <= 1:
+            raise ValueError(
+                f"cannot_deactivate_sole_default_agent: agent {agent_id!r} is the "
+                f"only active default for client {client_id!r}."
+            )
+
+    agent.is_active = False
+    await session.flush()
+    return agent
+
+
+async def set_default_agent(
+    session: AsyncSession,
+    client_id: str,
+    agent_id: str,
+) -> Agent:
+    """Atomically swap the default agent for a client.
+
+    Unsets is_default on all other agents for the client, then sets is_default
+    on the target agent. Both writes happen in a single flush (same transaction).
+
+    Args:
+        session: Active async DB session.
+        client_id: The owning client.
+        agent_id: UUID of the agent to make default.
+
+    Returns:
+        The updated Agent with is_default=True.
+
+    Raises:
+        ValueError: If agent not found or agent is inactive.
+    """
+    from sqlalchemy import update as sa_update
+
+    # Fetch the target agent with client isolation
+    result = await session.execute(
+        select(Agent).where(
+            Agent.id == agent_id,
+            Agent.client_id == client_id,
+        )
+    )
+    agent = result.scalar_one_or_none()
+    if agent is None:
+        raise ValueError(f"Agent {agent_id!r} not found for client {client_id!r}.")
+
+    if not agent.is_active:
+        raise ValueError(
+            f"cannot_set_inactive_agent_as_default: agent {agent_id!r} is inactive."
+        )
+
+    # Unset all other defaults for this client in one UPDATE
+    await session.execute(
+        sa_update(Agent)
+        .where(
+            Agent.client_id == client_id,
+            Agent.id != agent_id,
+        )
+        .values(is_default=False)
+    )
+
+    # Set this agent as default
+    agent.is_default = True
+    await session.flush()
+    return agent

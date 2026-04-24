@@ -29,7 +29,9 @@ def test_webhook_session_creation_block_catches_value_error():
     source = inspect.getsource(webhook._process_custom_llm_request)
 
     # The function must contain a try/except block around create_session
-    assert "create_session" in source, "create_session must be called in _process_custom_llm_request"
+    assert (
+        "create_session" in source
+    ), "create_session must be called in _process_custom_llm_request"
 
     # There must be a ValueError catch somewhere in the session creation path
     assert "ValueError" in source, (
@@ -44,11 +46,15 @@ def test_webhook_graceful_sse_on_value_error_returns_done():
     from app.voice import webhook
 
     # _sse_done must exist and return the DONE string
-    assert hasattr(webhook, "_sse_done"), "_sse_done helper must exist in webhook module"
+    assert hasattr(
+        webhook, "_sse_done"
+    ), "_sse_done helper must exist in webhook module"
     done = webhook._sse_done()
     assert "[DONE]" in done, f"_sse_done() must contain [DONE], got: {done!r}"
 
     # _sse_stop must exist and return the stop chunk
-    assert hasattr(webhook, "_sse_stop"), "_sse_stop helper must exist in webhook module"
+    assert hasattr(
+        webhook, "_sse_stop"
+    ), "_sse_stop helper must exist in webhook module"
     stop = webhook._sse_stop()
     assert "stop" in stop, f"_sse_stop() must contain 'stop', got: {stop!r}"

@@ -155,9 +155,7 @@ async def initiation_webhook(
                     pass
 
         # Phase 7: use agent.name when available, else fall back to client.agent_name
-        resolved_agent_name = (
-            agent.name if agent is not None else client.agent_name
-        )
+        resolved_agent_name = agent.name if agent is not None else client.agent_name
 
         return InitiationResponse(
             dynamic_variables={

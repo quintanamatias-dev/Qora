@@ -67,6 +67,7 @@ async def test_migration_creates_scheduled_calls_table(tmp_db_url: str):
 
     # Run migration
     from scripts.migrate_call_scheduler import run_migration
+
     await run_migration(tmp_db_url)
 
     # Verify scheduled_calls table exists
@@ -131,14 +132,13 @@ async def test_migration_adds_scheduler_columns_to_clients(tmp_db_url: str):
 
     # Run migration
     from scripts.migrate_call_scheduler import run_migration
+
     await run_migration(tmp_db_url)
 
     # Verify scheduler columns exist on clients
     engine2 = create_async_engine(tmp_db_url, echo=False)
     async with engine2.begin() as conn:
-        result = await conn.execute(
-            sqlalchemy.text("PRAGMA table_info(clients)")
-        )
+        result = await conn.execute(sqlalchemy.text("PRAGMA table_info(clients)"))
         columns = {row[1] for row in result.fetchall()}
 
     await engine2.dispose()
@@ -235,6 +235,7 @@ async def test_migration_composite_index_on_existing_table(tmp_path: Path):
 
     # Run migration — the composite index must be created even though table exists
     from scripts.migrate_call_scheduler import run_migration
+
     await run_migration(db_url)
 
     # Verify the composite index now exists
@@ -314,7 +315,9 @@ async def test_migration_is_idempotent(tmp_db_url: str):
         )
         assert table_result.fetchone() is not None
 
-        column_result = await conn.execute(sqlalchemy.text("PRAGMA table_info(clients)"))
+        column_result = await conn.execute(
+            sqlalchemy.text("PRAGMA table_info(clients)")
+        )
         columns = {row[1] for row in column_result.fetchall()}
         assert "scheduler_enabled" in columns
         assert "scheduler_timezone" in columns

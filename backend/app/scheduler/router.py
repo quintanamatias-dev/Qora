@@ -111,7 +111,11 @@ async def create_manual_scheduled_call(
     # Issue 2: Validate scheduled_at against allowed hours
     tz = ZoneInfo(client.scheduler_timezone)
     local_dt = payload.scheduled_at.astimezone(tz)
-    if not (client.scheduler_allowed_hours_start <= local_dt.hour < client.scheduler_allowed_hours_end):
+    if not (
+        client.scheduler_allowed_hours_start
+        <= local_dt.hour
+        < client.scheduler_allowed_hours_end
+    ):
         raise HTTPException(
             status_code=422,
             detail={

@@ -9,11 +9,13 @@ Initializes all QORA components during lifespan startup:
 
 Registers all domain routers:
 - /api/v1/clients (clients full CRUD router)
+- /api/v1/clients/{client_id}/agents (agents CRUD router — Phase 7)
 - /api/v1/voice (initiation + custom-llm)
 - /api/v1/leads (leads admin/debug router)
 - /api/v1/calls (calls admin/debug router)
 - /api/v1/tenants (backward-compat read-only alias)
 - /api/v1/health
+- /admin (internal admin UI — Phase 7)
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.staticfiles import StaticFiles
 
@@ -239,6 +242,7 @@ async def health_check():
 # Register domain routers
 from app.tenants.router import router as tenants_router  # noqa: E402
 from app.clients.router import router as clients_router  # noqa: E402
+from app.agents.router import router as agents_router  # noqa: E402
 from app.leads.router import router as leads_router  # noqa: E402
 from app.calls.router import router as calls_router  # noqa: E402
 from app.voice.initiation import router as initiation_router  # noqa: E402
@@ -246,6 +250,9 @@ from app.voice.webhook import router as webhook_router  # noqa: E402
 from app.scheduler.router import router as scheduler_router  # noqa: E402
 
 api_v1_router.include_router(clients_router)  # /api/v1/clients — full CRUD
+api_v1_router.include_router(
+    agents_router
+)  # /api/v1/clients/{client_id}/agents — Phase 7
 api_v1_router.include_router(tenants_router)  # /api/v1/tenants — backward-compat alias
 api_v1_router.include_router(leads_router)
 api_v1_router.include_router(calls_router)
@@ -256,7 +263,7 @@ api_v1_router.include_router(scheduler_router)  # /api/v1/scheduler — Phase 6
 app.include_router(api_v1_router)
 
 # ---------------------------------------------------------------------------
-# Static files — demo page
+# Static files — demo page + admin UI
 # ---------------------------------------------------------------------------
 
 import os  # noqa: E402
@@ -264,3 +271,9 @@ import os  # noqa: E402
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 if os.path.isdir(_STATIC_DIR):
     app.mount("/demo", StaticFiles(directory=_STATIC_DIR, html=True), name="demo")
+
+
+@app.get("/admin", tags=["admin"], include_in_schema=False)
+async def admin_ui() -> FileResponse:
+    """Internal admin UI — manage clients and agents."""
+    return FileResponse(os.path.join(_STATIC_DIR, "admin.html"), media_type="text/html")

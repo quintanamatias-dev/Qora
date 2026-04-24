@@ -78,7 +78,9 @@ async def run_migration(database_url: str) -> None:
                     "CREATE INDEX IF NOT EXISTS ix_agents_client_id ON agents(client_id)"
                 )
             )
-            print("  [create] agents table + ix_agents_client_id + UNIQUE(client_id, slug)")
+            print(
+                "  [create] agents table + ix_agents_client_id + UNIQUE(client_id, slug)"
+            )
 
         # ------------------------------------------------------------------
         # 1b. Ensure UNIQUE index on (client_id, slug) exists regardless of
@@ -159,10 +161,13 @@ async def run_migration(database_url: str) -> None:
                     "model": model or "gpt-4o",
                     "temperature": temperature if temperature is not None else 0.7,
                     "max_tokens": max_tokens or 300,
-                    "tools_enabled": tools_enabled or '["get_lead_details","register_interest","mark_not_interested","schedule_followup"]',
+                    "tools_enabled": tools_enabled
+                    or '["get_lead_details","register_interest","mark_not_interested","schedule_followup"]',
                 },
             )
-            print(f"  [seed] created default agent={agent_id!r} for client={client_id!r}")
+            print(
+                f"  [seed] created default agent={agent_id!r} for client={client_id!r}"
+            )
             seeded += 1
 
         print(f"\nSeeded: {seeded} agents, skipped: {skipped} (already existed)")

@@ -345,7 +345,9 @@ def test_parse_followup_date_naive_no_seconds_uses_client_tz():
     from app.tools.schedule_followup import _parse_followup_date
 
     # New York in winter is UTC-5, so midnight New York = 05:00 UTC
-    result = _parse_followup_date("2026-01-15T09:00", client_timezone="America/New_York")
+    result = _parse_followup_date(
+        "2026-01-15T09:00", client_timezone="America/New_York"
+    )
     assert result is not None
     # 9:00 AM New York (EST, UTC-5) = 14:00 UTC
     assert result.utcoffset().total_seconds() == 0  # stored as UTC
@@ -416,9 +418,9 @@ async def test_schedule_followup_passes_agent_id_when_source_session_has_agent(d
 
     assert len(scheduled_calls) >= 1
     sc = scheduled_calls[0]
-    assert sc.agent_id == agent_id, (
-        f"Expected agent_id={agent_id!r} on ScheduledCall, got {sc.agent_id!r}"
-    )
+    assert (
+        sc.agent_id == agent_id
+    ), f"Expected agent_id={agent_id!r} on ScheduledCall, got {sc.agent_id!r}"
 
 
 async def test_schedule_followup_resolves_default_agent_when_no_source_session(db):
@@ -471,6 +473,6 @@ async def test_schedule_followup_resolves_default_agent_when_no_source_session(d
 
     assert len(scheduled_calls) >= 1
     sc = scheduled_calls[0]
-    assert sc.agent_id == agent_id, (
-        f"Expected default agent_id={agent_id!r} on ScheduledCall, got {sc.agent_id!r}"
-    )
+    assert (
+        sc.agent_id == agent_id
+    ), f"Expected default agent_id={agent_id!r} on ScheduledCall, got {sc.agent_id!r}"

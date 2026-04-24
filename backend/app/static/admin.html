@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QORA — Admin</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0d0d0f; --surface: #16161a; --surface-2: #1e1e24;
+      --border: #2a2a35; --accent: #7b5ea7; --accent-glow: rgba(123,94,167,0.3);
+      --text: #e8e8f0; --text-muted: #888899;
+      --green: #4caf82; --red: #e05c5c; --yellow: #d0a040;
+    }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; padding: 1.5rem 1rem; }
+    .header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem; }
+    .logo-icon { width: 40px; height: 40px; background: linear-gradient(135deg, #7b5ea7 0%, #4a90d9 100%); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; flex-shrink: 0; }
+    .logo-text { font-size: 1.3rem; font-weight: 700; letter-spacing: -0.02em; }
+    .logo-sub { font-size: 0.72rem; color: var(--text-muted); }
+    /* Tabs */
+    .tabs { display: flex; gap: 0.25rem; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 0.3rem; margin-bottom: 1.5rem; width: fit-content; }
+    .tab { padding: 0.45rem 1.1rem; border-radius: 8px; font-size: 0.85rem; font-weight: 500; cursor: pointer; border: none; background: transparent; color: var(--text-muted); transition: all 0.2s; }
+    .tab.active { background: var(--accent); color: white; }
+    .tab:not(.active):hover { background: var(--surface-2); color: var(--text); }
+    /* Layout */
+    .panel { display: none; }
+    .panel.active { display: block; }
+    /* Cards */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 1.25rem; margin-bottom: 1rem; }
+    .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+    .card-title { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
+    /* Forms */
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 0.75rem; }
+    .form-row.single { grid-template-columns: 1fr; }
+    .form-group { display: flex; flex-direction: column; gap: 0.3rem; }
+    label { font-size: 0.78rem; color: var(--text-muted); }
+    input[type=text], input[type=number], select, textarea {
+      width: 100%; padding: 0.55rem 0.7rem; background: var(--surface-2);
+      border: 1px solid var(--border); border-radius: 8px; color: var(--text);
+      font-size: 0.875rem; outline: none; transition: border-color 0.2s;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+    textarea { resize: vertical; min-height: 80px; font-family: inherit; }
+    /* Buttons */
+    .btn { padding: 0.55rem 1.1rem; border-radius: 8px; font-size: 0.85rem; font-weight: 600; cursor: pointer; border: none; transition: all 0.2s; white-space: nowrap; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:not(:disabled):hover { background: #6b4e97; }
+    .btn-sm { padding: 0.35rem 0.75rem; font-size: 0.78rem; }
+    .btn-danger { background: var(--surface-2); color: var(--red); border: 1px solid var(--red); }
+    .btn-danger:not(:disabled):hover { background: rgba(224,92,92,0.08); }
+    .btn-warning { background: var(--surface-2); color: var(--yellow); border: 1px solid var(--yellow); }
+    .btn-warning:not(:disabled):hover { background: rgba(208,160,64,0.08); }
+    .btn-success { background: var(--surface-2); color: var(--green); border: 1px solid var(--green); }
+    .btn-success:not(:disabled):hover { background: rgba(76,175,130,0.08); }
+    .btn-ghost { background: transparent; color: var(--text-muted); border: 1px solid var(--border); }
+    .btn-ghost:not(:disabled):hover { border-color: var(--text-muted); color: var(--text); }
+    /* Table */
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th { text-align: left; font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
+    td { padding: 0.65rem 0.75rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--surface-2); }
+    /* Badges */
+    .badge { display: inline-block; font-size: 0.7rem; padding: 0.18rem 0.55rem; border-radius: 20px; font-weight: 600; }
+    .badge-active { background: rgba(76,175,130,0.15); color: var(--green); }
+    .badge-inactive { background: rgba(224,92,92,0.12); color: var(--red); }
+    .badge-default { background: rgba(123,94,167,0.2); color: var(--accent); }
+    /* Misc */
+    .actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .msg { font-size: 0.82rem; padding: 0.5rem 0.75rem; border-radius: 8px; margin-top: 0.75rem; }
+    .msg-ok { background: rgba(76,175,130,0.1); color: var(--green); border: 1px solid rgba(76,175,130,0.3); }
+    .msg-err { background: rgba(224,92,92,0.1); color: var(--red); border: 1px solid rgba(224,92,92,0.3); }
+    .section-title { font-size: 0.9rem; font-weight: 600; margin-bottom: 0.75rem; }
+    .tools-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .tool-check { display: flex; align-items: center; gap: 0.4rem; font-size: 0.82rem; cursor: pointer; }
+    .tool-check input { width: auto; }
+    .empty { color: var(--text-muted); font-size: 0.85rem; padding: 1.5rem 0; text-align: center; }
+    .select-client-hint { color: var(--text-muted); font-size: 0.85rem; padding: 1rem 0; text-align: center; }
+    ::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+    @media (max-width: 600px) { .form-row { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo-icon">⚙️</div>
+  <div>
+    <div class="logo-text">QORA Admin</div>
+    <div class="logo-sub">Internal management panel</div>
+  </div>
+</div>
+
+<!-- Tab bar -->
+<div class="tabs">
+  <button class="tab active" onclick="switchTab('clients')">Clients</button>
+  <button class="tab" onclick="switchTab('agents')">Agents</button>
+</div>
+
+<!-- ===== CLIENTS PANEL ===== -->
+<div id="tab-clients" class="panel active">
+
+  <!-- Create new client -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">New Client</div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Client ID (slug)</label>
+        <input type="text" id="c-id" placeholder="my-broker" />
+      </div>
+      <div class="form-group">
+        <label>Broker Name</label>
+        <input type="text" id="c-broker" placeholder="My Broker SA" />
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Agent Name</label>
+        <input type="text" id="c-agent" placeholder="Jaumpablo" value="Jaumpablo" />
+      </div>
+      <div class="form-group">
+        <label>Voice ID</label>
+        <input type="text" id="c-voice" placeholder="pNInz6obpgDQGcFmaJgB" />
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="createClient()">+ Create Client</button>
+    <div id="c-msg"></div>
+  </div>
+
+  <!-- Clients list -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">All Clients</div>
+      <button class="btn btn-ghost btn-sm" onclick="loadClients()">↻ Refresh</button>
+    </div>
+    <div id="clients-table-wrap">
+      <div class="empty">Loading…</div>
+    </div>
+  </div>
+
+  <!-- Inline edit panel (hidden by default) -->
+  <div class="card" id="client-edit-panel" style="display:none;">
+    <div class="card-header">
+      <div class="card-title">Edit Client — <span id="edit-client-id-label"></span></div>
+      <button class="btn btn-ghost btn-sm" onclick="hideClientEdit()">✕ Close</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Broker Name</label>
+        <input type="text" id="edit-c-broker" />
+      </div>
+      <div class="form-group">
+        <label>Agent Name</label>
+        <input type="text" id="edit-c-agent" />
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Voice ID</label>
+        <input type="text" id="edit-c-voice" />
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="saveClientEdit()">Save Changes</button>
+    <div id="edit-c-msg"></div>
+  </div>
+
+</div><!-- /clients panel -->
+
+<!-- ===== AGENTS PANEL ===== -->
+<div id="tab-agents" class="panel">
+
+  <!-- Client selector -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">Select Client</div>
+    </div>
+    <div class="form-row single">
+      <div class="form-group">
+        <label>Client</label>
+        <select id="agent-client-select" onchange="onAgentClientChange()">
+          <option value="">— select a client —</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Agents list -->
+  <div id="agents-section" style="display:none;">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Agents</div>
+        <button class="btn btn-ghost btn-sm" onclick="loadAgents()">↻ Refresh</button>
+      </div>
+      <div id="agents-table-wrap">
+        <div class="empty">Select a client to view agents.</div>
+      </div>
+    </div>
+
+    <!-- Create new agent -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">New Agent</div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Slug</label>
+          <input type="text" id="a-slug" placeholder="my-agent" />
+        </div>
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" id="a-name" placeholder="My Agent" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Voice ID</label>
+          <input type="text" id="a-voice" placeholder="pNInz6obpgDQGcFmaJgB" />
+        </div>
+        <div class="form-group">
+          <label>Model</label>
+          <input type="text" id="a-model" value="gpt-4o" />
+        </div>
+      </div>
+      <div class="form-row single">
+        <div class="form-group">
+          <label>System Prompt (optional)</label>
+          <textarea id="a-prompt" placeholder="You are a helpful insurance agent…"></textarea>
+        </div>
+      </div>
+      <div class="form-group" style="margin-bottom:0.75rem;">
+        <label>Tools Enabled</label>
+        <div class="tools-grid" id="new-agent-tools">
+          <label class="tool-check"><input type="checkbox" value="get_lead_details" checked /> get_lead_details</label>
+          <label class="tool-check"><input type="checkbox" value="register_interest" checked /> register_interest</label>
+          <label class="tool-check"><input type="checkbox" value="mark_not_interested" checked /> mark_not_interested</label>
+          <label class="tool-check"><input type="checkbox" value="schedule_followup" checked /> schedule_followup</label>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="createAgent()">+ Create Agent</button>
+      <div id="a-msg"></div>
+    </div>
+
+    <!-- Inline edit panel -->
+    <div class="card" id="agent-edit-panel" style="display:none;">
+      <div class="card-header">
+        <div class="card-title">Edit Agent — <span id="edit-agent-slug-label"></span></div>
+        <button class="btn btn-ghost btn-sm" onclick="hideAgentEdit()">✕ Close</button>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" id="edit-a-name" />
+        </div>
+        <div class="form-group">
+          <label>Voice ID</label>
+          <input type="text" id="edit-a-voice" />
+        </div>
+      </div>
+      <div class="form-row single">
+        <div class="form-group">
+          <label>System Prompt</label>
+          <textarea id="edit-a-prompt"></textarea>
+        </div>
+      </div>
+      <div class="form-group" style="margin-bottom:0.75rem;">
+        <label>Tools Enabled</label>
+        <div class="tools-grid" id="edit-agent-tools">
+          <label class="tool-check"><input type="checkbox" value="get_lead_details" /> get_lead_details</label>
+          <label class="tool-check"><input type="checkbox" value="register_interest" /> register_interest</label>
+          <label class="tool-check"><input type="checkbox" value="mark_not_interested" /> mark_not_interested</label>
+          <label class="tool-check"><input type="checkbox" value="schedule_followup" /> schedule_followup</label>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="saveAgentEdit()">Save Changes</button>
+      <div id="edit-a-msg"></div>
+    </div>
+  </div>
+
+</div><!-- /agents panel -->
+
+<script>
+// ============================================================
+// State
+// ============================================================
+let _editingClientId = null;
+let _editingAgentId  = null;
+let _selectedClientId = null;
+
+// ============================================================
+// Tabs
+// ============================================================
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  event.target.classList.add('active');
+  if (name === 'agents') populateAgentClientSelect();
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+function showMsg(id, text, ok = true) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'msg-ok' : 'msg-err');
+  el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+
+async function apiFetch(url, opts = {}) {
+  const res = await fetch(url, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+  });
+  const body = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, body };
+}
+
+function getCheckedTools(containerId) {
+  const checks = document.querySelectorAll(`#${containerId} input[type=checkbox]`);
+  const tools = [];
+  checks.forEach(c => { if (c.checked) tools.push(c.value); });
+  return JSON.stringify(tools);
+}
+
+function setCheckedTools(containerId, toolsJson) {
+  let tools = [];
+  try { tools = JSON.parse(toolsJson); } catch {}
+  const checks = document.querySelectorAll(`#${containerId} input[type=checkbox]`);
+  checks.forEach(c => { c.checked = tools.includes(c.value); });
+}
+
+// ============================================================
+// CLIENTS
+// ============================================================
+async function loadClients() {
+  const wrap = document.getElementById('clients-table-wrap');
+  wrap.innerHTML = '<div class="empty">Loading…</div>';
+  const { ok, body } = await apiFetch('/api/v1/clients');
+  if (!ok) { wrap.innerHTML = '<div class="empty" style="color:var(--red)">Error loading clients.</div>'; return; }
+  if (!body.length) { wrap.innerHTML = '<div class="empty">No clients yet.</div>'; return; }
+
+  let html = '<table><thead><tr><th>ID</th><th>Broker</th><th>Agent</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+  body.forEach(c => {
+    const badge = c.is_active
+      ? '<span class="badge badge-active">active</span>'
+      : '<span class="badge badge-inactive">inactive</span>';
+    html += `<tr>
+      <td><code>${c.client_id}</code></td>
+      <td>${c.broker_name}</td>
+      <td>${c.agent_name}</td>
+      <td>${badge}</td>
+      <td><div class="actions">
+        <button class="btn btn-ghost btn-sm" onclick="showClientEdit('${c.client_id}','${c.broker_name}','${c.agent_name}','${c.voice_id}')">Edit</button>
+        ${c.is_active ? `<button class="btn btn-danger btn-sm" onclick="deactivateClient('${c.client_id}')">Deactivate</button>` : ''}
+      </div></td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
+async function createClient() {
+  const id = document.getElementById('c-id').value.trim();
+  const broker = document.getElementById('c-broker').value.trim();
+  const agent = document.getElementById('c-agent').value.trim() || 'Jaumpablo';
+  const voice = document.getElementById('c-voice').value.trim();
+  if (!id || !broker || !voice) { showMsg('c-msg', 'Client ID, Broker Name, and Voice ID are required.', false); return; }
+
+  const { ok, body } = await apiFetch('/api/v1/clients', {
+    method: 'POST',
+    body: JSON.stringify({ client_id: id, broker_name: broker, agent_name: agent, voice_id: voice }),
+  });
+  if (ok) {
+    showMsg('c-msg', `Client "${id}" created successfully.`);
+    document.getElementById('c-id').value = '';
+    document.getElementById('c-broker').value = '';
+    document.getElementById('c-voice').value = '';
+    loadClients();
+  } else {
+    const detail = body.detail?.error || JSON.stringify(body);
+    showMsg('c-msg', `Error: ${detail}`, false);
+  }
+}
+
+function showClientEdit(id, broker, agent, voice) {
+  _editingClientId = id;
+  document.getElementById('edit-client-id-label').textContent = id;
+  document.getElementById('edit-c-broker').value = broker;
+  document.getElementById('edit-c-agent').value = agent;
+  document.getElementById('edit-c-voice').value = voice;
+  document.getElementById('client-edit-panel').style.display = 'block';
+  document.getElementById('client-edit-panel').scrollIntoView({ behavior: 'smooth' });
+}
+
+function hideClientEdit() {
+  _editingClientId = null;
+  document.getElementById('client-edit-panel').style.display = 'none';
+}
+
+async function saveClientEdit() {
+  if (!_editingClientId) return;
+  const payload = {
+    broker_name: document.getElementById('edit-c-broker').value.trim(),
+    agent_name:  document.getElementById('edit-c-agent').value.trim(),
+    voice_id:    document.getElementById('edit-c-voice').value.trim(),
+  };
+  const { ok, body } = await apiFetch(`/api/v1/clients/${_editingClientId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+  if (ok) {
+    showMsg('edit-c-msg', 'Client updated.');
+    loadClients();
+    hideClientEdit();
+  } else {
+    const detail = body.detail?.error || JSON.stringify(body);
+    showMsg('edit-c-msg', `Error: ${detail}`, false);
+  }
+}
+
+async function deactivateClient(id) {
+  if (!confirm(`Deactivate client "${id}"?`)) return;
+  const { ok, body } = await apiFetch(`/api/v1/clients/${id}`, { method: 'DELETE' });
+  if (ok) { loadClients(); }
+  else {
+    const detail = body.detail?.error || JSON.stringify(body);
+    alert(`Error: ${detail}`);
+  }
+}
+
+// ============================================================
+// AGENTS
+// ============================================================
+async function populateAgentClientSelect() {
+  const sel = document.getElementById('agent-client-select');
+  const prev = sel.value;
+  const { ok, body } = await apiFetch('/api/v1/clients');
+  if (!ok) return;
+  sel.innerHTML = '<option value="">— select a client —</option>';
+  body.filter(c => c.is_active).forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.client_id;
+    opt.textContent = `${c.broker_name} (${c.client_id})`;
+    if (c.client_id === prev) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  if (prev && sel.value === prev) onAgentClientChange();
+}
+
+function onAgentClientChange() {
+  const sel = document.getElementById('agent-client-select');
+  _selectedClientId = sel.value || null;
+  const section = document.getElementById('agents-section');
+  if (_selectedClientId) {
+    section.style.display = 'block';
+    loadAgents();
+  } else {
+    section.style.display = 'none';
+  }
+}
+
+async function loadAgents() {
+  if (!_selectedClientId) return;
+  const wrap = document.getElementById('agents-table-wrap');
+  wrap.innerHTML = '<div class="empty">Loading…</div>';
+  const { ok, body } = await apiFetch(`/api/v1/clients/${_selectedClientId}/agents`);
+  if (!ok) { wrap.innerHTML = '<div class="empty" style="color:var(--red)">Error loading agents.</div>'; return; }
+  if (!body.length) { wrap.innerHTML = '<div class="empty">No agents yet.</div>'; return; }
+
+  let html = '<table><thead><tr><th>Slug</th><th>Name</th><th>Model</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+  body.forEach(a => {
+    const statusBadge = a.is_active
+      ? '<span class="badge badge-active">active</span>'
+      : '<span class="badge badge-inactive">inactive</span>';
+    const defaultBadge = a.is_default ? ' <span class="badge badge-default">default</span>' : '';
+    html += `<tr>
+      <td><code>${a.slug}</code></td>
+      <td>${a.name}</td>
+      <td><code style="font-size:0.78rem">${a.model}</code></td>
+      <td>${statusBadge}${defaultBadge}</td>
+      <td><div class="actions">
+        <button class="btn btn-ghost btn-sm" onclick="showAgentEdit('${a.agent_id}','${a.slug}','${a.name}','${a.voice_id}','${a.system_prompt || ''}','${a.tools_enabled}')">Edit</button>
+        ${!a.is_default ? `<button class="btn btn-success btn-sm" onclick="makeDefault('${a.agent_id}')">★ Default</button>` : ''}
+        ${a.is_active ? `<button class="btn btn-danger btn-sm" onclick="deactivateAgent('${a.agent_id}')">Deactivate</button>` : ''}
+      </div></td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
+async function createAgent() {
+  if (!_selectedClientId) return;
+  const slug  = document.getElementById('a-slug').value.trim();
+  const name  = document.getElementById('a-name').value.trim();
+  const voice = document.getElementById('a-voice').value.trim();
+  const model = document.getElementById('a-model').value.trim() || 'gpt-4o';
+  const prompt = document.getElementById('a-prompt').value.trim() || null;
+  const tools = getCheckedTools('new-agent-tools');
+
+  if (!slug || !name || !voice) {
+    showMsg('a-msg', 'Slug, Name and Voice ID are required.', false);
+    return;
+  }
+
+  const payload = { slug, name, voice_id: voice, model, tools_enabled: tools };
+  if (prompt) payload.system_prompt = prompt;
+
+  const { ok, body } = await apiFetch(
+    `/api/v1/clients/${_selectedClientId}/agents`,
+    { method: 'POST', body: JSON.stringify(payload) },
+  );
+  if (ok) {
+    showMsg('a-msg', `Agent "${slug}" created.`);
+    document.getElementById('a-slug').value = '';
+    document.getElementById('a-name').value = '';
+    document.getElementById('a-voice').value = '';
+    document.getElementById('a-prompt').value = '';
+    loadAgents();
+  } else {
+    const detail = body.detail?.error || JSON.stringify(body);
+    showMsg('a-msg', `Error: ${detail}`, false);
+  }
+}
+
+function showAgentEdit(id, slug, name, voice, prompt, toolsJson) {
+  _editingAgentId = id;
+  document.getElementById('edit-agent-slug-label').textContent = slug;
+  document.getElementById('edit-a-name').value = name;
+  document.getElementById('edit-a-voice').value = voice;
+  document.getElementById('edit-a-prompt').value = prompt;
+  setCheckedTools('edit-agent-tools', toolsJson);
+  document.getElementById('agent-edit-panel').style.display = 'block';
+  document.getElementById('agent-edit-panel').scrollIntoView({ behavior: 'smooth' });
+}
+
+function hideAgentEdit() {
+  _editingAgentId = null;
+  document.getElementById('agent-edit-panel').style.display = 'none';
+}
+
+async function saveAgentEdit() {
+  if (!_editingAgentId || !_selectedClientId) return;
+  const payload = {
+    name:         document.getElementById('edit-a-name').value.trim(),
+    voice_id:     document.getElementById('edit-a-voice').value.trim(),
+    system_prompt: document.getElementById('edit-a-prompt').value.trim() || null,
+    tools_enabled: getCheckedTools('edit-agent-tools'),
+  };
+  const { ok, body } = await apiFetch(
+    `/api/v1/clients/${_selectedClientId}/agents/${_editingAgentId}`,
+    { method: 'PATCH', body: JSON.stringify(payload) },
+  );
+  if (ok) {
+    showMsg('edit-a-msg', 'Agent updated.');
+    loadAgents();
+    hideAgentEdit();
+  } else {
+    const detail = body.detail?.error || JSON.stringify(body);
+    showMsg('edit-a-msg', `Error: ${detail}`, false);
+  }
+}
+
+async function makeDefault(agentId) {
+  if (!_selectedClientId) return;
+  const { ok, body } = await apiFetch(
+    `/api/v1/clients/${_selectedClientId}/agents/${agentId}/make-default`,
+    { method: 'POST' },
+  );
+  if (ok) { loadAgents(); }
+  else {
+    const detail = body.detail?.error || JSON.stringify(body);
+    alert(`Error: ${detail}`);
+  }
+}
+
+async function deactivateAgent(agentId) {
+  if (!_selectedClientId) return;
+  if (!confirm('Deactivate this agent?')) return;
+  const { ok, body } = await apiFetch(
+    `/api/v1/clients/${_selectedClientId}/agents/${agentId}/deactivate`,
+    { method: 'POST' },
+  );
+  if (ok) { loadAgents(); }
+  else {
+    const detail = body.detail?.error || JSON.stringify(body);
+    alert(`Error: ${detail}`);
+  }
+}
+
+// ============================================================
+// Bootstrap
+// ============================================================
+loadClients();
+</script>
+</body>
+</html>

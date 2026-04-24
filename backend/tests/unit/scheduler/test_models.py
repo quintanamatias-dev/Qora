@@ -156,7 +156,14 @@ async def test_scheduled_call_all_status_values_accepted(db):
     from app.scheduler.models import ScheduledCall
     import uuid
 
-    valid_statuses = ["pending", "in_progress", "completed", "failed", "cancelled", "expired"]
+    valid_statuses = [
+        "pending",
+        "in_progress",
+        "completed",
+        "failed",
+        "cancelled",
+        "expired",
+    ]
     now = datetime.now(timezone.utc)
 
     for status in valid_statuses:

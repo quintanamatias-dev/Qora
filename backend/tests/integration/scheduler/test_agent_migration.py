@@ -94,7 +94,9 @@ async def _create_base_schema(conn) -> None:
     )
 
 
-async def _seed_client(conn, client_id: str, name: str, agent_name: str = "Jaumpablo") -> None:
+async def _seed_client(
+    conn, client_id: str, name: str, agent_name: str = "Jaumpablo"
+) -> None:
     """Insert a minimal client row."""
     await conn.execute(
         sqlalchemy.text(
@@ -151,6 +153,7 @@ async def test_migrate_add_agents_creates_agents_table(tmp_path: Path):
     await engine.dispose()
 
     from scripts.migrate_add_agents import run_migration
+
     await run_migration(db_url)
 
     engine2 = create_async_engine(db_url, echo=False)
@@ -180,6 +183,7 @@ async def test_migrate_add_agents_seeds_default_per_client(tmp_path: Path):
     await engine.dispose()
 
     from scripts.migrate_add_agents import run_migration
+
     await run_migration(db_url)
 
     engine2 = create_async_engine(db_url, echo=False)
@@ -234,9 +238,7 @@ async def test_migrate_add_agents_is_idempotent(tmp_path: Path):
     engine2 = create_async_engine(db_url, echo=False)
     async with engine2.begin() as conn:
         result = await conn.execute(
-            sqlalchemy.text(
-                "SELECT COUNT(*) FROM agents WHERE client_id='broker-idem'"
-            )
+            sqlalchemy.text("SELECT COUNT(*) FROM agents WHERE client_id='broker-idem'")
         )
         count = result.scalar()
         assert count == 1, f"Expected exactly 1 agent (idempotent), got {count}"
@@ -284,6 +286,7 @@ async def test_migrate_add_agent_id_fks_adds_column_to_call_sessions(tmp_path: P
         )
         # Insert a default agent manually
         import uuid
+
         agent_id = str(uuid.uuid4())
         await conn.execute(
             sqlalchemy.text(
@@ -296,6 +299,7 @@ async def test_migrate_add_agent_id_fks_adds_column_to_call_sessions(tmp_path: P
     await engine.dispose()
 
     from scripts.migrate_add_agent_id_fks import run_migration
+
     await run_migration(db_url)
 
     engine2 = create_async_engine(db_url, echo=False)
@@ -340,6 +344,7 @@ async def test_migrate_add_agent_id_fks_adds_column_to_scheduled_calls(tmp_path:
             )
         )
         import uuid
+
         agent_id = str(uuid.uuid4())
         await conn.execute(
             sqlalchemy.text(
@@ -352,18 +357,23 @@ async def test_migrate_add_agent_id_fks_adds_column_to_scheduled_calls(tmp_path:
     await engine.dispose()
 
     from scripts.migrate_add_agent_id_fks import run_migration
+
     await run_migration(db_url)
 
     engine2 = create_async_engine(db_url, echo=False)
     async with engine2.begin() as conn:
-        result = await conn.execute(sqlalchemy.text("PRAGMA table_info(scheduled_calls)"))
+        result = await conn.execute(
+            sqlalchemy.text("PRAGMA table_info(scheduled_calls)")
+        )
         columns = {row[1] for row in result.fetchall()}
         assert "agent_id" in columns, "agent_id column missing from scheduled_calls"
 
     await engine2.dispose()
 
 
-async def test_migrate_fks_backfill_assigns_agent_id_to_existing_sessions(tmp_path: Path):
+async def test_migrate_fks_backfill_assigns_agent_id_to_existing_sessions(
+    tmp_path: Path,
+):
     """Backfill assigns default agent_id to all existing call_sessions for the client."""
     from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -397,6 +407,7 @@ async def test_migrate_fks_backfill_assigns_agent_id_to_existing_sessions(tmp_pa
             )
         )
         import uuid
+
         agent_id = str(uuid.uuid4())
         await conn.execute(
             sqlalchemy.text(
@@ -413,6 +424,7 @@ async def test_migrate_fks_backfill_assigns_agent_id_to_existing_sessions(tmp_pa
     await engine.dispose()
 
     from scripts.migrate_add_agent_id_fks import run_migration
+
     await run_migration(db_url)
 
     engine2 = create_async_engine(db_url, echo=False)
@@ -425,10 +437,12 @@ async def test_migrate_fks_backfill_assigns_agent_id_to_existing_sessions(tmp_pa
         rows = result.fetchall()
         assert len(rows) == 3, f"Expected 3 session rows, got {len(rows)}"
         for row in rows:
-            assert row[1] is not None, f"Session {row[0]} has NULL agent_id after backfill"
-            assert row[1] == agent_id, (
-                f"Session {row[0]} has wrong agent_id: {row[1]!r} (expected {agent_id!r})"
-            )
+            assert (
+                row[1] is not None
+            ), f"Session {row[0]} has NULL agent_id after backfill"
+            assert (
+                row[1] == agent_id
+            ), f"Session {row[0]} has wrong agent_id: {row[1]!r} (expected {agent_id!r})"
 
     await engine2.dispose()
 
@@ -466,6 +480,7 @@ async def test_migrate_fks_is_idempotent(tmp_path: Path):
             )
         )
         import uuid
+
         agent_id = str(uuid.uuid4())
         await conn.execute(
             sqlalchemy.text(
@@ -491,7 +506,9 @@ async def test_migrate_fks_is_idempotent(tmp_path: Path):
         assert "agent_id" in columns
 
         row_result = await conn.execute(
-            sqlalchemy.text("SELECT agent_id FROM call_sessions WHERE id='idem-sess-001'")
+            sqlalchemy.text(
+                "SELECT agent_id FROM call_sessions WHERE id='idem-sess-001'"
+            )
         )
         row = row_result.fetchone()
         assert row is not None
@@ -541,6 +558,7 @@ async def test_migrate_fks_backfill_leaves_zero_null_rows_when_all_clients_have_
             )
         )
         import uuid
+
         agent_id = str(uuid.uuid4())
         await conn.execute(
             sqlalchemy.text(
@@ -563,9 +581,9 @@ async def test_migrate_fks_backfill_leaves_zero_null_rows_when_all_clients_have_
     engine2 = create_async_engine(db_url, echo=False)
     async with engine2.begin() as conn:
         null_count = await count_null_agent_rows(conn, "call_sessions")
-        assert null_count == 0, (
-            f"Expected 0 NULL agent_id rows after backfill, got {null_count}"
-        )
+        assert (
+            null_count == 0
+        ), f"Expected 0 NULL agent_id rows after backfill, got {null_count}"
     await engine2.dispose()
 
 
@@ -604,6 +622,7 @@ async def test_count_null_agent_rows_returns_correct_count(tmp_path):
         )
         # Insert a default agent
         import uuid
+
         agent_id = str(uuid.uuid4())
         await conn.execute(
             sqlalchemy.text(
@@ -634,8 +653,8 @@ async def test_count_null_agent_rows_returns_correct_count(tmp_path):
             )
         )
         null_count_manual = await count_null_agent_rows(conn, "call_sessions")
-        assert null_count_manual == 1, (
-            f"Expected 1 NULL row after manual update, got {null_count_manual}"
-        )
+        assert (
+            null_count_manual == 1
+        ), f"Expected 1 NULL row after manual update, got {null_count_manual}"
 
     await engine2.dispose()

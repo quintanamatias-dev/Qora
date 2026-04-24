@@ -22,9 +22,7 @@ async def column_exists(conn, table: str, column: str) -> bool:
     """Return True if the column already exists in the table."""
     import sqlalchemy
 
-    result = await conn.execute(
-        sqlalchemy.text(f"PRAGMA table_info({table})")
-    )
+    result = await conn.execute(sqlalchemy.text(f"PRAGMA table_info({table})"))
     rows = result.fetchall()
     return any(row[1] == column for row in rows)
 

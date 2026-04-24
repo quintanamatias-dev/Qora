@@ -25,6 +25,14 @@ class ClientCreate(BaseModel):
     agent_name: str = "Jaumpablo"
     voice_id: str = "pNInz6obpgDQGcFmaJgB"  # ElevenLabs Adam voice
     system_prompt_override: str | None = None
+    # Scheduler configuration (Phase 7 — bootstrappable at create time)
+    scheduler_enabled: bool = False
+    scheduler_max_attempts: int = 3
+    scheduler_cooldown_minutes: int = 60
+    scheduler_allowed_hours_start: int = 9
+    scheduler_allowed_hours_end: int = 20
+    scheduler_retry_on_outcomes: str = '["call_again","follow_up"]'
+    scheduler_timezone: str = "America/Argentina/Buenos_Aires"
 
     @field_validator("client_id")
     @classmethod
@@ -79,9 +87,7 @@ class ClientUpdate(BaseModel):
     def validate_max_attempts(cls, v: int | None) -> int | None:
         """Validate that scheduler_max_attempts is at least 1."""
         if v is not None and v < 1:
-            raise ValueError(
-                f"scheduler_max_attempts must be >= 1, got {v}."
-            )
+            raise ValueError(f"scheduler_max_attempts must be >= 1, got {v}.")
         return v
 
     @field_validator("scheduler_cooldown_minutes")
@@ -89,9 +95,7 @@ class ClientUpdate(BaseModel):
     def validate_cooldown(cls, v: int | None) -> int | None:
         """Validate that scheduler_cooldown_minutes is non-negative."""
         if v is not None and v < 0:
-            raise ValueError(
-                f"scheduler_cooldown_minutes must be >= 0, got {v}."
-            )
+            raise ValueError(f"scheduler_cooldown_minutes must be >= 0, got {v}.")
         return v
 
     @field_validator("scheduler_allowed_hours_start", "scheduler_allowed_hours_end")

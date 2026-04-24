@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.schemas import ClientCreate, ClientResponse, ClientUpdate
 from app.tenants.models import Client
+import app.tenants.service as tenant_service
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
@@ -74,6 +75,10 @@ async def create_client(
 ):
     """Create a new client.
 
+    Delegates to service.create_client() which automatically bootstraps a
+    default Agent for the new client (regression fix — router MUST NOT
+    construct Client() directly).
+
     Returns:
         201: ClientResponse with the created client.
         409: If client_id already exists.
@@ -87,18 +92,22 @@ async def create_client(
             detail={"error": "client already exists", "client_id": payload.client_id},
         )
 
-    client = Client(
+    client = await tenant_service.create_client(
+        session,
         id=payload.client_id,
-        # name must be unique — use broker_name as display name
         name=payload.broker_name,
         broker_name=payload.broker_name,
         agent_name=payload.agent_name,
         voice_id=payload.voice_id,
         system_prompt_override=payload.system_prompt_override,
-        is_active=True,
+        scheduler_enabled=payload.scheduler_enabled,
+        scheduler_max_attempts=payload.scheduler_max_attempts,
+        scheduler_cooldown_minutes=payload.scheduler_cooldown_minutes,
+        scheduler_allowed_hours_start=payload.scheduler_allowed_hours_start,
+        scheduler_allowed_hours_end=payload.scheduler_allowed_hours_end,
+        scheduler_retry_on_outcomes=payload.scheduler_retry_on_outcomes,
+        scheduler_timezone=payload.scheduler_timezone,
     )
-    session.add(client)
-    await session.flush()
     await session.commit()
     await session.refresh(client)
     return _client_to_response(client)
@@ -182,8 +191,14 @@ async def update_client(
     patch_start = update_data.get("scheduler_allowed_hours_start")
     patch_end = update_data.get("scheduler_allowed_hours_end")
     if patch_start is not None or patch_end is not None:
-        effective_start = patch_start if patch_start is not None else client.scheduler_allowed_hours_start
-        effective_end = patch_end if patch_end is not None else client.scheduler_allowed_hours_end
+        effective_start = (
+            patch_start
+            if patch_start is not None
+            else client.scheduler_allowed_hours_start
+        )
+        effective_end = (
+            patch_end if patch_end is not None else client.scheduler_allowed_hours_end
+        )
         if effective_start >= effective_end:
             raise HTTPException(
                 status_code=422,

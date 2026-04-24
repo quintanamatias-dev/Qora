@@ -112,7 +112,11 @@ async def schedule_followup(
             lead_id=lead_id,
             followup_date=followup_date,
         )
-        return {"error": "invalid_date", "field": "followup_date", "value": followup_date}
+        return {
+            "error": "invalid_date",
+            "field": "followup_date",
+            "value": followup_date,
+        }
 
     # Load the lead to resolve effective_client_id (needed for correct TZ resolution).
     lead = await get_lead(session, lead_id)
@@ -143,7 +147,11 @@ async def schedule_followup(
             lead_id=lead_id,
             followup_date=followup_date,
         )
-        return {"error": "invalid_date", "field": "followup_date", "value": followup_date}
+        return {
+            "error": "invalid_date",
+            "field": "followup_date",
+            "value": followup_date,
+        }
 
     # Transition to follow_up (enforces state machine)
     # Allow idempotent re-scheduling: if already in follow_up, skip the transition
@@ -161,7 +169,10 @@ async def schedule_followup(
     if effective_client_id:
         try:
             from app.tenants.models import Client
-            from app.scheduler.service import create_scheduled_call, calculate_scheduled_at
+            from app.scheduler.service import (
+                create_scheduled_call,
+                calculate_scheduled_at,
+            )
             from app.scheduler.models import ScheduledCall
             from sqlalchemy import select
 
@@ -191,9 +202,13 @@ async def schedule_followup(
                             resolved_agent_id = src_session.agent_id
 
                     if resolved_agent_id is None:
-                        from app.tenants.service import get_default_agent as _get_default_agent
+                        from app.tenants.service import (
+                            get_default_agent as _get_default_agent,
+                        )
 
-                        default_agent = await _get_default_agent(session, effective_client_id)
+                        default_agent = await _get_default_agent(
+                            session, effective_client_id
+                        )
                         if default_agent is not None:
                             resolved_agent_id = default_agent.id
                         else:
@@ -242,7 +257,11 @@ async def schedule_followup(
         followup_entry += f" — {note}"
 
     existing_notes = lead.notes or ""
-    lead.notes = f"{existing_notes}\n{followup_entry}".strip() if existing_notes else followup_entry
+    lead.notes = (
+        f"{existing_notes}\n{followup_entry}".strip()
+        if existing_notes
+        else followup_entry
+    )
 
     lead.updated_at = datetime.now(timezone.utc)
     await session.flush()

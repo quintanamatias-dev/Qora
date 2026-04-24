@@ -108,7 +108,9 @@ async def test_render_for_agent_uses_agent_name_in_template_variable(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_render_for_agent_falls_back_to_filesystem_when_no_system_prompt(tmp_path: Path):
+async def test_render_for_agent_falls_back_to_filesystem_when_no_system_prompt(
+    tmp_path: Path,
+):
     """When agent.system_prompt is None, render_for_agent falls back to filesystem or JAUMPABLO template."""
     from app.prompts.loader import PromptLoader
 
@@ -175,14 +177,18 @@ async def test_render_for_agent_no_knowledge_base_no_section(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_render_for_agent_db_knowledge_takes_precedence_over_filesystem(tmp_path: Path):
+async def test_render_for_agent_db_knowledge_takes_precedence_over_filesystem(
+    tmp_path: Path,
+):
     """DB knowledge_base takes precedence over filesystem knowledge.md."""
     from app.prompts.loader import PromptLoader
 
     # Create a filesystem knowledge.md that should NOT be used
     client_dir = tmp_path / "test-client"
     client_dir.mkdir()
-    (client_dir / "knowledge.md").write_text("Filesystem knowledge — should NOT appear.")
+    (client_dir / "knowledge.md").write_text(
+        "Filesystem knowledge — should NOT appear."
+    )
 
     agent = make_agent(
         client_id="test-client",

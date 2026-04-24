@@ -64,9 +64,7 @@ async def test_get_default_agent_ignores_inactive_agent(session: AsyncSession):
     assert active is not None, "create_client must bootstrap a default agent first"
 
     await session.execute(
-        update(Agent)
-        .where(Agent.id == active.id)
-        .values(is_active=False)
+        update(Agent).where(Agent.id == active.id).values(is_active=False)
     )
     await session.flush()
 
@@ -78,7 +76,9 @@ async def test_get_default_agent_ignores_inactive_agent(session: AsyncSession):
     )
 
 
-async def test_get_default_agent_returns_active_default_among_inactive(session: AsyncSession):
+async def test_get_default_agent_returns_active_default_among_inactive(
+    session: AsyncSession,
+):
     """get_default_agent() returns the active default, not inactive ones."""
     from app.tenants.service import create_client, get_default_agent
     from app.tenants.models import Agent
@@ -98,17 +98,15 @@ async def test_get_default_agent_returns_active_default_among_inactive(session: 
     assert active_agent is not None
 
     await session.execute(
-        update(Agent)
-        .where(Agent.id == active_agent.id)
-        .values(is_active=False)
+        update(Agent).where(Agent.id == active_agent.id).values(is_active=False)
     )
     await session.flush()
 
     # Now there's a default agent that's inactive — result must be None
     result = await get_default_agent(session, "broker-mixed-active")
-    assert result is None, (
-        "After deactivating the default agent, get_default_agent() must return None"
-    )
+    assert (
+        result is None
+    ), "After deactivating the default agent, get_default_agent() must return None"
 
 
 # ---------------------------------------------------------------------------
@@ -143,17 +141,20 @@ async def test_schedule_followup_naive_datetime_uses_client_tz_even_when_client_
 
     # Enable scheduler and set timezone on quintana
     from app.tenants.models import Client
+
     client = await session.get(Client, "quintana-seguros")
     client.scheduler_timezone = "America/Argentina/Buenos_Aires"  # UTC-3
     await session.flush()
 
     # Simulate what schedule_followup should do:
     # "2026-05-10T09:00" naive in ART (UTC-3) → 12:00 UTC
-    dt = _parse_followup_date("2026-05-10T09:00", client_timezone="America/Argentina/Buenos_Aires")
-    assert dt is not None
-    assert dt.hour == 12, (
-        f"Naive 09:00 ART (UTC-3) should be stored as 12:00 UTC, got {dt.hour}:00 UTC"
+    dt = _parse_followup_date(
+        "2026-05-10T09:00", client_timezone="America/Argentina/Buenos_Aires"
     )
+    assert dt is not None
+    assert (
+        dt.hour == 12
+    ), f"Naive 09:00 ART (UTC-3) should be stored as 12:00 UTC, got {dt.hour}:00 UTC"
 
 
 # ---------------------------------------------------------------------------

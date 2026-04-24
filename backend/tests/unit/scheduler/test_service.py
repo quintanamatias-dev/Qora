@@ -67,6 +67,7 @@ def test_calculate_after_end_of_window_clamps_to_next_day():
     # candidate local = 20:30 → after end(20) → clamp to 09:00 next day
     # 09:00 BsAs next day (2026-05-02) = 12:00 UTC
     from zoneinfo import ZoneInfo
+
     tz = ZoneInfo(tz_str)
     result_local = result.astimezone(tz)
     assert result_local.hour == 9
@@ -90,6 +91,7 @@ def test_calculate_before_start_of_window_clamps_same_day():
     )
     # candidate local = 08:00 → before start(9) → clamp to 09:00 same day
     from zoneinfo import ZoneInfo
+
     tz = ZoneInfo(tz_str)
     result_local = result.astimezone(tz)
     assert result_local.hour == 9
@@ -156,7 +158,9 @@ async def sched_db(tmp_path: Path):
         client.scheduler_cooldown_minutes = 60
         client.scheduler_allowed_hours_start = 9
         client.scheduler_allowed_hours_end = 20
-        client.scheduler_retry_on_outcomes = '["busy","no_answer","follow_up","call_again"]'
+        client.scheduler_retry_on_outcomes = (
+            '["busy","no_answer","follow_up","call_again"]'
+        )
         await sess.commit()
 
     yield db_module
@@ -589,9 +593,9 @@ def test_client_default_retry_outcomes_includes_call_again():
     # The default value is set at the column level
     default_val = Client.__table__.c["scheduler_retry_on_outcomes"].default.arg
     outcomes = json.loads(default_val)
-    assert "call_again" in outcomes, (
-        f"Default scheduler_retry_on_outcomes must include 'call_again', got: {outcomes}"
-    )
+    assert (
+        "call_again" in outcomes
+    ), f"Default scheduler_retry_on_outcomes must include 'call_again', got: {outcomes}"
 
 
 async def test_auto_schedule_triggers_with_call_again_on_fresh_client(tmp_path):
@@ -614,6 +618,7 @@ async def test_auto_schedule_triggers_with_call_again_on_fresh_client(tmp_path):
     async with db_module.async_session_factory() as sess:
         from app.tenants.service import seed_quintana
         from app.leads.service import create_lead
+
         await seed_quintana(sess)
         await create_lead(
             sess,
@@ -627,12 +632,14 @@ async def test_auto_schedule_triggers_with_call_again_on_fresh_client(tmp_path):
     # Enable scheduler but leave scheduler_retry_on_outcomes at DEFAULT
     async with db_module.async_session_factory() as sess:
         from app.tenants.models import Client
+
         client = await sess.get(Client, "quintana-seguros")
         client.scheduler_enabled = True
         # Do NOT set scheduler_retry_on_outcomes — rely on default
         await sess.commit()
 
     from app.scheduler.service import auto_schedule
+
     async with db_module.async_session_factory() as sess:
         result = await auto_schedule(
             db=sess,

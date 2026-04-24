@@ -642,9 +642,8 @@ async def _process_custom_llm_request(
     #
     # AGENT PATH: agent.system_prompt behaves like override — append lead context
     # if agent has a DB prompt set.
-    _has_static_prompt = (
-        (agent is not None and agent.system_prompt)
-        or (agent is None and client.system_prompt_override is not None)
+    _has_static_prompt = (agent is not None and agent.system_prompt) or (
+        agent is None and client.system_prompt_override is not None
     )
     if _has_static_prompt and lead is not None:
         lead_context = (
@@ -668,9 +667,7 @@ async def _process_custom_llm_request(
 
     # Parse tools from agent config (Phase 7) or client config (legacy)
     _tools_enabled_str = (
-        agent.tools_enabled
-        if agent is not None
-        else client.tools_enabled
+        agent.tools_enabled if agent is not None else client.tools_enabled
     )
     tools = None
     if _tools_enabled_str:
@@ -712,7 +709,9 @@ async def _process_custom_llm_request(
             )
 
             async def _error_stream():
-                yield _sse_chunk("Lo siento, no hay agente configurado para este cliente.")
+                yield _sse_chunk(
+                    "Lo siento, no hay agente configurado para este cliente."
+                )
                 yield _sse_stop()
                 yield _sse_done()
 

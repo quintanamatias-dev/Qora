@@ -452,13 +452,19 @@ async def test_schedule_followup_date_only_interpreted_as_local_tz(followup_app)
         sc = rows.scalar_one()
         # Buenos Aires is UTC-3; 09:00 local = 12:00 UTC
         # The call must NOT be at 00:00 UTC (which is what naive UTC interpretation would give)
-        sc_utc = sc.scheduled_at.replace(tzinfo=timezone.utc) if sc.scheduled_at.tzinfo is None else sc.scheduled_at.astimezone(timezone.utc)
+        sc_utc = (
+            sc.scheduled_at.replace(tzinfo=timezone.utc)
+            if sc.scheduled_at.tzinfo is None
+            else sc.scheduled_at.astimezone(timezone.utc)
+        )
         assert sc_utc.hour != 0, (
             f"scheduled_at {sc_utc} looks like UTC midnight — "
             "date-only strings must be interpreted as local TZ start_hour, not UTC midnight"
         )
         # Should be at 12:00 UTC (09:00 Buenos Aires)
-        assert sc_utc.hour == 12, f"Expected 12:00 UTC (09:00 BsAs), got {sc_utc.hour}:00 UTC"
+        assert (
+            sc_utc.hour == 12
+        ), f"Expected 12:00 UTC (09:00 BsAs), got {sc_utc.hour}:00 UTC"
 
 
 async def test_schedule_followup_naive_datetime_interpreted_as_local_tz(followup_app):
@@ -489,7 +495,11 @@ async def test_schedule_followup_naive_datetime_interpreted_as_local_tz(followup
             select(ScheduledCall).where(ScheduledCall.lead_id == "fu-lead-001")
         )
         sc = rows.scalar_one()
-        sc_utc = sc.scheduled_at.replace(tzinfo=timezone.utc) if sc.scheduled_at.tzinfo is None else sc.scheduled_at.astimezone(timezone.utc)
+        sc_utc = (
+            sc.scheduled_at.replace(tzinfo=timezone.utc)
+            if sc.scheduled_at.tzinfo is None
+            else sc.scheduled_at.astimezone(timezone.utc)
+        )
         # 14:00 Buenos Aires (UTC-3) = 17:00 UTC
         assert sc_utc.hour == 17, (
             f"Expected 17:00 UTC (14:00 BsAs), got {sc_utc.hour}:00 UTC — "
