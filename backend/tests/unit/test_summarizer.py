@@ -211,6 +211,267 @@ async def test_summarizer_gpt_failure_no_exception(seeded_db):
         async with seeded_db.async_session_factory() as db:
             # Must not raise
             await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+
+# ===========================================================================
+# WARNING 1 — 6 scenarios without direct runtime tests (verify fix)
+# ===========================================================================
+
+
+async def test_call_analysis_upsert_retry_safe_same_session_id(seeded_db):
+    """WARNING 1-A: Calling summarizer TWICE on the same session_id produces exactly ONE CallAnalysis row.
+
+    This tests retry-safe upsert semantics: the second run must UPDATE the existing
+    row rather than INSERT a duplicate (which would violate the UNIQUE constraint on session_id).
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.models import CallAnalysis
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "Hola, llamo de Quintana"),
+            ("user", "Me interesa el todo riesgo"),
+        ],
+    )
+
+    analysis = _make_full_analysis_payload()
+
+    # --- First run ---
+    mock_client_1 = _make_mock_client(_make_parse_response(analysis))
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client_1, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    # --- Second run (retry / re-webhook) ---
+    mock_client_2 = _make_mock_client(_make_parse_response(analysis))
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client_2, "gpt-4o-mini")
+    ):
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    # Exactly ONE row must exist (upsert, not duplicate insert)
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+        )
+        rows = result.scalars().all()
+        assert len(rows) == 1, (
+            f"Expected exactly 1 CallAnalysis row after double summarizer run, "
+            f"got {len(rows)}"
+        )
+        assert rows[0].analysis_status == "ok"
+
+
+async def test_call_analysis_extra_axes_data_is_none_when_no_extra_axes(seeded_db):
+    """WARNING 1-B: When the client has no extra_axes configured, extra_axes_data is NULL in CallAnalysis.
+
+    The base path (no extra axes) must NOT write a dummy JSON value — it must be NULL.
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.models import CallAnalysis
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "Hola"),
+            ("user", "Sí, me interesa"),
+        ],
+    )
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+        )
+        ca = result.scalar_one()
+        # No extra axes configured → extra_axes_data must be NULL
+        assert (
+            ca.extra_axes_data is None
+        ), "extra_axes_data must be NULL when no extra_axes are configured"
+
+
+def test_extraction_config_deserialized_from_valid_spec_payload():
+    """WARNING 1-C: ExtractionConfig.model_validate() correctly deserializes a spec-shaped JSON payload.
+
+    Verifies round-trip: JSON dict → ExtractionConfig → fields match expected values.
+    This is the deserialization path used by _load_extraction_config().
+    """
+    from app.analysis_schema import ExtractionConfig
+
+    payload = {
+        "disabled_axes": ["service_issues"],
+        "extra_axes": [
+            {
+                "name": "property_type",
+                "field_type": "str",
+                "description": "Type of real estate property",
+            }
+        ],
+        "prompt_addendum": "Focus on real estate in Buenos Aires.",
+    }
+
+    config = ExtractionConfig.model_validate(payload)
+
+    assert config.disabled_axes == ["service_issues"]
+    assert len(config.extra_axes) == 1
+    assert config.extra_axes[0].name == "property_type"
+    assert config.extra_axes[0].field_type == "str"
+    assert config.extra_axes[0].description == "Type of real estate property"
+    assert config.prompt_addendum == "Focus on real estate in Buenos Aires."
+
+
+def test_build_system_prompt_fallback_to_analysis_system_prompt_when_config_none():
+    """WARNING 1-D: build_system_prompt(None) returns ANALYSIS_SYSTEM_PROMPT exactly.
+
+    This is the backward-compat fallback: when config=None, the deprecated static
+    prompt is used (not the generic builder), ensuring legacy behavior is preserved.
+    """
+    from app.analysis_schema import build_system_prompt, ANALYSIS_SYSTEM_PROMPT
+
+    result = build_system_prompt(None)
+
+    assert result is ANALYSIS_SYSTEM_PROMPT, (
+        "build_system_prompt(None) must return the exact ANALYSIS_SYSTEM_PROMPT object "
+        "(identity check), not a generated version"
+    )
+
+
+async def test_call_analysis_extra_axes_data_round_trips_named_keys(seeded_db):
+    """WARNING 1-E: extra_axes_data with named keys is stored and retrievable as JSON.
+
+    When the LLM returns extra_axes_data with named keys, _upsert_call_analysis must
+    serialize it to JSON and store it in the extra_axes_data column. On read-back,
+    the JSON must deserialize to the same dict with the same keys.
+    """
+    import json
+    from app.summarizer import _upsert_call_analysis
+    from app.calls.models import CallAnalysis
+    from sqlalchemy import select
+
+    # Create a bare session (no turns needed — testing _upsert_call_analysis directly)
+    assert seeded_db.async_session_factory is not None
+
+    # We need a real session_id that exists in DB for the FK constraint
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[("user", "test")],
+    )
+
+    extra_data = {"property_type": "apartment", "num_bedrooms": 3}
+    facts = {
+        "interest_level": 75,
+        "next_action_suggested": "call_again",
+        "current_insurance": None,
+        "objections": [],
+        "call_outcome": {
+            "classification": "interested",
+            "reason": "Lead interested in apartment.",
+            "engagement_quality": "high",
+        },
+        "detected_interests": {
+            "products": [],
+            "specific_needs": [],
+            "buying_signals": [],
+        },
+        "identified_problem": {
+            "primary_need": "Apartment coverage.",
+            "pain_points": [],
+            "urgency": "medium",
+        },
+        "service_issues": {"issues": []},
+        "profile_facts": {"facts": []},
+        "commitment_signals": {"signals": []},
+        "abandonment_reason": {"reason": None},
+        "data_corrections": "",
+        "misc_notes": "",
+        "extra_axes_data": extra_data,
+    }
+
+    async with seeded_db.async_session_factory() as db:
+        await _upsert_call_analysis(
+            db,
+            session_id=session_id,
+            lead_id="test-lead-sum-001",
+            client_id="quintana-seguros",
+            summary="Test extra axes round-trip.",
+            facts=facts,
+        )
+        await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+        )
+        ca = result.scalar_one()
+
+        # extra_axes_data must be stored as JSON string
+        assert ca.extra_axes_data is not None, "extra_axes_data must NOT be None"
+        retrieved = json.loads(ca.extra_axes_data)
+        assert retrieved["property_type"] == "apartment"
+        assert retrieved["num_bedrooms"] == 3
+
+
+async def test_call_analysis_upsert_no_duplicates_after_retry(seeded_db):
+    """WARNING 1-F: After two summarizer runs, exactly one CallAnalysis row exists (no duplicates).
+
+    This is a stricter variant of WARNING 1-A: verifies the DB count directly via
+    a raw COUNT query rather than checking the ORM result list length, to catch
+    any scenario where the uniqueness constraint might not be enforced in the ORM layer.
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.models import CallAnalysis
+    from sqlalchemy import select, func
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "Buenos días"),
+            ("user", "Me llamo Juan"),
+        ],
+    )
+
+    analysis = _make_full_analysis_payload()
+
+    for _ in range(2):
+        mock_client = _make_mock_client(_make_parse_response(analysis))
+        with patch(
+            "app.summarizer._get_openai_client",
+            return_value=(mock_client, "gpt-4o-mini"),
+        ):
+            assert seeded_db.async_session_factory is not None
+            async with seeded_db.async_session_factory() as db:
+                await generate_summary_and_facts(session_id, db)
+                await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        count_result = await db.execute(
+            select(func.count()).where(CallAnalysis.session_id == session_id)
+        )
+        count = count_result.scalar_one()
+        assert count == 1, (
+            f"Expected exactly 1 CallAnalysis row after 2 summarizer runs, "
+            f"got {count} — duplicate insert bug"
+        )
 
 
 async def test_summarizer_gpt_failure_session_stays_completed(seeded_db):
@@ -1495,3 +1756,467 @@ async def test_summarizer_critical2_data_corrections_create_lead_profile_facts(
             len(car_year_facts) >= 1
         ), "CRITICAL 2 FAIL: no LeadProfileFact row created for car_year correction"
         assert car_year_facts[0].fact_value == "2022"
+
+
+# ===========================================================================
+# Issue #35 — Phase 3: Persistence — 5 new CallAnalysis columns + Client config
+# ===========================================================================
+
+
+async def test_call_analysis_has_five_new_columns(seeded_db):
+    """Phase 3: CallAnalysis row after summarizer run has the 5 new axis columns."""
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.models import CallAnalysis
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "Hola"),
+            ("user", "Hola, me interesa cotizar"),
+        ],
+    )
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+        )
+        ca = result.scalar_one_or_none()
+        assert ca is not None
+
+        # Verify 5 new columns exist on the ORM model
+        assert hasattr(
+            ca, "service_issues"
+        ), "CallAnalysis must have service_issues column"
+        assert hasattr(
+            ca, "profile_facts"
+        ), "CallAnalysis must have profile_facts column"
+        assert hasattr(
+            ca, "commitment_signals"
+        ), "CallAnalysis must have commitment_signals column"
+        assert hasattr(
+            ca, "abandonment_reason"
+        ), "CallAnalysis must have abandonment_reason column"
+        assert hasattr(
+            ca, "extra_axes_data"
+        ), "CallAnalysis must have extra_axes_data column"
+
+
+async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
+    """Phase 3: Summarizer persists service_issues, profile_facts, commitment_signals, abandonment_reason."""
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.models import CallAnalysis
+    from app.analysis_schema import (
+        PostCallAnalysis,
+        CallOutcome,
+        DetectedInterests,
+        IdentifiedProblem,
+        ServiceIssuesAxis,
+        ProfileFactsAxis,
+        CommitmentSignalsAxis,
+        AbandonmentReasonAxis,
+    )
+    from sqlalchemy import select
+    import json
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "¿Tuvo algún problema con el servicio anterior?"),
+            ("user", "Sí, la atención fue muy mala"),
+        ],
+    )
+
+    axes_analysis = PostCallAnalysis(
+        summary="Lead con problemas de servicio anterior.",
+        objections=["bad service"],
+        interest_level=60,
+        current_insurance="La Caja",
+        next_action_suggested="send_quote",
+        misc_notes="",
+        call_outcome=CallOutcome(
+            classification="interested",
+            reason="Lead wants to switch provider.",
+            engagement_quality="medium",
+        ),
+        detected_interests=DetectedInterests(products=["todo_riesgo"]),
+        identified_problem=IdentifiedProblem(
+            primary_need="Switch insurance provider.",
+            urgency="medium",
+        ),
+        service_issues=ServiceIssuesAxis(
+            issues=["poor customer service", "claim denied"]
+        ),
+        profile_facts=ProfileFactsAxis(facts=["owns a Fiat", "lives in Palermo"]),
+        commitment_signals=CommitmentSignalsAxis(
+            signals=["asked for quote comparison"]
+        ),
+        abandonment_reason=AbandonmentReasonAxis(reason=None),
+    )
+
+    mock_client = _make_mock_client(_make_parse_response(axes_analysis))
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+        )
+        ca = result.scalar_one()
+
+        # service_issues: stored as JSON text list
+        issues = json.loads(ca.service_issues)
+        assert "poor customer service" in issues
+        assert "claim denied" in issues
+
+        # profile_facts: stored as JSON text list
+        facts = json.loads(ca.profile_facts)
+        assert "owns a Fiat" in facts
+
+        # commitment_signals: stored as JSON text list
+        signals = json.loads(ca.commitment_signals)
+        assert "asked for quote comparison" in signals
+
+        # abandonment_reason: None → stored as NULL
+        assert ca.abandonment_reason is None
+
+
+async def test_call_analysis_abandonment_reason_persisted_when_set(seeded_db):
+    """Phase 3: abandonment_reason is stored as text when the lead disengaged."""
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.models import CallAnalysis
+    from app.analysis_schema import (
+        PostCallAnalysis,
+        CallOutcome,
+        DetectedInterests,
+        IdentifiedProblem,
+        AbandonmentReasonAxis,
+        ServiceIssuesAxis,
+        ProfileFactsAxis,
+        CommitmentSignalsAxis,
+    )
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "¿Le interesa?"),
+            ("user", "No, ya conseguí algo mejor"),
+        ],
+    )
+
+    abandon_analysis = PostCallAnalysis(
+        summary="Lead encontró mejor oferta.",
+        objections=["found cheaper"],
+        interest_level=10,
+        current_insurance=None,
+        next_action_suggested="wait",
+        misc_notes="",
+        call_outcome=CallOutcome(
+            classification="not_interested",
+            reason="Lead found a cheaper competitor.",
+            engagement_quality="low",
+        ),
+        detected_interests=DetectedInterests(),
+        identified_problem=IdentifiedProblem(
+            primary_need="Looking for cheapest option.",
+            urgency="low",
+        ),
+        service_issues=ServiceIssuesAxis(),
+        profile_facts=ProfileFactsAxis(),
+        commitment_signals=CommitmentSignalsAxis(),
+        abandonment_reason=AbandonmentReasonAxis(
+            reason="Found a cheaper provider elsewhere"
+        ),
+    )
+
+    mock_client = _make_mock_client(_make_parse_response(abandon_analysis))
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+        )
+        ca = result.scalar_one()
+        assert ca.abandonment_reason == "Found a cheaper provider elsewhere"
+
+
+async def test_call_analysis_null_axes_on_failure(seeded_db):
+    """Phase 3: Analysis failure marker — new axis columns remain at their defaults."""
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.models import CallAnalysis
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[("user", "Hola"), ("agent", "Buenos días")],
+    )
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.parse = AsyncMock(side_effect=Exception("API error"))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+        )
+        ca = result.scalar_one()
+        assert ca.analysis_status == "failed"
+        # New columns should have their defaults (empty lists / null)
+        assert ca.service_issues == "[]"
+        assert ca.profile_facts == "[]"
+        assert ca.commitment_signals == "[]"
+        assert ca.abandonment_reason is None
+        assert ca.extra_axes_data is None
+
+
+async def test_client_extraction_config_column_nullable(seeded_db):
+    """Phase 3: Client.extraction_config column is nullable — NULL for existing clients."""
+    from app.tenants.models import Client
+    from sqlalchemy import select
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(select(Client).where(Client.id == "quintana-seguros"))
+        client = result.scalar_one()
+        # extraction_config must exist as attribute and be NULL by default
+        assert hasattr(
+            client, "extraction_config"
+        ), "Client must have extraction_config column"
+        assert client.extraction_config is None
+
+
+async def test_client_extraction_config_can_be_set(seeded_db):
+    """Phase 3: Client.extraction_config can be stored as a JSON string."""
+    import json
+    from app.tenants.models import Client
+    from sqlalchemy import select
+
+    config_json = json.dumps(
+        {"disabled_axes": [], "extra_axes": [], "prompt_addendum": ""}
+    )
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(select(Client).where(Client.id == "quintana-seguros"))
+        client = result.scalar_one()
+        client.extraction_config = config_json
+        await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(select(Client).where(Client.id == "quintana-seguros"))
+        client = result.scalar_one()
+        assert client.extraction_config == config_json
+        parsed = json.loads(client.extraction_config)
+        assert parsed["disabled_axes"] == []
+
+
+# ===========================================================================
+# Issue #35 — Phase 4: Config-aware summarizer pipeline
+# ===========================================================================
+
+
+async def test_call_gpt_summarize_null_config_uses_base_model(seeded_db):
+    """Phase 4: _call_gpt_summarize(config=None) uses PostCallAnalysis as response_format."""
+    from app.summarizer import generate_summary_and_facts
+    from app.analysis_schema import PostCallAnalysis
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[("user", "Me interesa el seguro")],
+    )
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+
+        call_kwargs = mock_client.chat.completions.parse.call_args[1]
+        # NULL config (quintana-seguros has no extraction_config) → PostCallAnalysis
+        assert call_kwargs.get("response_format") is PostCallAnalysis
+
+
+async def test_call_gpt_summarize_with_config_uses_dynamic_model(seeded_db):
+    """Phase 4: _call_gpt_summarize with config → uses build_analysis_model(config) as response_format."""
+    import json
+    from app.summarizer import generate_summary_and_facts
+    from app.analysis_schema import build_analysis_model, ExtractionConfig
+    from app.tenants.models import Client
+    from sqlalchemy import select
+
+    # Set extraction_config on the client
+    config = ExtractionConfig(prompt_addendum="Real estate context")
+    config_json = json.dumps(config.model_dump())
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(select(Client).where(Client.id == "quintana-seguros"))
+        client = result.scalar_one()
+        client.extraction_config = config_json
+        await db.commit()
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[("user", "Me interesa")],
+    )
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+
+        call_kwargs = mock_client.chat.completions.parse.call_args[1]
+        used_format = call_kwargs.get("response_format")
+        # Must NOT be the bare PostCallAnalysis class when config is set
+        # (could be PostCallAnalysis itself if config is empty — that's also valid)
+        expected_model = build_analysis_model(config)
+        assert used_format is expected_model
+
+
+async def test_call_gpt_summarize_with_config_uses_dynamic_prompt(seeded_db):
+    """Phase 4: _call_gpt_summarize with config → system prompt is from build_system_prompt(config)."""
+    import json
+    from app.summarizer import generate_summary_and_facts
+    from app.analysis_schema import ExtractionConfig
+    from app.tenants.models import Client
+    from sqlalchemy import select
+
+    config = ExtractionConfig(prompt_addendum="Focus on real estate leads in CABA.")
+    config_json = json.dumps(config.model_dump())
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(select(Client).where(Client.id == "quintana-seguros"))
+        client = result.scalar_one()
+        client.extraction_config = config_json
+        await db.commit()
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[("user", "Quiero ver propiedades")],
+    )
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+
+        call_kwargs = mock_client.chat.completions.parse.call_args[1]
+        messages = call_kwargs.get("messages", [])
+        system_message = next(
+            (m["content"] for m in messages if m["role"] == "system"), None
+        )
+        assert system_message is not None
+        # The system prompt must contain the addendum
+        assert "Focus on real estate leads in CABA." in system_message
+
+
+async def test_run_summarizer_null_config_no_error(seeded_db):
+    """Phase 4: _run_summarizer() with NULL extraction_config does not error — uses base path."""
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.models import CallAnalysis
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[("agent", "Hola"), ("user", "Sí, me interesa")],
+    )
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            # quintana-seguros has extraction_config=NULL — must not raise
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+        )
+        ca = result.scalar_one()
+        assert ca.analysis_status == "ok"
+
+
+async def test_summarizer_gpt_refusal_with_config_is_non_fatal(seeded_db):
+    """Phase 4: GPT refusal with dynamic model config → summarizer logs and does NOT raise."""
+    import json
+    from app.summarizer import generate_summary_and_facts
+    from app.analysis_schema import ExtractionConfig
+    from app.tenants.models import Client
+    from sqlalchemy import select
+
+    config = ExtractionConfig()
+    config_json = json.dumps(config.model_dump())
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(select(Client).where(Client.id == "quintana-seguros"))
+        client = result.scalar_one()
+        client.extraction_config = config_json
+        await db.commit()
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[("user", "Hola"), ("agent", "Hola")],
+    )
+
+    mock_refusal_response = MagicMock()
+    mock_refusal_response.choices = [MagicMock()]
+    mock_refusal_response.choices[0].message.parsed = None
+    mock_refusal_response.choices[0].message.refusal = "I cannot analyze this."
+
+    mock_client = AsyncMock()
+    mock_client.chat.completions.parse.return_value = mock_refusal_response
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            # Must not raise
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
