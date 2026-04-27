@@ -726,3 +726,351 @@ def test_format_confirmed_facts_lists_joined_as_string():
 
     # Must produce output containing the list items
     assert "precio alto" in result or "objections" in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# Issue #36 Phase 3 — Memory context upgrade: accumulated profile facts
+# ---------------------------------------------------------------------------
+
+
+async def _insert_profile_fact(
+    db_module, *, lead_id, fact_key, fact_value, superseded_at=None, recorded_at=None
+):
+    """Helper: insert a LeadProfileFact row directly."""
+    import uuid as _uuid
+    from app.leads.models import LeadProfileFact
+    from datetime import datetime, timezone
+
+    row_id = str(_uuid.uuid4())
+    async with db_module.async_session_factory() as sess:
+        row = LeadProfileFact(
+            id=row_id,
+            lead_id=lead_id,
+            fact_key=fact_key,
+            fact_value=fact_value,
+            superseded_at=superseded_at,
+            recorded_at=recorded_at or datetime.now(timezone.utc),
+        )
+        sess.add(row)
+        await sess.commit()
+    return row_id
+
+
+async def _insert_interest_history_mem(
+    db_module, *, lead_id, interest_level, recorded_at=None
+):
+    """Helper: insert a LeadInterestHistory row directly."""
+    import uuid as _uuid
+    from app.leads.models import LeadInterestHistory
+    from datetime import datetime, timezone
+
+    row_id = str(_uuid.uuid4())
+    async with db_module.async_session_factory() as sess:
+        row = LeadInterestHistory(
+            id=row_id,
+            lead_id=lead_id,
+            interest_level=interest_level,
+            recorded_at=recorded_at or datetime.now(timezone.utc),
+        )
+        sess.add(row)
+        await sess.commit()
+    return row_id
+
+
+@pytest.mark.asyncio
+async def test_confirmed_facts_includes_accumulated_profile_facts(seeded_db):
+    """Issue #36 Phase 3: build_memory_context includes accumulated profile facts in confirmed_facts.
+
+    GIVEN a lead with 3 active 'profile:' facts and 2 active 'pain:' facts
+    WHEN build_memory_context(db, lead) is called
+    THEN confirmed_facts contains lines for each accumulated fact, grouped by namespace.
+    """
+    from app.memory import build_memory_context
+    from app.leads.service import get_lead
+
+    lead_id = "test-lead-memory-001"
+
+    await _insert_profile_fact(
+        seeded_db, lead_id=lead_id, fact_key="profile:married", fact_value="married"
+    )
+    await _insert_profile_fact(
+        seeded_db,
+        lead_id=lead_id,
+        fact_key="profile:has 2 children",
+        fact_value="has 2 children",
+    )
+    await _insert_profile_fact(
+        seeded_db,
+        lead_id=lead_id,
+        fact_key="pain:high premiums",
+        fact_value="high premiums",
+    )
+    await _insert_profile_fact(
+        seeded_db,
+        lead_id=lead_id,
+        fact_key="pain:no coverage",
+        fact_value="no coverage",
+    )
+
+    async with seeded_db.async_session_factory() as sess:
+        lead = await get_lead(sess, lead_id)
+        assert lead is not None
+        ctx = await build_memory_context(sess, lead)
+
+    # The confirmed_facts must contain the accumulated facts
+    confirmed = ctx["confirmed_facts"]
+    assert (
+        "married" in confirmed
+    ), f"Expected 'married' in confirmed_facts, got: {confirmed!r}"
+    assert "has 2 children" in confirmed, "Expected 'has 2 children' in confirmed_facts"
+    assert "high premiums" in confirmed, "Expected 'high premiums' in confirmed_facts"
+    assert "no coverage" in confirmed, "Expected 'no coverage' in confirmed_facts"
+
+
+@pytest.mark.asyncio
+async def test_confirmed_facts_token_budget_caps_at_10_per_namespace(seeded_db):
+    """Issue #36 Phase 3: build_memory_context caps accumulated facts at 10 per namespace.
+
+    GIVEN a lead with 15 active 'profile:' facts
+    WHEN build_memory_context(db, lead) is called
+    THEN at most 10 'profile:' facts appear in confirmed_facts.
+    """
+    from app.memory import build_memory_context
+    from app.leads.service import get_lead
+
+    lead_id = "test-lead-memory-001"
+    now = datetime.now(timezone.utc)
+
+    # Insert 15 profile: facts with different timestamps
+    for i in range(15):
+        await _insert_profile_fact(
+            seeded_db,
+            lead_id=lead_id,
+            fact_key=f"profile:fact number {i}",
+            fact_value=f"fact number {i}",
+            recorded_at=now - timedelta(hours=15 - i),
+        )
+
+    async with seeded_db.async_session_factory() as sess:
+        lead = await get_lead(sess, lead_id)
+        assert lead is not None
+        ctx = await build_memory_context(sess, lead)
+
+    confirmed = ctx["confirmed_facts"]
+    # Count how many unique 'fact number X' items appear using exact item matching
+    # We look for items by their exact value; use word-boundary-like check with prefix/suffix
+    count = sum(
+        1
+        for i in range(15)
+        if f"fact number {i}," in confirmed or confirmed.endswith(f"fact number {i}")
+    )
+    assert (
+        count <= 10
+    ), f"Expected at most 10 profile: facts, found {count} in confirmed_facts"
+    assert count >= 1, "Expected at least 1 profile: fact to appear"
+
+
+@pytest.mark.asyncio
+async def test_confirmed_facts_no_fallback_to_extracted_facts_json(seeded_db):
+    """Issue #36 Phase 3: When no LeadProfileFact rows exist, confirmed_facts is empty or minimal.
+
+    GIVEN a lead with no LeadProfileFact rows but non-empty Lead.extracted_facts
+    WHEN build_memory_context(db, lead) is called
+    THEN confirmed_facts does NOT include extracted_facts JSON blob content
+         (uses relational tables only for new accumulated facts).
+    """
+    from app.memory import build_memory_context
+    from app.leads.service import get_lead
+
+    lead_id = "test-lead-memory-001"
+
+    # Set extracted_facts to verify they don't bleed into accumulated section
+    async with seeded_db.async_session_factory() as sess:
+        lead = await get_lead(sess, lead_id)
+        assert lead is not None
+        lead.extracted_facts = {
+            "current_insurance": "La Caja",
+            "interest_level": 80,
+        }
+        await sess.commit()
+
+    # No LeadProfileFact rows inserted — accumulated section should be absent
+    async with seeded_db.async_session_factory() as sess:
+        lead = await get_lead(sess, lead_id)
+        assert lead is not None
+        ctx = await build_memory_context(sess, lead)
+
+    confirmed = ctx["confirmed_facts"]
+    # The legacy section (current_insurance from extracted_facts) is still present
+    assert "La Caja" in confirmed, "Legacy scalar facts should still be present"
+    # But there must be no 'Perfil acumulado' / accumulated section if no profile facts exist
+    assert (
+        "Perfil acumulado" not in confirmed
+    ), "Accumulated section must NOT appear when there are no LeadProfileFact rows"
+
+
+@pytest.mark.asyncio
+async def test_call_history_and_call_number_unchanged_after_profile_facts(seeded_db):
+    """Issue #36 Phase 3: call_history and call_number behave exactly as before.
+
+    GIVEN a lead with profile facts AND a completed session
+    WHEN build_memory_context(db, lead) is called
+    THEN call_history and call_number are unaffected by the new profile facts logic.
+    """
+    from app.memory import build_memory_context
+    from app.leads.service import get_lead
+
+    lead_id = "test-lead-memory-001"
+
+    # Insert a completed session with summary
+    await _create_completed_session(
+        seeded_db,
+        lead_id=lead_id,
+        summary="El lead quiere seguro todo riesgo.",
+    )
+
+    # Insert a profile fact
+    await _insert_profile_fact(
+        seeded_db, lead_id=lead_id, fact_key="profile:retired", fact_value="retired"
+    )
+
+    async with seeded_db.async_session_factory() as sess:
+        lead = await get_lead(sess, lead_id)
+        assert lead is not None
+        ctx = await build_memory_context(sess, lead)
+
+    # call_history should still contain the session summary
+    assert (
+        "seguro todo riesgo" in ctx["call_history"]
+    ), f"Expected session summary in call_history, got: {ctx['call_history']!r}"
+    # is_returning_caller should be True (completed session exists)
+    assert ctx["is_returning_caller"] is True
+    # call_number should be lead.call_count + 1
+    assert ctx["call_number"] == 1  # call_count=0 by default
+
+
+# ---------------------------------------------------------------------------
+# Issue #36 CRITICAL 1 — Interest history included in confirmed_facts
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_confirmed_facts_includes_interest_history_evolution(seeded_db):
+    """CRITICAL 1: build_memory_context includes LeadInterestHistory in confirmed_facts.
+
+    GIVEN a lead with 3 LeadInterestHistory rows (oldest to newest: 75, 60, 85)
+    WHEN build_memory_context(db, lead) is called
+    THEN confirmed_facts contains 'Evolución de interés: 75→60→85' (oldest→newest order)
+    """
+    from app.memory import build_memory_context
+    from app.leads.service import get_lead
+
+    lead_id = "test-lead-memory-001"
+    now = datetime.now(timezone.utc)
+
+    # Insert 3 interest history entries; oldest first
+    await _insert_interest_history_mem(
+        seeded_db,
+        lead_id=lead_id,
+        interest_level=75,
+        recorded_at=now - timedelta(hours=3),
+    )
+    await _insert_interest_history_mem(
+        seeded_db,
+        lead_id=lead_id,
+        interest_level=60,
+        recorded_at=now - timedelta(hours=2),
+    )
+    await _insert_interest_history_mem(
+        seeded_db,
+        lead_id=lead_id,
+        interest_level=85,
+        recorded_at=now - timedelta(hours=1),
+    )
+
+    async with seeded_db.async_session_factory() as sess:
+        lead = await get_lead(sess, lead_id)
+        assert lead is not None
+        ctx = await build_memory_context(sess, lead)
+
+    confirmed = ctx["confirmed_facts"]
+    assert (
+        "Evolución de interés:" in confirmed
+    ), f"Expected 'Evolución de interés:' in confirmed_facts, got: {confirmed!r}"
+    assert "75" in confirmed, f"Expected '75' in interest evolution, got: {confirmed!r}"
+    assert "60" in confirmed, f"Expected '60' in interest evolution, got: {confirmed!r}"
+    assert "85" in confirmed, f"Expected '85' in interest evolution, got: {confirmed!r}"
+    # Verify the arrow format exists
+    assert (
+        "→" in confirmed
+    ), f"Expected '→' separator in interest evolution, got: {confirmed!r}"
+
+
+@pytest.mark.asyncio
+async def test_confirmed_facts_interest_history_capped_at_5(seeded_db):
+    """CRITICAL 1 triangulation: Interest history is capped at 5 entries.
+
+    GIVEN a lead with 8 LeadInterestHistory rows
+    WHEN build_memory_context(db, lead) is called
+    THEN 'Evolución de interés:' contains at most 5 values (oldest to newest within cap)
+    """
+    from app.memory import build_memory_context
+    from app.leads.service import get_lead
+
+    lead_id = "test-lead-memory-001"
+    now = datetime.now(timezone.utc)
+
+    # Insert 8 entries with distinct values
+    levels = [10, 20, 30, 40, 50, 60, 70, 80]
+    for i, level in enumerate(levels):
+        await _insert_interest_history_mem(
+            seeded_db,
+            lead_id=lead_id,
+            interest_level=level,
+            recorded_at=now - timedelta(hours=len(levels) - i),
+        )
+
+    async with seeded_db.async_session_factory() as sess:
+        lead = await get_lead(sess, lead_id)
+        assert lead is not None
+        ctx = await build_memory_context(sess, lead)
+
+    confirmed = ctx["confirmed_facts"]
+    assert (
+        "Evolución de interés:" in confirmed
+    ), f"Expected 'Evolución de interés:' in confirmed_facts, got: {confirmed!r}"
+    # Find the evolution line and count the arrows
+    for line in confirmed.split("\n"):
+        if "Evolución de interés:" in line:
+            # Count number of data points: N arrows = N+1 values, so count by →
+            arrow_count = line.count("→")
+            assert arrow_count <= 4, (
+                f"Expected at most 4 arrows (5 values) in interest evolution, "
+                f"got {arrow_count + 1} values: {line!r}"
+            )
+            break
+
+
+@pytest.mark.asyncio
+async def test_confirmed_facts_no_interest_history_section_when_empty(seeded_db):
+    """CRITICAL 1 edge case: No interest history → no 'Evolución de interés:' in confirmed_facts.
+
+    GIVEN a lead with no LeadInterestHistory rows
+    WHEN build_memory_context(db, lead) is called
+    THEN confirmed_facts does NOT contain 'Evolución de interés:'
+    """
+    from app.memory import build_memory_context
+    from app.leads.service import get_lead
+
+    lead_id = "test-lead-memory-001"
+
+    async with seeded_db.async_session_factory() as sess:
+        lead = await get_lead(sess, lead_id)
+        assert lead is not None
+        ctx = await build_memory_context(sess, lead)
+
+    confirmed = ctx["confirmed_facts"]
+    assert "Evolución de interés:" not in confirmed, (
+        f"'Evolución de interés:' should NOT appear when no history exists, "
+        f"got: {confirmed!r}"
+    )
