@@ -387,9 +387,9 @@ async def test_list_leads_includes_next_scheduled_call_at_field(
     leads = response.json()
     assert len(leads) > 0
     for lead in leads:
-        assert "next_scheduled_call_at" in lead, (
-            f"Lead {lead['id']} missing 'next_scheduled_call_at' field"
-        )
+        assert (
+            "next_scheduled_call_at" in lead
+        ), f"Lead {lead['id']} missing 'next_scheduled_call_at' field"
 
 
 async def test_list_leads_next_scheduled_call_at_is_null_without_calls(
@@ -402,9 +402,9 @@ async def test_list_leads_next_scheduled_call_at_is_null_without_calls(
     assert len(leads) > 0
     # Seeded leads have no ScheduledCalls — all must be null
     for lead in leads:
-        assert lead["next_scheduled_call_at"] is None, (
-            f"Lead {lead['id']} expected null but got {lead['next_scheduled_call_at']!r}"
-        )
+        assert (
+            lead["next_scheduled_call_at"] is None
+        ), f"Lead {lead['id']} expected null but got {lead['next_scheduled_call_at']!r}"
 
 
 async def test_list_leads_next_scheduled_call_at_returns_earliest_pending(
@@ -529,48 +529,50 @@ async def test_list_leads_multiple_leads_with_mixed_scheduled_calls(
     past = now - timedelta(hours=2)
 
     async with db_module.async_session_factory() as sess:
-        sess.add_all([
-            ScheduledCall(
-                id=str(uuid.uuid4()),
-                client_id="quintana-seguros",
-                lead_id="lead-quintana-001",
-                status="pending",
-                scheduled_at=future_near,
-                trigger_reason="test-near",
-            ),
-            ScheduledCall(
-                id=str(uuid.uuid4()),
-                client_id="quintana-seguros",
-                lead_id="lead-quintana-001",
-                status="pending",
-                scheduled_at=future_far,
-                trigger_reason="test-far",
-            ),
-            ScheduledCall(
-                id=str(uuid.uuid4()),
-                client_id="quintana-seguros",
-                lead_id="lead-quintana-002",
-                status="in_progress",
-                scheduled_at=future_in_progress,
-                trigger_reason="test-in-progress",
-            ),
-            ScheduledCall(
-                id=str(uuid.uuid4()),
-                client_id="quintana-seguros",
-                lead_id="lead-quintana-003",
-                status="completed",
-                scheduled_at=future_completed,
-                trigger_reason="test-completed",
-            ),
-            ScheduledCall(
-                id=str(uuid.uuid4()),
-                client_id="quintana-seguros",
-                lead_id="lead-quintana-004",
-                status="pending",
-                scheduled_at=past,
-                trigger_reason="test-overdue",
-            ),
-        ])
+        sess.add_all(
+            [
+                ScheduledCall(
+                    id=str(uuid.uuid4()),
+                    client_id="quintana-seguros",
+                    lead_id="lead-quintana-001",
+                    status="pending",
+                    scheduled_at=future_near,
+                    trigger_reason="test-near",
+                ),
+                ScheduledCall(
+                    id=str(uuid.uuid4()),
+                    client_id="quintana-seguros",
+                    lead_id="lead-quintana-001",
+                    status="pending",
+                    scheduled_at=future_far,
+                    trigger_reason="test-far",
+                ),
+                ScheduledCall(
+                    id=str(uuid.uuid4()),
+                    client_id="quintana-seguros",
+                    lead_id="lead-quintana-002",
+                    status="in_progress",
+                    scheduled_at=future_in_progress,
+                    trigger_reason="test-in-progress",
+                ),
+                ScheduledCall(
+                    id=str(uuid.uuid4()),
+                    client_id="quintana-seguros",
+                    lead_id="lead-quintana-003",
+                    status="completed",
+                    scheduled_at=future_completed,
+                    trigger_reason="test-completed",
+                ),
+                ScheduledCall(
+                    id=str(uuid.uuid4()),
+                    client_id="quintana-seguros",
+                    lead_id="lead-quintana-004",
+                    status="pending",
+                    scheduled_at=past,
+                    trigger_reason="test-overdue",
+                ),
+            ]
+        )
         await sess.commit()
 
     response = await leads_client.get("/api/v1/leads?client_id=quintana-seguros")
@@ -595,15 +597,15 @@ async def test_list_leads_multiple_leads_with_mixed_scheduled_calls(
 
     # lead-003: only completed call → null
     l003 = by_id["lead-quintana-003"]
-    assert l003["next_scheduled_call_at"] is None, (
-        f"lead-003 should be null, got {l003['next_scheduled_call_at']!r}"
-    )
+    assert (
+        l003["next_scheduled_call_at"] is None
+    ), f"lead-003 should be null, got {l003['next_scheduled_call_at']!r}"
 
     # lead-004: overdue pending call — still returned (frontend handles display)
     l004 = by_id["lead-quintana-004"]
-    assert l004["next_scheduled_call_at"] is not None, (
-        "lead-004 overdue pending call should still be returned"
-    )
+    assert (
+        l004["next_scheduled_call_at"] is not None
+    ), "lead-004 overdue pending call should still be returned"
 
 
 # ---------------------------------------------------------------------------
@@ -630,20 +632,24 @@ async def test_list_leads_batch_query_is_exactly_one_scheduled_calls_query(
     now = datetime.now(timezone.utc)
     async with db_module.async_session_factory() as sess:
         for i in range(1, 4):
-            sess.add(ScheduledCall(
-                id=str(uuid.uuid4()),
-                client_id="quintana-seguros",
-                lead_id=f"lead-quintana-00{i}",
-                status="pending",
-                scheduled_at=now + timedelta(hours=i),
-                trigger_reason="n1-proof",
-            ))
+            sess.add(
+                ScheduledCall(
+                    id=str(uuid.uuid4()),
+                    client_id="quintana-seguros",
+                    lead_id=f"lead-quintana-00{i}",
+                    status="pending",
+                    scheduled_at=now + timedelta(hours=i),
+                    trigger_reason="n1-proof",
+                )
+            )
         await sess.commit()
 
     # Count SQL statements that reference the scheduled_calls table
     scheduled_calls_query_count = []
 
-    def count_scheduled_calls(conn, cursor, statement, parameters, context, executemany):
+    def count_scheduled_calls(
+        conn, cursor, statement, parameters, context, executemany
+    ):
         if "scheduled_calls" in statement.lower():
             scheduled_calls_query_count.append(statement)
 
@@ -680,7 +686,9 @@ async def test_list_leads_empty_result_executes_zero_scheduled_calls_queries(
 
     scheduled_calls_query_count = []
 
-    def count_scheduled_calls(conn, cursor, statement, parameters, context, executemany):
+    def count_scheduled_calls(
+        conn, cursor, statement, parameters, context, executemany
+    ):
         if "scheduled_calls" in statement.lower():
             scheduled_calls_query_count.append(statement)
 

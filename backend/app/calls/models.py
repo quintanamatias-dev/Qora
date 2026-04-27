@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -86,3 +86,54 @@ class TranscriptTurn(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<TranscriptTurn role={self.role!r} session={self.session_id!r}>"
+
+
+class CallAnalysis(Base):
+    """Flattened analysis record for one call session (1:1 with CallSession).
+
+    Stores all GPT-extracted analysis fields in normalized columns, replacing the
+    opaque JSON blob in CallSession.extracted_facts for structured queries.
+    JSON arrays are stored as TEXT (json.dumps/json.loads at app level — AD1).
+    """
+
+    __tablename__ = "call_analyses"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String, ForeignKey("call_sessions.id"), nullable=False, unique=True
+    )
+    lead_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("leads.id"), nullable=True, index=True
+    )
+    client_id: Mapped[str] = mapped_column(
+        String, ForeignKey("clients.id"), nullable=False, index=True
+    )
+    # Flattened scalar analysis fields
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    interest_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    classification: Mapped[str | None] = mapped_column(String, nullable=True)
+    engagement_quality: Mapped[str | None] = mapped_column(String, nullable=True)
+    outcome_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    urgency: Mapped[str | None] = mapped_column(String, nullable=True)
+    primary_need: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_action_suggested: Mapped[str | None] = mapped_column(String, nullable=True)
+    current_insurance: Mapped[str | None] = mapped_column(String, nullable=True)
+    data_corrections: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    misc_notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # JSON arrays stored as TEXT (AD1 — SQLite stores JSON as TEXT anyway)
+    objections: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    products: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    specific_needs: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    buying_signals: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    pain_points: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    # Audit / metadata
+    analyzed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    analysis_status: Mapped[str] = mapped_column(String, nullable=False, default="ok")
+    analysis_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (Index("ix_call_analyses_classification", "classification"),)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<CallAnalysis session={self.session_id!r} status={self.analysis_status!r}>"

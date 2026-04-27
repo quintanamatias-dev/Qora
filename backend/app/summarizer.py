@@ -26,6 +26,7 @@ session close or any other operation.
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
 import structlog
@@ -34,8 +35,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis_schema import ANALYSIS_SYSTEM_PROMPT, PostCallAnalysis
-from app.calls.models import CallSession, TranscriptTurn
-from app.leads.models import Lead
+from app.calls.models import CallAnalysis, CallSession, TranscriptTurn
+from app.leads.models import Lead, LeadInterestHistory, LeadProfileFact
 
 logger = structlog.get_logger(__name__)
 
@@ -119,6 +120,10 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
             "_analysis_status": "failed",
             "_analysis_error": error_msg,
         }
+        # ★ NEW: Write CallAnalysis failure marker (analysis v2 — same flush)
+        await _upsert_call_analysis_failed(
+            db, cs.id, cs.lead_id, cs.client_id, error_msg
+        )
         await db.flush()
         return
 
@@ -128,9 +133,12 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
     cs.total_user_turns = user_turns
     cs.total_agent_turns = agent_turns
 
+    # ★ NEW: Dual-write to CallAnalysis (analysis v2 — same flush, atomic)
+    await _upsert_call_analysis(db, cs.id, cs.lead_id, cs.client_id, summary, facts)
+
     # Merge into Lead
     if cs.lead_id:
-        await _merge_facts_into_lead(db, cs.lead_id, summary, facts)
+        await _merge_facts_into_lead(db, cs.lead_id, summary, facts, session_id=cs.id)
 
     # Auto-schedule follow-up call if eligible (Phase 6)
     if cs.lead_id and cs.client_id:
@@ -247,9 +255,12 @@ async def _merge_facts_into_lead(
     lead_id: str,
     summary: str,
     facts: dict[str, Any],
+    *,
+    session_id: str | None = None,
 ) -> None:
-    """Merge extracted facts into the Lead record.
+    """Merge extracted facts into the Lead record and dual-write to new relational tables.
 
+    Legacy JSON path (unchanged):
     - summary_last_call ← current summary
     - objections_heard ← union of existing + new (deduplicated)
     - interest_level ← latest value
@@ -257,11 +268,16 @@ async def _merge_facts_into_lead(
     - do_not_call ← True if next_action_suggested == "do_not_call"
     - call_outcome, detected_interests, identified_problem ← overwrite (latest wins)
 
+    ★ NEW (analysis v2 dual-write):
+    - LeadProfileFact rows for key scalar facts (upsert semantics via superseded_at)
+    - LeadInterestHistory row for interest_level (append-only)
+
     Args:
         db: Active async DB session.
         lead_id: UUID of the lead to update.
         summary: Call summary text.
         facts: Extracted facts dict from GPT (already model_dump()'d).
+        session_id: Optional UUID of the source call session (for FK reference).
     """
     lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
     lead = lead_result.scalar_one_or_none()
@@ -319,6 +335,10 @@ async def _merge_facts_into_lead(
     corrections_str = facts.get("data_corrections") or ""
     if corrections_str:
         _apply_data_corrections(lead, corrections_str)
+
+    # ★ NEW: Dual-write to relational tables (analysis v2)
+    await _write_lead_profile_facts(db, lead_id, session_id, facts)
+    _write_interest_history(db, lead_id, session_id, facts)
 
 
 # ---------------------------------------------------------------------------
@@ -397,3 +417,240 @@ def _apply_data_corrections(lead: "Lead", corrections_str: str) -> None:
         else:
             if value:
                 setattr(lead, field, value)
+
+
+# ---------------------------------------------------------------------------
+# Analysis v2 helpers — dual-write to relational tables
+# ---------------------------------------------------------------------------
+
+
+def _new_uuid() -> str:
+    """Generate a new UUID4 string (matches project PK convention)."""
+    return str(uuid.uuid4())
+
+
+async def _upsert_call_analysis(
+    db: AsyncSession,
+    session_id: str,
+    lead_id: str | None,
+    client_id: str,
+    summary: str,
+    facts: dict[str, Any],
+) -> None:
+    """Insert or update a CallAnalysis row for the given session_id.
+
+    On re-run (e.g. webhook retry), updates the existing row in-place.
+    On first run, inserts a new row with a fresh UUID.
+
+    Args:
+        db: Active async DB session.
+        session_id: UUID of the source call session.
+        lead_id: Optional UUID of the lead.
+        client_id: UUID of the client.
+        summary: Call summary text.
+        facts: Extracted facts dict (model_dump()'d PostCallAnalysis).
+    """
+    call_outcome = facts.get("call_outcome") or {}
+    detected_interests = facts.get("detected_interests") or {}
+    identified_problem = facts.get("identified_problem") or {}
+
+    # Check for existing row
+    existing_result = await db.execute(
+        select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+    )
+    ca = existing_result.scalar_one_or_none()
+
+    if ca is None:
+        ca = CallAnalysis(id=_new_uuid(), session_id=session_id)
+        db.add(ca)
+
+    # Set or update all fields
+    ca.lead_id = lead_id
+    ca.client_id = client_id
+    ca.summary = summary
+    ca.interest_level = facts.get("interest_level")
+    ca.classification = _str_or_none(call_outcome.get("classification"))
+    ca.engagement_quality = _str_or_none(call_outcome.get("engagement_quality"))
+    ca.outcome_reason = call_outcome.get("reason")
+    ca.urgency = _str_or_none(identified_problem.get("urgency"))
+    ca.primary_need = identified_problem.get("primary_need")
+    ca.next_action_suggested = facts.get("next_action_suggested")
+    ca.current_insurance = facts.get("current_insurance")
+    ca.data_corrections = facts.get("data_corrections") or ""
+    ca.misc_notes = facts.get("misc_notes") or ""
+    ca.objections = _to_json_list(facts.get("objections"))
+    ca.products = _to_json_list(detected_interests.get("products"))
+    ca.specific_needs = _to_json_list(detected_interests.get("specific_needs"))
+    ca.buying_signals = _to_json_list(detected_interests.get("buying_signals"))
+    ca.pain_points = _to_json_list(identified_problem.get("pain_points"))
+    ca.analysis_status = "ok"
+    ca.analysis_error = None
+
+
+async def _upsert_call_analysis_failed(
+    db: AsyncSession,
+    session_id: str,
+    lead_id: str | None,
+    client_id: str,
+    error_msg: str,
+) -> None:
+    """Insert or update a CallAnalysis failure marker row.
+
+    Args:
+        db: Active async DB session.
+        session_id: UUID of the source call session.
+        lead_id: Optional UUID of the lead.
+        client_id: UUID of the client.
+        error_msg: Error message from the failed GPT call.
+    """
+    existing_result = await db.execute(
+        select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+    )
+    ca = existing_result.scalar_one_or_none()
+
+    if ca is None:
+        ca = CallAnalysis(id=_new_uuid(), session_id=session_id)
+        db.add(ca)
+
+    ca.lead_id = lead_id
+    ca.client_id = client_id
+    ca.analysis_status = "failed"
+    ca.analysis_error = error_msg
+
+
+def _str_or_none(value: Any) -> str | None:
+    """Return string representation of value, or None if value is None.
+
+    Handles enum values by extracting .value (Pydantic model_dump() may return
+    enum objects when mode='python' is used — the default).
+    """
+    if value is None:
+        return None
+    # Handle enum values (e.g. OutcomeClassification.interested → 'interested')
+    if hasattr(value, "value"):
+        return str(value.value)
+    return str(value)
+
+
+def _to_json_list(value: Any) -> str:
+    """Serialize value to a JSON list string. Returns '[]' if None or not a list."""
+    if isinstance(value, list):
+        return json.dumps(value)
+    return "[]"
+
+
+async def _write_lead_profile_facts(
+    db: AsyncSession,
+    lead_id: str,
+    session_id: str | None,
+    facts: dict[str, Any],
+) -> None:
+    """Write LeadProfileFact rows for key scalar facts from this call.
+
+    Upsert semantics: for singular facts (interest_level, current_insurance,
+    next_action, primary_need, classification), supersede any existing active row
+    (superseded_at IS NULL) when the value changes.
+
+    Append-only facts (do_not_call) are inserted unconditionally.
+
+    Args:
+        db: Active async DB session.
+        lead_id: UUID of the lead to write facts for.
+        session_id: UUID of the source call session (for FK + provenance).
+        facts: Extracted facts dict from GPT.
+    """
+    from datetime import datetime, timezone
+
+    call_outcome = facts.get("call_outcome") or {}
+    identified_problem = facts.get("identified_problem") or {}
+
+    # Build map of fact_key → fact_value for singular facts
+    singular_facts: dict[str, str] = {}
+
+    il = facts.get("interest_level")
+    if il is not None:
+        singular_facts["interest_level"] = str(il)
+
+    ci = facts.get("current_insurance")
+    if ci is not None:
+        singular_facts["current_insurance"] = str(ci)
+
+    na = facts.get("next_action_suggested")
+    if na is not None:
+        singular_facts["next_action"] = str(na)
+
+    pn = identified_problem.get("primary_need")
+    if pn is not None:
+        singular_facts["primary_need"] = str(pn)
+
+    clf = call_outcome.get("classification")
+    if clf is not None:
+        singular_facts["classification"] = _str_or_none(clf) or str(clf)
+
+    # do_not_call is a special append-only fact
+    if facts.get("next_action_suggested") == "do_not_call":
+        singular_facts["do_not_call"] = "true"
+
+    now = datetime.now(timezone.utc)
+
+    for fact_key, fact_value in singular_facts.items():
+        # Supersede existing active row if value is different
+        existing_result = await db.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == lead_id,
+                LeadProfileFact.fact_key == fact_key,
+                LeadProfileFact.superseded_at == None,  # noqa: E711
+            )
+        )
+        existing = existing_result.scalar_one_or_none()
+
+        if existing is not None:
+            if existing.fact_value == fact_value:
+                # Same value — skip (no change)
+                continue
+            # Different value — supersede old
+            existing.superseded_at = now
+
+        # Insert new active row
+        db.add(
+            LeadProfileFact(
+                id=_new_uuid(),
+                lead_id=lead_id,
+                fact_key=fact_key,
+                fact_value=fact_value,
+                source_call_id=session_id,
+            )
+        )
+
+
+def _write_interest_history(
+    db: AsyncSession,
+    lead_id: str,
+    session_id: str | None,
+    facts: dict[str, Any],
+) -> None:
+    """Append a LeadInterestHistory row if interest_level is present in facts.
+
+    Always appends a new row — never updates existing rows (append-only).
+
+    Args:
+        db: Active async DB session.
+        lead_id: UUID of the lead.
+        session_id: UUID of the source call session (for FK + provenance).
+        facts: Extracted facts dict from GPT.
+    """
+    interest_level = facts.get("interest_level")
+    if interest_level is None:
+        return
+
+    # Clamp to 0-100 range (application-layer enforcement per spec)
+    level = max(0, min(100, int(interest_level)))
+
+    db.add(
+        LeadInterestHistory(
+            id=_new_uuid(),
+            lead_id=lead_id,
+            interest_level=level,
+            source_call_id=session_id,
+        )
+    )

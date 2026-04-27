@@ -8,7 +8,17 @@ from __future__ import annotations
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -105,3 +115,79 @@ class Lead(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Lead id={self.id!r} name={self.name!r} status={self.status!r}>"
+
+
+class LeadProfileFact(Base):
+    """Key-value store for named facts extracted from calls for a lead.
+
+    Append-and-supersede pattern: when a fact_key changes, the current row
+    gets superseded_at set to now, and a new row is inserted.
+    NULL superseded_at means the row is the current (active) value.
+    """
+
+    __tablename__ = "lead_profile_facts"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    lead_id: Mapped[str] = mapped_column(String, ForeignKey("leads.id"), nullable=False)
+    fact_key: Mapped[str] = mapped_column(String, nullable=False)
+    fact_value: Mapped[str] = mapped_column(Text, nullable=False)
+    source_call_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("call_sessions.id"), nullable=True
+    )
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    superseded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        # Composite index for efficient "current fact" queries
+        Index(
+            "ix_lead_profile_facts_lead_key_active",
+            "lead_id",
+            "fact_key",
+            "superseded_at",
+        ),
+        # Additional indexes per spec
+        Index("ix_lead_profile_facts_lead_id", "lead_id"),
+        Index("ix_lead_profile_facts_source_call_id", "source_call_id"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<LeadProfileFact lead={self.lead_id!r} key={self.fact_key!r} "
+            f"value={self.fact_value!r} active={self.superseded_at is None}>"
+        )
+
+
+class LeadInterestHistory(Base):
+    """Append-only time series of interest_level measurements per lead.
+
+    Rows are NEVER updated or deleted after insert — each call appends a new row.
+    """
+
+    __tablename__ = "lead_interest_history"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    lead_id: Mapped[str] = mapped_column(
+        String, ForeignKey("leads.id"), nullable=False, index=True
+    )
+    interest_level: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_call_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("call_sessions.id"), nullable=True
+    )
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+    __table_args__ = (
+        # Composite index for time-series queries per lead
+        Index("ix_lead_interest_history_lead_recorded_at", "lead_id", "recorded_at"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<LeadInterestHistory lead={self.lead_id!r} "
+            f"level={self.interest_level!r} at={self.recorded_at!r}>"
+        )

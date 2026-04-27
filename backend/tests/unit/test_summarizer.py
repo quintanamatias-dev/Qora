@@ -1032,3 +1032,312 @@ async def test_summarizer_analysis_axes_flow_to_lead(seeded_db):
         assert lead.extracted_facts["call_outcome"]["classification"] == "interested"
         assert "todo_riesgo" in lead.extracted_facts["detected_interests"]["products"]
         assert lead.extracted_facts["identified_problem"]["urgency"] == "high"
+
+
+# ===========================================================================
+# Phase 3 — Dual-write: summarizer writes to new relational tables
+# ===========================================================================
+
+
+async def test_summarizer_dual_write_creates_call_analysis(seeded_db):
+    """Phase 3: successful summarizer run creates a CallAnalysis row for the session."""
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.models import CallAnalysis
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "Hola"),
+            ("user", "Me interesa el todo riesgo"),
+        ],
+    )
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+        )
+        ca = result.scalar_one_or_none()
+        assert ca is not None
+        assert ca.lead_id == "test-lead-sum-001"
+        assert ca.interest_level == 85
+        assert ca.classification == "interested"
+        assert ca.analysis_status == "ok"
+
+
+async def test_summarizer_dual_write_creates_interest_history(seeded_db):
+    """Phase 3: successful summarizer run creates a LeadInterestHistory row."""
+    from app.summarizer import generate_summary_and_facts
+    from app.leads.models import LeadInterestHistory
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "Hola"),
+            ("user", "Quiero cotizar"),
+        ],
+    )
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(LeadInterestHistory).where(
+                LeadInterestHistory.lead_id == "test-lead-sum-001"
+            )
+        )
+        rows = result.scalars().all()
+        assert len(rows) >= 1
+        assert rows[-1].interest_level == 85
+        assert rows[-1].source_call_id == session_id
+
+
+async def test_summarizer_dual_write_creates_lead_profile_facts(seeded_db):
+    """Phase 3: successful summarizer run creates LeadProfileFact rows for the lead."""
+    from app.summarizer import generate_summary_and_facts
+    from app.leads.models import LeadProfileFact
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "Hola"),
+            ("user", "Tengo La Caja de seguro"),
+        ],
+    )
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == "test-lead-sum-001"
+            )
+        )
+        facts = result.scalars().all()
+        assert len(facts) >= 1
+        fact_keys = {f.fact_key for f in facts}
+        # At minimum interest_level and current_insurance should be present
+        assert "interest_level" in fact_keys or "current_insurance" in fact_keys
+
+
+async def test_summarizer_dual_write_old_json_still_populated(seeded_db):
+    """Phase 3: dual-write doesn't break old path — CallSession.extracted_facts stays populated."""
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.models import CallSession
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "Hola"),
+            ("user", "Sí, me interesa"),
+        ],
+    )
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(CallSession).where(CallSession.id == session_id)
+        )
+        cs = result.scalar_one()
+        # Old path must still be populated (backward compat)
+        assert cs.extracted_facts is not None
+        assert cs.extracted_facts.get("interest_level") == 85
+        assert (
+            cs.summary
+            == "Lead was very interested in todo riesgo coverage for their Toyota."
+        )
+
+
+async def test_summarizer_dual_write_gpt_failure_writes_call_analysis_failed(seeded_db):
+    """Phase 3: GPT failure → CallAnalysis row with analysis_status='failed'."""
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.models import CallAnalysis
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "Hola"),
+            ("user", "Necesito un seguro"),
+        ],
+    )
+
+    mock_client = AsyncMock()
+    mock_client.chat.completions.parse.side_effect = Exception("API timeout")
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+        )
+        ca = result.scalar_one_or_none()
+        assert ca is not None
+        assert ca.analysis_status == "failed"
+        assert ca.analysis_error == "API timeout"
+
+
+async def test_summarizer_dual_write_do_not_call_creates_fact_row(seeded_db):
+    """Phase 3: do_not_call path → LeadProfileFact row with fact_key='do_not_call'."""
+    from app.summarizer import generate_summary_and_facts
+    from app.leads.models import LeadProfileFact, Lead
+    from app.analysis_schema import (
+        PostCallAnalysis,
+        CallOutcome,
+        DetectedInterests,
+        IdentifiedProblem,
+    )
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "Hola"),
+            ("user", "No me llamen más por favor"),
+        ],
+    )
+
+    dnc_analysis = PostCallAnalysis(
+        summary="Lead no quiere ser contactado.",
+        objections=["no quiere ser contactado"],
+        interest_level=0,
+        current_insurance=None,
+        next_action_suggested="do_not_call",
+        misc_notes="",
+        call_outcome=CallOutcome(
+            classification="hostile",
+            reason="Lead asked not to be called.",
+            engagement_quality="low",
+        ),
+        detected_interests=DetectedInterests(),
+        identified_problem=IdentifiedProblem(
+            primary_need="No interest.",
+            urgency="low",
+        ),
+    )
+
+    mock_client = _make_mock_client(_make_parse_response(dnc_analysis))
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        # Old path: Lead.do_not_call must still be True (backward compat)
+        result = await db.execute(select(Lead).where(Lead.id == "test-lead-sum-001"))
+        lead = result.scalar_one()
+        assert lead.do_not_call is True
+
+        # New path: LeadProfileFact with do_not_call key
+        result2 = await db.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == "test-lead-sum-001",
+                LeadProfileFact.fact_key == "do_not_call",
+            )
+        )
+        dnc_facts = result2.scalars().all()
+        assert len(dnc_facts) >= 1
+        assert dnc_facts[0].fact_value == "true"
+
+
+async def test_summarizer_dual_write_no_session_without_lead(seeded_db):
+    """Phase 3: session with no lead → CallAnalysis row exists but no LeadProfileFact rows."""
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.models import CallAnalysis
+    from app.leads.models import LeadProfileFact
+    from app.calls.service import create_session
+    from sqlalchemy import select
+
+    # Create a session WITHOUT a lead_id
+    assert seeded_db.async_session_factory is not None
+    async with seeded_db.async_session_factory() as sess:
+        cs = await create_session(
+            sess,
+            client_id="quintana-seguros",
+            lead_id=None,
+        )
+        cs.status = "completed"
+        no_lead_session_id = cs.id
+        from app.calls.service import add_transcript_turn
+
+        await add_transcript_turn(sess, no_lead_session_id, "user", "Hola")
+        await sess.commit()
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(no_lead_session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        # CallAnalysis must exist for the session
+        result = await db.execute(
+            select(CallAnalysis).where(CallAnalysis.session_id == no_lead_session_id)
+        )
+        ca = result.scalar_one_or_none()
+        assert ca is not None
+        assert ca.lead_id is None
+
+        # No LeadProfileFact rows with this source_call_id
+        result2 = await db.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.source_call_id == no_lead_session_id
+            )
+        )
+        facts = result2.scalars().all()
+        assert len(facts) == 0

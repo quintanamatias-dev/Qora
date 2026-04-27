@@ -118,7 +118,9 @@ class ClientCreate(_SchedulerValidatorMixin):
     client_id: str
     broker_name: str
     agent_name: str = "Jaumpablo"
-    voice_id: str = "pNInz6obpgDQGcFmaJgB"  # ElevenLabs Adam voice (default, configure per-agent)
+    voice_id: str = (
+        "pNInz6obpgDQGcFmaJgB"  # ElevenLabs Adam voice (default, configure per-agent)
+    )
     system_prompt_override: str | None = None
     # Scheduler configuration (Phase 7 — bootstrappable at create time)
     scheduler_enabled: bool = False
