@@ -71,6 +71,12 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
     """Internal: runs the full summarize+persist pipeline.
 
     Separated so the outer function can catch all exceptions in one place.
+
+    Atomicity guarantee (Issue #34 CRITICAL 1):
+    All writes — both legacy fields (CallSession.summary/extracted_facts) and
+    new-table writes (CallAnalysis, LeadProfileFact, LeadInterestHistory) — are
+    wrapped in a savepoint (nested transaction).  If ANY write fails, the savepoint
+    rolls back and NO partial data is committed.
     """
     # Load transcript turns
     turns_result = await db.execute(
@@ -114,37 +120,41 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
             session_id=session_id,
             error=error_msg,
         )
-        cs.total_user_turns = user_turns
-        cs.total_agent_turns = agent_turns
-        cs.extracted_facts = {
-            "_analysis_status": "failed",
-            "_analysis_error": error_msg,
-        }
-        # ★ NEW: Write CallAnalysis failure marker (analysis v2 — same flush)
-        await _upsert_call_analysis_failed(
-            db, cs.id, cs.lead_id, cs.client_id, error_msg
-        )
-        await db.flush()
+        async with db.begin_nested():
+            cs.total_user_turns = user_turns
+            cs.total_agent_turns = agent_turns
+            cs.extracted_facts = {
+                "_analysis_status": "failed",
+                "_analysis_error": error_msg,
+            }
+            # ★ NEW: Write CallAnalysis failure marker (analysis v2 — same savepoint)
+            await _upsert_call_analysis_failed(
+                db, cs.id, cs.lead_id, cs.client_id, error_msg
+            )
         return
 
-    # Persist to CallSession
-    cs.summary = summary
-    cs.extracted_facts = facts
-    cs.total_user_turns = user_turns
-    cs.total_agent_turns = agent_turns
+    # ★ Wrap ALL persistence in a single savepoint — guarantees atomicity.
+    # If _upsert_call_analysis or any other write raises, the savepoint rolls back
+    # and legacy fields (summary, extracted_facts) are NOT committed.
+    async with db.begin_nested():
+        # Persist to CallSession (legacy path)
+        cs.summary = summary
+        cs.extracted_facts = facts
+        cs.total_user_turns = user_turns
+        cs.total_agent_turns = agent_turns
 
-    # ★ NEW: Dual-write to CallAnalysis (analysis v2 — same flush, atomic)
-    await _upsert_call_analysis(db, cs.id, cs.lead_id, cs.client_id, summary, facts)
+        # ★ NEW: Dual-write to CallAnalysis (analysis v2 — same savepoint, atomic)
+        await _upsert_call_analysis(db, cs.id, cs.lead_id, cs.client_id, summary, facts)
 
-    # Merge into Lead
-    if cs.lead_id:
-        await _merge_facts_into_lead(db, cs.lead_id, summary, facts, session_id=cs.id)
+        # Merge into Lead
+        if cs.lead_id:
+            await _merge_facts_into_lead(
+                db, cs.lead_id, summary, facts, session_id=cs.id
+            )
 
-    # Auto-schedule follow-up call if eligible (Phase 6)
-    if cs.lead_id and cs.client_id:
-        await _auto_schedule_if_needed(db, cs, facts)
-
-    await db.flush()
+        # Auto-schedule follow-up call if eligible (Phase 6)
+        if cs.lead_id and cs.client_id:
+            await _auto_schedule_if_needed(db, cs, facts)
 
     logger.info(
         "summarizer_complete",
@@ -339,6 +349,10 @@ async def _merge_facts_into_lead(
     # ★ NEW: Dual-write to relational tables (analysis v2)
     await _write_lead_profile_facts(db, lead_id, session_id, facts)
     _write_interest_history(db, lead_id, session_id, facts)
+
+    # ★ NEW: Write LeadProfileFact rows for each data_correction (Issue #34 CRITICAL 2)
+    if corrections_str:
+        await _write_correction_facts(db, lead_id, session_id, corrections_str)
 
 
 # ---------------------------------------------------------------------------
@@ -618,6 +632,70 @@ async def _write_lead_profile_facts(
                 lead_id=lead_id,
                 fact_key=fact_key,
                 fact_value=fact_value,
+                source_call_id=session_id,
+            )
+        )
+
+
+async def _write_correction_facts(
+    db: AsyncSession,
+    lead_id: str,
+    session_id: str | None,
+    corrections_str: str,
+) -> None:
+    """Write LeadProfileFact rows for each parsed data_correction field.
+
+    Upsert semantics: supersedes any existing active row for the same fact_key
+    when the value changes.  Confidence is implicitly 'high' (explicit correction from GPT).
+
+    Supported fields: car_make, car_model, car_year (same set as _apply_data_corrections).
+
+    Args:
+        db: Active async DB session.
+        lead_id: UUID of the lead.
+        session_id: UUID of the source call session (FK + provenance).
+        corrections_str: Free-text string with 'field: value' per line.
+    """
+    from datetime import datetime, timezone
+
+    if not corrections_str or not corrections_str.strip():
+        return
+
+    _SUPPORTED_FIELDS = {"car_make", "car_model", "car_year"}
+    now = datetime.now(timezone.utc)
+
+    for line in corrections_str.splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        field, _, value = line.partition(":")
+        field = field.strip()
+        value = value.strip()
+
+        if field not in _SUPPORTED_FIELDS or not value:
+            continue
+
+        # Supersede existing active row if value differs
+        existing_result = await db.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == lead_id,
+                LeadProfileFact.fact_key == field,
+                LeadProfileFact.superseded_at == None,  # noqa: E711
+            )
+        )
+        existing = existing_result.scalar_one_or_none()
+
+        if existing is not None:
+            if existing.fact_value == value:
+                continue  # Same value — skip
+            existing.superseded_at = now
+
+        db.add(
+            LeadProfileFact(
+                id=_new_uuid(),
+                lead_id=lead_id,
+                fact_key=field,
+                fact_value=value,
                 source_call_id=session_id,
             )
         )

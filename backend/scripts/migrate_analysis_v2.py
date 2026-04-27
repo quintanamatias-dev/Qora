@@ -223,14 +223,19 @@ def _build_lead_profile_fact_rows(
 def _build_interest_history_row(
     lead_id: str, session_id: str, facts: dict
 ) -> dict | None:
-    """Build a LeadInterestHistory row from facts. Returns None if interest_level absent."""
+    """Build a LeadInterestHistory row from facts. Returns None if interest_level absent.
+
+    Clamps interest_level to the valid 0-100 range (application-layer enforcement per spec).
+    """
     interest_level = facts.get("interest_level")
     if interest_level is None:
         return None
+    # Clamp to 0-100 range — same enforcement as summarizer._write_interest_history()
+    level = max(0, min(100, int(interest_level)))
     return {
         "id": str(uuid.uuid4()),
         "lead_id": lead_id,
-        "interest_level": int(interest_level),
+        "interest_level": level,
         "source_call_id": session_id,
         "recorded_at": _utcnow_str(),
     }

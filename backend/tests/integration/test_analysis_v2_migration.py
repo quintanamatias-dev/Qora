@@ -367,3 +367,54 @@ async def test_migration_null_lead_id_skips_lead_tables(migration_db):
         )
         facts = result2.scalars().all()
         assert len(facts) == 0
+
+
+# ===========================================================================
+# FIX: CRITICAL 3 — 0-100 interest range enforcement in migration (Issue #34)
+# ===========================================================================
+
+
+def test_migration_build_interest_history_row_clamps_above_100():
+    """CRITICAL 3: _build_interest_history_row clamps interest_level > 100 to 100."""
+    from scripts.migrate_analysis_v2 import _build_interest_history_row
+
+    row = _build_interest_history_row(
+        lead_id="lead-a",
+        session_id="sess-1",
+        facts={"interest_level": 101},
+    )
+
+    assert row is not None
+    assert (
+        row["interest_level"] == 100
+    ), f"CRITICAL 3 FAIL: interest_level=101 was not clamped to 100, got {row['interest_level']}"
+
+
+def test_migration_build_interest_history_row_clamps_below_0():
+    """CRITICAL 3: _build_interest_history_row clamps interest_level < 0 to 0."""
+    from scripts.migrate_analysis_v2 import _build_interest_history_row
+
+    row = _build_interest_history_row(
+        lead_id="lead-a",
+        session_id="sess-1",
+        facts={"interest_level": -5},
+    )
+
+    assert row is not None
+    assert (
+        row["interest_level"] == 0
+    ), f"CRITICAL 3 FAIL: interest_level=-5 was not clamped to 0, got {row['interest_level']}"
+
+
+def test_migration_build_interest_history_row_valid_value_unchanged():
+    """CRITICAL 3 TRIANGULATE: valid interest_level (50) passes through unchanged."""
+    from scripts.migrate_analysis_v2 import _build_interest_history_row
+
+    row = _build_interest_history_row(
+        lead_id="lead-a",
+        session_id="sess-1",
+        facts={"interest_level": 50},
+    )
+
+    assert row is not None
+    assert row["interest_level"] == 50

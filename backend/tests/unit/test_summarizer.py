@@ -1341,3 +1341,157 @@ async def test_summarizer_dual_write_no_session_without_lead(seeded_db):
         )
         facts = result2.scalars().all()
         assert len(facts) == 0
+
+
+# ===========================================================================
+# FIX: CRITICAL 1 — Dual-write atomicity (Issue #34)
+# ===========================================================================
+
+
+async def test_summarizer_critical1_upsert_failure_rolls_back_legacy_writes(seeded_db):
+    """CRITICAL 1: if _upsert_call_analysis raises, legacy summary/extracted_facts must NOT commit.
+
+    This proves the full summarizer pipeline is wrapped in a single transactional boundary:
+    if ANY new-table write fails, the entire transaction (including legacy fields) rolls back.
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.models import CallSession
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "Hola, llamo de Quintana Seguros"),
+            ("user", "Me interesa un seguro todo riesgo"),
+        ],
+    )
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with (
+        patch(
+            "app.summarizer._get_openai_client",
+            return_value=(mock_client, "gpt-4o-mini"),
+        ),
+        patch(
+            "app.summarizer._upsert_call_analysis",
+            side_effect=RuntimeError("simulated new-table write failure"),
+        ),
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    # If atomicity is correct: legacy fields must NOT have been written
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(CallSession).where(CallSession.id == session_id)
+        )
+        cs = result.scalar_one()
+        # The whole transaction must have rolled back: summary stays None
+        assert cs.summary is None, (
+            "CRITICAL 1 FAIL: legacy summary was committed even though "
+            "_upsert_call_analysis raised — atomicity is broken"
+        )
+        # extracted_facts must also be None (not partially written)
+        assert cs.extracted_facts is None, (
+            "CRITICAL 1 FAIL: legacy extracted_facts was committed even though "
+            "_upsert_call_analysis raised — atomicity is broken"
+        )
+
+
+# ===========================================================================
+# FIX: CRITICAL 2 — data_corrections creates LeadProfileFact rows (Issue #34)
+# ===========================================================================
+
+
+async def test_summarizer_critical2_data_corrections_create_lead_profile_facts(
+    seeded_db,
+):
+    """CRITICAL 2: data_corrections 'car_model: Polo' → LeadProfileFact row with fact_key='car_model'.
+
+    After _apply_data_corrections() updates Lead columns, the dual-write path must
+    also write LeadProfileFact rows for each correction (fact_key=field, confidence='high').
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.leads.models import LeadProfileFact, Lead
+    from app.analysis_schema import (
+        PostCallAnalysis,
+        CallOutcome,
+        DetectedInterests,
+        IdentifiedProblem,
+    )
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "¿Qué auto tiene?"),
+            ("user", "Tengo un Polo, modelo 2022"),
+        ],
+    )
+
+    corrections_analysis = PostCallAnalysis(
+        summary="Lead tiene un Polo 2022.",
+        objections=[],
+        interest_level=70,
+        current_insurance=None,
+        next_action_suggested="send_quote",
+        misc_notes="",
+        data_corrections="car_model: Polo\ncar_year: 2022",
+        call_outcome=CallOutcome(
+            classification="interested",
+            reason="Lead provided car details.",
+            engagement_quality="medium",
+        ),
+        detected_interests=DetectedInterests(),
+        identified_problem=IdentifiedProblem(
+            primary_need="Needs auto insurance.",
+            urgency="medium",
+        ),
+    )
+
+    mock_client = _make_mock_client(_make_parse_response(corrections_analysis))
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        # Legacy path: Lead columns must be updated
+        result = await db.execute(select(Lead).where(Lead.id == "test-lead-sum-001"))
+        lead = result.scalar_one()
+        assert lead.car_model == "Polo", "Legacy car_model column must be updated"
+        assert lead.car_year == 2022, "Legacy car_year column must be updated"
+
+        # New path: LeadProfileFact rows must exist for corrections
+        result2 = await db.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == "test-lead-sum-001",
+                LeadProfileFact.source_call_id == session_id,
+                LeadProfileFact.fact_key == "car_model",
+            )
+        )
+        car_model_facts = result2.scalars().all()
+        assert (
+            len(car_model_facts) >= 1
+        ), "CRITICAL 2 FAIL: no LeadProfileFact row created for car_model correction"
+        assert car_model_facts[0].fact_value == "Polo"
+
+        result3 = await db.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == "test-lead-sum-001",
+                LeadProfileFact.source_call_id == session_id,
+                LeadProfileFact.fact_key == "car_year",
+            )
+        )
+        car_year_facts = result3.scalars().all()
+        assert (
+            len(car_year_facts) >= 1
+        ), "CRITICAL 2 FAIL: no LeadProfileFact row created for car_year correction"
+        assert car_year_facts[0].fact_value == "2022"
