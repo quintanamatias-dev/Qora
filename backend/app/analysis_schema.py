@@ -248,6 +248,8 @@ class ExtractionConfig(BaseModel):
     Validates and carries settings for the per-call extraction pipeline:
     - disabled_axes: base axes to skip (must be in _KNOWN_BASE_AXES)
     - extra_axes: client-specific additional fields (max 10, no name collision)
+      Accepts EITHER list[AxisFieldDef] (native) OR dict[str, str] (legacy shape,
+      auto-converted to list[AxisFieldDef] with generated descriptions).
     - prompt_addendum: text appended after axis instructions in the system prompt
     """
 
@@ -264,6 +266,43 @@ class ExtractionConfig(BaseModel):
         description="Appended after axis instructions in the generated system prompt",
         validation_alias=AliasChoices("prompt_addendum", "context_description"),
     )
+
+    @field_validator("extra_axes", mode="before")
+    @classmethod
+    def coerce_dict_extra_axes(cls, v: object) -> object:
+        """Accept legacy dict[str, str] shape and convert to list[AxisFieldDef] dicts.
+
+        Forward-compat shim: old spec used ``{"field_name": "field_type"}`` but the
+        implementation uses ``list[AxisFieldDef]``.  Both shapes are supported so that
+        JSON payloads serialised against either spec version are accepted.
+
+        Examples
+        --------
+        Dict input::
+
+            {"property_type": "str", "budget": "list[str]"}
+
+        is converted to::
+
+            [
+                {"name": "property_type", "field_type": "str",
+                 "description": "property_type (auto-generated)"},
+                {"name": "budget", "field_type": "list[str]",
+                 "description": "budget (auto-generated)"},
+            ]
+
+        List input passes through unchanged so native list[AxisFieldDef] still works.
+        """
+        if isinstance(v, dict):
+            return [
+                {
+                    "name": name,
+                    "field_type": field_type,
+                    "description": f"{name} (auto-generated)",
+                }
+                for name, field_type in v.items()
+            ]
+        return v  # type: ignore[return-value]
 
     @property
     def context_description(self) -> str:

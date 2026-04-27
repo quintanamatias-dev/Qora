@@ -1247,6 +1247,69 @@ def test_extraction_config_prompt_addendum_still_works_directly():
     assert config.context_description == "Direct addendum"
 
 
+# ===========================================================================
+# Spec alignment: extra_axes dict→list[AxisFieldDef] convenience conversion
+# ===========================================================================
+
+
+def test_extraction_config_accepts_dict_shaped_extra_axes():
+    """ExtractionConfig auto-converts dict-shaped extra_axes to list[AxisFieldDef].
+
+    Spec alignment fix: old spec used dict[str, str] shape, implementation uses
+    list[AxisFieldDef]. This test verifies the convenience conversion so both
+    shapes work — forward compat for JSON payloads sent in dict form.
+
+    Input:  {"extra_axes": {"property_type": "str", "budget_range": "list[str]"}}
+    Output: list[AxisFieldDef] with 2 entries, names/types preserved
+    """
+    from app.analysis_schema import ExtractionConfig
+
+    config = ExtractionConfig.model_validate(
+        {"extra_axes": {"property_type": "str", "budget_range": "list[str]"}}
+    )
+    assert isinstance(config.extra_axes, list)
+    assert len(config.extra_axes) == 2
+    names = {ax.name for ax in config.extra_axes}
+    assert "property_type" in names
+    assert "budget_range" in names
+    types = {ax.name: ax.field_type for ax in config.extra_axes}
+    assert types["property_type"] == "str"
+    assert types["budget_range"] == "list[str]"
+
+
+def test_extraction_config_dict_extra_axes_generates_description():
+    """Dict-converted AxisFieldDef entries have a non-empty auto-generated description."""
+    from app.analysis_schema import ExtractionConfig
+
+    config = ExtractionConfig.model_validate({"extra_axes": {"property_type": "str"}})
+    assert len(config.extra_axes) == 1
+    ax = config.extra_axes[0]
+    assert ax.description  # non-empty
+    assert isinstance(ax.description, str)
+
+
+def test_extraction_config_dict_extra_axes_rejects_unsupported_type():
+    """Dict-shaped extra_axes raises ValidationError when a value is an unsupported type."""
+    from pydantic import ValidationError
+    from app.analysis_schema import ExtractionConfig
+
+    with pytest.raises(ValidationError):
+        ExtractionConfig.model_validate({"extra_axes": {"bad_field": "dict"}})
+
+
+def test_extraction_config_list_shape_still_works_after_dict_support():
+    """Native list[AxisFieldDef] shape still accepted after adding dict conversion."""
+    from app.analysis_schema import ExtractionConfig, AxisFieldDef
+
+    config = ExtractionConfig(
+        extra_axes=[
+            AxisFieldDef(name="region", field_type="str", description="Sales region")
+        ]
+    )
+    assert len(config.extra_axes) == 1
+    assert config.extra_axes[0].name == "region"
+
+
 def test_build_analysis_model_cache_eviction_max_100():
     """WARNING 2: build_analysis_model LRU cache evicts oldest entries beyond 100 items."""
     from app.analysis_schema import (
