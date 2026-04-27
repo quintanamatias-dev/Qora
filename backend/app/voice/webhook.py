@@ -862,6 +862,48 @@ QORA_TOOL_DEFINITIONS = {
             },
         },
     },
+    "get_lead_profile": {
+        "type": "function",
+        "function": {
+            "name": "get_lead_profile",
+            "description": "Obtenés el perfil acumulado del lead: datos personales, puntos de dolor, señales de compra y más",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "lead_id": {"type": "string", "description": "ID del lead"}
+                },
+                "required": ["lead_id"],
+            },
+        },
+    },
+    "get_lead_history": {
+        "type": "function",
+        "function": {
+            "name": "get_lead_history",
+            "description": "Obtenés el historial de interés del lead a lo largo de las llamadas anteriores",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "lead_id": {"type": "string", "description": "ID del lead"}
+                },
+                "required": ["lead_id"],
+            },
+        },
+    },
+    "get_lead_pain_points": {
+        "type": "function",
+        "function": {
+            "name": "get_lead_pain_points",
+            "description": "Obtenés los puntos de dolor y problemas de servicio acumulados del lead",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "lead_id": {"type": "string", "description": "ID del lead"}
+                },
+                "required": ["lead_id"],
+            },
+        },
+    },
 }
 
 

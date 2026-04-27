@@ -34,7 +34,13 @@ from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analysis_schema import ANALYSIS_SYSTEM_PROMPT, PostCallAnalysis
+from app.analysis_schema import (
+    ANALYSIS_SYSTEM_PROMPT,
+    ExtractionConfig,
+    PostCallAnalysis,
+    build_analysis_model,
+    build_system_prompt,
+)
 from app.calls.models import CallAnalysis, CallSession, TranscriptTurn
 from app.leads.models import Lead, LeadInterestHistory, LeadProfileFact
 
@@ -105,6 +111,9 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
     # Build transcript text for GPT
     transcript_text = _format_transcript(turns)
 
+    # Load client's extraction config (Issue #35)
+    extraction_cfg = await _load_extraction_config(db, cs.client_id)
+
     # Call GPT-4o-mini with structured outputs
     # On failure, persist a partial-analysis marker so the record shows
     # that analysis was attempted but failed (spec requirement: CRITICAL 1).
@@ -112,7 +121,9 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
     agent_turns = sum(1 for t in turns if t.role == "agent")
 
     try:
-        summary, facts = await _call_gpt_summarize(transcript_text)
+        summary, facts = await _call_gpt_summarize(
+            transcript_text, config=extraction_cfg
+        )
     except Exception as gpt_exc:
         error_msg = str(gpt_exc)
         logger.warning(
@@ -199,14 +210,20 @@ def _get_openai_client() -> tuple[AsyncOpenAI, str]:
     return client, model
 
 
-async def _call_gpt_summarize(transcript_text: str) -> tuple[str, dict[str, Any]]:
+async def _call_gpt_summarize(
+    transcript_text: str,
+    *,
+    config: "ExtractionConfig | None" = None,
+) -> tuple[str, dict[str, Any]]:
     """Make a single GPT-4o-mini call using Structured Outputs (parse mode).
 
-    Uses PostCallAnalysis as response_format to guarantee schema compliance.
-    On failure, raises so the caller (_run_summarizer) can handle it uniformly.
+    When config is provided, uses build_analysis_model(config) as response_format
+    and build_system_prompt(config) as the system message.
+    When config is None, falls back to PostCallAnalysis + ANALYSIS_SYSTEM_PROMPT.
 
     Args:
         transcript_text: Formatted call transcript.
+        config: Optional ExtractionConfig for dynamic model/prompt selection.
 
     Returns:
         Tuple of (summary_text, extracted_facts_dict).
@@ -216,16 +233,24 @@ async def _call_gpt_summarize(transcript_text: str) -> tuple[str, dict[str, Any]
     """
     client, model = _get_openai_client()
 
+    # Issue #35: select response_format and system prompt based on config
+    if config is not None:
+        response_format = build_analysis_model(config)
+        system_prompt = build_system_prompt(config)
+    else:
+        response_format = PostCallAnalysis
+        system_prompt = ANALYSIS_SYSTEM_PROMPT
+
     response = await client.chat.completions.parse(
         model=model,
         messages=[
-            {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {
                 "role": "user",
                 "content": f"Transcript:\n\n{transcript_text}",
             },
         ],
-        response_format=PostCallAnalysis,
+        response_format=response_format,
         max_tokens=1024,
         temperature=0.2,
     )
@@ -443,6 +468,41 @@ def _new_uuid() -> str:
     return str(uuid.uuid4())
 
 
+async def _load_extraction_config(
+    db: AsyncSession,
+    client_id: str,
+) -> "ExtractionConfig | None":
+    """Load and deserialize Client.extraction_config for the given client.
+
+    Returns ExtractionConfig if the client has a non-NULL extraction_config,
+    or None (base path / backward compat) if extraction_config is NULL or missing.
+
+    Args:
+        db: Active async DB session.
+        client_id: The client whose extraction config to load.
+
+    Returns:
+        ExtractionConfig instance or None.
+    """
+    from app.tenants.models import Client
+
+    result = await db.execute(select(Client).where(Client.id == client_id))
+    client = result.scalar_one_or_none()
+    if client is None or client.extraction_config is None:
+        return None
+
+    try:
+        config_dict = json.loads(client.extraction_config)
+        return ExtractionConfig.model_validate(config_dict)
+    except Exception as exc:
+        logger.warning(
+            "summarizer_invalid_extraction_config",
+            client_id=client_id,
+            error=str(exc),
+        )
+        return None
+
+
 async def _upsert_call_analysis(
     db: AsyncSession,
     session_id: str,
@@ -497,6 +557,19 @@ async def _upsert_call_analysis(
     ca.specific_needs = _to_json_list(detected_interests.get("specific_needs"))
     ca.buying_signals = _to_json_list(detected_interests.get("buying_signals"))
     ca.pain_points = _to_json_list(identified_problem.get("pain_points"))
+    # Issue #35 — 4 new universal axes
+    ca.service_issues = _to_json_list((facts.get("service_issues") or {}).get("issues"))
+    ca.profile_facts = _to_json_list((facts.get("profile_facts") or {}).get("facts"))
+    ca.commitment_signals = _to_json_list(
+        (facts.get("commitment_signals") or {}).get("signals")
+    )
+    _abandonment = facts.get("abandonment_reason") or {}
+    ca.abandonment_reason = _abandonment.get("reason")
+    ca.extra_axes_data = (
+        json.dumps(facts.get("extra_axes_data"))
+        if facts.get("extra_axes_data") is not None
+        else None
+    )
     ca.analysis_status = "ok"
     ca.analysis_error = None
 
@@ -635,6 +708,52 @@ async def _write_lead_profile_facts(
                 source_call_id=session_id,
             )
         )
+
+    # ★ NEW (Issue #36): Append-only list-type facts with namespace prefixes
+    # Axes: profile_facts.facts, pain_points, service_issues.issues,
+    #       commitment_signals.signals, detected_interests.buying_signals
+    # Dedup: normalized (strip().lower()) fact_key match against active rows
+    _LIST_AXES: list[tuple[str, list[str]]] = [
+        ("profile:", (facts.get("profile_facts") or {}).get("facts") or []),
+        ("pain:", (facts.get("identified_problem") or {}).get("pain_points") or []),
+        ("service_issue:", (facts.get("service_issues") or {}).get("issues") or []),
+        ("signal:", (facts.get("commitment_signals") or {}).get("signals") or []),
+        (
+            "buying_signal:",
+            (facts.get("detected_interests") or {}).get("buying_signals") or [],
+        ),
+    ]
+
+    for namespace_prefix, items in _LIST_AXES:
+        if not items:
+            continue
+        for raw_item in items:
+            if not raw_item or not str(raw_item).strip():
+                continue
+            normalized = str(raw_item).strip().lower()
+            namespaced_key = f"{namespace_prefix}{normalized}"
+
+            # Skip if an active row with this exact (normalized) fact_key already exists
+            existing_result = await db.execute(
+                select(LeadProfileFact).where(
+                    LeadProfileFact.lead_id == lead_id,
+                    LeadProfileFact.fact_key == namespaced_key,
+                    LeadProfileFact.superseded_at == None,  # noqa: E711
+                )
+            )
+            if existing_result.scalar_one_or_none() is not None:
+                continue  # Deduplication: skip existing active row
+
+            # Insert new append-only row
+            db.add(
+                LeadProfileFact(
+                    id=_new_uuid(),
+                    lead_id=lead_id,
+                    fact_key=namespaced_key,
+                    fact_value=normalized,
+                    source_call_id=session_id,
+                )
+            )
 
 
 async def _write_correction_facts(

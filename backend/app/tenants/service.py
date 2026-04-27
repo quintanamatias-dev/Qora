@@ -34,6 +34,8 @@ async def create_client(
     scheduler_allowed_hours_end: int = 20,
     scheduler_retry_on_outcomes: str = '["call_again","follow_up"]',
     scheduler_timezone: str = "America/Argentina/Buenos_Aires",
+    # Issue #35 — Per-client extraction configuration (JSON string or None)
+    extraction_config: str | None = None,
 ) -> Client:
     """Create and persist a new Client record and its default Agent.
 
@@ -73,6 +75,7 @@ async def create_client(
         scheduler_allowed_hours_end=scheduler_allowed_hours_end,
         scheduler_retry_on_outcomes=scheduler_retry_on_outcomes,
         scheduler_timezone=scheduler_timezone,
+        extraction_config=extraction_config,
     )
     session.add(client)
     await session.flush()  # Flush to DB within current transaction

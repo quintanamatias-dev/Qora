@@ -19,6 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 import pytest_asyncio
 from pydantic import SecretStr
 
@@ -2220,3 +2221,310 @@ async def test_summarizer_gpt_refusal_with_config_is_non_fatal(seeded_db):
             # Must not raise
             await generate_summary_and_facts(session_id, db)
             await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Issue #36 — Phase 1: List-type LeadProfileFact accumulation
+# ---------------------------------------------------------------------------
+
+
+def _make_analysis_with_list_axes(
+    *,
+    profile_facts_list=None,
+    pain_points=None,
+    service_issues=None,
+    commitment_signals=None,
+    buying_signals=None,
+):
+    """Build a PostCallAnalysis with specific list-axis values."""
+    from app.analysis_schema import (
+        PostCallAnalysis,
+        CallOutcome,
+        DetectedInterests,
+        IdentifiedProblem,
+        ServiceIssuesAxis,
+        ProfileFactsAxis,
+        CommitmentSignalsAxis,
+    )
+
+    return PostCallAnalysis(
+        summary="Test summary",
+        interest_level=70,
+        current_insurance="OSDE",
+        next_action_suggested="send_quote",
+        call_outcome=CallOutcome(
+            classification="interested",
+            reason="Lead was interested.",
+            engagement_quality="high",
+        ),
+        detected_interests=DetectedInterests(
+            products=[],
+            specific_needs=[],
+            buying_signals=buying_signals or [],
+        ),
+        identified_problem=IdentifiedProblem(
+            primary_need="Needs insurance",
+            pain_points=pain_points or [],
+            urgency="medium",
+        ),
+        service_issues=ServiceIssuesAxis(issues=service_issues or []),
+        profile_facts=ProfileFactsAxis(facts=profile_facts_list or []),
+        commitment_signals=CommitmentSignalsAxis(signals=commitment_signals or []),
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_facts_first_insert_profile_facts(seeded_db):
+    """Issue #36 Phase 1: First call with profile_facts inserts namespaced LeadProfileFact rows.
+
+    GIVEN a lead with no existing LeadProfileFact rows for 'profile:' namespace
+    WHEN _write_lead_profile_facts() runs with profile_facts.facts = ['owns a home', 'has 2 cars']
+    THEN 2 rows are inserted: fact_key='profile:owns a home', fact_key='profile:has 2 cars', both active.
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.leads.models import LeadProfileFact
+    from sqlalchemy import select
+
+    analysis = _make_analysis_with_list_axes(
+        profile_facts_list=["owns a home", "has 2 cars"]
+    )
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[("user", "Soy dueño de una casa"), ("agent", "Entendido")],
+    )
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == "test-lead-sum-001",
+                LeadProfileFact.fact_key.startswith("profile:"),
+                LeadProfileFact.superseded_at == None,  # noqa: E711
+            )
+        )
+        rows = list(result.scalars().all())
+
+    profile_keys = {r.fact_key for r in rows}
+    assert (
+        "profile:owns a home" in profile_keys
+    ), f"Expected profile:owns a home in {profile_keys}"
+    assert (
+        "profile:has 2 cars" in profile_keys
+    ), f"Expected profile:has 2 cars in {profile_keys}"
+    assert len([r for r in rows if r.fact_key.startswith("profile:")]) == 2
+
+
+@pytest.mark.asyncio
+async def test_list_facts_cross_call_dedup_no_duplicate_insert(seeded_db):
+    """Issue #36 Phase 1: Second call with same item skips insert (cross-call dedup).
+
+    GIVEN 'profile:owns a home' already exists as active row
+    WHEN second call produces profile_facts = ['owns a home', 'retired']
+    THEN 'profile:owns a home' is NOT re-inserted; 'profile:retired' IS inserted.
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.leads.models import LeadProfileFact
+    from sqlalchemy import select
+
+    # First call — inserts 'owns a home'
+    analysis1 = _make_analysis_with_list_axes(profile_facts_list=["owns a home"])
+    mock_client1 = _make_mock_client(_make_parse_response(analysis1))
+    session_id1 = await _create_session(
+        seeded_db, with_turns=[("user", "Soy dueño de casa")]
+    )
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client1, "gpt-4o-mini")
+    ):
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id1, db)
+            await db.commit()
+
+    # Second call — same 'owns a home' + new 'retired'
+    analysis2 = _make_analysis_with_list_axes(
+        profile_facts_list=["owns a home", "retired"]
+    )
+    mock_client2 = _make_mock_client(_make_parse_response(analysis2))
+    session_id2 = await _create_session(
+        seeded_db, with_turns=[("user", "Estoy jubilado")]
+    )
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client2, "gpt-4o-mini")
+    ):
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id2, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == "test-lead-sum-001",
+                LeadProfileFact.fact_key.startswith("profile:"),
+                LeadProfileFact.superseded_at == None,  # noqa: E711
+            )
+        )
+        rows = list(result.scalars().all())
+
+    profile_keys = {r.fact_key for r in rows}
+    # Exactly 2 active profile: rows (no duplicate for 'owns a home')
+    assert profile_keys == {
+        "profile:owns a home",
+        "profile:retired",
+    }, f"Expected exactly 2 profile: facts, got: {profile_keys}"
+
+
+@pytest.mark.asyncio
+async def test_list_facts_case_insensitive_dedup(seeded_db):
+    """Issue #36 Phase 1: Deduplication is case-insensitive (normalized to lowercase).
+
+    GIVEN 'pain:high premiums' exists as active row
+    WHEN new call produces pain_points = ['High Premiums']
+    THEN no new row is inserted (normalized key matches).
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.leads.models import LeadProfileFact
+    from sqlalchemy import select
+
+    # First call — inserts 'pain:high premiums' (normalized)
+    analysis1 = _make_analysis_with_list_axes(pain_points=["high premiums"])
+    mock_client1 = _make_mock_client(_make_parse_response(analysis1))
+    session_id1 = await _create_session(
+        seeded_db, with_turns=[("user", "Las primas son altas")]
+    )
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client1, "gpt-4o-mini")
+    ):
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id1, db)
+            await db.commit()
+
+    # Second call — same item but uppercase
+    analysis2 = _make_analysis_with_list_axes(pain_points=["High Premiums"])
+    mock_client2 = _make_mock_client(_make_parse_response(analysis2))
+    session_id2 = await _create_session(
+        seeded_db, with_turns=[("user", "Las primas son MUY altas")]
+    )
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client2, "gpt-4o-mini")
+    ):
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id2, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == "test-lead-sum-001",
+                LeadProfileFact.fact_key.startswith("pain:"),
+                LeadProfileFact.superseded_at == None,  # noqa: E711
+            )
+        )
+        rows = list(result.scalars().all())
+
+    assert (
+        len(rows) == 1
+    ), f"Expected exactly 1 pain: row (dedup), got {len(rows)}: {[r.fact_key for r in rows]}"
+    assert rows[0].fact_key == "pain:high premiums"
+
+
+@pytest.mark.asyncio
+async def test_list_facts_empty_list_skips_inserts(seeded_db):
+    """Issue #36 Phase 1: Empty or None list-axis skips inserts.
+
+    GIVEN pain_points = [] or None
+    WHEN _write_lead_profile_facts() runs
+    THEN no 'pain:' rows are created.
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.leads.models import LeadProfileFact
+    from sqlalchemy import select
+
+    analysis = _make_analysis_with_list_axes(pain_points=[])
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+    session_id = await _create_session(seeded_db, with_turns=[("user", "Todo bien")])
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == "test-lead-sum-001",
+                LeadProfileFact.fact_key.startswith("pain:"),
+            )
+        )
+        rows = list(result.scalars().all())
+
+    assert len(rows) == 0, f"Expected 0 pain: rows for empty list, got {len(rows)}"
+
+
+@pytest.mark.asyncio
+async def test_list_facts_all_5_axes_persisted(seeded_db):
+    """Issue #36 Phase 1: All 5 list axes are persisted with correct namespace prefixes.
+
+    GIVEN a call analysis with non-empty values in all 5 list axes
+    WHEN _write_lead_profile_facts() runs
+    THEN rows are created with prefixes: profile:, pain:, service_issue:, signal:, buying_signal:
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.leads.models import LeadProfileFact
+    from sqlalchemy import select
+
+    analysis = _make_analysis_with_list_axes(
+        profile_facts_list=["married"],
+        pain_points=["too expensive"],
+        service_issues=["claim denied"],
+        commitment_signals=["will call back tomorrow"],
+        buying_signals=["asked for quote"],
+    )
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+    session_id = await _create_session(
+        seeded_db, with_turns=[("user", "Quiero un seguro")]
+    )
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == "test-lead-sum-001",
+                LeadProfileFact.superseded_at == None,  # noqa: E711
+            )
+        )
+        all_rows = list(result.scalars().all())
+
+    # Extract by known prefixes
+    by_prefix = {}
+    for r in all_rows:
+        prefix = r.fact_key.split(":")[0] + ":"
+        by_prefix.setdefault(prefix, []).append(r.fact_key)
+
+    assert (
+        "profile:" in by_prefix
+    ), f"Missing 'profile:' rows. Got prefixes: {list(by_prefix.keys())}"
+    assert (
+        "pain:" in by_prefix
+    ), f"Missing 'pain:' rows. Got prefixes: {list(by_prefix.keys())}"
+    assert (
+        "service_issue:" in by_prefix
+    ), f"Missing 'service_issue:' rows. Got prefixes: {list(by_prefix.keys())}"
+    assert (
+        "signal:" in by_prefix
+    ), f"Missing 'signal:' rows. Got prefixes: {list(by_prefix.keys())}"
+    assert (
+        "buying_signal:" in by_prefix
+    ), f"Missing 'buying_signal:' rows. Got prefixes: {list(by_prefix.keys())}"

@@ -11,6 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.leads.service import get_lead
 from app.tools.get_lead_details import get_lead_details
+from app.tools.get_lead_history import get_lead_history
+from app.tools.get_lead_pain_points import get_lead_pain_points
+from app.tools.get_lead_profile import get_lead_profile
 from app.tools.mark_not_interested import mark_not_interested
 from app.tools.register_interest import register_interest
 from app.tools.schedule_followup import schedule_followup
@@ -19,6 +22,9 @@ from app.tools.schedule_followup import schedule_followup
 # Tool registry: name → handler function
 _TOOL_REGISTRY = {
     "get_lead_details": get_lead_details,
+    "get_lead_profile": get_lead_profile,
+    "get_lead_history": get_lead_history,
+    "get_lead_pain_points": get_lead_pain_points,
     "register_interest": register_interest,
     "mark_not_interested": mark_not_interested,
     "schedule_followup": schedule_followup,
@@ -69,6 +75,21 @@ async def dispatch_tool(
             return scope_error
         if tool_name == "get_lead_details":
             return await get_lead_details(
+                session=sess,
+                lead_id=effective_lead_id,
+            )
+        elif tool_name == "get_lead_profile":
+            return await get_lead_profile(
+                session=sess,
+                lead_id=effective_lead_id,
+            )
+        elif tool_name == "get_lead_history":
+            return await get_lead_history(
+                session=sess,
+                lead_id=effective_lead_id,
+            )
+        elif tool_name == "get_lead_pain_points":
+            return await get_lead_pain_points(
                 session=sess,
                 lead_id=effective_lead_id,
             )

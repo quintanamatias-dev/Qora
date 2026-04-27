@@ -23,6 +23,8 @@ from app.leads.models import LeadStatus
 from app.leads.service import (
     InvalidTransitionError,
     create_lead,
+    get_active_profile_facts,
+    get_interest_history,
     get_lead,
     list_leads_for_client,
     transition_lead_status,
@@ -106,18 +108,39 @@ async def _batch_next_scheduled_call_at(
     return {row.lead_id: row.earliest for row in result}
 
 
-def _lead_to_dict(lead, *, next_scheduled_call_at: datetime | None = None) -> dict:
+def _lead_to_dict(
+    lead,
+    *,
+    next_scheduled_call_at: datetime | None = None,
+    profile_facts: list | None = None,
+    interest_history: list | None = None,
+) -> dict:
     """Serialize a Lead ORM object to a response dict.
 
-    Includes Phase 2 CRM fields (summary_last_call, interest_level, etc.) and
-    Phase 7 enrichment field (next_scheduled_call_at).
+    Includes Phase 2 CRM fields (summary_last_call, interest_level, etc.),
+    Phase 7 enrichment field (next_scheduled_call_at), and Issue #36 additive
+    fields (profile_facts, interest_history).
     All optional fields are null-safe — returned as null if not set.
 
     Args:
         lead: Lead ORM instance.
         next_scheduled_call_at: Optional datetime from batch enrichment query.
             Passed by list_leads(); other callers omit it (defaults to None).
+        profile_facts: Pre-fetched list of active LeadProfileFact dicts (Issue #36).
+            If None, defaults to empty dict in the response.
+        interest_history: Pre-fetched list of LeadInterestHistory dicts (Issue #36).
+            If None, defaults to empty list in the response.
     """
+    # Group profile_facts by namespace prefix (strip trailing colon)
+    grouped_profile_facts: dict = {}
+    for row in profile_facts or []:
+        fact_key = row.get("fact_key", "")
+        # Extract namespace prefix (e.g. 'profile:married' → 'profile')
+        if ":" in fact_key:
+            namespace = fact_key.split(":")[0]
+            value = row.get("fact_value") or fact_key[len(namespace) + 1 :]
+            grouped_profile_facts.setdefault(namespace, []).append(value)
+
     return {
         "id": lead.id,
         "client_id": lead.client_id,
@@ -149,6 +172,15 @@ def _lead_to_dict(lead, *, next_scheduled_call_at: datetime | None = None) -> di
         "next_scheduled_call_at": (
             next_scheduled_call_at.isoformat() if next_scheduled_call_at else None
         ),
+        # Issue #36 additive fields — accumulated lead profile
+        "profile_facts": grouped_profile_facts,
+        "interest_history": [
+            {
+                "interest_level": row.get("interest_level"),
+                "recorded_at": row.get("recorded_at"),
+            }
+            for row in (interest_history or [])
+        ],
     }
 
 
@@ -193,7 +225,7 @@ async def get_lead_by_id(
     """Get a single lead by its UUID.
 
     Returns:
-        Lead object with all fields.
+        Lead object with all fields including accumulated profile_facts and interest_history.
 
     Raises:
         404: If lead_id does not exist.
@@ -201,7 +233,14 @@ async def get_lead_by_id(
     lead = await get_lead(session, lead_id)
     if lead is None:
         raise HTTPException(status_code=404, detail={"error": "lead not found"})
-    return _lead_to_dict(lead)
+
+    # Issue #36: Fetch accumulated profile data from relational tables
+    profile_facts = await get_active_profile_facts(session, lead_id)
+    interest_history = await get_interest_history(session, lead_id)
+
+    return _lead_to_dict(
+        lead, profile_facts=profile_facts, interest_history=interest_history
+    )
 
 
 @router.post("", status_code=201)

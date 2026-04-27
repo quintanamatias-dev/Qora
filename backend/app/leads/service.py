@@ -8,7 +8,13 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.leads.models import Lead, LeadStatus, is_valid_transition
+from app.leads.models import (
+    Lead,
+    LeadInterestHistory,
+    LeadProfileFact,
+    LeadStatus,
+    is_valid_transition,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +117,115 @@ async def transition_lead_status(
     lead.updated_at = datetime.now(timezone.utc)
     await session.flush()
     return lead
+
+
+# ---------------------------------------------------------------------------
+# Profile query functions (Issue #36)
+# ---------------------------------------------------------------------------
+
+
+async def get_active_profile_facts(
+    db: AsyncSession,
+    lead_id: str,
+) -> list[dict]:
+    """Return active (non-superseded) LeadProfileFact rows for a lead.
+
+    Args:
+        db: Active async DB session.
+        lead_id: UUID of the lead.
+
+    Returns:
+        List of dicts: {fact_key, fact_value, recorded_at, source_call_id}.
+        Ordered by recorded_at DESC. Empty list if no active rows.
+    """
+    result = await db.execute(
+        select(LeadProfileFact)
+        .where(
+            LeadProfileFact.lead_id == lead_id,
+            LeadProfileFact.superseded_at == None,  # noqa: E711
+        )
+        .order_by(LeadProfileFact.recorded_at.desc())
+    )
+    rows = list(result.scalars().all())
+    return [
+        {
+            "fact_key": r.fact_key,
+            "fact_value": r.fact_value,
+            "recorded_at": r.recorded_at.isoformat() if r.recorded_at else None,
+            "source_call_id": r.source_call_id,
+        }
+        for r in rows
+    ]
+
+
+async def get_interest_history(
+    db: AsyncSession,
+    lead_id: str,
+    *,
+    limit: int = 10,
+) -> list[dict]:
+    """Return recent LeadInterestHistory rows for a lead (newest first).
+
+    Args:
+        db: Active async DB session.
+        lead_id: UUID of the lead.
+        limit: Maximum number of rows to return (default 10).
+
+    Returns:
+        List of dicts: {interest_level, recorded_at, source_call_id}.
+        Ordered by recorded_at DESC. Empty list if no rows.
+    """
+    result = await db.execute(
+        select(LeadInterestHistory)
+        .where(LeadInterestHistory.lead_id == lead_id)
+        .order_by(LeadInterestHistory.recorded_at.desc())
+        .limit(limit)
+    )
+    rows = list(result.scalars().all())
+    return [
+        {
+            "interest_level": r.interest_level,
+            "recorded_at": r.recorded_at.isoformat() if r.recorded_at else None,
+            "source_call_id": r.source_call_id,
+        }
+        for r in rows
+    ]
+
+
+async def get_facts_by_namespace(
+    db: AsyncSession,
+    lead_id: str,
+    prefix: str,
+) -> list[dict]:
+    """Return active LeadProfileFact rows where fact_key starts with prefix.
+
+    Args:
+        db: Active async DB session.
+        lead_id: UUID of the lead.
+        prefix: Namespace prefix to filter by (e.g. 'pain:', 'profile:').
+
+    Returns:
+        List of dicts matching get_active_profile_facts() shape, filtered by prefix.
+    """
+    result = await db.execute(
+        select(LeadProfileFact)
+        .where(
+            LeadProfileFact.lead_id == lead_id,
+            LeadProfileFact.fact_key.startswith(prefix),
+            LeadProfileFact.superseded_at == None,  # noqa: E711
+        )
+        .order_by(LeadProfileFact.recorded_at.desc())
+    )
+    rows = list(result.scalars().all())
+    return [
+        {
+            "fact_key": r.fact_key,
+            "fact_value": r.fact_value,
+            "recorded_at": r.recorded_at.isoformat() if r.recorded_at else None,
+            "source_call_id": r.source_call_id,
+        }
+        for r in rows
+    ]
 
 
 # ---------------------------------------------------------------------------

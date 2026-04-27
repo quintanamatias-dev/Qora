@@ -12,8 +12,11 @@ Covers: T2.4 AC — GET/PATCH endpoints scope queries by client_id.
 
 from __future__ import annotations
 
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from pydantic import SecretStr
@@ -708,3 +711,207 @@ async def test_list_leads_empty_result_executes_zero_scheduled_calls_queries(
         f"got {len(scheduled_calls_query_count)}. "
         f"Queries fired: {scheduled_calls_query_count}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #36 Phase 5: Lead detail API enrichment with profile_facts / interest_history
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def enriched_leads_client(tmp_path: Path):
+    """Test app + DB with one lead that has LeadProfileFact and LeadInterestHistory rows."""
+    from app.core.config import Settings
+    from app.core import database as db_module
+    from app.leads.models import LeadProfileFact, LeadInterestHistory
+
+    settings = Settings(
+        openai_api_key=SecretStr("sk-test"),
+        elevenlabs_api_key=SecretStr("el-test"),
+        database_url=f"sqlite+aiosqlite:///{tmp_path}/leads_router_enriched_test.db",
+    )
+    await db_module.init_db(settings)
+
+    async with db_module.async_session_factory() as sess:
+        from app.tenants.service import seed_quintana
+        from app.leads.service import create_lead
+
+        await seed_quintana(sess)
+        await create_lead(
+            sess,
+            client_id="quintana-seguros",
+            name="Enriched Lead",
+            phone="+5411055555",
+            lead_id="test-lead-enriched-001",
+        )
+        # Insert active profile facts
+        sess.add(
+            LeadProfileFact(
+                id=str(uuid.uuid4()),
+                lead_id="test-lead-enriched-001",
+                fact_key="profile:married",
+                fact_value="married",
+            )
+        )
+        sess.add(
+            LeadProfileFact(
+                id=str(uuid.uuid4()),
+                lead_id="test-lead-enriched-001",
+                fact_key="pain:high cost",
+                fact_value="high cost",
+            )
+        )
+        # Insert interest history
+        sess.add(
+            LeadInterestHistory(
+                id=str(uuid.uuid4()),
+                lead_id="test-lead-enriched-001",
+                interest_level=75,
+                recorded_at=datetime.now(timezone.utc),
+            )
+        )
+        sess.add(
+            LeadInterestHistory(
+                id=str(uuid.uuid4()),
+                lead_id="test-lead-enriched-001",
+                interest_level=90,
+                recorded_at=datetime.now(timezone.utc),
+            )
+        )
+        await sess.commit()
+
+    from app.leads.router import router as leads_router
+    from fastapi import FastAPI
+
+    test_app = FastAPI()
+    test_app.include_router(leads_router, prefix="/api/v1")
+
+    from httpx import AsyncClient, ASGITransport
+
+    async with AsyncClient(
+        transport=ASGITransport(app=test_app),
+        base_url="http://test",
+    ) as client:
+        yield client
+
+    await db_module.close_db()
+
+
+@pytest.mark.asyncio
+async def test_get_lead_by_id_returns_profile_facts_and_interest_history(
+    enriched_leads_client,
+):
+    """Issue #36 Phase 5: GET /leads/{id} returns profile_facts dict and interest_history array.
+
+    GIVEN a lead with active LeadProfileFact rows and 2 LeadInterestHistory rows
+    WHEN GET /leads/{id} is called
+    THEN the response contains 'profile_facts' dict and 'interest_history' array.
+    """
+    response = await enriched_leads_client.get("/api/v1/leads/test-lead-enriched-001")
+    assert response.status_code == 200
+    data = response.json()
+
+    assert (
+        "profile_facts" in data
+    ), f"Missing 'profile_facts' key in response: {list(data.keys())}"
+    assert (
+        "interest_history" in data
+    ), f"Missing 'interest_history' key in response: {list(data.keys())}"
+
+    profile_facts = data["profile_facts"]
+    interest_history = data["interest_history"]
+
+    assert isinstance(
+        profile_facts, dict
+    ), f"profile_facts should be dict, got: {type(profile_facts)}"
+    assert isinstance(
+        interest_history, list
+    ), f"interest_history should be list, got: {type(interest_history)}"
+
+    # Profile facts grouped by namespace prefix (without the colon): profile, pain, etc.
+    assert (
+        "profile" in profile_facts
+    ), f"Expected 'profile' key in profile_facts: {profile_facts}"
+    assert (
+        "pain" in profile_facts
+    ), f"Expected 'pain' key in profile_facts: {profile_facts}"
+    assert (
+        "married" in profile_facts["profile"]
+    ), f"Expected 'married' in profile facts: {profile_facts['profile']}"
+
+    # Interest history has 2 rows
+    assert (
+        len(interest_history) == 2
+    ), f"Expected 2 interest history rows, got {len(interest_history)}"
+    # Each row has interest_level
+    for row in interest_history:
+        assert "interest_level" in row, f"Missing 'interest_level' in row: {row}"
+        assert "recorded_at" in row, f"Missing 'recorded_at' in row: {row}"
+
+
+@pytest.mark.asyncio
+async def test_get_lead_by_id_empty_profile_facts_and_history_when_none_exist(
+    leads_client,
+):
+    """Issue #36 Phase 5: GET /leads/{id} returns empty profile_facts and interest_history when no relational data exists.
+
+    GIVEN a lead with no LeadProfileFact or LeadInterestHistory rows
+    WHEN GET /leads/{id} is called
+    THEN 'profile_facts' is {} and 'interest_history' is [].
+    """
+    response = await leads_client.get("/api/v1/leads/lead-quintana-001")
+    assert response.status_code == 200
+    data = response.json()
+
+    assert "profile_facts" in data, "Missing 'profile_facts' in response"
+    assert "interest_history" in data, "Missing 'interest_history' in response"
+    assert (
+        data["profile_facts"] == {}
+    ), f"Expected empty dict, got: {data['profile_facts']}"
+    assert (
+        data["interest_history"] == []
+    ), f"Expected empty list, got: {data['interest_history']}"
+
+
+@pytest.mark.asyncio
+async def test_get_lead_by_id_404_still_returned_for_unknown_lead(leads_client):
+    """Issue #36 Phase 5: GET /leads/{id} still returns 404 for unknown lead (backward compat)."""
+    response = await leads_client.get("/api/v1/leads/nonexistent-lead-id")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_lead_by_id_existing_fields_unchanged(leads_client):
+    """Issue #36 Phase 5: GET /leads/{id} still returns all previously existing fields unchanged."""
+    response = await leads_client.get("/api/v1/leads/lead-quintana-001")
+    assert response.status_code == 200
+    data = response.json()
+
+    existing_fields = [
+        "id",
+        "client_id",
+        "name",
+        "phone",
+        "car_make",
+        "car_model",
+        "car_year",
+        "current_insurance",
+        "status",
+        "notes",
+        "call_count",
+        "last_called_at",
+        "created_at",
+        "updated_at",
+        "summary_last_call",
+        "objections_heard",
+        "interest_level",
+        "extracted_facts",
+        "do_not_call",
+        "next_action",
+        "next_action_at",
+        "next_scheduled_call_at",
+    ]
+    for field in existing_fields:
+        assert (
+            field in data
+        ), f"Previously existing field '{field}' is missing from response"

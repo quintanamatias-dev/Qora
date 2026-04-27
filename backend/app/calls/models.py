@@ -126,6 +126,12 @@ class CallAnalysis(Base):
     specific_needs: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     buying_signals: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     pain_points: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    # Issue #35 — 4 new universal axes (TEXT, migration-safe defaults)
+    service_issues: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    profile_facts: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    commitment_signals: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    abandonment_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extra_axes_data: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Audit / metadata
     analyzed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow

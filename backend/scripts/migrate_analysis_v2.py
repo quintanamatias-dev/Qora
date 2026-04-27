@@ -56,6 +56,11 @@ CREATE TABLE IF NOT EXISTS call_analyses (
     specific_needs TEXT NOT NULL DEFAULT '[]',
     buying_signals TEXT NOT NULL DEFAULT '[]',
     pain_points TEXT NOT NULL DEFAULT '[]',
+    service_issues TEXT NOT NULL DEFAULT '[]',
+    profile_facts TEXT NOT NULL DEFAULT '[]',
+    commitment_signals TEXT NOT NULL DEFAULT '[]',
+    abandonment_reason TEXT,
+    extra_axes_data TEXT,
     analyzed_at DATETIME NOT NULL,
     analysis_status TEXT NOT NULL DEFAULT 'ok',
     analysis_error TEXT
@@ -149,6 +154,12 @@ def _build_call_analysis_row(
     detected_interests = facts.get("detected_interests") or {}
     identified_problem = facts.get("identified_problem") or {}
 
+    # Issue #35 — 4 new universal axes (default to empty list / null if not in facts)
+    service_issues_data = facts.get("service_issues") or {}
+    profile_facts_data = facts.get("profile_facts") or {}
+    commitment_signals_data = facts.get("commitment_signals") or {}
+    abandonment_reason_data = facts.get("abandonment_reason") or {}
+
     return {
         "id": str(uuid.uuid4()),
         "session_id": session_id,
@@ -170,6 +181,27 @@ def _build_call_analysis_row(
         "specific_needs": _safe_json_list(detected_interests.get("specific_needs")),
         "buying_signals": _safe_json_list(detected_interests.get("buying_signals")),
         "pain_points": _safe_json_list(identified_problem.get("pain_points")),
+        "service_issues": _safe_json_list(
+            service_issues_data.get("issues")
+            if isinstance(service_issues_data, dict)
+            else None
+        ),
+        "profile_facts": _safe_json_list(
+            profile_facts_data.get("facts")
+            if isinstance(profile_facts_data, dict)
+            else None
+        ),
+        "commitment_signals": _safe_json_list(
+            commitment_signals_data.get("signals")
+            if isinstance(commitment_signals_data, dict)
+            else None
+        ),
+        "abandonment_reason": (
+            abandonment_reason_data.get("reason")
+            if isinstance(abandonment_reason_data, dict)
+            else None
+        ),
+        "extra_axes_data": None,  # not populated during migration from legacy JSON
         "analyzed_at": _utcnow_str(),
         "analysis_status": "ok",
         "analysis_error": None,
@@ -344,6 +376,8 @@ async def run_migration(database_url: str) -> dict:
                              primary_need, next_action_suggested, current_insurance,
                              data_corrections, misc_notes, objections, products,
                              specific_needs, buying_signals, pain_points,
+                             service_issues, profile_facts, commitment_signals,
+                             abandonment_reason, extra_axes_data,
                              analyzed_at, analysis_status, analysis_error)
                         VALUES
                             (:id, :session_id, :lead_id, :client_id, :summary, :interest_level,
@@ -351,6 +385,8 @@ async def run_migration(database_url: str) -> dict:
                              :primary_need, :next_action_suggested, :current_insurance,
                              :data_corrections, :misc_notes, :objections, :products,
                              :specific_needs, :buying_signals, :pain_points,
+                             :service_issues, :profile_facts, :commitment_signals,
+                             :abandonment_reason, :extra_axes_data,
                              :analyzed_at, :analysis_status, :analysis_error)
                         """
                     ),
