@@ -203,3 +203,73 @@ export interface UpdateAgentPayload {
   system_prompt?: string | null
   tools_enabled?: string[]
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Analytics
+// ──────────────────────────────────────────────────────────────────────────────
+
+export type AnalyticsPeriod = 'day' | 'week' | 'month' | 'custom'
+
+export interface AnalyticsParams {
+  period: AnalyticsPeriod
+  agentId?: string
+  startDate?: string
+  endDate?: string
+}
+
+export interface AnalyticsOverviewResponse {
+  total_calls: number
+  outcome_distribution: Record<string, number>
+  engagement_distribution: Record<string, number>
+  avg_call_duration_seconds: number | null
+  conversion_rate: number | null
+  period: string
+  start_date: string
+  end_date: string
+  agent_id: string | null
+}
+
+export interface ServiceIssueItem {
+  issue: string
+  count: number
+  rank: number
+}
+
+export interface AnalyticsServiceIssuesResponse {
+  issues: ServiceIssueItem[]
+  period: string
+  start_date: string
+  end_date: string
+  agent_id: string | null
+}
+
+export interface InterestItem {
+  interest: string
+  count: number
+  trend: 'up' | 'down' | 'stable'
+  previous_count: number
+}
+
+export interface AnalyticsInterestsResponse {
+  interests: InterestItem[]
+  period: string
+  start_date: string
+  end_date: string
+  agent_id: string | null
+}
+
+export interface AgentStatItem {
+  agent_id: string
+  agent_name: string | null
+  total_calls: number
+  outcome_distribution: Record<string, number>
+  avg_engagement_quality: string | null
+  conversion_rate: number | null
+}
+
+export interface AnalyticsAgentStatsResponse {
+  agents: AgentStatItem[]
+  period: string
+  start_date: string
+  end_date: string
+}
