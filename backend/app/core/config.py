@@ -48,6 +48,20 @@ class Settings(BaseSettings):
     default_broker_name: str = "Quintana Seguros"
     default_agent_name: str = "Jaumpablo"
 
+    # ------------------------------------------------------------------
+    # n8n Orchestration (feature-flagged, all off by default)
+    # ------------------------------------------------------------------
+    # Feature flag — when False, zero behavior change to existing code.
+    n8n_enabled: bool = False
+    # Outbound webhook URL (n8n webhook trigger endpoint)
+    n8n_webhook_url: str = ""
+    # Outbound HMAC signing secret — for X-Webhook-Signature on triggered requests
+    n8n_webhook_secret: SecretStr = SecretStr("")
+    # Inbound static API key — for X-Internal-Api-Key on internal API endpoints
+    n8n_internal_api_key: SecretStr = SecretStr("")
+    # Outbound HTTP timeout for webhook POST (seconds)
+    n8n_timeout_seconds: int = 5
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
