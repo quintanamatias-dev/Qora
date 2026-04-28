@@ -202,7 +202,7 @@ async def elevenlabs_postcall_webhook(body: ElevenLabsPostCallPayload):
                     merged_count=len(extra_turns),
                 )
                 # Trigger re-summary with the full (merged) transcript (CAP-4)
-                _schedule_summarize(cs.id)
+                _schedule_summarize(cs.id, client_id=cs.client_id)
         else:
             # abandoned or other status — close to completed
             logger.info(
