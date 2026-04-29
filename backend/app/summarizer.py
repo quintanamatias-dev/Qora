@@ -1,22 +1,18 @@
-"""QORA — Post-call summarizer and fact extractor (CAP-4, Phase 5).
+"""QORA — Post-call summarizer and fact extractor.
 
-Generates a concise summary and structured facts from a call transcript
-using a single GPT-4o-mini call with OpenAI Structured Outputs (parse mode).
-
-Phase 5 changes:
-- Switched from `create()` + JSON mode to `parse(response_format=PostCallAnalysis)`
-- Imports PostCallAnalysis + ANALYSIS_SYSTEM_PROMPT from analysis_schema (N8N boundary)
-- max_tokens increased to 1024 (3 new nested axes need more tokens)
-- _SYSTEM_PROMPT removed — now lives in analysis_schema.ANALYSIS_SYSTEM_PROMPT
-- _call_gpt_summarize updated to use .parse() and return typed Pydantic result
-- _merge_facts_into_lead preserves all existing merge logic + new axes flow naturally
+Orchestrates per-dimension analysis: each module under
+``app.analysis.universal`` owns its own prompt, schema, and OpenAI call.
+This summarizer fans the 13 ``analyze`` coroutines out via
+``asyncio.gather(return_exceptions=True)`` and merges the results into
+``PostCallAnalysis``. One bad dimension does not kill the analysis — it is
+logged and the field falls back to the schema's default.
 
 Flow:
 1. Load transcript turns for the session from DB.
-2. If 0 turns → skip (no GPT call, no side-effects).
-3. Single GPT-4o-mini call → PostCallAnalysis Pydantic object.
-4. model_dump() → facts dict (summary popped out).
-5. Persist summary + facts to CallSession.
+2. If 0 turns → skip (no GPT calls, no side-effects).
+3. Run all 13 dimensions in parallel; assemble PostCallAnalysis.
+4. model_dump() → facts dict (summary popped out for separate persistence).
+5. Persist summary + facts to CallSession + CallAnalysis.
 6. Merge facts into Lead (objection union, latest values, do_not_call flag).
 
 Failures are always caught and logged — MUST NOT raise, MUST NOT affect
@@ -25,6 +21,7 @@ session close or any other operation.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from typing import Any
@@ -34,13 +31,8 @@ from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analysis_schema import (
-    ANALYSIS_SYSTEM_PROMPT,
-    ExtractionConfig,
-    PostCallAnalysis,
-    build_analysis_model,
-    build_system_prompt,
-)
+from app.analysis.schema import PostCallAnalysis
+from app.analysis.universal import DIMENSION_MODULES
 from app.calls.models import CallAnalysis, CallSession, TranscriptTurn
 from app.leads.models import Lead, LeadInterestHistory, LeadProfileFact
 
@@ -111,19 +103,14 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
     # Build transcript text for GPT
     transcript_text = _format_transcript(turns)
 
-    # Load client's extraction config (Issue #35)
-    extraction_cfg = await _load_extraction_config(db, cs.client_id)
-
-    # Call GPT-4o-mini with structured outputs
-    # On failure, persist a partial-analysis marker so the record shows
-    # that analysis was attempted but failed (spec requirement: CRITICAL 1).
+    # Run all dimensions in parallel.
+    # On failure (ALL dimensions blew up), persist a partial-analysis marker so
+    # the record shows that analysis was attempted but failed.
     user_turns = sum(1 for t in turns if t.role == "user")
     agent_turns = sum(1 for t in turns if t.role == "agent")
 
     try:
-        summary, facts = await _call_gpt_summarize(
-            transcript_text, config=extraction_cfg
-        )
+        summary, facts = await _call_gpt_summarize(transcript_text)
     except Exception as gpt_exc:
         error_msg = str(gpt_exc)
         logger.warning(
@@ -210,71 +197,54 @@ def _get_openai_client() -> tuple[AsyncOpenAI, str]:
     return client, model
 
 
-async def _call_gpt_summarize(
-    transcript_text: str,
-    *,
-    config: "ExtractionConfig | None" = None,
-) -> tuple[str, dict[str, Any]]:
-    """Make a single GPT-4o-mini call using Structured Outputs (parse mode).
+async def _call_gpt_summarize(transcript_text: str) -> tuple[str, dict[str, Any]]:
+    """Run all 13 universal dimensions in parallel and assemble PostCallAnalysis.
 
-    When config is provided, uses build_analysis_model(config) as response_format
-    and build_system_prompt(config) as the system message.
-    When config is None, falls back to PostCallAnalysis + ANALYSIS_SYSTEM_PROMPT.
-
-    Args:
-        transcript_text: Formatted call transcript.
-        config: Optional ExtractionConfig for dynamic model/prompt selection.
+    Each module under ``app.analysis.universal`` owns one OpenAI call. Results
+    are gathered with ``return_exceptions=True`` so one failed dimension does
+    not poison the others — the failed field falls back to PostCallAnalysis's
+    schema default.
 
     Returns:
         Tuple of (summary_text, extracted_facts_dict).
 
     Raises:
-        Exception: On API failure, schema parse error, or refusal.
+        RuntimeError: When ALL 13 dimensions fail (no usable analysis).
     """
-    client, model = _get_openai_client()
+    client, _model = _get_openai_client()
 
-    # Issue #35: select response_format and system prompt based on config
-    if config is not None:
-        response_format = build_analysis_model(config)
-        system_prompt = build_system_prompt(config)
-    else:
-        response_format = PostCallAnalysis
-        system_prompt = ANALYSIS_SYSTEM_PROMPT
-
-    response = await client.chat.completions.parse(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": f"Transcript:\n\n{transcript_text}",
-            },
-        ],
-        response_format=response_format,
-        max_tokens=1024,
-        temperature=0.2,
+    results = await asyncio.gather(
+        *[mod.analyze(transcript_text, client) for mod in DIMENSION_MODULES],
+        return_exceptions=True,
     )
 
-    message = response.choices[0].message
+    fields: dict[str, Any] = {}
+    failures = 0
+    for mod, result in zip(DIMENSION_MODULES, results):
+        dim_name = mod.DIMENSION["name"]
+        if isinstance(result, Exception):
+            failures += 1
+            logger.error(
+                "dimension_analysis_failed",
+                dimension=dim_name,
+                error=str(result),
+                error_type=type(result).__name__,
+            )
+            continue
+        fields[mod.DIMENSION["target_field"]] = result
 
-    # Handle refusal (OpenAI can refuse to analyze certain content)
-    if message.refusal:
-        logger.warning(
-            "summarizer_llm_refusal",
-            refusal=message.refusal[:200],
+    if failures == len(DIMENSION_MODULES):
+        # All dimensions blew up — no useful analysis.
+        raise RuntimeError(
+            f"all {failures} dimension analyses failed — see dimension_analysis_failed logs"
         )
-        raise ValueError(f"LLM refused to analyze transcript: {message.refusal[:100]}")
 
-    if message.parsed is None:
-        logger.error("summarizer_parse_returned_none")
-        raise ValueError("OpenAI parse() returned None — unexpected empty response")
+    analysis = PostCallAnalysis(**fields)
 
-    analysis: PostCallAnalysis = message.parsed
-
-    # model_dump() gives us the full structured facts dict
+    # model_dump() gives us the full structured facts dict.
     facts = analysis.model_dump()
 
-    # Pop summary out — it's stored separately on CallSession
+    # Pop summary out — it's stored separately on CallSession.
     summary = str(facts.pop("summary", ""))
 
     return summary, facts
@@ -466,41 +436,6 @@ def _apply_data_corrections(lead: "Lead", corrections_str: str) -> None:
 def _new_uuid() -> str:
     """Generate a new UUID4 string (matches project PK convention)."""
     return str(uuid.uuid4())
-
-
-async def _load_extraction_config(
-    db: AsyncSession,
-    client_id: str,
-) -> "ExtractionConfig | None":
-    """Load and deserialize Client.extraction_config for the given client.
-
-    Returns ExtractionConfig if the client has a non-NULL extraction_config,
-    or None (base path / backward compat) if extraction_config is NULL or missing.
-
-    Args:
-        db: Active async DB session.
-        client_id: The client whose extraction config to load.
-
-    Returns:
-        ExtractionConfig instance or None.
-    """
-    from app.tenants.models import Client
-
-    result = await db.execute(select(Client).where(Client.id == client_id))
-    client = result.scalar_one_or_none()
-    if client is None or client.extraction_config is None:
-        return None
-
-    try:
-        config_dict = json.loads(client.extraction_config)
-        return ExtractionConfig.model_validate(config_dict)
-    except Exception as exc:
-        logger.warning(
-            "summarizer_invalid_extraction_config",
-            client_id=client_id,
-            error=str(exc),
-        )
-        return None
 
 
 async def _upsert_call_analysis(

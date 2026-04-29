@@ -14,6 +14,7 @@ interface SidebarProps {
 
 const navItems = [
   { label: 'Dashboard', path: 'dashboard' },
+  { label: 'Analytics', path: 'analytics' },
   { label: 'Leads', path: 'leads' },
   { label: 'Import', path: 'import' },
 ]

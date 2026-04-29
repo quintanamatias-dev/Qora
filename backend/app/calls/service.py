@@ -637,25 +637,14 @@ def _schedule_summarize(session_id: str, client_id: str | None = None) -> None:
     """Fire-and-forget: schedule summary + fact extraction for a session.
 
     Creates an asyncio background task that opens its own DB session.
-    When N8N_ENABLED=True, also fires the n8n webhook trigger (non-blocking,
-    independently — n8n failure MUST NOT suppress local summarizer).
 
     MUST NOT be called from outside an async context.
 
     Args:
         session_id: UUID of the call session to summarize.
-        client_id: Optional client UUID. If provided, passed to n8n trigger.
-            If None, the background task looks it up from the DB.
+        client_id: Unused — accepted for backwards compat with older callers.
     """
     asyncio.create_task(_summarize_in_background(session_id))
-
-    # Only schedule n8n trigger task when the feature flag is enabled.
-    # Avoids creating a no-op background task when N8N_ENABLED=false.
-    from app.core.config import Settings
-
-    settings = Settings()
-    if settings.n8n_enabled:
-        asyncio.create_task(_trigger_n8n_if_enabled(session_id, client_id))
 
 
 async def _summarize_in_background(session_id: str) -> None:
@@ -673,55 +662,6 @@ async def _summarize_in_background(session_id: str) -> None:
     except Exception as exc:
         structlog.get_logger().warning(
             "background_summarize_failed",
-            session_id=session_id,
-            error=str(exc),
-        )
-
-
-async def _trigger_n8n_if_enabled(
-    session_id: str,
-    client_id: str | None,
-) -> None:
-    """Background task: fire n8n webhook trigger when N8N_ENABLED=True.
-
-    If client_id is None, looks it up from the DB. Swallows all errors —
-    n8n trigger failure MUST NOT affect the local summarizer pipeline.
-
-    Args:
-        session_id: UUID of the call session.
-        client_id: Client UUID (optional — resolved from DB if None).
-    """
-    try:
-        from app.core.config import Settings
-
-        settings = Settings()
-        if not settings.n8n_enabled:
-            return
-
-        # Resolve client_id from DB if not provided
-        resolved_client_id = client_id
-        if resolved_client_id is None:
-            from app.core.database import get_session as db_session
-
-            async with db_session() as db:
-                result = await db.execute(
-                    select(CallSession).where(CallSession.id == session_id)
-                )
-                cs = result.scalar_one_or_none()
-                if cs is None:
-                    structlog.get_logger().warning(
-                        "n8n_trigger_session_not_found",
-                        session_id=session_id,
-                    )
-                    return
-                resolved_client_id = cs.client_id
-
-        from app.n8n.client import trigger_n8n_webhook
-
-        await trigger_n8n_webhook(session_id, resolved_client_id)
-    except Exception as exc:
-        structlog.get_logger().warning(
-            "n8n_trigger_background_failed",
             session_id=session_id,
             error=str(exc),
         )

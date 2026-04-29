@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 
@@ -35,6 +36,7 @@ DIMENSION = {
     "name": "interests",
     "display_name": "Detected Interests",
     "schema": DetectedInterests,
+    "target_field": "detected_interests",
     "prompt": (
         "Extract what the lead was interested in. Return JSON with three lists: "
         "products (products/services mentioned or inquired about), "
@@ -45,3 +47,16 @@ DIMENSION = {
     ),
     "model": "gpt-4o-mini",
 }
+
+
+async def analyze(transcript: str, client: AsyncOpenAI) -> DetectedInterests:
+    """Run this dimension's GPT call and return the parsed DetectedInterests."""
+    response = await client.beta.chat.completions.parse(
+        model=DIMENSION["model"],
+        messages=[
+            {"role": "system", "content": DIMENSION["prompt"]},
+            {"role": "user", "content": transcript},
+        ],
+        response_format=DIMENSION["schema"],
+    )
+    return response.choices[0].message.parsed

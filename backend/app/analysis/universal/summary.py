@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 # Output language for client-facing fields. Will move to a global config
@@ -21,6 +22,7 @@ DIMENSION = {
     "name": "summary",
     "display_name": "Summary",
     "schema": SummaryAxis,
+    "target_field": "summary",
     "prompt": (
         f"Describe in one sentence what happened during the call. "
         f"Write the response in {LANGUAGE}. "
@@ -29,3 +31,17 @@ DIMENSION = {
     ),
     "model": "gpt-4o-mini",
 }
+
+
+async def analyze(transcript: str, client: AsyncOpenAI) -> str:
+    """Run this dimension's GPT call and return the unwrapped string."""
+    response = await client.beta.chat.completions.parse(
+        model=DIMENSION["model"],
+        messages=[
+            {"role": "system", "content": DIMENSION["prompt"]},
+            {"role": "user", "content": transcript},
+        ],
+        response_format=DIMENSION["schema"],
+    )
+    parsed: SummaryAxis = response.choices[0].message.parsed
+    return parsed.text

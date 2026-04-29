@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from app.analysis.enums import Urgency
@@ -26,6 +27,7 @@ DIMENSION = {
     "name": "problem",
     "display_name": "Identified Problem",
     "schema": IdentifiedProblem,
+    "target_field": "identified_problem",
     "prompt": (
         "Identify the underlying problem driving the lead's interest. Return JSON with: "
         "primary_need (one sentence — what the lead ACTUALLY needs, not just what they said), "
@@ -34,3 +36,16 @@ DIMENSION = {
     ),
     "model": "gpt-4o-mini",
 }
+
+
+async def analyze(transcript: str, client: AsyncOpenAI) -> IdentifiedProblem:
+    """Run this dimension's GPT call and return the parsed IdentifiedProblem."""
+    response = await client.beta.chat.completions.parse(
+        model=DIMENSION["model"],
+        messages=[
+            {"role": "system", "content": DIMENSION["prompt"]},
+            {"role": "user", "content": transcript},
+        ],
+        response_format=DIMENSION["schema"],
+    )
+    return response.choices[0].message.parsed

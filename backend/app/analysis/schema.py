@@ -1,8 +1,9 @@
 """Composite root schema — PostCallAnalysis.
 
-Used as ``response_format`` for OpenAI Structured Outputs
-(``client.chat.completions.parse(response_format=PostCallAnalysis)``).
-The summarizer imports this model and uses it as the response schema.
+Aggregates the 13 universal dimensions into one Pydantic model. Each field
+has a default so the summarizer's per-dimension orchestrator can leave a
+field unset when its dimension call fails (asyncio.gather with
+return_exceptions=True), and the model still validates.
 """
 
 from __future__ import annotations
@@ -18,23 +19,43 @@ from app.analysis.universal import (
     ProfileFactsAxis,
     ServiceIssuesAxis,
 )
+from app.analysis.enums import EngagementQuality, OutcomeClassification, Urgency
+
+
+def _default_call_outcome() -> CallOutcome:
+    return CallOutcome(
+        classification=OutcomeClassification.no_answer,
+        reason="dimension analysis failed or not produced",
+        engagement_quality=EngagementQuality.none,
+    )
+
+
+def _default_identified_problem() -> IdentifiedProblem:
+    return IdentifiedProblem(
+        primary_need="",
+        pain_points=[],
+        urgency=Urgency.low,
+    )
 
 
 class PostCallAnalysis(BaseModel):
     """Complete post-call analysis output."""
 
     summary: str = Field(
-        description="Concise call summary, max 150 tokens, plain language"
+        default="",
+        description="Concise call summary, max 150 tokens, plain language",
     )
     objections: list[str] = Field(
         default_factory=list,
         description="Objections the lead raised during the call",
     )
     interest_level: int = Field(
-        description="0-100 estimated interest level: 0 = completely uninterested, 100 = ready to buy"
+        default=0,
+        description="0-100 estimated interest level: 0 = completely uninterested, 100 = ready to buy",
     )
     next_action_suggested: str = Field(
-        description="One of: call_again, send_quote, wait, do_not_call"
+        default="wait",
+        description="One of: call_again, send_quote, wait, do_not_call",
     )
     misc_notes: str = Field(
         default="",
@@ -54,13 +75,16 @@ class PostCallAnalysis(BaseModel):
     )
 
     call_outcome: CallOutcome = Field(
-        description="Semantic classification of the call result and lead engagement quality"
+        default_factory=_default_call_outcome,
+        description="Semantic classification of the call result and lead engagement quality",
     )
     detected_interests: DetectedInterests = Field(
-        description="Insurance products, specific needs, and buying signals detected in the transcript"
+        default_factory=DetectedInterests,
+        description="Insurance products, specific needs, and buying signals detected in the transcript",
     )
     identified_problem: IdentifiedProblem = Field(
-        description="The underlying need or problem driving the lead's potential purchase"
+        default_factory=_default_identified_problem,
+        description="The underlying need or problem driving the lead's potential purchase",
     )
 
     service_issues: ServiceIssuesAxis = Field(

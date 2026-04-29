@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 
@@ -18,6 +19,7 @@ DIMENSION = {
     "name": "abandonment_reason",
     "display_name": "Abandonment Reason",
     "schema": AbandonmentReasonAxis,
+    "target_field": "abandonment_reason",
     "prompt": (
         "Determine why the lead disengaged or wants to stop, if applicable. "
         "Return JSON with: reason (string explaining why the lead disengaged, "
@@ -25,3 +27,16 @@ DIMENSION = {
     ),
     "model": "gpt-4o-mini",
 }
+
+
+async def analyze(transcript: str, client: AsyncOpenAI) -> AbandonmentReasonAxis:
+    """Run this dimension's GPT call and return the parsed AbandonmentReasonAxis."""
+    response = await client.beta.chat.completions.parse(
+        model=DIMENSION["model"],
+        messages=[
+            {"role": "system", "content": DIMENSION["prompt"]},
+            {"role": "user", "content": transcript},
+        ],
+        response_format=DIMENSION["schema"],
+    )
+    return response.choices[0].message.parsed

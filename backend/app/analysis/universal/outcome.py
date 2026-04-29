@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from app.analysis.enums import EngagementQuality, OutcomeClassification
@@ -25,6 +26,7 @@ DIMENSION = {
     "name": "outcome",
     "display_name": "Call Outcome",
     "schema": CallOutcome,
+    "target_field": "call_outcome",
     "prompt": (
         "Classify the call outcome. Return JSON with: "
         "classification (one of: interested, not_interested, busy, follow_up, "
@@ -34,3 +36,16 @@ DIMENSION = {
     ),
     "model": "gpt-4o-mini",
 }
+
+
+async def analyze(transcript: str, client: AsyncOpenAI) -> CallOutcome:
+    """Run this dimension's GPT call and return the parsed CallOutcome."""
+    response = await client.beta.chat.completions.parse(
+        model=DIMENSION["model"],
+        messages=[
+            {"role": "system", "content": DIMENSION["prompt"]},
+            {"role": "user", "content": transcript},
+        ],
+        response_format=DIMENSION["schema"],
+    )
+    return response.choices[0].message.parsed

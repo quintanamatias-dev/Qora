@@ -184,14 +184,32 @@ Agent entity model (1 client → N agents). Internal admin CRUD for clients and 
 
 ### 🔄 In Progress — Post-Call Analysis v2
 - Rethink analysis pipeline for maximum business value ([#33](../../issues/33))
-- n8n orchestration for observable, configurable analysis workflows
+- Per-dimension analysis: each axis owns its prompt + schema + GPT call,
+  fanned out in parallel via `asyncio.gather` from the summarizer
 - Multi-level analysis: per-call → per-lead → per-company
+
+> **Note about n8n.** The analysis pipeline is now fully Python-native. The
+> exported workflow under `docs/n8n-workflows/` and `docker-compose.n8n-local.yml`
+> are kept as static modeling/diagramming references only — they are not part
+> of the runtime path.
 
 ---
 
 ## Quick Start
 
 See [`docs/running-locally.md`](docs/running-locally.md) for full setup.
+
+Once dependencies and environment variables are configured, start the whole local stack with one command from the repository root:
+
+```bash
+./Qora
+```
+
+This starts:
+- Backend: `http://localhost:8000`
+- ngrok tunnel to the backend for ElevenLabs webhooks
+- Frontend: `http://localhost:5173`
+- Voice demo: `http://localhost:8000/demo/`
 
 **TL;DR:**
 
@@ -211,10 +229,10 @@ uvicorn app.main:app --reload
 open http://localhost:8000/demo/
 ```
 
-For ElevenLabs to reach your local webhook, you also need ngrok:
+For ElevenLabs to reach your local webhook, `Qora` starts ngrok automatically:
 ```bash
-ngrok http 8000
-# Set the ngrok URL as Custom LLM URL in your ElevenLabs agent dashboard
+Qora
+# Copy the ngrok HTTPS forwarding URL into your ElevenLabs agent dashboard
 ```
 
 ---

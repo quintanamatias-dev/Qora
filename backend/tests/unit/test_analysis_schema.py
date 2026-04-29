@@ -34,17 +34,15 @@ def test_analysis_schema_importable_standalone():
     assert hasattr(mod, "OutcomeClassification")
     assert hasattr(mod, "EngagementQuality")
     assert hasattr(mod, "Urgency")
-    assert hasattr(mod, "ANALYSIS_SYSTEM_PROMPT")
 
 
 def test_analysis_schema_no_app_imports():
     """app.analysis package only imports pydantic and enum — no foreign app dependencies.
 
-    The schema lives in ``app/analysis/`` (split into enums, schema, prompts,
-    builder, config, universal/, configurable/). Internal cross-imports between
-    these submodules are allowed; what must stay forbidden is FastAPI,
-    SQLAlchemy, structlog, or any non-analysis ``app.*`` module so the package
-    remains copy-pastable into the n8n webhook handler.
+    The schema lives in ``app/analysis/`` (split into enums, schema, universal/).
+    Internal cross-imports between these submodules are allowed; what must stay
+    forbidden is FastAPI, SQLAlchemy, structlog, or any non-analysis ``app.*``
+    module so the package remains copy-pastable into other runtimes.
     """
     import ast
     import pathlib
@@ -325,58 +323,25 @@ def test_post_call_analysis_model_dump_contains_axes():
 
 
 # ---------------------------------------------------------------------------
-# Scenario: ANALYSIS_SYSTEM_PROMPT is non-empty string
+# Scenario: Edge cases — defaults, extra fields, model_config
 # ---------------------------------------------------------------------------
 
 
-def test_analysis_system_prompt_is_non_empty_string():
-    """ANALYSIS_SYSTEM_PROMPT is a non-empty string."""
-    from app.analysis_schema import ANALYSIS_SYSTEM_PROMPT
+def test_post_call_analysis_constructs_with_no_args():
+    """PostCallAnalysis() with no args is valid — every field has a default.
 
-    assert isinstance(ANALYSIS_SYSTEM_PROMPT, str)
-    assert len(ANALYSIS_SYSTEM_PROMPT) > 50  # meaningful prompt, not a stub
+    This is a deliberate architectural choice for the per-dimension pipeline:
+    asyncio.gather(return_exceptions=True) leaves a failed dimension's field
+    unset, and PostCallAnalysis(**fields) must still validate so the caller
+    can persist a partial analysis.
+    """
+    from app.analysis_schema import PostCallAnalysis
 
-
-def test_analysis_system_prompt_mentions_axes():
-    """ANALYSIS_SYSTEM_PROMPT references all 3 analysis axes."""
-    from app.analysis_schema import ANALYSIS_SYSTEM_PROMPT
-
-    prompt_lower = ANALYSIS_SYSTEM_PROMPT.lower()
-    assert "call_outcome" in prompt_lower or "outcome" in prompt_lower
-    assert "detected_interests" in prompt_lower or "interest" in prompt_lower
-    assert "identified_problem" in prompt_lower or "problem" in prompt_lower
-
-
-# ---------------------------------------------------------------------------
-# Scenario: Edge cases — unknown keys, extra fields, model_config
-# ---------------------------------------------------------------------------
-
-
-def test_post_call_analysis_rejects_unknown_fields():
-    """PostCallAnalysis does NOT silently ignore unknown fields (strict by default)."""
-    from pydantic import ValidationError
-    from app.analysis_schema import (
-        PostCallAnalysis,
-        DetectedInterests,
-        IdentifiedProblem,
-    )
-
-    # Missing required call_outcome → should raise
-    with pytest.raises(ValidationError):
-        PostCallAnalysis(
-            summary="Test.",
-            objections=[],
-            interest_level=50,
-            current_insurance=None,
-            next_action_suggested="wait",
-            misc_notes="",
-            # call_outcome is MISSING — required field
-            detected_interests=DetectedInterests(),
-            identified_problem=IdentifiedProblem(
-                primary_need="Test need.",
-                urgency="low",
-            ),
-        )
+    analysis = PostCallAnalysis()
+    assert analysis.summary == ""
+    assert analysis.objections == []
+    assert analysis.interest_level == 0
+    assert analysis.next_action_suggested == "wait"
 
 
 def test_detected_interests_with_empty_buying_signals():
@@ -558,19 +523,9 @@ def test_post_call_analysis_data_corrections_rejects_dict():
         )
 
 
-def test_analysis_system_prompt_mentions_data_corrections():
-    """ANALYSIS_SYSTEM_PROMPT instructs LLM about data_corrections field."""
-    from app.analysis_schema import ANALYSIS_SYSTEM_PROMPT
-
-    prompt_lower = ANALYSIS_SYSTEM_PROMPT.lower()
-    assert (
-        "data_corrections" in prompt_lower or "correction" in prompt_lower
-    ), "ANALYSIS_SYSTEM_PROMPT must mention data_corrections — Issue #21"
-
-
 # ===========================================================================
 # Issue #35 — Enhanced Per-Call Extraction
-# Phase 1: 4 new universal axis models + ExtractionConfig validation
+# Phase 1: 4 new universal axis models
 # ===========================================================================
 
 
@@ -760,567 +715,165 @@ def test_post_call_analysis_new_axes_accept_data():
     assert analysis.abandonment_reason.reason == "Found competitor cheaper"
 
 
-# ---------------------------------------------------------------------------
-# ExtractionConfig — valid/invalid scenarios
-# ---------------------------------------------------------------------------
-
-
-def test_extraction_config_defaults():
-    """ExtractionConfig() with no args has empty extra_axes, disabled_axes, prompt_addendum."""
-    from app.analysis_schema import ExtractionConfig
-
-    config = ExtractionConfig()
-    assert config.extra_axes == []
-    assert config.disabled_axes == []
-    assert config.prompt_addendum == ""
-
-
-def test_extraction_config_valid_extra_axes():
-    """ExtractionConfig accepts extra_axes with allowed field types."""
-    from app.analysis_schema import ExtractionConfig, AxisFieldDef
-
-    config = ExtractionConfig(
-        extra_axes=[
-            AxisFieldDef(
-                name="property_type", field_type="str", description="Type of property"
-            ),
-            AxisFieldDef(name="budget_range", field_type="str", description="Budget"),
-            AxisFieldDef(
-                name="num_rooms", field_type="int", description="Number of rooms"
-            ),
-        ]
-    )
-    assert len(config.extra_axes) == 3
-    assert config.extra_axes[0].name == "property_type"
-    assert config.extra_axes[0].field_type == "str"
-
-
-def test_extraction_config_valid_list_str_type():
-    """ExtractionConfig accepts 'list[str]' as field_type in extra_axes."""
-    from app.analysis_schema import ExtractionConfig, AxisFieldDef
-
-    config = ExtractionConfig(
-        extra_axes=[
-            AxisFieldDef(
-                name="amenities",
-                field_type="list[str]",
-                description="Property amenities",
-            )
-        ]
-    )
-    assert config.extra_axes[0].field_type == "list[str]"
-
-
-def test_extraction_config_rejects_unsupported_field_type():
-    """ExtractionConfig raises ValidationError when extra_axes has unsupported field type."""
-    from pydantic import ValidationError
-    from app.analysis_schema import ExtractionConfig, AxisFieldDef
-
-    with pytest.raises(ValidationError):
-        ExtractionConfig(
-            extra_axes=[
-                AxisFieldDef(name="bad_field", field_type="dict", description="Bad")
-            ]
-        )
-
-
-def test_extraction_config_disabled_axes_valid():
-    """ExtractionConfig accepts disabled_axes referencing known base axes."""
-    from app.analysis_schema import ExtractionConfig
-
-    config = ExtractionConfig(disabled_axes=["service_issues", "abandonment_reason"])
-    assert "service_issues" in config.disabled_axes
-    assert "abandonment_reason" in config.disabled_axes
-
-
-def test_extraction_config_disabled_axes_rejects_unknown():
-    """ExtractionConfig raises ValidationError when disabled_axes references unknown axis name."""
-    from pydantic import ValidationError
-    from app.analysis_schema import ExtractionConfig
-
-    with pytest.raises(ValidationError):
-        ExtractionConfig(disabled_axes=["nonexistent_axis"])
-
-
-def test_extraction_config_rejects_more_than_10_extra_axes():
-    """ExtractionConfig raises ValidationError when more than 10 extra_axes are provided."""
-    from pydantic import ValidationError
-    from app.analysis_schema import ExtractionConfig, AxisFieldDef
-
-    axes = [
-        AxisFieldDef(name=f"field_{i}", field_type="str", description=f"Field {i}")
-        for i in range(11)
-    ]
-    with pytest.raises(ValidationError):
-        ExtractionConfig(extra_axes=axes)
-
-
-def test_extraction_config_rejects_name_collision_with_base_axes():
-    """ExtractionConfig raises ValidationError when extra_axes name collides with a base field."""
-    from pydantic import ValidationError
-    from app.analysis_schema import ExtractionConfig, AxisFieldDef
-
-    with pytest.raises(ValidationError):
-        ExtractionConfig(
-            extra_axes=[
-                # 'summary' is a base PostCallAnalysis field — collision
-                AxisFieldDef(
-                    name="summary", field_type="str", description="Collision test"
-                )
-            ]
-        )
-
-
-def test_axis_field_def_name_must_be_snake_case():
-    """AxisFieldDef.name must be valid snake_case (^[a-z][a-z0-9_]{1,30}$)."""
-    from pydantic import ValidationError
-    from app.analysis_schema import AxisFieldDef
-
-    with pytest.raises(ValidationError):
-        AxisFieldDef(name="BadName", field_type="str", description="Bad")
-
-    with pytest.raises(ValidationError):
-        AxisFieldDef(name="123bad", field_type="str", description="Bad")
-
-
-def test_extraction_config_with_prompt_addendum():
-    """ExtractionConfig accepts a prompt_addendum string."""
-    from app.analysis_schema import ExtractionConfig
-
-    config = ExtractionConfig(
-        prompt_addendum="Focus on real estate properties in CABA."
-    )
-    assert config.prompt_addendum == "Focus on real estate properties in CABA."
-
-
-def test_analysis_schema_exports_new_symbols():
-    """analysis_schema exports ExtractionConfig, AxisFieldDef, and 4 new axis models."""
-    import importlib
-
-    mod = importlib.import_module("app.analysis_schema")
-
-    assert hasattr(mod, "ExtractionConfig"), "Must export ExtractionConfig"
-    assert hasattr(mod, "AxisFieldDef"), "Must export AxisFieldDef"
-    assert hasattr(mod, "ServiceIssuesAxis"), "Must export ServiceIssuesAxis"
-    assert hasattr(mod, "ProfileFactsAxis"), "Must export ProfileFactsAxis"
-    assert hasattr(mod, "CommitmentSignalsAxis"), "Must export CommitmentSignalsAxis"
-    assert hasattr(mod, "AbandonmentReasonAxis"), "Must export AbandonmentReasonAxis"
-
-
 # ===========================================================================
-# Issue #35 — Phase 2: build_analysis_model() and build_system_prompt()
+# Per-dimension analyze() coroutine — every module must have one
 # ===========================================================================
 
 
-# ---------------------------------------------------------------------------
-# build_analysis_model — base config (no extra axes)
-# ---------------------------------------------------------------------------
-
-
-def test_build_analysis_model_base_has_all_four_new_axes():
-    """build_analysis_model(base_config) returns model with all 4 universal axis fields."""
-    from app.analysis_schema import build_analysis_model, ExtractionConfig
-
-    config = ExtractionConfig()
-    Model = build_analysis_model(config)
-
-    schema = Model.model_json_schema()
-    props = schema.get("properties", {})
-    assert "service_issues" in props
-    assert "profile_facts" in props
-    assert "commitment_signals" in props
-    assert "abandonment_reason" in props
-
-
-def test_build_analysis_model_base_has_existing_post_call_analysis_fields():
-    """build_analysis_model() includes all existing PostCallAnalysis fields."""
-    from app.analysis_schema import build_analysis_model, ExtractionConfig
-
-    config = ExtractionConfig()
-    Model = build_analysis_model(config)
-    schema = Model.model_json_schema()
-    props = schema.get("properties", {})
-
-    assert "summary" in props
-    assert "objections" in props
-    assert "interest_level" in props
-    assert "call_outcome" in props
-    assert "detected_interests" in props
-    assert "identified_problem" in props
-
-
-def test_build_analysis_model_returns_valid_json_schema():
-    """build_analysis_model() output is a valid JSON-serializable schema dict."""
-    import json
-    from app.analysis_schema import build_analysis_model, ExtractionConfig
-
-    config = ExtractionConfig()
-    Model = build_analysis_model(config)
-    schema = Model.model_json_schema()
-
-    # Must be JSON-serializable (no non-serializable objects)
-    json_str = json.dumps(schema)
-    assert len(json_str) > 100  # non-trivial schema
-
-
-def test_build_analysis_model_can_be_instantiated_with_valid_data():
-    """The model returned by build_analysis_model() can be validated with model_validate."""
-    from app.analysis_schema import build_analysis_model, ExtractionConfig
-
-    config = ExtractionConfig()
-    Model = build_analysis_model(config)
-
-    instance = Model.model_validate(
-        {
-            "summary": "Test call",
-            "objections": [],
-            "interest_level": 50,
-            "current_insurance": None,
-            "next_action_suggested": "wait",
-            "misc_notes": "",
-            "data_corrections": "",
-            "call_outcome": {
-                "classification": "interested",
-                "reason": "Test reason",
-                "engagement_quality": "medium",
-            },
-            "detected_interests": {
-                "products": [],
-                "specific_needs": [],
-                "buying_signals": [],
-            },
-            "identified_problem": {
-                "primary_need": "Test need",
-                "pain_points": [],
-                "urgency": "low",
-            },
-        }
-    )
-    assert instance.summary == "Test call"
-    assert instance.interest_level == 50
-
-
-# ---------------------------------------------------------------------------
-# build_analysis_model — cache identity
-# ---------------------------------------------------------------------------
-
-
-def test_build_analysis_model_same_config_returns_same_object():
-    """build_analysis_model() with identical configs returns same cached model class."""
-    from app.analysis_schema import build_analysis_model, ExtractionConfig
-
-    config1 = ExtractionConfig()
-    config2 = ExtractionConfig()
-    Model1 = build_analysis_model(config1)
-    Model2 = build_analysis_model(config2)
-
-    # Same config → same model object (lru_cache by config hash)
-    assert Model1 is Model2
-
-
-def test_build_analysis_model_different_config_returns_different_object():
-    """build_analysis_model() with different configs returns different model classes."""
-    from app.analysis_schema import build_analysis_model, ExtractionConfig, AxisFieldDef
-
-    config_base = ExtractionConfig()
-    config_extended = ExtractionConfig(
-        extra_axes=[AxisFieldDef(name="region", field_type="str", description="Region")]
-    )
-
-    Model_base = build_analysis_model(config_base)
-    Model_ext = build_analysis_model(config_extended)
-
-    assert Model_base is not Model_ext
-
-
-# ---------------------------------------------------------------------------
-# build_analysis_model — disabled axes
-# ---------------------------------------------------------------------------
-
-
-def test_build_analysis_model_disabled_axis_excluded():
-    """build_analysis_model() with disabled_axes excludes those axes from the model."""
-    from app.analysis_schema import build_analysis_model, ExtractionConfig
-
-    config = ExtractionConfig(disabled_axes=["service_issues"])
-    Model = build_analysis_model(config)
-    schema = Model.model_json_schema()
-    props = schema.get("properties", {})
-
-    assert "service_issues" not in props
-    # Other axes still present
-    assert "profile_facts" in props
-    assert "commitment_signals" in props
-    assert "abandonment_reason" in props
-
-
-# ---------------------------------------------------------------------------
-# build_analysis_model — extra axes land in extra_axes_data
-# ---------------------------------------------------------------------------
-
-
-def test_build_analysis_model_extra_axes_produces_extra_axes_data_field():
-    """build_analysis_model() with extra_axes includes extra_axes_data in schema."""
-    from app.analysis_schema import build_analysis_model, ExtractionConfig, AxisFieldDef
-
-    config = ExtractionConfig(
-        extra_axes=[
-            AxisFieldDef(
-                name="property_type", field_type="str", description="Type of property"
-            )
-        ]
-    )
-    Model = build_analysis_model(config)
-    schema = Model.model_json_schema()
-    props = schema.get("properties", {})
-
-    assert "extra_axes_data" in props
-
-
-# ---------------------------------------------------------------------------
-# build_system_prompt — base config
-# ---------------------------------------------------------------------------
-
-
-def test_build_system_prompt_base_contains_all_four_axis_names():
-    """build_system_prompt(base) mentions all 4 universal axis names."""
-    from app.analysis_schema import build_system_prompt, ExtractionConfig
-
-    config = ExtractionConfig()
-    prompt = build_system_prompt(config)
-
-    assert "service_issues" in prompt or "service issues" in prompt.lower()
-    assert "profile_facts" in prompt or "profile facts" in prompt.lower()
-    assert "commitment_signals" in prompt or "commitment signals" in prompt.lower()
-    assert "abandonment_reason" in prompt or "abandonment reason" in prompt.lower()
-
-
-def test_build_system_prompt_base_contains_rules_section():
-    """build_system_prompt() always includes a RULES section."""
-    from app.analysis_schema import build_system_prompt, ExtractionConfig
-
-    config = ExtractionConfig()
-    prompt = build_system_prompt(config)
-
-    assert "RULES" in prompt or "rules" in prompt.lower()
-
-
-def test_build_system_prompt_is_non_empty_string():
-    """build_system_prompt() returns a meaningful non-empty string."""
-    from app.analysis_schema import build_system_prompt, ExtractionConfig
-
-    prompt = build_system_prompt(ExtractionConfig())
-    assert isinstance(prompt, str)
-    assert len(prompt) > 100
-
-
-# ---------------------------------------------------------------------------
-# build_system_prompt — context description
-# ---------------------------------------------------------------------------
-
-
-def test_build_system_prompt_includes_context_description():
-    """build_system_prompt() includes context_description in the prompt when set via addendum."""
-    from app.analysis_schema import build_system_prompt, ExtractionConfig
-
-    config = ExtractionConfig(prompt_addendum="Real estate broker in Buenos Aires")
-    prompt = build_system_prompt(config)
-
-    assert "Real estate broker in Buenos Aires" in prompt
-
-
-def test_build_system_prompt_no_addendum_no_extra_text():
-    """build_system_prompt() with empty addendum does NOT add extra placeholder text."""
-    from app.analysis_schema import build_system_prompt, ExtractionConfig
-
-    config = ExtractionConfig()
-    prompt = build_system_prompt(config)
-
-    # No placeholder artifacts
-    assert "{{" not in prompt
-    assert "}}" not in prompt
-
-
-# ---------------------------------------------------------------------------
-# build_system_prompt — extra axes instructions
-# ---------------------------------------------------------------------------
-
-
-def test_build_system_prompt_mentions_extra_axes():
-    """build_system_prompt() instructs extraction of extra axis names when extra_axes set."""
-    from app.analysis_schema import build_system_prompt, ExtractionConfig, AxisFieldDef
-
-    config = ExtractionConfig(
-        extra_axes=[
-            AxisFieldDef(
-                name="property_type", field_type="str", description="Type of property"
-            )
-        ]
-    )
-    prompt = build_system_prompt(config)
-
-    assert "property_type" in prompt
-
-
-# ---------------------------------------------------------------------------
-# build_system_prompt — disabled axes NOT mentioned
-# ---------------------------------------------------------------------------
-
-
-def test_build_system_prompt_disabled_axis_not_mentioned():
-    """build_system_prompt() excludes disabled axes from instructions."""
-    from app.analysis_schema import build_system_prompt, ExtractionConfig
-
-    config = ExtractionConfig(disabled_axes=["service_issues"])
-    prompt = build_system_prompt(config)
-
-    # service_issues must NOT appear in instructions
-    assert "service_issues" not in prompt
-
-
-# ---------------------------------------------------------------------------
-# build_analysis_model and build_system_prompt exported
-# ---------------------------------------------------------------------------
-
-
-def test_analysis_schema_exports_builder_functions():
-    """analysis_schema exports build_analysis_model and build_system_prompt."""
-    import importlib
-
-    mod = importlib.import_module("app.analysis_schema")
-
-    assert hasattr(mod, "build_analysis_model"), "Must export build_analysis_model"
-    assert hasattr(mod, "build_system_prompt"), "Must export build_system_prompt"
-
-
-# ===========================================================================
-# CRITICAL 1 (verify fix) — ExtractionConfig.context_description alias
-# ===========================================================================
-
-
-def test_extraction_config_accepts_context_description_as_alias():
-    """CRITICAL 1: ExtractionConfig can be constructed with 'context_description' field name.
-
-    The spec used context_description; the implementation uses prompt_addendum.
-    The alias ensures forward-compat: JSON payloads with context_description are accepted.
-    """
-    from app.analysis_schema import ExtractionConfig
-
-    config = ExtractionConfig.model_validate(
-        {"context_description": "Real estate broker context"}
-    )
-    # The field is stored as prompt_addendum
-    assert config.prompt_addendum == "Real estate broker context"
-
-
-def test_extraction_config_context_description_property_returns_prompt_addendum():
-    """CRITICAL 1: ExtractionConfig.context_description property returns prompt_addendum value."""
-    from app.analysis_schema import ExtractionConfig
-
-    config = ExtractionConfig(prompt_addendum="Insurance broker context")
-    assert config.context_description == "Insurance broker context"
-
-
-def test_extraction_config_prompt_addendum_still_works_directly():
-    """CRITICAL 1: ExtractionConfig constructed with prompt_addendum (primary name) still works."""
-    from app.analysis_schema import ExtractionConfig
-
-    config = ExtractionConfig(prompt_addendum="Direct addendum")
-    assert config.prompt_addendum == "Direct addendum"
-    assert config.context_description == "Direct addendum"
-
-
-# ===========================================================================
-# Spec alignment: extra_axes dict→list[AxisFieldDef] convenience conversion
-# ===========================================================================
-
-
-def test_extraction_config_accepts_dict_shaped_extra_axes():
-    """ExtractionConfig auto-converts dict-shaped extra_axes to list[AxisFieldDef].
-
-    Spec alignment fix: old spec used dict[str, str] shape, implementation uses
-    list[AxisFieldDef]. This test verifies the convenience conversion so both
-    shapes work — forward compat for JSON payloads sent in dict form.
-
-    Input:  {"extra_axes": {"property_type": "str", "budget_range": "list[str]"}}
-    Output: list[AxisFieldDef] with 2 entries, names/types preserved
-    """
-    from app.analysis_schema import ExtractionConfig
-
-    config = ExtractionConfig.model_validate(
-        {"extra_axes": {"property_type": "str", "budget_range": "list[str]"}}
-    )
-    assert isinstance(config.extra_axes, list)
-    assert len(config.extra_axes) == 2
-    names = {ax.name for ax in config.extra_axes}
-    assert "property_type" in names
-    assert "budget_range" in names
-    types = {ax.name: ax.field_type for ax in config.extra_axes}
-    assert types["property_type"] == "str"
-    assert types["budget_range"] == "list[str]"
-
-
-def test_extraction_config_dict_extra_axes_generates_description():
-    """Dict-converted AxisFieldDef entries have a non-empty auto-generated description."""
-    from app.analysis_schema import ExtractionConfig
-
-    config = ExtractionConfig.model_validate({"extra_axes": {"property_type": "str"}})
-    assert len(config.extra_axes) == 1
-    ax = config.extra_axes[0]
-    assert ax.description  # non-empty
-    assert isinstance(ax.description, str)
-
-
-def test_extraction_config_dict_extra_axes_rejects_unsupported_type():
-    """Dict-shaped extra_axes raises ValidationError when a value is an unsupported type."""
-    from pydantic import ValidationError
-    from app.analysis_schema import ExtractionConfig
-
-    with pytest.raises(ValidationError):
-        ExtractionConfig.model_validate({"extra_axes": {"bad_field": "dict"}})
-
-
-def test_extraction_config_list_shape_still_works_after_dict_support():
-    """Native list[AxisFieldDef] shape still accepted after adding dict conversion."""
-    from app.analysis_schema import ExtractionConfig, AxisFieldDef
-
-    config = ExtractionConfig(
-        extra_axes=[
-            AxisFieldDef(name="region", field_type="str", description="Sales region")
-        ]
-    )
-    assert len(config.extra_axes) == 1
-    assert config.extra_axes[0].name == "region"
-
-
-def test_build_analysis_model_cache_eviction_max_100():
-    """WARNING 2: build_analysis_model LRU cache evicts oldest entries beyond 100 items."""
-    from app.analysis_schema import (
-        build_analysis_model,
-        ExtractionConfig,
-        AxisFieldDef,
-        _model_cache,
-    )
-
-    # Clear cache to start fresh
-    _model_cache.clear()
-
-    # Build 101 distinct models (different extra_axes names force distinct cache keys)
-    models = []
-    for i in range(101):
-        config = ExtractionConfig(
-            extra_axes=[
-                AxisFieldDef(
-                    name=f"field_{i:03d}",
-                    field_type="str",
-                    description=f"Field number {i}",
-                )
-            ]
-        )
-        model = build_analysis_model(config)
-        models.append(model)
-
-    # Cache should not exceed 100 entries (oldest was evicted)
+@pytest.mark.parametrize(
+    "mod",
+    [
+        __import__("app.analysis.universal.summary", fromlist=["x"]),
+        __import__("app.analysis.universal.objections", fromlist=["x"]),
+        __import__("app.analysis.universal.interest_level", fromlist=["x"]),
+        __import__("app.analysis.universal.next_action", fromlist=["x"]),
+        __import__("app.analysis.universal.misc_notes", fromlist=["x"]),
+        __import__("app.analysis.universal.data_corrections", fromlist=["x"]),
+        __import__("app.analysis.universal.outcome", fromlist=["x"]),
+        __import__("app.analysis.universal.interests", fromlist=["x"]),
+        __import__("app.analysis.universal.problem", fromlist=["x"]),
+        __import__("app.analysis.universal.service_issues", fromlist=["x"]),
+        __import__("app.analysis.universal.profile_facts", fromlist=["x"]),
+        __import__("app.analysis.universal.commitments", fromlist=["x"]),
+        __import__("app.analysis.universal.abandonment", fromlist=["x"]),
+    ],
+    ids=lambda m: m.DIMENSION["name"],
+)
+def test_dimension_module_contract(mod):
+    """Every dimension module exposes DIMENSION dict, target_field, and async analyze()."""
+    import inspect
+    from app.analysis import PostCallAnalysis
+
+    assert hasattr(mod, "DIMENSION"), f"{mod.__name__} must define DIMENSION"
+    assert hasattr(mod, "analyze"), f"{mod.__name__} must define analyze()"
+    assert inspect.iscoroutinefunction(mod.analyze), "analyze must be async"
+
+    dim = mod.DIMENSION
+    for key in ("name", "schema", "target_field", "prompt", "model"):
+        assert key in dim, f"{mod.__name__}.DIMENSION missing key: {key}"
+
+    target = dim["target_field"]
     assert (
-        len(_model_cache) <= 100
-    ), f"Cache size {len(_model_cache)} exceeds max of 100 — eviction not working"
+        target in PostCallAnalysis.model_fields
+    ), f"{mod.__name__} target_field {target!r} is not a PostCallAnalysis field"
+
+
+def test_dimension_modules_cover_all_post_call_analysis_fields():
+    """Every PostCallAnalysis field is owned by exactly one dimension module."""
+    from app.analysis import PostCallAnalysis
+    from app.analysis.universal import DIMENSION_MODULES
+
+    target_fields = [mod.DIMENSION["target_field"] for mod in DIMENSION_MODULES]
+    assert len(target_fields) == len(set(target_fields)), (
+        f"Duplicate target_field across dimensions: {target_fields}"
+    )
+    expected = set(PostCallAnalysis.model_fields.keys())
+    assert set(target_fields) == expected, (
+        f"Mismatch — extra: {set(target_fields) - expected}, "
+        f"missing: {expected - set(target_fields)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dimension_analyze_returns_unwrapped_value_for_simple_axes():
+    """Simple-wrapper analyze() returns the inner primitive, not the axis model."""
+    from unittest.mock import AsyncMock, MagicMock
+    from app.analysis.universal import (
+        SummaryAxis,
+        ObjectionsAxis,
+        InterestLevelAxis,
+        NextActionAxis,
+        MiscNotesAxis,
+        DataCorrectionsAxis,
+        summary as summary_mod,
+        objections as objections_mod,
+        interest_level as interest_level_mod,
+        next_action as next_action_mod,
+        misc_notes as misc_notes_mod,
+        data_corrections as data_corrections_mod,
+    )
+
+    cases = [
+        (summary_mod, SummaryAxis(text="hi"), str, "hi"),
+        (objections_mod, ObjectionsAxis(items=["p"]), list, ["p"]),
+        (interest_level_mod, InterestLevelAxis(score=42), int, 42),
+        (next_action_mod, NextActionAxis(action="wait"), str, "wait"),
+        (misc_notes_mod, MiscNotesAxis(notes="ok"), str, "ok"),
+        (data_corrections_mod, DataCorrectionsAxis(corrections=""), str, ""),
+    ]
+    for mod, parsed, expected_type, expected_value in cases:
+        client = AsyncMock()
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.parsed = parsed
+        client.beta.chat.completions.parse = AsyncMock(return_value=response)
+        result = await mod.analyze("transcript", client)
+        assert isinstance(result, expected_type), (
+            f"{mod.__name__}.analyze returned {type(result)}, expected {expected_type}"
+        )
+        assert result == expected_value
+
+
+@pytest.mark.asyncio
+async def test_dimension_analyze_returns_axis_for_complex_axes():
+    """Complex-axis analyze() returns the parsed axis model unchanged."""
+    from unittest.mock import AsyncMock, MagicMock
+    from app.analysis.universal import (
+        CallOutcome,
+        DetectedInterests,
+        IdentifiedProblem,
+        ServiceIssuesAxis,
+        ProfileFactsAxis,
+        CommitmentSignalsAxis,
+        AbandonmentReasonAxis,
+        outcome as outcome_mod,
+        interests as interests_mod,
+        problem as problem_mod,
+        service_issues as service_issues_mod,
+        profile_facts as profile_facts_mod,
+        commitments as commitments_mod,
+        abandonment as abandonment_mod,
+    )
+
+    cases = [
+        (
+            outcome_mod,
+            CallOutcome(classification="busy", reason="r", engagement_quality="none"),
+        ),
+        (interests_mod, DetectedInterests()),
+        (problem_mod, IdentifiedProblem(primary_need="n", urgency="low")),
+        (service_issues_mod, ServiceIssuesAxis()),
+        (profile_facts_mod, ProfileFactsAxis()),
+        (commitments_mod, CommitmentSignalsAxis()),
+        (abandonment_mod, AbandonmentReasonAxis()),
+    ]
+    for mod, parsed in cases:
+        client = AsyncMock()
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.parsed = parsed
+        client.beta.chat.completions.parse = AsyncMock(return_value=response)
+        result = await mod.analyze("transcript", client)
+        assert result is parsed
+
+
+def test_dimension_modules_iteration_order_is_stable():
+    """DIMENSION_MODULES order is stable so the summarizer fan-out is deterministic."""
+    from app.analysis.universal import DIMENSION_MODULES
+
+    names = [mod.DIMENSION["name"] for mod in DIMENSION_MODULES]
+    assert names == [
+        "summary",
+        "objections",
+        "interest_level",
+        "next_action",
+        "misc_notes",
+        "data_corrections",
+        "outcome",
+        "interests",
+        "problem",
+        "service_issues",
+        "profile_facts",
+        "commitment_signals",
+        "abandonment_reason",
+    ]
