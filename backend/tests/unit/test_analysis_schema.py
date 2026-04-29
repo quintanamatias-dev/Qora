@@ -38,30 +38,46 @@ def test_analysis_schema_importable_standalone():
 
 
 def test_analysis_schema_no_app_imports():
-    """analysis_schema module only imports pydantic and enum — no app.* dependencies."""
+    """app.analysis package only imports pydantic and enum — no foreign app dependencies.
+
+    The schema lives in ``app/analysis/`` (split into enums, schema, prompts,
+    builder, config, universal/, configurable/). Internal cross-imports between
+    these submodules are allowed; what must stay forbidden is FastAPI,
+    SQLAlchemy, structlog, or any non-analysis ``app.*`` module so the package
+    remains copy-pastable into the n8n webhook handler.
+    """
     import ast
     import pathlib
 
-    schema_path = (
-        pathlib.Path(__file__).parent.parent.parent / "app" / "analysis_schema.py"
+    package_root = (
+        pathlib.Path(__file__).parent.parent.parent / "app" / "analysis"
     )
-    source = schema_path.read_text()
-    tree = ast.parse(source)
+    forbidden_prefixes = ("fastapi", "sqlalchemy", "structlog")
+    allowed_app_prefix = "app.analysis"
 
-    forbidden_prefixes = ("app.", "fastapi", "sqlalchemy", "structlog")
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            module_name = ""
-            if isinstance(node, ast.ImportFrom) and node.module:
-                module_name = node.module
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    module_name = alias.name
-            for prefix in forbidden_prefixes:
-                assert not module_name.startswith(prefix), (
-                    f"analysis_schema.py must not import '{module_name}' — "
-                    f"found forbidden prefix '{prefix}'"
-                )
+    for py_file in package_root.rglob("*.py"):
+        source = py_file.read_text()
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                module_name = ""
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    module_name = node.module
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        module_name = alias.name
+                for prefix in forbidden_prefixes:
+                    assert not module_name.startswith(prefix), (
+                        f"{py_file} must not import '{module_name}' — "
+                        f"found forbidden prefix '{prefix}'"
+                    )
+                if module_name.startswith("app.") and not module_name.startswith(
+                    allowed_app_prefix
+                ):
+                    raise AssertionError(
+                        f"{py_file} must not import '{module_name}' — only "
+                        f"'app.analysis.*' internal imports are permitted"
+                    )
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +235,6 @@ def test_post_call_analysis_json_schema_contains_required_keys():
     assert "summary" in properties
     assert "objections" in properties
     assert "interest_level" in properties
-    assert "current_insurance" in properties
     assert "next_action_suggested" in properties
     assert "misc_notes" in properties
 
@@ -375,38 +390,6 @@ def test_detected_interests_with_empty_buying_signals():
     )
     assert interests.products == ["todo_riesgo"]
     assert interests.buying_signals == []
-
-
-def test_post_call_analysis_current_insurance_nullable():
-    """PostCallAnalysis.current_insurance can be None (nullable field)."""
-    from app.analysis_schema import (
-        PostCallAnalysis,
-        CallOutcome,
-        DetectedInterests,
-        IdentifiedProblem,
-    )
-
-    analysis = PostCallAnalysis(
-        summary="Lead was not interested.",
-        objections=["already covered"],
-        interest_level=10,
-        current_insurance=None,  # explicit None
-        next_action_suggested="do_not_call",
-        misc_notes="",
-        call_outcome=CallOutcome(
-            classification="not_interested",
-            reason="Lead already has insurance and is satisfied.",
-            engagement_quality="low",
-        ),
-        detected_interests=DetectedInterests(),
-        identified_problem=IdentifiedProblem(
-            primary_need="No current need — satisfied with existing coverage.",
-            urgency="low",
-        ),
-    )
-    assert analysis.current_insurance is None
-    dumped = analysis.model_dump()
-    assert dumped["current_insurance"] is None
 
 
 def test_call_outcome_all_classifications_valid():

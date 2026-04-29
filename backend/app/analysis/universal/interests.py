@@ -1,0 +1,47 @@
+"""Detected interests dimension — products, needs, and buying signals."""
+
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
+
+
+class DetectedInterests(BaseModel):
+    """Insurance products and needs the lead expressed interest in."""
+
+    products: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Insurance products mentioned or inquired about: "
+            "todo_riesgo, terceros_completo, terceros, vida, hogar, etc."
+        ),
+    )
+    specific_needs: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Specific requirements the lead expressed: "
+            "precio_competitivo, cobertura_amplia, atencion_personalizada, etc."
+        ),
+    )
+    buying_signals: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Concrete buying signals observed: "
+            "asked about price, comparing quotes, has a specific deadline, etc."
+        ),
+    )
+
+
+DIMENSION = {
+    "name": "interests",
+    "display_name": "Detected Interests",
+    "schema": DetectedInterests,
+    "prompt": (
+        "Extract what the lead was interested in. Return JSON with three lists: "
+        "products (products/services mentioned or inquired about), "
+        "specific_needs (concrete requirements expressed by the lead), "
+        "buying_signals (indicators of purchase intent: asked about price, "
+        "comparing quotes, deadlines, etc.). All three default to empty lists "
+        "when nothing was detected."
+    ),
+    "model": "gpt-4o-mini",
+}

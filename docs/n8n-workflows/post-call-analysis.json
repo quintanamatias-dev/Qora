@@ -82,9 +82,10 @@
       "id": "5",
       "name": "OpenAI GPT Analysis",
       "type": "n8n-nodes-base.openAi",
-      "typeVersion": 1,
+      "typeVersion": 1.8,
       "position": [1120, 300],
       "parameters": {
+        "resource": "chat",
         "operation": "message",
         "modelId": {
           "__rl": true,
