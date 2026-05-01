@@ -203,7 +203,11 @@ async def get_service_issues(
         params["agent_id"] = agent_id
 
     sql = text(f"""
-        SELECT je.value AS issue, COUNT(*) AS cnt
+        SELECT CASE
+                 WHEN json_valid(je.value) THEN json_extract(je.value, '$.category')
+                 ELSE je.value
+               END AS issue,
+               COUNT(*) AS cnt
         FROM call_analyses ca
         JOIN call_sessions cs ON cs.id = ca.session_id
         JOIN json_each(ca.service_issues) je
@@ -214,7 +218,10 @@ async def get_service_issues(
           AND ca.service_issues != '[]'
           AND ca.service_issues != ''
           {agent_filter}
-        GROUP BY je.value
+        GROUP BY CASE
+                   WHEN json_valid(je.value) THEN json_extract(je.value, '$.category')
+                   ELSE je.value
+                 END
         ORDER BY cnt DESC
         LIMIT :limit
     """)

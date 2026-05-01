@@ -542,12 +542,33 @@ def test_service_issues_axis_defaults_to_empty_list():
     assert axis.issues == []
 
 
-def test_service_issues_axis_accepts_list_of_strings():
-    """ServiceIssuesAxis.issues accepts a list of strings."""
+def test_service_issues_axis_accepts_list_of_service_issues():
+    """ServiceIssuesAxis.issues accepts a list of ServiceIssue objects."""
     from app.analysis_schema import ServiceIssuesAxis
+    from app.analysis.universal.service_issues import ServiceIssue
 
-    axis = ServiceIssuesAxis(issues=["late delivery", "wrong product sent"])
-    assert axis.issues == ["late delivery", "wrong product sent"]
+    issues = [
+        ServiceIssue(
+            category="delay",
+            description="Provider was very slow.",
+            source="current_provider",
+            severity="medium",
+            evidence="They took 3 weeks to process my claim.",
+            confidence="high",
+        ),
+        ServiceIssue(
+            category="billing_issue",
+            description="Wrong charge applied.",
+            source="previous_provider",
+            severity="high",
+            evidence="Me cobraron de más el mes pasado.",
+            confidence="high",
+        ),
+    ]
+    axis = ServiceIssuesAxis(issues=issues)
+    assert len(axis.issues) == 2
+    assert axis.issues[0].category == "delay"
+    assert axis.issues[1].category == "billing_issue"
 
 
 # ---------------------------------------------------------------------------
@@ -694,6 +715,7 @@ def test_post_call_analysis_new_axes_accept_data():
         AbandonmentReasonAxis,
     )
     from app.analysis.universal.commitments import CommitmentsAxis, Commitment
+    from app.analysis.universal.service_issues import ServiceIssue
 
     c = Commitment(
         type="callback",
@@ -702,6 +724,14 @@ def test_post_call_analysis_new_axes_accept_data():
         due="this_week",
         strength="strong",
         evidence="Le llamo el viernes.",
+        confidence="high",
+    )
+    issue = ServiceIssue(
+        category="billing_issue",
+        description="Lead was overcharged.",
+        source="current_provider",
+        severity="high",
+        evidence="Me cobraron de más.",
         confidence="high",
     )
     analysis = PostCallAnalysis(
@@ -721,13 +751,14 @@ def test_post_call_analysis_new_axes_accept_data():
             primary_need="Needs a solution.",
             urgency="medium",
         ),
-        service_issues=ServiceIssuesAxis(issues=["billing error"]),
+        service_issues=ServiceIssuesAxis(issues=[issue]),
         profile_facts=ProfileFactsAxis(facts=["manager at startup"]),
         commitments=CommitmentsAxis(commitments=[c]),
         abandonment_reason=AbandonmentReasonAxis(reason="Found competitor cheaper"),
     )
 
-    assert analysis.service_issues.issues == ["billing error"]
+    assert len(analysis.service_issues.issues) == 1
+    assert analysis.service_issues.issues[0].category == "billing_issue"
     assert analysis.profile_facts.facts == ["manager at startup"]
     assert len(analysis.commitments.commitments) == 1
     assert analysis.commitments.commitments[0].type == "callback"

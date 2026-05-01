@@ -38,7 +38,7 @@ from app.analysis.universal.objections import ObjectionsAxis
 from app.analysis.universal.outcome import CallOutcome
 from app.analysis.universal.problem import IdentifiedProblem
 from app.analysis.universal.profile_facts import ProfileFactsAxis
-from app.analysis.universal.service_issues import ServiceIssuesAxis
+from app.analysis.universal.service_issues import ServiceIssue, ServiceIssuesAxis
 from app.analysis.universal.summary import SummaryAxis
 
 # Ordered list of dimension modules — one entry per per-dimension analyzer.
@@ -72,6 +72,7 @@ __all__ = [
     "CallOutcome",
     "DetectedInterests",
     "IdentifiedProblem",
+    "ServiceIssue",
     "ServiceIssuesAxis",
     "ProfileFactsAxis",
     "CommitmentsAxis",

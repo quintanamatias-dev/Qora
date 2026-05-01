@@ -22,6 +22,7 @@ from app.analysis.universal import (
     DIMENSION_MODULES,
     IdentifiedProblem,
     ProfileFactsAxis,
+    ServiceIssue,
     ServiceIssuesAxis,
     UNIVERSAL_DIMENSIONS,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "CallOutcome",
     "DetectedInterests",
     "IdentifiedProblem",
+    "ServiceIssue",
     "ServiceIssuesAxis",
     "ProfileFactsAxis",
     "CommitmentsAxis",

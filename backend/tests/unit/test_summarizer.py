@@ -1748,7 +1748,7 @@ async def test_call_analysis_has_five_new_columns(seeded_db):
 
 
 async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
-    """Phase 3: Summarizer persists service_issues, profile_facts, commitment_signals, abandonment_reason."""
+    """Phase 3: Summarizer persists service_issues (structured JSON), profile_facts, commitment_signals, abandonment_reason."""
     from app.summarizer import generate_summary_and_facts
     from app.calls.models import CallAnalysis
     from app.analysis_schema import (
@@ -1761,6 +1761,7 @@ async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
         AbandonmentReasonAxis,
     )
     from app.analysis.universal.commitments import CommitmentsAxis, Commitment
+    from app.analysis.universal.service_issues import ServiceIssue
     from sqlalchemy import select
     import json
 
@@ -1790,7 +1791,24 @@ async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
             urgency="medium",
         ),
         service_issues=ServiceIssuesAxis(
-            issues=["poor customer service", "claim denied"]
+            issues=[
+                ServiceIssue(
+                    category="poor_attention",
+                    description="Poor customer service from provider.",
+                    source="current_provider",
+                    severity="high",
+                    evidence="La atención fue muy mala.",
+                    confidence="high",
+                ),
+                ServiceIssue(
+                    category="claim_problem",
+                    description="Claim was denied without explanation.",
+                    source="current_provider",
+                    severity="high",
+                    evidence="Me rechazaron el reclamo.",
+                    confidence="high",
+                ),
+            ]
         ),
         profile_facts=ProfileFactsAxis(facts=["owns a Fiat", "lives in Palermo"]),
         commitments=CommitmentsAxis(
@@ -1824,10 +1842,12 @@ async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
         )
         ca = result.scalar_one()
 
-        # service_issues: stored as JSON text list
+        # service_issues: stored as JSON array of objects (structured format)
         issues = json.loads(ca.service_issues)
-        assert "poor customer service" in issues
-        assert "claim denied" in issues
+        assert len(issues) == 2
+        categories = {i["category"] for i in issues}
+        assert "poor_attention" in categories
+        assert "claim_problem" in categories
 
         # profile_facts: stored as JSON text list
         facts = json.loads(ca.profile_facts)
@@ -1963,7 +1983,12 @@ def _make_analysis_with_list_axes(
     commitment_signals=None,
     buying_signals=None,
 ):
-    """Build a PostCallAnalysis with specific list-axis values."""
+    """Build a PostCallAnalysis with specific list-axis values.
+
+    service_issues accepts list[ServiceIssue] or list[str] (strings are
+    coerced to ServiceIssue(category='other', description=str, ...) for
+    backward-compatible test helpers).
+    """
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
@@ -1973,6 +1998,7 @@ def _make_analysis_with_list_axes(
         ProfileFactsAxis,
     )
     from app.analysis.universal.commitments import CommitmentsAxis, Commitment
+    from app.analysis.universal.service_issues import ServiceIssue
 
     # Convert string descriptions to Commitment objects for the new structured API
     commitment_objects = [
@@ -1986,6 +2012,22 @@ def _make_analysis_with_list_axes(
             confidence="medium",
         )
         for desc in (commitment_signals or [])
+    ]
+
+    # Convert plain strings to ServiceIssue objects for backward-compatible helpers
+    raw_issues = service_issues or []
+    issue_objects = [
+        item
+        if isinstance(item, ServiceIssue)
+        else ServiceIssue(
+            category="other",
+            description=str(item),
+            source="unknown",
+            severity="medium",
+            evidence=str(item),
+            confidence="medium",
+        )
+        for item in raw_issues
     ]
 
     return PostCallAnalysis(
@@ -2008,7 +2050,7 @@ def _make_analysis_with_list_axes(
             pain_points=pain_points or [],
             urgency="medium",
         ),
-        service_issues=ServiceIssuesAxis(issues=service_issues or []),
+        service_issues=ServiceIssuesAxis(issues=issue_objects),
         profile_facts=ProfileFactsAxis(facts=profile_facts_list or []),
         commitments=CommitmentsAxis(commitments=commitment_objects),
     )

@@ -66,7 +66,7 @@ async def _seed_call_analysis(
     lead_id: str = "lead-svc-001",
     classification: str = "interested",
     engagement_quality: str = "high",
-    service_issues: list[str] | None = None,
+    service_issues: list[str] | list[dict] | None = None,
     analyzed_at: datetime | None = None,
     agent_id: str | None = None,
 ):
@@ -350,6 +350,130 @@ async def test_service_issues_ranked_by_frequency(analytics_service_db):
     assert issues[1]["issue"] == "coverage_gap"
     assert issues[1]["count"] == 1
     assert issues[1]["rank"] == 2
+
+
+async def test_service_issues_structured_row_returns_category(analytics_service_db):
+    """Structured JSON row extracts category as the issue key."""
+    from app.analytics.service import get_service_issues
+
+    ts = datetime.now(timezone.utc)
+    # Seed a structured issue (new format: list of dicts)
+    await _seed_call_analysis(
+        analytics_service_db,
+        service_issues=[
+            {
+                "category": "billing_issue",
+                "description": "Lead was overcharged.",
+                "source": "current_provider",
+                "severity": "high",
+                "evidence": "Me cobraron de más.",
+                "confidence": "high",
+            }
+        ],
+        analyzed_at=ts,
+    )
+
+    date_from = ts - timedelta(hours=1)
+    date_to = ts + timedelta(hours=1)
+
+    assert analytics_service_db.async_session_factory is not None
+    async with analytics_service_db.async_session_factory() as sess:
+        result = await get_service_issues(
+            sess,
+            client_id="quintana-seguros",
+            date_from=date_from,
+            date_to=date_to,
+            agent_id=None,
+        )
+
+    issues = result["issues"]
+    assert len(issues) == 1
+    assert issues[0]["issue"] == "billing_issue"
+    assert issues[0]["count"] == 1
+    assert issues[0]["rank"] == 1
+
+
+async def test_service_issues_legacy_string_row_returns_string(analytics_service_db):
+    """Legacy string row (old format) returns the raw string as issue key."""
+    from app.analytics.service import get_service_issues
+
+    ts = datetime.now(timezone.utc)
+    # Seed a legacy issue (old format: list of strings)
+    await _seed_call_analysis(
+        analytics_service_db,
+        service_issues=["billing_error"],
+        analyzed_at=ts,
+    )
+
+    date_from = ts - timedelta(hours=1)
+    date_to = ts + timedelta(hours=1)
+
+    assert analytics_service_db.async_session_factory is not None
+    async with analytics_service_db.async_session_factory() as sess:
+        result = await get_service_issues(
+            sess,
+            client_id="quintana-seguros",
+            date_from=date_from,
+            date_to=date_to,
+            agent_id=None,
+        )
+
+    issues = result["issues"]
+    assert len(issues) == 1
+    assert issues[0]["issue"] == "billing_error"
+    assert issues[0]["count"] == 1
+    assert issues[0]["rank"] == 1
+
+
+async def test_service_issues_mixed_legacy_and_structured(analytics_service_db):
+    """Mixed legacy string and structured JSON rows aggregate correctly."""
+    from app.analytics.service import get_service_issues
+
+    ts = datetime.now(timezone.utc)
+    # Legacy row
+    await _seed_call_analysis(
+        analytics_service_db,
+        service_issues=["billing_error"],
+        analyzed_at=ts,
+    )
+    # Structured row with different category
+    await _seed_call_analysis(
+        analytics_service_db,
+        service_issues=[
+            {
+                "category": "delay",
+                "description": "Provider took too long.",
+                "source": "current_provider",
+                "severity": "medium",
+                "evidence": "Tardaron semanas.",
+                "confidence": "high",
+            }
+        ],
+        analyzed_at=ts,
+    )
+
+    date_from = ts - timedelta(hours=1)
+    date_to = ts + timedelta(hours=1)
+
+    assert analytics_service_db.async_session_factory is not None
+    async with analytics_service_db.async_session_factory() as sess:
+        result = await get_service_issues(
+            sess,
+            client_id="quintana-seguros",
+            date_from=date_from,
+            date_to=date_to,
+            agent_id=None,
+        )
+
+    issues = result["issues"]
+    issue_keys = {i["issue"] for i in issues}
+    assert "billing_error" in issue_keys
+    assert "delay" in issue_keys
+    # Each appears once (different keys)
+    billing = next(i for i in issues if i["issue"] == "billing_error")
+    delay = next(i for i in issues if i["issue"] == "delay")
+    assert billing["count"] == 1
+    assert delay["count"] == 1
 
 
 # ---------------------------------------------------------------------------

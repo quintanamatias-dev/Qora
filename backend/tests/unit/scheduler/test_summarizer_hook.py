@@ -108,10 +108,10 @@ def _make_dispatching_client(analysis):
         NextActionAxis,
         MiscNotesAxis,
         DataCorrectionsAxis,
-        ServiceIssuesAxis,
-        ProfileFactsAxis,
-        CommitmentsAxis,
-        AbandonmentReasonAxis,
+        ServiceIssuesAxis,  # noqa: F401 — used via DIMENSION_MODULES dynamic dispatch
+        ProfileFactsAxis,  # noqa: F401
+        CommitmentsAxis,  # noqa: F401
+        AbandonmentReasonAxis,  # noqa: F401
     )
 
     schema_to_target = {
