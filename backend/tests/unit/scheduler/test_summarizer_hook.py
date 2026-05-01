@@ -110,7 +110,7 @@ def _make_dispatching_client(analysis):
         DataCorrectionsAxis,
         ServiceIssuesAxis,
         ProfileFactsAxis,
-        CommitmentSignalsAxis,
+        CommitmentsAxis,
         AbandonmentReasonAxis,
     )
 
@@ -126,7 +126,7 @@ def _make_dispatching_client(analysis):
             "identified_problem",
             "service_issues",
             "profile_facts",
-            "commitment_signals",
+            "commitments",
             "abandonment_reason",
         }
         if target_field in complex_targets:

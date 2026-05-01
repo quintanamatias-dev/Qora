@@ -17,7 +17,7 @@ from app.analysis.schema import PostCallAnalysis
 from app.analysis.universal import (
     AbandonmentReasonAxis,
     CallOutcome,
-    CommitmentSignalsAxis,
+    CommitmentsAxis,
     DetectedInterests,
     DIMENSION_MODULES,
     IdentifiedProblem,
@@ -35,7 +35,7 @@ __all__ = [
     "IdentifiedProblem",
     "ServiceIssuesAxis",
     "ProfileFactsAxis",
-    "CommitmentSignalsAxis",
+    "CommitmentsAxis",
     "AbandonmentReasonAxis",
     "PostCallAnalysis",
     "UNIVERSAL_DIMENSIONS",

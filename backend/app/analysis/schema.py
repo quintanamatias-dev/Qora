@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from app.analysis.universal import (
     AbandonmentReasonAxis,
     CallOutcome,
-    CommitmentSignalsAxis,
+    CommitmentsAxis,
     DetectedInterests,
     IdentifiedProblem,
     ProfileFactsAxis,
@@ -95,9 +95,9 @@ class PostCallAnalysis(BaseModel):
         default_factory=ProfileFactsAxis,
         description="Personal or professional facts about the lead revealed during the call",
     )
-    commitment_signals: CommitmentSignalsAxis = Field(
-        default_factory=CommitmentSignalsAxis,
-        description="Verbal commitments or intent signals expressed by the lead",
+    commitments: CommitmentsAxis = Field(
+        default_factory=CommitmentsAxis,
+        description="Concrete commitments and next-step actions identified in the call",
     )
     abandonment_reason: AbandonmentReasonAxis = Field(
         default_factory=AbandonmentReasonAxis,

@@ -496,7 +496,7 @@ async def _upsert_call_analysis(
     ca.service_issues = _to_json_list((facts.get("service_issues") or {}).get("issues"))
     ca.profile_facts = _to_json_list((facts.get("profile_facts") or {}).get("facts"))
     ca.commitment_signals = _to_json_list(
-        (facts.get("commitment_signals") or {}).get("signals")
+        [c.get("description", "") for c in (facts.get("commitments") or {}).get("commitments") or []]
     )
     _abandonment = facts.get("abandonment_reason") or {}
     ca.abandonment_reason = _abandonment.get("reason")
@@ -559,6 +559,25 @@ def _to_json_list(value: Any) -> str:
     if isinstance(value, list):
         return json.dumps(value)
     return "[]"
+
+
+def _service_issue_key(raw_item: Any) -> str | None:
+    """Normalize service issue payloads to one analytics/profile key.
+
+    New payloads store structured objects. Persist their category for aggregation.
+    Legacy payloads may still be plain strings, so keep supporting them.
+    """
+    if isinstance(raw_item, dict):
+        category = raw_item.get("category")
+        if category and str(category).strip():
+            return str(category).strip().lower()
+        description = raw_item.get("description")
+        if description and str(description).strip():
+            return str(description).strip().lower()
+        return None
+    if not raw_item or not str(raw_item).strip():
+        return None
+    return str(raw_item).strip().lower()
 
 
 async def _write_lead_profile_facts(
@@ -646,13 +665,18 @@ async def _write_lead_profile_facts(
 
     # ★ NEW (Issue #36): Append-only list-type facts with namespace prefixes
     # Axes: profile_facts.facts, pain_points, service_issues.issues,
-    #       commitment_signals.signals, detected_interests.buying_signals
+    #       commitments.commitments (descriptions), detected_interests.buying_signals
     # Dedup: normalized (strip().lower()) fact_key match against active rows
-    _LIST_AXES: list[tuple[str, list[str]]] = [
+    _commitment_descriptions = [
+        c.get("description", "")
+        for c in (facts.get("commitments") or {}).get("commitments") or []
+        if c.get("description")
+    ]
+    _LIST_AXES: list[tuple[str, list[Any]]] = [
         ("profile:", (facts.get("profile_facts") or {}).get("facts") or []),
         ("pain:", (facts.get("identified_problem") or {}).get("pain_points") or []),
         ("service_issue:", (facts.get("service_issues") or {}).get("issues") or []),
-        ("signal:", (facts.get("commitment_signals") or {}).get("signals") or []),
+        ("signal:", _commitment_descriptions),
         (
             "buying_signal:",
             (facts.get("detected_interests") or {}).get("buying_signals") or [],
@@ -663,9 +687,14 @@ async def _write_lead_profile_facts(
         if not items:
             continue
         for raw_item in items:
-            if not raw_item or not str(raw_item).strip():
+            if namespace_prefix == "service_issue:":
+                normalized = _service_issue_key(raw_item)
+            else:
+                if not raw_item or not str(raw_item).strip():
+                    continue
+                normalized = str(raw_item).strip().lower()
+            if not normalized:
                 continue
-            normalized = str(raw_item).strip().lower()
             namespaced_key = f"{namespace_prefix}{normalized}"
 
             # Skip if an active row with this exact (normalized) fact_key already exists

@@ -28,7 +28,7 @@ from app.analysis.universal import (
     summary,
 )
 from app.analysis.universal.abandonment import AbandonmentReasonAxis
-from app.analysis.universal.commitments import CommitmentSignalsAxis
+from app.analysis.universal.commitments import CommitmentsAxis
 from app.analysis.universal.data_corrections import DataCorrectionsAxis
 from app.analysis.universal.interest_level import InterestLevelAxis
 from app.analysis.universal.interests import DetectedInterests
@@ -74,7 +74,7 @@ __all__ = [
     "IdentifiedProblem",
     "ServiceIssuesAxis",
     "ProfileFactsAxis",
-    "CommitmentSignalsAxis",
+    "CommitmentsAxis",
     "AbandonmentReasonAxis",
     "UNIVERSAL_DIMENSIONS",
     "DIMENSION_MODULES",

@@ -575,25 +575,34 @@ def test_profile_facts_axis_accepts_populated_list():
 
 
 # ---------------------------------------------------------------------------
-# CommitmentSignalsAxis
+# CommitmentsAxis
 # ---------------------------------------------------------------------------
 
 
-def test_commitment_signals_axis_defaults_to_empty_list():
-    """CommitmentSignalsAxis.signals defaults to empty list."""
-    from app.analysis_schema import CommitmentSignalsAxis
+def test_commitments_axis_defaults_to_empty_list():
+    """CommitmentsAxis.commitments defaults to empty list."""
+    from app.analysis.universal.commitments import CommitmentsAxis
 
-    axis = CommitmentSignalsAxis()
-    assert axis.signals == []
+    axis = CommitmentsAxis()
+    assert axis.commitments == []
 
 
-def test_commitment_signals_axis_accepts_signals():
-    """CommitmentSignalsAxis.signals accepts a list of verbal commitments."""
-    from app.analysis_schema import CommitmentSignalsAxis
+def test_commitments_axis_accepts_commitment_objects():
+    """CommitmentsAxis.commitments accepts a list of Commitment objects."""
+    from app.analysis.universal.commitments import CommitmentsAxis, Commitment
 
-    axis = CommitmentSignalsAxis(signals=["said yes to demo", "asked for invoice"])
-    assert "said yes to demo" in axis.signals
-    assert "asked for invoice" in axis.signals
+    c = Commitment(
+        type="callback",
+        owner="agent",
+        description="Agent will call back.",
+        due="tomorrow",
+        strength="strong",
+        evidence="Le llamo mañana.",
+        confidence="high",
+    )
+    axis = CommitmentsAxis(commitments=[c])
+    assert len(axis.commitments) == 1
+    assert axis.commitments[0].type == "callback"
 
 
 # ---------------------------------------------------------------------------
@@ -632,8 +641,8 @@ def test_post_call_analysis_has_four_new_axes():
     assert "service_issues" in props, "PostCallAnalysis must have service_issues axis"
     assert "profile_facts" in props, "PostCallAnalysis must have profile_facts axis"
     assert (
-        "commitment_signals" in props
-    ), "PostCallAnalysis must have commitment_signals axis"
+        "commitments" in props
+    ), "PostCallAnalysis must have commitments axis"
     assert (
         "abandonment_reason" in props
     ), "PostCallAnalysis must have abandonment_reason axis"
@@ -669,7 +678,7 @@ def test_post_call_analysis_new_axes_have_correct_defaults():
 
     assert analysis.service_issues.issues == []
     assert analysis.profile_facts.facts == []
-    assert analysis.commitment_signals.signals == []
+    assert analysis.commitments.commitments == []
     assert analysis.abandonment_reason.reason is None
 
 
@@ -682,10 +691,19 @@ def test_post_call_analysis_new_axes_accept_data():
         IdentifiedProblem,
         ServiceIssuesAxis,
         ProfileFactsAxis,
-        CommitmentSignalsAxis,
         AbandonmentReasonAxis,
     )
+    from app.analysis.universal.commitments import CommitmentsAxis, Commitment
 
+    c = Commitment(
+        type="callback",
+        owner="agent",
+        description="Will call back Friday.",
+        due="this_week",
+        strength="strong",
+        evidence="Le llamo el viernes.",
+        confidence="high",
+    )
     analysis = PostCallAnalysis(
         summary="Full analysis.",
         objections=[],
@@ -705,13 +723,14 @@ def test_post_call_analysis_new_axes_accept_data():
         ),
         service_issues=ServiceIssuesAxis(issues=["billing error"]),
         profile_facts=ProfileFactsAxis(facts=["manager at startup"]),
-        commitment_signals=CommitmentSignalsAxis(signals=["will call back Friday"]),
+        commitments=CommitmentsAxis(commitments=[c]),
         abandonment_reason=AbandonmentReasonAxis(reason="Found competitor cheaper"),
     )
 
     assert analysis.service_issues.issues == ["billing error"]
     assert analysis.profile_facts.facts == ["manager at startup"]
-    assert analysis.commitment_signals.signals == ["will call back Friday"]
+    assert len(analysis.commitments.commitments) == 1
+    assert analysis.commitments.commitments[0].type == "callback"
     assert analysis.abandonment_reason.reason == "Found competitor cheaper"
 
 
@@ -824,7 +843,7 @@ async def test_dimension_analyze_returns_axis_for_complex_axes():
         IdentifiedProblem,
         ServiceIssuesAxis,
         ProfileFactsAxis,
-        CommitmentSignalsAxis,
+        CommitmentsAxis,
         AbandonmentReasonAxis,
         outcome as outcome_mod,
         interests as interests_mod,
@@ -844,7 +863,7 @@ async def test_dimension_analyze_returns_axis_for_complex_axes():
         (problem_mod, IdentifiedProblem(primary_need="n", urgency="low")),
         (service_issues_mod, ServiceIssuesAxis()),
         (profile_facts_mod, ProfileFactsAxis()),
-        (commitments_mod, CommitmentSignalsAxis()),
+        (commitments_mod, CommitmentsAxis()),
         (abandonment_mod, AbandonmentReasonAxis()),
     ]
     for mod, parsed in cases:
@@ -874,6 +893,6 @@ def test_dimension_modules_iteration_order_is_stable():
         "problem",
         "service_issues",
         "profile_facts",
-        "commitment_signals",
+        "commitments",
         "abandonment_reason",
     ]

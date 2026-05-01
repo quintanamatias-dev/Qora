@@ -1,37 +1,118 @@
-"""Commitment signals dimension — verbal commitments or intent signals."""
+"""Commitments dimension — bilateral commitments and concrete next-step actions.
+
+Each commitment tracks: type, owner (lead/agent/both), description, due date,
+strength (weak/medium/strong), a direct transcript evidence quote, and
+confidence. At most 5 commitments are returned per call.
+"""
 
 from __future__ import annotations
+
+from typing import Literal
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
+# ---------------------------------------------------------------------------
+# Literal type aliases — follow service_issues.py convention (not Enum)
+# ---------------------------------------------------------------------------
 
-class CommitmentSignalsAxis(BaseModel):
-    """Verbal commitments or intent signals from the lead."""
+CommitmentType = Literal[
+    "send_document",
+    "receive_quote",
+    "review_proposal",
+    "consult_third_party",
+    "callback",
+    "continue_by_channel",
+    "compare_options",
+    "other",
+]
 
-    signals: list[str] = Field(
+CommitmentOwner = Literal["lead", "agent", "both"]
+
+CommitmentStrength = Literal["weak", "medium", "strong"]
+
+CommitmentDue = Literal["today", "tomorrow", "this_week", "specific_date", "unknown"]
+
+CommitmentConfidence = Literal["low", "medium", "high"]
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
+
+
+class Commitment(BaseModel):
+    """A single concrete commitment or next-step action identified in the transcript."""
+
+    type: CommitmentType
+    owner: CommitmentOwner
+    description: str = Field(min_length=1)
+    due: CommitmentDue
+    strength: CommitmentStrength
+    evidence: str = Field(
+        min_length=1,
+        description="Direct quote from transcript supporting this commitment",
+    )
+    confidence: CommitmentConfidence
+
+
+class CommitmentsAxis(BaseModel):
+    """Structured commitments extracted from the call — at most 5."""
+
+    commitments: list[Commitment] = Field(
         default_factory=list,
-        description="Verbal commitments or intent signals expressed by the lead",
+        max_length=5,
+        description="Concrete commitments or next-step actions identified in the transcript",
     )
 
 
+# ---------------------------------------------------------------------------
+# DIMENSION configuration
+# ---------------------------------------------------------------------------
+
+_PROMPT = (
+    "You are an expert at detecting concrete commitments and next-step actions from sales call transcripts.\n\n"
+    "A commitment exists when the lead or agent explicitly assumed, accepted, or requested a concrete next step. "
+    "Examples: agreeing to send a document, scheduling a callback, committing to review a proposal.\n\n"
+    "For each commitment identify:\n"
+    "- type: one of send_document, receive_quote, review_proposal, consult_third_party, callback, "
+    "continue_by_channel, compare_options, other\n"
+    "- owner: who made the commitment — lead, agent, or both\n"
+    "- description: brief description of the commitment (1-2 sentences)\n"
+    "- due: when — today, tomorrow, this_week, specific_date, or unknown\n"
+    "- strength: weak (conditional/vague), medium (clear intent but missing timeline), "
+    "strong (explicit action with concrete timeline)\n"
+    "- evidence: direct quote from the transcript that proves this commitment\n"
+    "- confidence: your confidence in the detection — low, medium, or high\n\n"
+    "CONSTRAINTS:\n"
+    "- Return at most 5 commitments. If more than 5 are detectable, return the 5 strongest.\n"
+    "- Return empty array if no commitments are present.\n"
+    "- Every commitment MUST include transcript evidence.\n\n"
+    "DO NOT count as commitments:\n"
+    "- Vague interest ('maybe I'll think about it', 'ya vemos', 'sí, me parece interesante')\n"
+    "- Politeness phrases ('thanks, bye', 'gracias')\n"
+    "- Questions without commitment ('how much would it cost?')\n"
+    "- General expressions of interest without a concrete action\n\n"
+    "Return JSON with: commitments (array of commitment objects)."
+)
+
 DIMENSION = {
-    "name": "commitment_signals",
-    "display_name": "Commitment Signals",
-    "schema": CommitmentSignalsAxis,
-    "target_field": "commitment_signals",
-    "prompt": (
-        "Extract verbal commitments or intent signals from the lead "
-        "(e.g. 'will call back Friday', 'send me the quote', 'I'll think about it'). "
-        "Return JSON with: signals (list of short commitment statements, "
-        "empty list if none)."
-    ),
+    "name": "commitments",
+    "display_name": "Commitments",
+    "schema": CommitmentsAxis,
+    "target_field": "commitments",
+    "prompt": _PROMPT,
     "model": "gpt-4o-mini",
 }
 
 
-async def analyze(transcript: str, client: AsyncOpenAI) -> CommitmentSignalsAxis:
-    """Run this dimension's GPT call and return the parsed CommitmentSignalsAxis."""
+# ---------------------------------------------------------------------------
+# Analyzer
+# ---------------------------------------------------------------------------
+
+
+async def analyze(transcript: str, client: AsyncOpenAI) -> CommitmentsAxis:
+    """Run this dimension's GPT call and return the parsed CommitmentsAxis."""
     response = await client.beta.chat.completions.parse(
         model=DIMENSION["model"],
         messages=[

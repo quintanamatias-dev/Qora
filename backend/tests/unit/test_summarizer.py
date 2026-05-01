@@ -97,7 +97,7 @@ def _axis_for_dimension(analysis_obj, target_field: str, schema_cls):
     """
     from app.analysis.universal import (
         AbandonmentReasonAxis,
-        CommitmentSignalsAxis,
+        CommitmentsAxis,
         DataCorrectionsAxis,
         InterestLevelAxis,
         MiscNotesAxis,
@@ -115,7 +115,7 @@ def _axis_for_dimension(analysis_obj, target_field: str, schema_cls):
         "identified_problem",
         "service_issues",
         "profile_facts",
-        "commitment_signals",
+        "commitments",
         "abandonment_reason",
     }
     if target_field in complex_targets:
@@ -140,9 +140,9 @@ def _axis_for_dimension(analysis_obj, target_field: str, schema_cls):
         return ServiceIssuesAxis(issues=list(analysis_obj.service_issues.issues))
     if schema_cls is ProfileFactsAxis:
         return ProfileFactsAxis(facts=list(analysis_obj.profile_facts.facts))
-    if schema_cls is CommitmentSignalsAxis:
-        return CommitmentSignalsAxis(
-            signals=list(analysis_obj.commitment_signals.signals)
+    if schema_cls is CommitmentsAxis:
+        return CommitmentsAxis(
+            commitments=list(analysis_obj.commitments.commitments)
         )
     if schema_cls is AbandonmentReasonAxis:
         return AbandonmentReasonAxis(
@@ -1758,9 +1758,9 @@ async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
         IdentifiedProblem,
         ServiceIssuesAxis,
         ProfileFactsAxis,
-        CommitmentSignalsAxis,
         AbandonmentReasonAxis,
     )
+    from app.analysis.universal.commitments import CommitmentsAxis, Commitment
     from sqlalchemy import select
     import json
 
@@ -1793,8 +1793,18 @@ async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
             issues=["poor customer service", "claim denied"]
         ),
         profile_facts=ProfileFactsAxis(facts=["owns a Fiat", "lives in Palermo"]),
-        commitment_signals=CommitmentSignalsAxis(
-            signals=["asked for quote comparison"]
+        commitments=CommitmentsAxis(
+            commitments=[
+                Commitment(
+                    type="receive_quote",
+                    owner="agent",
+                    description="asked for quote comparison",
+                    due="this_week",
+                    strength="medium",
+                    evidence="Me pidió una comparativa de cotizaciones.",
+                    confidence="high",
+                )
+            ]
         ),
         abandonment_reason=AbandonmentReasonAxis(reason=None),
     )
@@ -1843,8 +1853,8 @@ async def test_call_analysis_abandonment_reason_persisted_when_set(seeded_db):
         AbandonmentReasonAxis,
         ServiceIssuesAxis,
         ProfileFactsAxis,
-        CommitmentSignalsAxis,
     )
+    from app.analysis.universal.commitments import CommitmentsAxis
     from sqlalchemy import select
 
     session_id = await _create_session(
@@ -1874,7 +1884,7 @@ async def test_call_analysis_abandonment_reason_persisted_when_set(seeded_db):
         ),
         service_issues=ServiceIssuesAxis(),
         profile_facts=ProfileFactsAxis(),
-        commitment_signals=CommitmentSignalsAxis(),
+        commitments=CommitmentsAxis(),
         abandonment_reason=AbandonmentReasonAxis(
             reason="Found a cheaper provider elsewhere"
         ),
@@ -1961,8 +1971,22 @@ def _make_analysis_with_list_axes(
         IdentifiedProblem,
         ServiceIssuesAxis,
         ProfileFactsAxis,
-        CommitmentSignalsAxis,
     )
+    from app.analysis.universal.commitments import CommitmentsAxis, Commitment
+
+    # Convert string descriptions to Commitment objects for the new structured API
+    commitment_objects = [
+        Commitment(
+            type="other",
+            owner="agent",
+            description=desc,
+            due="unknown",
+            strength="medium",
+            evidence=desc,
+            confidence="medium",
+        )
+        for desc in (commitment_signals or [])
+    ]
 
     return PostCallAnalysis(
         summary="Test summary",
@@ -1986,7 +2010,7 @@ def _make_analysis_with_list_axes(
         ),
         service_issues=ServiceIssuesAxis(issues=service_issues or []),
         profile_facts=ProfileFactsAxis(facts=profile_facts_list or []),
-        commitment_signals=CommitmentSignalsAxis(signals=commitment_signals or []),
+        commitments=CommitmentsAxis(commitments=commitment_objects),
     )
 
 
