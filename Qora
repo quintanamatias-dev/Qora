@@ -1,0 +1,305 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# QORA one-command local launcher.
+# Starts the FastAPI backend, ngrok tunnel, and Vite frontend, then keeps all processes alive.
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+
+# Resolve symlinks so `Qora` works both as `./Qora` from the repo and as a
+# PATH command via /Users/mati/.local/bin/Qora -> /Users/mati/Desktop/Qora/Qora.
+while [[ -L "$SCRIPT_PATH" ]]; do
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  LINK_TARGET="$(readlink "$SCRIPT_PATH")"
+  if [[ "$LINK_TARGET" == /* ]]; then
+    SCRIPT_PATH="$LINK_TARGET"
+  else
+    SCRIPT_PATH="$SCRIPT_DIR/$LINK_TARGET"
+  fi
+done
+
+ROOT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+BACKEND_DIR="$ROOT_DIR/backend"
+FRONTEND_DIR="$ROOT_DIR/frontend"
+
+BACKEND_PID=""
+FRONTEND_PID=""
+NGROK_PID=""
+
+info() {
+  printf '\033[1;36m[QORA]\033[0m %s\n' "$1"
+}
+
+warn() {
+  printf '\033[1;33m[QORA]\033[0m %s\n' "$1"
+}
+
+fail() {
+  printf '\033[1;31m[QORA]\033[0m %s\n' "$1" >&2
+  exit 1
+}
+
+kill_process_tree() {
+  local pid="$1"
+  local signal="${2:-TERM}"
+  local child
+
+  if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
+
+  for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+    kill_process_tree "$child" "$signal"
+  done
+
+  kill "-$signal" "$pid" 2>/dev/null || true
+}
+
+stop_port_if_busy() {
+  local port="$1"
+  local label="$2"
+  local pids
+
+  pids="$(lsof -ti ":$port" 2>/dev/null || true)"
+  if [[ -z "$pids" ]]; then
+    return 0
+  fi
+
+  warn "Port $port is already in use by $label. Stopping previous process(es): ${pids//$'\n'/, }"
+  for pid in $pids; do
+    kill_process_tree "$pid" TERM
+  done
+  sleep 2
+
+  pids="$(lsof -ti ":$port" 2>/dev/null || true)"
+  if [[ -n "$pids" ]]; then
+    warn "Port $port is still busy. Forcing process(es): ${pids//$'\n'/, }"
+    for pid in $pids; do
+      kill_process_tree "$pid" KILL
+    done
+    sleep 1
+  fi
+
+  if [[ -n "$(lsof -ti ":$port" 2>/dev/null || true)" ]]; then
+    fail "Port $port is still busy after cleanup. Stop that process manually and retry."
+  fi
+}
+
+wait_for_http() {
+  local url="$1"
+  local label="$2"
+  local timeout_seconds="${3:-30}"
+  local elapsed=0
+
+  while [[ "$elapsed" -lt "$timeout_seconds" ]]; do
+    if curl --max-time 2 -fsS "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+
+  fail "$label did not become ready at $url after ${timeout_seconds}s. Check the logs above."
+}
+
+get_ngrok_public_url() {
+  "$PYTHON_BIN" - <<'PY'
+import json
+import sys
+import urllib.request
+
+try:
+    with urllib.request.urlopen("http://127.0.0.1:4040/api/tunnels", timeout=2) as response:
+        payload = json.load(response)
+except Exception:
+    sys.exit(1)
+
+for tunnel in payload.get("tunnels", []):
+    public_url = tunnel.get("public_url", "")
+    config_addr = tunnel.get("config", {}).get("addr", "")
+    if public_url.startswith("https://") and config_addr.endswith(":8000"):
+        print(public_url)
+        sys.exit(0)
+
+for tunnel in payload.get("tunnels", []):
+    public_url = tunnel.get("public_url", "")
+    if public_url.startswith("https://"):
+        print(public_url)
+        sys.exit(0)
+
+sys.exit(1)
+PY
+}
+
+wait_for_ngrok_url() {
+  local timeout_seconds="${1:-30}"
+  local elapsed=0
+  local url=""
+
+  while [[ "$elapsed" -lt "$timeout_seconds" ]]; do
+    url="$(get_ngrok_public_url 2>/dev/null || true)"
+    if [[ -n "$url" ]]; then
+      printf '%s\n' "$url"
+      return 0
+    fi
+
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+
+  fail "ngrok did not expose a public HTTPS URL after ${timeout_seconds}s. Check the logs above."
+}
+
+print_ready_summary() {
+  local ngrok_url="$1"
+
+  printf '\n'
+  printf '\033[1;36m┌──────────────────────────────────────────────────────────────────────────────────────────────┐\033[0m\n'
+  printf '\033[1;36m│ QORA is ready                                                                                │\033[0m\n'
+  printf '\033[1;36m├──────────────────────────────────────────────────────────────────────────────────────────────┤\033[0m\n'
+  printf '\033[1;36m│\033[0m Frontend       %-76s \033[1;36m│\033[0m\n' "http://localhost:5173"
+  printf '\033[1;36m│\033[0m Backend API    %-76s \033[1;36m│\033[0m\n' "http://localhost:8000"
+  printf '\033[1;36m│\033[0m Voice demo     %-76s \033[1;36m│\033[0m\n' "http://localhost:8000/demo/"
+  printf '\033[1;36m│\033[0m ngrok UI       %-76s \033[1;36m│\033[0m\n' "http://127.0.0.1:4040"
+  printf '\033[1;36m│\033[0m Public URL     %-76s \033[1;36m│\033[0m\n' "$ngrok_url"
+  printf '\033[1;36m├──────────────────────────────────────────────────────────────────────────────────────────────┤\033[0m\n'
+  printf '\033[1;36m│\033[0m ElevenLabs URL %-76s \033[1;36m│\033[0m\n' "$ngrok_url/api/v1/voice"
+  printf '\033[1;36m└──────────────────────────────────────────────────────────────────────────────────────────────┘\033[0m\n'
+  printf '\n'
+}
+
+cleanup() {
+  info "Shutting down local services..."
+  if [[ -n "$FRONTEND_PID" ]] && kill -0 "$FRONTEND_PID" 2>/dev/null; then
+    kill_process_tree "$FRONTEND_PID" TERM
+  fi
+  if [[ -n "$NGROK_PID" ]] && kill -0 "$NGROK_PID" 2>/dev/null; then
+    kill_process_tree "$NGROK_PID" TERM
+  fi
+  if [[ -n "$BACKEND_PID" ]] && kill -0 "$BACKEND_PID" 2>/dev/null; then
+    kill_process_tree "$BACKEND_PID" TERM
+  fi
+
+  sleep 2
+
+  if [[ -n "$FRONTEND_PID" ]] && kill -0 "$FRONTEND_PID" 2>/dev/null; then
+    kill_process_tree "$FRONTEND_PID" KILL
+  fi
+  if [[ -n "$NGROK_PID" ]] && kill -0 "$NGROK_PID" 2>/dev/null; then
+    kill_process_tree "$NGROK_PID" KILL
+  fi
+  if [[ -n "$BACKEND_PID" ]] && kill -0 "$BACKEND_PID" 2>/dev/null; then
+    kill_process_tree "$BACKEND_PID" KILL
+  fi
+}
+
+shutdown() {
+  trap - EXIT
+  cleanup
+  exit 0
+}
+
+trap cleanup EXIT
+trap shutdown INT TERM
+
+[[ -d "$BACKEND_DIR" ]] || fail "Missing backend directory: $BACKEND_DIR"
+[[ -d "$FRONTEND_DIR" ]] || fail "Missing frontend directory: $FRONTEND_DIR"
+
+if [[ -x "$BACKEND_DIR/.venv/bin/python" ]]; then
+  PYTHON_BIN="$BACKEND_DIR/.venv/bin/python"
+else
+  PYTHON_BIN="$(command -v python3 || true)"
+fi
+
+[[ -n "$PYTHON_BIN" ]] || fail "python3 was not found. Install Python 3.11+ and run backend setup first."
+command -v npm >/dev/null 2>&1 || fail "npm was not found. Install Node.js and run frontend setup first."
+command -v ngrok >/dev/null 2>&1 || fail "ngrok was not found. Install ngrok and authenticate it before running Qora."
+
+if [[ ! -f "$BACKEND_DIR/.env" ]]; then
+  warn "backend/.env not found. Create it from backend/.env.example and add your API keys if the backend fails to boot."
+fi
+
+if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
+  warn "frontend/node_modules not found. If Vite fails, run: cd frontend && npm install"
+fi
+
+stop_port_if_busy 8000 "QORA backend"
+stop_port_if_busy 5173 "QORA frontend"
+stop_port_if_busy 4040 "ngrok web interface"
+
+info "Ensuring local database schema is up to date"
+(
+  cd "$BACKEND_DIR"
+
+  # SQLAlchemy create_all creates missing tables on a fresh DB. It does NOT alter
+  # existing tables, so the idempotent migration scripts below handle schema drift
+  # from older local databases.
+  "$PYTHON_BIN" - <<'PY'
+import asyncio
+
+from app.core.config import Settings
+from app.core import database as db
+
+
+async def main() -> None:
+    settings = Settings()
+    await db.init_db(settings)
+    await db.close_db()
+
+
+asyncio.run(main())
+PY
+
+  "$PYTHON_BIN" "scripts/migrate_phase2.py"
+  "$PYTHON_BIN" "scripts/migrate_lead_id_nullable.py"
+  "$PYTHON_BIN" "scripts/migrate_session_reconciliation.py"
+  "$PYTHON_BIN" "scripts/migrate_call_scheduler.py"
+  "$PYTHON_BIN" "scripts/migrate_analysis_v2.py"
+  "$PYTHON_BIN" "scripts/migrate_extraction_v2.py"
+  "$PYTHON_BIN" "scripts/migrate_add_agents.py"
+  "$PYTHON_BIN" "scripts/migrate_add_agent_id_fks.py"
+)
+
+info "Starting backend on http://localhost:8000"
+(
+  cd "$BACKEND_DIR"
+  "$PYTHON_BIN" -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+) &
+BACKEND_PID=$!
+
+info "Starting ngrok tunnel for http://localhost:8000"
+ngrok http 8000 --log=stdout --log-format=logfmt &
+NGROK_PID=$!
+
+info "Starting frontend on http://localhost:5173"
+(
+  cd "$FRONTEND_DIR"
+  npm run dev -- --host 0.0.0.0 --strictPort
+) &
+FRONTEND_PID=$!
+
+info "QORA is starting. Open http://localhost:5173 for the React app or http://localhost:8000/demo/ for the voice demo."
+info "ngrok is exposing the backend. Copy the HTTPS forwarding URL from the ngrok logs above for ElevenLabs."
+info "Press Ctrl+C to stop everything."
+
+wait_for_http "http://localhost:8000/api/v1/health" "Backend"
+wait_for_http "http://localhost:5173/" "Frontend"
+NGROK_PUBLIC_URL="$(wait_for_ngrok_url)"
+print_ready_summary "$NGROK_PUBLIC_URL"
+
+while true; do
+  if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+    fail "Backend process stopped. Check the logs above."
+  fi
+
+  if ! kill -0 "$FRONTEND_PID" 2>/dev/null; then
+    fail "Frontend process stopped. Check the logs above."
+  fi
+
+  if ! kill -0 "$NGROK_PID" 2>/dev/null; then
+    fail "ngrok process stopped. Check the logs above."
+  fi
+
+  sleep 1
+done

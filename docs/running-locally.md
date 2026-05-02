@@ -77,6 +77,16 @@ asyncio.run(main())
 
 ## 4. Run the Dev Server
 
+From the repository root, you can start the backend, ngrok tunnel, and frontend together:
+
+```bash
+./Qora
+```
+
+This keeps all local processes attached to the same terminal. Press `Ctrl+C` to stop everything.
+
+If you only want the backend, run it manually from `backend/`:
+
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
@@ -95,10 +105,10 @@ The demo UI is available at: **http://localhost:8000/demo/**
 
 ## 5. Expose via ngrok
 
-ElevenLabs needs a public HTTPS URL to reach your webhook. Use ngrok:
+ElevenLabs needs a public HTTPS URL to reach your webhook. The `Qora` launcher starts ngrok automatically:
 
 ```bash
-ngrok http 8000
+Qora
 ```
 
 ngrok will print something like:
@@ -107,7 +117,13 @@ ngrok will print something like:
 Forwarding  https://abc123.ngrok-free.app -> http://localhost:8000
 ```
 
-Copy the HTTPS URL — you'll need it in step 6.
+Copy the HTTPS forwarding URL from the ngrok logs — you'll need it in step 6.
+
+If you only need ngrok manually, run:
+
+```bash
+ngrok http 8000
+```
 
 > **Tip:** Use `ngrok http 8000 --domain your-static-domain.ngrok-free.app` if you have a free static ngrok domain — this way the URL never changes between restarts.
 
@@ -160,6 +176,25 @@ pytest tests/ --cov=app --cov-report=term-missing
 pytest tests/unit/prompts/ -v
 pytest tests/integration/voice/ -v
 ```
+
+---
+
+## 9. n8n (modeling reference only)
+
+QORA's post-call analysis pipeline is fully Python-native. Each dimension under
+`backend/app/analysis/universal/` owns its own prompt, schema, and OpenAI call;
+the summarizer runs all 13 in parallel via `asyncio.gather`.
+
+The files below are kept only as diagramming / modeling references — they are
+NOT part of the runtime path:
+
+- `docs/n8n-workflows/post-call-analysis.json`
+- `docker-compose.n8n-local.yml`
+
+If you want to inspect the workflow visually, you can still spin up the local
+n8n container with `docker compose -f docker-compose.n8n-local.yml up -d` and
+import the JSON, but the backend will neither call it nor receive callbacks
+from it.
 
 ---
 

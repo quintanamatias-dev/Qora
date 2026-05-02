@@ -64,8 +64,8 @@ async def seeded_db(tmp_path: Path):
     await db_module.close_db()
 
 
-def _make_parse_response_with_action(next_action: str) -> MagicMock:
-    """Build mock parse response with a specific next_action_suggested."""
+def _make_analysis_with_action(next_action: str):
+    """Build a PostCallAnalysis with a specific next_action_suggested."""
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
@@ -73,17 +73,16 @@ def _make_parse_response_with_action(next_action: str) -> MagicMock:
         IdentifiedProblem,
     )
 
-    analysis = PostCallAnalysis(
+    return PostCallAnalysis(
         summary="Test summary.",
         objections=[],
         interest_level=60,
-        current_insurance=None,
         next_action_suggested=next_action,
         misc_notes="",
         call_outcome=CallOutcome(
-            classification="follow_up",
+            classification="callback_requested",
             reason="Lead asked to be called again.",
-            engagement_quality="medium",
+            confidence="medium",
         ),
         detected_interests=DetectedInterests(),
         identified_problem=IdentifiedProblem(
@@ -92,11 +91,73 @@ def _make_parse_response_with_action(next_action: str) -> MagicMock:
         ),
     )
 
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock()]
-    mock_response.choices[0].message.parsed = analysis
-    mock_response.choices[0].message.refusal = None
-    return mock_response
+
+def _make_dispatching_client(analysis):
+    """Build an AsyncOpenAI mock that dispatches per-dimension parse() calls.
+
+    Uses the same dispatch strategy as test_summarizer's helper: for each call
+    to ``beta.chat.completions.parse(response_format=Schema)``, returns a
+    response whose ``parsed`` is the per-dimension axis derived from the full
+    PostCallAnalysis payload.
+    """
+    from app.analysis.universal import (
+        DIMENSION_MODULES,
+        SummaryAxis,
+        ObjectionsAxis,
+        InterestLevelAxis,
+        NextActionAxis,
+        MiscNotesAxis,
+        DataCorrectionsAxis,
+        ServiceIssuesAxis,  # noqa: F401 — used via DIMENSION_MODULES dynamic dispatch
+        ProfileFactsAxis,  # noqa: F401
+        CommitmentsAxis,  # noqa: F401
+        AbandonmentReasonAxis,  # noqa: F401
+    )
+
+    schema_to_target = {
+        mod.DIMENSION["schema"]: mod.DIMENSION["target_field"]
+        for mod in DIMENSION_MODULES
+    }
+
+    def _build_axis(target_field, schema_cls):
+        complex_targets = {
+            "call_outcome",
+            "detected_interests",
+            "identified_problem",
+            "service_issues",
+            "profile_facts",
+            "commitments",
+            "abandonment_reason",
+        }
+        if target_field in complex_targets:
+            return getattr(analysis, target_field)
+        if schema_cls is SummaryAxis:
+            return SummaryAxis(text=analysis.summary)
+        if schema_cls is ObjectionsAxis:
+            return ObjectionsAxis(items=list(analysis.objections))
+        if schema_cls is InterestLevelAxis:
+            return InterestLevelAxis(score=int(analysis.interest_level))
+        if schema_cls is NextActionAxis:
+            return NextActionAxis(action=str(analysis.next_action_suggested))
+        if schema_cls is MiscNotesAxis:
+            return MiscNotesAxis(notes=str(analysis.misc_notes or ""))
+        if schema_cls is DataCorrectionsAxis:
+            return DataCorrectionsAxis(corrections="")
+        raise AssertionError(f"Unknown schema: {schema_cls!r}")
+
+    async def _dispatch(*_args, response_format=None, **_kwargs):
+        target_field = schema_to_target.get(response_format)
+        axis_value = _build_axis(target_field, response_format)
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.parsed = axis_value
+        response.choices[0].message.refusal = None
+        return response
+
+    mock_client = AsyncMock()
+    mock_client.beta.chat.completions.parse = AsyncMock(side_effect=_dispatch)
+    mock_client.chat.completions.parse = mock_client.beta.chat.completions.parse
+    return mock_client
 
 
 async def _create_session_with_turns(db_module, lead_id: str) -> str:
@@ -129,10 +190,7 @@ async def test_auto_schedule_fires_after_eligible_call(seeded_db):
 
     session_id = await _create_session_with_turns(seeded_db, "hook-lead-001")
 
-    mock_client = AsyncMock()
-    mock_client.chat.completions.parse.return_value = _make_parse_response_with_action(
-        "call_again"
-    )
+    mock_client = _make_dispatching_client(_make_analysis_with_action("call_again"))
 
     with patch(
         "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
@@ -160,10 +218,7 @@ async def test_auto_schedule_skips_ineligible_outcome_in_summarizer(seeded_db):
 
     session_id = await _create_session_with_turns(seeded_db, "hook-lead-001")
 
-    mock_client = AsyncMock()
-    mock_client.chat.completions.parse.return_value = _make_parse_response_with_action(
-        "send_quote"
-    )
+    mock_client = _make_dispatching_client(_make_analysis_with_action("send_quote"))
 
     with patch(
         "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
@@ -188,10 +243,7 @@ async def test_summarizer_auto_schedule_failure_does_not_block_lead_merge(seeded
 
     session_id = await _create_session_with_turns(seeded_db, "hook-lead-001")
 
-    mock_client = AsyncMock()
-    mock_client.chat.completions.parse.return_value = _make_parse_response_with_action(
-        "call_again"
-    )
+    mock_client = _make_dispatching_client(_make_analysis_with_action("call_again"))
 
     # Patch auto_schedule to raise
     with (
@@ -233,10 +285,7 @@ async def test_auto_schedule_skips_do_not_call_lead_in_summarizer(seeded_db):
 
     session_id = await _create_session_with_turns(seeded_db, "hook-lead-001")
 
-    mock_client = AsyncMock()
-    mock_client.chat.completions.parse.return_value = _make_parse_response_with_action(
-        "call_again"
-    )
+    mock_client = _make_dispatching_client(_make_analysis_with_action("call_again"))
 
     with patch(
         "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")

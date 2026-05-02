@@ -1,22 +1,18 @@
-"""QORA — Post-call summarizer and fact extractor (CAP-4, Phase 5).
+"""QORA — Post-call summarizer and fact extractor.
 
-Generates a concise summary and structured facts from a call transcript
-using a single GPT-4o-mini call with OpenAI Structured Outputs (parse mode).
-
-Phase 5 changes:
-- Switched from `create()` + JSON mode to `parse(response_format=PostCallAnalysis)`
-- Imports PostCallAnalysis + ANALYSIS_SYSTEM_PROMPT from analysis_schema (N8N boundary)
-- max_tokens increased to 1024 (3 new nested axes need more tokens)
-- _SYSTEM_PROMPT removed — now lives in analysis_schema.ANALYSIS_SYSTEM_PROMPT
-- _call_gpt_summarize updated to use .parse() and return typed Pydantic result
-- _merge_facts_into_lead preserves all existing merge logic + new axes flow naturally
+Orchestrates per-dimension analysis: each module under
+``app.analysis.universal`` owns its own prompt, schema, and OpenAI call.
+This summarizer fans the 13 ``analyze`` coroutines out via
+``asyncio.gather(return_exceptions=True)`` and merges the results into
+``PostCallAnalysis``. One bad dimension does not kill the analysis — it is
+logged and the field falls back to the schema's default.
 
 Flow:
 1. Load transcript turns for the session from DB.
-2. If 0 turns → skip (no GPT call, no side-effects).
-3. Single GPT-4o-mini call → PostCallAnalysis Pydantic object.
-4. model_dump() → facts dict (summary popped out).
-5. Persist summary + facts to CallSession.
+2. If 0 turns → skip (no GPT calls, no side-effects).
+3. Run all 13 dimensions in parallel; assemble PostCallAnalysis.
+4. model_dump() → facts dict (summary popped out for separate persistence).
+5. Persist summary + facts to CallSession + CallAnalysis.
 6. Merge facts into Lead (objection union, latest values, do_not_call flag).
 
 Failures are always caught and logged — MUST NOT raise, MUST NOT affect
@@ -25,7 +21,9 @@ session close or any other operation.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import uuid
 from typing import Any
 
 import structlog
@@ -33,9 +31,10 @@ from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analysis_schema import ANALYSIS_SYSTEM_PROMPT, PostCallAnalysis
-from app.calls.models import CallSession, TranscriptTurn
-from app.leads.models import Lead
+from app.analysis.schema import PostCallAnalysis
+from app.analysis.universal import DIMENSION_MODULES
+from app.calls.models import CallAnalysis, CallSession, TranscriptTurn
+from app.leads.models import Lead, LeadInterestHistory, LeadProfileFact
 
 logger = structlog.get_logger(__name__)
 
@@ -70,6 +69,12 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
     """Internal: runs the full summarize+persist pipeline.
 
     Separated so the outer function can catch all exceptions in one place.
+
+    Atomicity guarantee (Issue #34 CRITICAL 1):
+    All writes — both legacy fields (CallSession.summary/extracted_facts) and
+    new-table writes (CallAnalysis, LeadProfileFact, LeadInterestHistory) — are
+    wrapped in a savepoint (nested transaction).  If ANY write fails, the savepoint
+    rolls back and NO partial data is committed.
     """
     # Load transcript turns
     turns_result = await db.execute(
@@ -98,9 +103,9 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
     # Build transcript text for GPT
     transcript_text = _format_transcript(turns)
 
-    # Call GPT-4o-mini with structured outputs
-    # On failure, persist a partial-analysis marker so the record shows
-    # that analysis was attempted but failed (spec requirement: CRITICAL 1).
+    # Run all dimensions in parallel.
+    # On failure (ALL dimensions blew up), persist a partial-analysis marker so
+    # the record shows that analysis was attempted but failed.
     user_turns = sum(1 for t in turns if t.role == "user")
     agent_turns = sum(1 for t in turns if t.role == "agent")
 
@@ -113,30 +118,41 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
             session_id=session_id,
             error=error_msg,
         )
-        cs.total_user_turns = user_turns
-        cs.total_agent_turns = agent_turns
-        cs.extracted_facts = {
-            "_analysis_status": "failed",
-            "_analysis_error": error_msg,
-        }
-        await db.flush()
+        async with db.begin_nested():
+            cs.total_user_turns = user_turns
+            cs.total_agent_turns = agent_turns
+            cs.extracted_facts = {
+                "_analysis_status": "failed",
+                "_analysis_error": error_msg,
+            }
+            # ★ NEW: Write CallAnalysis failure marker (analysis v2 — same savepoint)
+            await _upsert_call_analysis_failed(
+                db, cs.id, cs.lead_id, cs.client_id, error_msg
+            )
         return
 
-    # Persist to CallSession
-    cs.summary = summary
-    cs.extracted_facts = facts
-    cs.total_user_turns = user_turns
-    cs.total_agent_turns = agent_turns
+    # ★ Wrap ALL persistence in a single savepoint — guarantees atomicity.
+    # If _upsert_call_analysis or any other write raises, the savepoint rolls back
+    # and legacy fields (summary, extracted_facts) are NOT committed.
+    async with db.begin_nested():
+        # Persist to CallSession (legacy path)
+        cs.summary = summary
+        cs.extracted_facts = facts
+        cs.total_user_turns = user_turns
+        cs.total_agent_turns = agent_turns
 
-    # Merge into Lead
-    if cs.lead_id:
-        await _merge_facts_into_lead(db, cs.lead_id, summary, facts)
+        # ★ NEW: Dual-write to CallAnalysis (analysis v2 — same savepoint, atomic)
+        await _upsert_call_analysis(db, cs.id, cs.lead_id, cs.client_id, summary, facts)
 
-    # Auto-schedule follow-up call if eligible (Phase 6)
-    if cs.lead_id and cs.client_id:
-        await _auto_schedule_if_needed(db, cs, facts)
+        # Merge into Lead
+        if cs.lead_id:
+            await _merge_facts_into_lead(
+                db, cs.lead_id, summary, facts, session_id=cs.id
+            )
 
-    await db.flush()
+        # Auto-schedule follow-up call if eligible (Phase 6)
+        if cs.lead_id and cs.client_id:
+            await _auto_schedule_if_needed(db, cs, facts)
 
     logger.info(
         "summarizer_complete",
@@ -182,56 +198,53 @@ def _get_openai_client() -> tuple[AsyncOpenAI, str]:
 
 
 async def _call_gpt_summarize(transcript_text: str) -> tuple[str, dict[str, Any]]:
-    """Make a single GPT-4o-mini call using Structured Outputs (parse mode).
+    """Run all 13 universal dimensions in parallel and assemble PostCallAnalysis.
 
-    Uses PostCallAnalysis as response_format to guarantee schema compliance.
-    On failure, raises so the caller (_run_summarizer) can handle it uniformly.
-
-    Args:
-        transcript_text: Formatted call transcript.
+    Each module under ``app.analysis.universal`` owns one OpenAI call. Results
+    are gathered with ``return_exceptions=True`` so one failed dimension does
+    not poison the others — the failed field falls back to PostCallAnalysis's
+    schema default.
 
     Returns:
         Tuple of (summary_text, extracted_facts_dict).
 
     Raises:
-        Exception: On API failure, schema parse error, or refusal.
+        RuntimeError: When ALL 13 dimensions fail (no usable analysis).
     """
-    client, model = _get_openai_client()
+    client, _model = _get_openai_client()
 
-    response = await client.chat.completions.parse(
-        model=model,
-        messages=[
-            {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": f"Transcript:\n\n{transcript_text}",
-            },
-        ],
-        response_format=PostCallAnalysis,
-        max_tokens=1024,
-        temperature=0.2,
+    results = await asyncio.gather(
+        *[mod.analyze(transcript_text, client) for mod in DIMENSION_MODULES],
+        return_exceptions=True,
     )
 
-    message = response.choices[0].message
+    fields: dict[str, Any] = {}
+    failures = 0
+    for mod, result in zip(DIMENSION_MODULES, results):
+        dim_name = mod.DIMENSION["name"]
+        if isinstance(result, Exception):
+            failures += 1
+            logger.error(
+                "dimension_analysis_failed",
+                dimension=dim_name,
+                error=str(result),
+                error_type=type(result).__name__,
+            )
+            continue
+        fields[mod.DIMENSION["target_field"]] = result
 
-    # Handle refusal (OpenAI can refuse to analyze certain content)
-    if message.refusal:
-        logger.warning(
-            "summarizer_llm_refusal",
-            refusal=message.refusal[:200],
+    if failures == len(DIMENSION_MODULES):
+        # All dimensions blew up — no useful analysis.
+        raise RuntimeError(
+            f"all {failures} dimension analyses failed — see dimension_analysis_failed logs"
         )
-        raise ValueError(f"LLM refused to analyze transcript: {message.refusal[:100]}")
 
-    if message.parsed is None:
-        logger.error("summarizer_parse_returned_none")
-        raise ValueError("OpenAI parse() returned None — unexpected empty response")
+    analysis = PostCallAnalysis(**fields)
 
-    analysis: PostCallAnalysis = message.parsed
-
-    # model_dump() gives us the full structured facts dict
+    # model_dump() gives us the full structured facts dict.
     facts = analysis.model_dump()
 
-    # Pop summary out — it's stored separately on CallSession
+    # Pop summary out — it's stored separately on CallSession.
     summary = str(facts.pop("summary", ""))
 
     return summary, facts
@@ -247,9 +260,12 @@ async def _merge_facts_into_lead(
     lead_id: str,
     summary: str,
     facts: dict[str, Any],
+    *,
+    session_id: str | None = None,
 ) -> None:
-    """Merge extracted facts into the Lead record.
+    """Merge extracted facts into the Lead record and dual-write to new relational tables.
 
+    Legacy JSON path (unchanged):
     - summary_last_call ← current summary
     - objections_heard ← union of existing + new (deduplicated)
     - interest_level ← latest value
@@ -257,11 +273,16 @@ async def _merge_facts_into_lead(
     - do_not_call ← True if next_action_suggested == "do_not_call"
     - call_outcome, detected_interests, identified_problem ← overwrite (latest wins)
 
+    ★ NEW (analysis v2 dual-write):
+    - LeadProfileFact rows for key scalar facts (upsert semantics via superseded_at)
+    - LeadInterestHistory row for interest_level (append-only)
+
     Args:
         db: Active async DB session.
         lead_id: UUID of the lead to update.
         summary: Call summary text.
         facts: Extracted facts dict from GPT (already model_dump()'d).
+        session_id: Optional UUID of the source call session (for FK reference).
     """
     lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
     lead = lead_result.scalar_one_or_none()
@@ -307,8 +328,11 @@ async def _merge_facts_into_lead(
     new_facts_clean = {k: v for k, v in facts.items() if v is not None}
     lead.extracted_facts = {**existing_facts, **new_facts_clean}
 
-    # do_not_call ← True if suggested
+    # do_not_call ← True if suggested via next_action OR via do_not_contact classification
     if facts.get("next_action_suggested") == "do_not_call":
+        lead.do_not_call = True
+    call_outcome = facts.get("call_outcome") or {}
+    if call_outcome.get("classification") == "do_not_contact":
         lead.do_not_call = True
 
     # next_action ← latest suggested action
@@ -319,6 +343,14 @@ async def _merge_facts_into_lead(
     corrections_str = facts.get("data_corrections") or ""
     if corrections_str:
         _apply_data_corrections(lead, corrections_str)
+
+    # ★ NEW: Dual-write to relational tables (analysis v2)
+    await _write_lead_profile_facts(db, lead_id, session_id, facts)
+    _write_interest_history(db, lead_id, session_id, facts)
+
+    # ★ NEW: Write LeadProfileFact rows for each data_correction (Issue #34 CRITICAL 2)
+    if corrections_str:
+        await _write_correction_facts(db, lead_id, session_id, corrections_str)
 
 
 # ---------------------------------------------------------------------------
@@ -397,3 +429,391 @@ def _apply_data_corrections(lead: "Lead", corrections_str: str) -> None:
         else:
             if value:
                 setattr(lead, field, value)
+
+
+# ---------------------------------------------------------------------------
+# Analysis v2 helpers — dual-write to relational tables
+# ---------------------------------------------------------------------------
+
+
+def _new_uuid() -> str:
+    """Generate a new UUID4 string (matches project PK convention)."""
+    return str(uuid.uuid4())
+
+
+async def _upsert_call_analysis(
+    db: AsyncSession,
+    session_id: str,
+    lead_id: str | None,
+    client_id: str,
+    summary: str,
+    facts: dict[str, Any],
+) -> None:
+    """Insert or update a CallAnalysis row for the given session_id.
+
+    On re-run (e.g. webhook retry), updates the existing row in-place.
+    On first run, inserts a new row with a fresh UUID.
+
+    Args:
+        db: Active async DB session.
+        session_id: UUID of the source call session.
+        lead_id: Optional UUID of the lead.
+        client_id: UUID of the client.
+        summary: Call summary text.
+        facts: Extracted facts dict (model_dump()'d PostCallAnalysis).
+    """
+    call_outcome = facts.get("call_outcome") or {}
+    detected_interests = facts.get("detected_interests") or {}
+    identified_problem = facts.get("identified_problem") or {}
+
+    # Check for existing row
+    existing_result = await db.execute(
+        select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+    )
+    ca = existing_result.scalar_one_or_none()
+
+    if ca is None:
+        ca = CallAnalysis(id=_new_uuid(), session_id=session_id)
+        db.add(ca)
+
+    # Set or update all fields
+    ca.lead_id = lead_id
+    ca.client_id = client_id
+    ca.summary = summary
+    ca.interest_level = facts.get("interest_level")
+    ca.classification = _str_or_none(call_outcome.get("classification"))
+    ca.outcome_reason = call_outcome.get("reason")
+    ca.urgency = _str_or_none(identified_problem.get("urgency"))
+    ca.primary_need = identified_problem.get("primary_need")
+    ca.next_action_suggested = facts.get("next_action_suggested")
+    ca.current_insurance = facts.get("current_insurance")
+    ca.data_corrections = facts.get("data_corrections") or ""
+    ca.misc_notes = facts.get("misc_notes") or ""
+    ca.objections = _to_json_list(facts.get("objections"))
+    ca.products = _to_json_list(detected_interests.get("products"))
+    ca.specific_needs = _to_json_list(detected_interests.get("specific_needs"))
+    ca.buying_signals = _to_json_list(detected_interests.get("buying_signals"))
+    ca.pain_points = _to_json_list(identified_problem.get("pain_points"))
+    # Issue #35 — 4 new universal axes
+    ca.service_issues = _to_json_list((facts.get("service_issues") or {}).get("issues"))
+    ca.profile_facts = _to_json_list((facts.get("profile_facts") or {}).get("facts"))
+    ca.commitment_signals = _to_json_list(
+        [c.get("description", "") for c in (facts.get("commitments") or {}).get("commitments") or []]
+    )
+    _abandonment = facts.get("abandonment_reason") or {}
+    ca.abandonment_reason = _abandonment.get("reason")
+    ca.extra_axes_data = (
+        json.dumps(facts.get("extra_axes_data"))
+        if facts.get("extra_axes_data") is not None
+        else None
+    )
+    ca.analysis_status = "ok"
+    ca.analysis_error = None
+
+
+async def _upsert_call_analysis_failed(
+    db: AsyncSession,
+    session_id: str,
+    lead_id: str | None,
+    client_id: str,
+    error_msg: str,
+) -> None:
+    """Insert or update a CallAnalysis failure marker row.
+
+    Args:
+        db: Active async DB session.
+        session_id: UUID of the source call session.
+        lead_id: Optional UUID of the lead.
+        client_id: UUID of the client.
+        error_msg: Error message from the failed GPT call.
+    """
+    existing_result = await db.execute(
+        select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+    )
+    ca = existing_result.scalar_one_or_none()
+
+    if ca is None:
+        ca = CallAnalysis(id=_new_uuid(), session_id=session_id)
+        db.add(ca)
+
+    ca.lead_id = lead_id
+    ca.client_id = client_id
+    ca.analysis_status = "failed"
+    ca.analysis_error = error_msg
+
+
+def _str_or_none(value: Any) -> str | None:
+    """Return string representation of value, or None if value is None.
+
+    Handles enum values by extracting .value (Pydantic model_dump() may return
+    enum objects when mode='python' is used — the default).
+    """
+    if value is None:
+        return None
+    # Handle enum-like values that expose .value
+    if hasattr(value, "value"):
+        return str(value.value)
+    return str(value)
+
+
+def _to_json_list(value: Any) -> str:
+    """Serialize value to a JSON list string. Returns '[]' if None or not a list."""
+    if isinstance(value, list):
+        return json.dumps(value)
+    return "[]"
+
+
+def _service_issue_key(raw_item: Any) -> str | None:
+    """Normalize service issue payloads to one analytics/profile key.
+
+    New payloads store structured objects. Persist their category for aggregation.
+    Legacy payloads may still be plain strings, so keep supporting them.
+    """
+    if isinstance(raw_item, dict):
+        category = raw_item.get("category")
+        if category and str(category).strip():
+            return str(category).strip().lower()
+        description = raw_item.get("description")
+        if description and str(description).strip():
+            return str(description).strip().lower()
+        return None
+    if not raw_item or not str(raw_item).strip():
+        return None
+    return str(raw_item).strip().lower()
+
+
+async def _write_lead_profile_facts(
+    db: AsyncSession,
+    lead_id: str,
+    session_id: str | None,
+    facts: dict[str, Any],
+) -> None:
+    """Write LeadProfileFact rows for key scalar facts from this call.
+
+    Upsert semantics: for singular facts (interest_level, current_insurance,
+    next_action, primary_need, classification), supersede any existing active row
+    (superseded_at IS NULL) when the value changes.
+
+    Append-only facts (do_not_call) are inserted unconditionally.
+
+    Args:
+        db: Active async DB session.
+        lead_id: UUID of the lead to write facts for.
+        session_id: UUID of the source call session (for FK + provenance).
+        facts: Extracted facts dict from GPT.
+    """
+    from datetime import datetime, timezone
+
+    call_outcome = facts.get("call_outcome") or {}
+    identified_problem = facts.get("identified_problem") or {}
+
+    # Build map of fact_key → fact_value for singular facts
+    singular_facts: dict[str, str] = {}
+
+    il = facts.get("interest_level")
+    if il is not None:
+        singular_facts["interest_level"] = str(il)
+
+    ci = facts.get("current_insurance")
+    if ci is not None:
+        singular_facts["current_insurance"] = str(ci)
+
+    na = facts.get("next_action_suggested")
+    if na is not None:
+        singular_facts["next_action"] = str(na)
+
+    pn = identified_problem.get("primary_need")
+    if pn is not None:
+        singular_facts["primary_need"] = str(pn)
+
+    clf = call_outcome.get("classification")
+    if clf is not None:
+        singular_facts["classification"] = _str_or_none(clf) or str(clf)
+
+    # do_not_call is a special append-only fact
+    if facts.get("next_action_suggested") == "do_not_call":
+        singular_facts["do_not_call"] = "true"
+
+    now = datetime.now(timezone.utc)
+
+    for fact_key, fact_value in singular_facts.items():
+        # Supersede existing active row if value is different
+        existing_result = await db.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == lead_id,
+                LeadProfileFact.fact_key == fact_key,
+                LeadProfileFact.superseded_at == None,  # noqa: E711
+            )
+        )
+        existing = existing_result.scalar_one_or_none()
+
+        if existing is not None:
+            if existing.fact_value == fact_value:
+                # Same value — skip (no change)
+                continue
+            # Different value — supersede old
+            existing.superseded_at = now
+
+        # Insert new active row
+        db.add(
+            LeadProfileFact(
+                id=_new_uuid(),
+                lead_id=lead_id,
+                fact_key=fact_key,
+                fact_value=fact_value,
+                source_call_id=session_id,
+            )
+        )
+
+    # ★ NEW (Issue #36): Append-only list-type facts with namespace prefixes
+    # Axes: profile_facts.facts, pain_points, service_issues.issues,
+    #       commitments.commitments (descriptions), detected_interests.buying_signals
+    # Dedup: normalized (strip().lower()) fact_key match against active rows
+    _commitment_descriptions = [
+        c.get("description", "")
+        for c in (facts.get("commitments") or {}).get("commitments") or []
+        if c.get("description")
+    ]
+    _LIST_AXES: list[tuple[str, list[Any]]] = [
+        ("profile:", (facts.get("profile_facts") or {}).get("facts") or []),
+        ("pain:", (facts.get("identified_problem") or {}).get("pain_points") or []),
+        ("service_issue:", (facts.get("service_issues") or {}).get("issues") or []),
+        ("signal:", _commitment_descriptions),
+        (
+            "buying_signal:",
+            (facts.get("detected_interests") or {}).get("buying_signals") or [],
+        ),
+    ]
+
+    for namespace_prefix, items in _LIST_AXES:
+        if not items:
+            continue
+        for raw_item in items:
+            if namespace_prefix == "service_issue:":
+                normalized = _service_issue_key(raw_item)
+            else:
+                if not raw_item or not str(raw_item).strip():
+                    continue
+                normalized = str(raw_item).strip().lower()
+            if not normalized:
+                continue
+            namespaced_key = f"{namespace_prefix}{normalized}"
+
+            # Skip if an active row with this exact (normalized) fact_key already exists
+            existing_result = await db.execute(
+                select(LeadProfileFact).where(
+                    LeadProfileFact.lead_id == lead_id,
+                    LeadProfileFact.fact_key == namespaced_key,
+                    LeadProfileFact.superseded_at == None,  # noqa: E711
+                )
+            )
+            if existing_result.scalar_one_or_none() is not None:
+                continue  # Deduplication: skip existing active row
+
+            # Insert new append-only row
+            db.add(
+                LeadProfileFact(
+                    id=_new_uuid(),
+                    lead_id=lead_id,
+                    fact_key=namespaced_key,
+                    fact_value=normalized,
+                    source_call_id=session_id,
+                )
+            )
+
+
+async def _write_correction_facts(
+    db: AsyncSession,
+    lead_id: str,
+    session_id: str | None,
+    corrections_str: str,
+) -> None:
+    """Write LeadProfileFact rows for each parsed data_correction field.
+
+    Upsert semantics: supersedes any existing active row for the same fact_key
+    when the value changes.  Confidence is implicitly 'high' (explicit correction from GPT).
+
+    Supported fields: car_make, car_model, car_year (same set as _apply_data_corrections).
+
+    Args:
+        db: Active async DB session.
+        lead_id: UUID of the lead.
+        session_id: UUID of the source call session (FK + provenance).
+        corrections_str: Free-text string with 'field: value' per line.
+    """
+    from datetime import datetime, timezone
+
+    if not corrections_str or not corrections_str.strip():
+        return
+
+    _SUPPORTED_FIELDS = {"car_make", "car_model", "car_year"}
+    now = datetime.now(timezone.utc)
+
+    for line in corrections_str.splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        field, _, value = line.partition(":")
+        field = field.strip()
+        value = value.strip()
+
+        if field not in _SUPPORTED_FIELDS or not value:
+            continue
+
+        # Supersede existing active row if value differs
+        existing_result = await db.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == lead_id,
+                LeadProfileFact.fact_key == field,
+                LeadProfileFact.superseded_at == None,  # noqa: E711
+            )
+        )
+        existing = existing_result.scalar_one_or_none()
+
+        if existing is not None:
+            if existing.fact_value == value:
+                continue  # Same value — skip
+            existing.superseded_at = now
+
+        db.add(
+            LeadProfileFact(
+                id=_new_uuid(),
+                lead_id=lead_id,
+                fact_key=field,
+                fact_value=value,
+                source_call_id=session_id,
+            )
+        )
+
+
+def _write_interest_history(
+    db: AsyncSession,
+    lead_id: str,
+    session_id: str | None,
+    facts: dict[str, Any],
+) -> None:
+    """Append a LeadInterestHistory row if interest_level is present in facts.
+
+    Always appends a new row — never updates existing rows (append-only).
+
+    Args:
+        db: Active async DB session.
+        lead_id: UUID of the lead.
+        session_id: UUID of the source call session (for FK + provenance).
+        facts: Extracted facts dict from GPT.
+    """
+    interest_level = facts.get("interest_level")
+    if interest_level is None:
+        return
+
+    # Clamp to 0-100 range (application-layer enforcement per spec)
+    level = max(0, min(100, int(interest_level)))
+
+    db.add(
+        LeadInterestHistory(
+            id=_new_uuid(),
+            lead_id=lead_id,
+            interest_level=level,
+            source_call_id=session_id,
+        )
+    )

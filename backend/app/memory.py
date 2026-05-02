@@ -132,9 +132,18 @@ async def build_memory_context(db: AsyncSession, lead: "Lead") -> MemoryContext:
     sessions = list(sessions_result.scalars().all())
 
     call_history = _format_call_history(sessions, _TZ_BA)
+    # Legacy scalar facts from extracted_facts JSON
     confirmed_facts = _format_confirmed_facts(
         _coerce_extracted_facts(lead.extracted_facts)
     )
+    # Issue #36: Append accumulated relational profile facts (token-budgeted)
+    accumulated_section = await _format_accumulated_profile(db, lead.id)
+    if accumulated_section:
+        if confirmed_facts:
+            confirmed_facts = confirmed_facts + "\n" + accumulated_section
+        else:
+            confirmed_facts = accumulated_section
+
     # REQ-1.5: is_returning_caller is True iff ANY completed session exists,
     # regardless of whether it has a summary.
     is_returning_caller = has_any_completed
@@ -284,15 +293,12 @@ def _format_axis(key: str, axis_dict: dict) -> str:
 
     if key == "call_outcome":
         classification = axis_dict.get("classification", "")
-        quality = axis_dict.get("engagement_quality", "")
         reason = axis_dict.get("reason", "")
-        if classification and quality:
-            core = f"{classification} ({quality} engagement)"
-        elif classification:
-            core = str(classification)
-        else:
-            core = str(quality) if quality else ""
-        return f"{core} — {reason}".strip(" —") if (core and reason) else core or reason
+        confidence = axis_dict.get("confidence", "")
+        core = str(classification) if classification else ""
+        suffix = f" [{confidence}]" if confidence else ""
+        base = f"{core}{suffix}"
+        return f"{base} — {reason}".strip(" —") if (base and reason) else base or reason
 
     if key == "detected_interests":
         products = axis_dict.get("products") or []
@@ -348,3 +354,99 @@ def _coerce_extracted_facts(raw: object) -> dict | None:
         except (json.JSONDecodeError, ValueError):
             return None
     return None
+
+
+# ---------------------------------------------------------------------------
+# Issue #36: Accumulated profile facts from relational tables
+# ---------------------------------------------------------------------------
+
+# Token budget: max 10 items per namespace (AD-3 from design.md)
+_MAX_FACTS_PER_NAMESPACE = 10
+
+# Max interest history points to include in memory context (Issue #36 CRITICAL 1)
+_MAX_INTEREST_HISTORY = 5
+
+# Namespace prefix → Spanish section label
+_NAMESPACE_LABELS: list[tuple[str, str]] = [
+    ("profile:", "Datos personales"),
+    ("pain:", "Puntos de dolor"),
+    ("service_issue:", "Problemas de servicio"),
+    ("signal:", "Señales de compromiso"),
+    ("buying_signal:", "Señales de compra"),
+]
+
+
+async def _format_accumulated_profile(db: AsyncSession, lead_id: str) -> str:
+    """Build a structured string of accumulated LeadProfileFact rows and interest
+    history for this lead.
+
+    Queries active (superseded_at IS NULL) LeadProfileFact rows grouped by namespace.
+    Caps each namespace at _MAX_FACTS_PER_NAMESPACE (token budget, AD-3).
+    Ordered by recorded_at DESC within each namespace.
+
+    Also queries the last _MAX_INTEREST_HISTORY LeadInterestHistory rows (newest first)
+    and formats them as 'Evolución de interés: 75→60→85' (oldest→newest within cap).
+
+    Args:
+        db: Active async DB session.
+        lead_id: UUID of the lead.
+
+    Returns:
+        Multi-line string with grouped facts and interest history,
+        or empty string if no data exists.
+    """
+    from app.leads.models import LeadInterestHistory, LeadProfileFact
+
+    # Query 1: Active profile facts
+    result = await db.execute(
+        select(LeadProfileFact)
+        .where(
+            LeadProfileFact.lead_id == lead_id,
+            LeadProfileFact.superseded_at == None,  # noqa: E711
+        )
+        .order_by(LeadProfileFact.recorded_at.desc())
+    )
+    all_rows = list(result.scalars().all())
+
+    # Query 2: Interest history — last 5, newest first
+    interest_result = await db.execute(
+        select(LeadInterestHistory)
+        .where(LeadInterestHistory.lead_id == lead_id)
+        .order_by(LeadInterestHistory.recorded_at.desc())
+        .limit(_MAX_INTEREST_HISTORY)
+    )
+    interest_rows = list(interest_result.scalars().all())
+
+    if not all_rows and not interest_rows:
+        return ""
+
+    # Group profile fact rows by namespace prefix
+    by_namespace: dict[str, list[str]] = {}
+    for row in all_rows:
+        for prefix, _label in _NAMESPACE_LABELS:
+            if row.fact_key.startswith(prefix):
+                value = row.fact_value or row.fact_key[len(prefix) :]
+                by_namespace.setdefault(prefix, []).append(value)
+                break
+
+    # Build section lines
+    lines: list[str] = []
+
+    if by_namespace:
+        lines.append("--- Perfil acumulado ---")
+        for prefix, label in _NAMESPACE_LABELS:
+            items = by_namespace.get(prefix)
+            if not items:
+                continue
+            # Apply token budget cap
+            capped = items[:_MAX_FACTS_PER_NAMESPACE]
+            lines.append(f"- {label}: {', '.join(capped)}")
+
+    # Append interest evolution line (reverse to oldest→newest order)
+    if interest_rows:
+        # interest_rows is newest-first; reverse to get chronological order
+        chronological = list(reversed(interest_rows))
+        levels = "→".join(str(r.interest_level) for r in chronological)
+        lines.append(f"- Evolución de interés: {levels}")
+
+    return "\n".join(lines) if lines else ""

@@ -633,14 +633,16 @@ async def close_session(
 # ---------------------------------------------------------------------------
 
 
-def _schedule_summarize(session_id: str) -> None:
+def _schedule_summarize(session_id: str, client_id: str | None = None) -> None:
     """Fire-and-forget: schedule summary + fact extraction for a session.
 
     Creates an asyncio background task that opens its own DB session.
+
     MUST NOT be called from outside an async context.
 
     Args:
         session_id: UUID of the call session to summarize.
+        client_id: Unused — accepted for backwards compat with older callers.
     """
     asyncio.create_task(_summarize_in_background(session_id))
 

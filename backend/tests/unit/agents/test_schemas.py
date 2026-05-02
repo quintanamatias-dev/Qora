@@ -38,14 +38,27 @@ def test_agent_create_minimal_valid():
     assert agent.is_default is False
     assert agent.system_prompt is None
     assert agent.knowledge_base is None
-    # tools_enabled default is a list with all 4 tools
+    # tools_enabled default is a list with all registered tools (Issue #36 adds 3 more)
     assert isinstance(agent.tools_enabled, list)
-    assert set(agent.tools_enabled) == {
+    # Must include the original 4 tools
+    expected_original = {
         "get_lead_details",
         "register_interest",
         "mark_not_interested",
         "schedule_followup",
     }
+    assert expected_original.issubset(
+        set(agent.tools_enabled)
+    ), f"Original tools missing from default: {expected_original - set(agent.tools_enabled)}"
+    # Must also include Issue #36 new tools
+    expected_new = {
+        "get_lead_profile",
+        "get_lead_history",
+        "get_lead_pain_points",
+    }
+    assert expected_new.issubset(
+        set(agent.tools_enabled)
+    ), f"New Issue #36 tools missing from default: {expected_new - set(agent.tools_enabled)}"
 
 
 def test_agent_create_custom_values():

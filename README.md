@@ -8,9 +8,9 @@ QORA is a B2B SaaS platform that replaces traditional call center agents with AI
 
 **The core value proposition**: An AI agent that sounds indistinguishable from a human, knows your product, calls your leads, and never burns out.
 
-## Current State — Phase 2 (Memory Loop) ✅
+## Current State — Phase 7 Complete ✅
 
-The agent remembers previous conversations. Cross-call memory is working end-to-end in the browser demo — the agent references prior call summaries, extracted facts, and recognizes returning callers.
+Full client dashboard, CRM, internal admin panel, call scheduler, post-call analysis, agent entity model, and unified design system — all implemented and tested.
 
 ### What works today
 
@@ -25,16 +25,25 @@ The agent remembers previous conversations. Cross-call memory is working end-to-
 | Cross-call memory (summaries + facts) | ✅ Working |
 | Session lifecycle with lead linkage | ✅ Working |
 | Post-call summarization + fact extraction | ✅ Working |
-| Mock CRM with test leads | ✅ Working |
-| Real-time lead status updates | ✅ Working |
-| 342+ passing tests | ✅ |
+| Structured transcript storage (turn-by-turn) | ✅ Working |
+| Base call metrics (count + duration) | ✅ Working |
+| Client dashboard with metrics + period selector | ✅ Working |
+| CRM — lead list, call history, transcript viewer | ✅ Working |
+| CRM — Next Action column (scheduled call visibility) | ✅ Working |
+| Post-call analysis (abandonment, interests, problem detection) | ✅ Working |
+| Call scheduler with configurable retry logic | ✅ Working |
+| Agent entity model (1 client → N agents) | ✅ Working |
+| Internal admin CRUD (clients + agents) | ✅ Working |
+| Unified design system (admin + client dashboard) | ✅ Working |
+| React frontend with TanStack Query | ✅ Working |
+| 718 backend + 402 frontend tests | ✅ |
 
 ### Architecture
 
 ```
-BROWSER (Web Demo)
+BROWSER (Web Demo + Client Dashboard + Admin Panel)
     │
-    │  Native WebSocket
+    │  Native WebSocket (voice) / REST API (dashboard)
     ▼
 ELEVENLABS (Voice Layer)
     • STT — speech to text (~200ms)
@@ -43,7 +52,7 @@ ELEVENLABS (Voice Layer)
     • Turn-taking — manages conversation flow
     │
     │  Custom LLM Webhook (SSE)
-    │  POST /api/v1/clients/{client_id}/voice/custom-llm/chat/completions
+    │  POST /api/v1/clients/{client_id}/voice/{agent_id}/chat/completions
     ▼
 OUR BACKEND (Intelligence Layer — FastAPI)
     • GPT-4o — conversation brain
@@ -52,7 +61,10 @@ OUR BACKEND (Intelligence Layer — FastAPI)
     • Memory builder — prior call summaries + extracted facts
     • Session lifecycle — lead linkage + reconciliation
     • Summarizer — post-call summary + fact extraction
+    • Post-call analysis — abandonment, interests, problem detection
     • Multi-tenant routing — per-client isolation
+    • Agent entity model — 1 client → N agents
+    • Call scheduler — agenda with configurable retry logic
     • Tool calls — register_interest, mark_not_interested, schedule_followup
     │
     ▼
@@ -60,6 +72,9 @@ SQLITE (Data Layer)
     • Leads with state machine (new → called → interested → not_interested)
     • Call sessions with lead_id + conversation_id linkage
     • Per-session summaries and extracted facts (JSON)
+    • Per-session call analysis (structured JSON)
+    • Scheduled calls with retry configuration
+    • Agents (per-client, with own config)
     • Per-client tenant config
 ```
 
@@ -87,21 +102,38 @@ Qora/
 │   │   ├── prompts/            # System prompt + template renderer
 │   │   ├── leads/              # Lead model + state machine
 │   │   ├── tenants/            # Multi-tenant config (clients)
+│   │   ├── clients/            # Client CRUD API
+│   │   ├── agents/             # Agent entity model + CRUD API
 │   │   ├── calls/              # Call sessions, lifecycle, /end endpoint
+│   │   ├── scheduler/          # Call scheduler + retry logic
 │   │   ├── tools/              # Agent tools (register_interest, etc.)
+│   │   ├── ai/                 # LLM client + streaming
 │   │   ├── memory.py           # Shared memory context builder
 │   │   ├── summarizer.py       # Post-call summary + fact extraction
+│   │   ├── analysis_schema.py  # Post-call analysis schema
 │   │   ├── sweeper.py          # Stale session cleanup
 │   │   └── static/             # Web demo frontend (index.html)
 │   ├── clients/                # Per-client prompt templates
 │   │   └── quintana-seguros/   # Pilot client
-│   ├── tests/                  # 342+ tests (unit + integration)
+│   ├── tests/                  # 718 backend tests (unit + integration)
 │   ├── scripts/                # Migration and inspection scripts
 │   ├── pyproject.toml
 │   ├── .env.example
 │   └── README.md               # Backend setup guide
+├── frontend/                   # React client dashboard + admin panel
+│   ├── src/
+│   │   ├── design/             # Design system (tokens, components)
+│   │   ├── features/
+│   │   │   ├── dashboard/      # Client metrics dashboard
+│   │   │   ├── leads/          # CRM — lead list, detail, transcript viewer
+│   │   │   ├── admin/          # Internal admin (clients + agents CRUD)
+│   │   │   └── import/         # Lead import
+│   │   ├── api/                # TanStack Query hooks + API layer
+│   │   └── router.tsx          # App routing
+│   └── tests/                  # 402 frontend tests
 ├── docs/
 │   ├── architecture.md         # Detailed system architecture
+│   ├── DESIGN.md               # Design system specification
 │   ├── running-locally.md      # Step-by-step local setup
 │   ├── elevenlabs-setup.md     # ElevenLabs config + session continuity
 │   └── elevenlabs-reference.md # ElevenLabs API reference
@@ -125,28 +157,59 @@ Per-client configuration, tenant routing, data isolation.
 ### ✅ Phase 2 — Memory Loop (complete)
 Cross-call memory: session continuity, tenant resolution, memory injection into prompt. Agent remembers previous conversations.
 
-### 🔲 Phase 3 — Call Analytics + Client Dashboard
-- Post-call analysis automation (conversation insights, duration metrics, abandonment reasons)
-- Client-facing dashboard (agent metrics, call history, basic CRM)
-- Internal admin panel for agent configuration
-- Multi-agent concurrency (multiple agents running simultaneously per client)
+### ✅ Phase 3 — Transcripts + Base Metrics (complete)
+Structured transcript storage (turn-by-turn). Base call metrics (count + duration).
 
-### 🔲 Phase 4 — Real Phone Calls
-- Deploy to server (Railway/Render)
-- Twilio integration for outbound calls
-- Public webhook URLs (no more ngrok)
+### ✅ Phase 4 — Client Interface v1 + CRM (complete)
+Client web app scaffold. Dashboard with call metrics view. Basic CRM — lead list, call history, transcript viewer.
 
-### 🔲 Phase 5 — Sellable Product
-- Per-minute billing tracking
-- Client onboarding flow
-- Real CRM integrations (replacing mock CRM)
-- Hume AI sentiment analysis
+### ✅ Phase 5 — Post-Call Analysis (complete)
+Post-call analysis automation (abandonment detection, interest extraction, problem identification). Session reconciliation. Cross-call memory bugfixes.
+
+### ✅ Phase 6 — Call Scheduler (complete)
+Agenda system with configurable retry logic. Schedule follow-up calls from within conversations.
+
+### ✅ Phase 7 — Internal Admin + Multi-Agent (complete)
+Agent entity model (1 client → N agents). Internal admin CRUD for clients and agents. CRM Next Action column with scheduled call visibility. Admin panel unified with client dashboard design system.
+
+### 🔲 Phase 8 — Real Telephony
+- Deploy to Railway/Render + public webhooks ([#11](../../issues/11))
+- Twilio outbound call integration ([#12](../../issues/12))
+
+### 🔲 Phase 9 — Sellable Product
+- Lead import via CSV ([#6](../../issues/6))
+- Auth (JWT) + per-minute billing ([#13](../../issues/13))
+- Real CRM integrations ([#14](../../issues/14))
+- Hume AI sentiment analysis ([#15](../../issues/15))
+
+### 🔄 In Progress — Post-Call Analysis v2
+- Rethink analysis pipeline for maximum business value ([#33](../../issues/33))
+- Per-dimension analysis: each axis owns its prompt + schema + GPT call,
+  fanned out in parallel via `asyncio.gather` from the summarizer
+- Multi-level analysis: per-call → per-lead → per-company
+
+> **Note about n8n.** The analysis pipeline is now fully Python-native. The
+> exported workflow under `docs/n8n-workflows/` and `docker-compose.n8n-local.yml`
+> are kept as static modeling/diagramming references only — they are not part
+> of the runtime path.
 
 ---
 
 ## Quick Start
 
 See [`docs/running-locally.md`](docs/running-locally.md) for full setup.
+
+Once dependencies and environment variables are configured, start the whole local stack with one command from the repository root:
+
+```bash
+./Qora
+```
+
+This starts:
+- Backend: `http://localhost:8000`
+- ngrok tunnel to the backend for ElevenLabs webhooks
+- Frontend: `http://localhost:5173`
+- Voice demo: `http://localhost:8000/demo/`
 
 **TL;DR:**
 
@@ -166,10 +229,10 @@ uvicorn app.main:app --reload
 open http://localhost:8000/demo/
 ```
 
-For ElevenLabs to reach your local webhook, you also need ngrok:
+For ElevenLabs to reach your local webhook, `Qora` starts ngrok automatically:
 ```bash
-ngrok http 8000
-# Set the ngrok URL as Custom LLM URL in your ElevenLabs agent dashboard
+Qora
+# Copy the ngrok HTTPS forwarding URL into your ElevenLabs agent dashboard
 ```
 
 ---
@@ -179,12 +242,14 @@ ngrok http 8000
 | Layer | Technology |
 |-------|-----------|
 | Backend | Python 3.11 + FastAPI |
+| Frontend | React + TypeScript + TanStack Query + Vite |
 | LLM | OpenAI GPT-4o |
 | Voice | ElevenLabs Conversational AI |
-| Database | SQLite (→ PostgreSQL in Phase 4) |
-| Testing | pytest + pytest-asyncio (342+ tests) |
-| Telephony | Twilio (Phase 4+) |
-| Deploy | Railway/Render (Phase 4+) |
+| Database | SQLite (→ PostgreSQL in Phase 8) |
+| Design System | Custom tokens + component library |
+| Testing | pytest (718 tests) + Vitest (402 tests) |
+| Telephony | Twilio (Phase 8+) |
+| Deploy | Railway/Render (Phase 8+) |
 
 ---
 

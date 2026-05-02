@@ -1,0 +1,296 @@
+{
+  "name": "QORA — Post-Call Analysis Pipeline",
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "qora-post-call-analysis",
+        "responseMode": "onReceived",
+        "responseData": "firstEntryJson"
+      },
+      "notes": "Entry point — receives {session_id, client_id, timestamp} from QORA backend. Verify X-Webhook-Signature header against HMAC-SHA256(N8N_WEBHOOK_SECRET, body)."
+    },
+    {
+      "id": "2",
+      "name": "Fetch Transcript",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.QORA_BACKEND_URL }}/api/v1/internal/transcript/{{ $json.session_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-Secret",
+              "value": "={{ $env.QORA_INTERNAL_SECRET }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "notes": "Fetches formatted transcript text from QORA internal API. Returns plain text with 'role: content' lines."
+    },
+    {
+      "id": "3",
+      "name": "Fetch Extraction Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [680, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.QORA_BACKEND_URL }}/api/v1/internal/extraction-config/{{ $('Webhook Trigger').item.json.client_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-Secret",
+              "value": "={{ $env.QORA_INTERNAL_SECRET }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "notes": "Fetches client extraction config (system_prompt + response_schema). Returns {client_id, system_prompt, response_schema}."
+    },
+    {
+      "id": "4",
+      "name": "Assemble Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300],
+      "parameters": {
+        "jsCode": "// Assemble the GPT analysis prompt from transcript + extraction config\nconst transcript = $('Fetch Transcript').item.json.body || $('Fetch Transcript').item.json;\nconst systemPrompt = $('Fetch Extraction Config').item.json.system_prompt;\nconst sessionId = $('Webhook Trigger').item.json.session_id;\nconst clientId = $('Webhook Trigger').item.json.client_id;\n\nreturn [{\n  json: {\n    session_id: sessionId,\n    client_id: clientId,\n    system_prompt: systemPrompt,\n    user_message: `Transcript:\\n\\n${transcript}`,\n    transcript_length: (typeof transcript === 'string' ? transcript : JSON.stringify(transcript)).length\n  }\n}];"
+      },
+      "notes": "Code node: combines transcript and system prompt into GPT request format. Runs synchronously — no I/O."
+    },
+    {
+      "id": "5",
+      "name": "OpenAI GPT Analysis",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1.8,
+      "position": [1120, 300],
+      "parameters": {
+        "resource": "chat",
+        "operation": "message",
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list"
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "={{ $json.system_prompt }}"
+            },
+            {
+              "role": "user",
+              "content": "={{ $json.user_message }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.2,
+          "maxTokens": 1024,
+          "responseFormat": "json_object"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "continueOnFail": true,
+      "notes": "GPT-4o-mini structured output. Retries up to 2 times on failure (maxTries=3: 1 initial + 2 retries). continueOnFail=true routes to error branch after all retries fail."
+    },
+    {
+      "id": "6",
+      "name": "Parse GPT Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300],
+      "parameters": {
+        "jsCode": "// Parse GPT response and build callback payload\nconst gptResponse = $input.item.json.message?.content || $input.item.json.choices?.[0]?.message?.content || '';\nconst sessionId = $('Assemble Prompt').item.json.session_id;\n\n// Check for n8n error (continueOnFail=true passes error as json.error)\nif ($input.item.json.error) {\n  return [{\n    json: {\n      _gpt_failed: true,\n      session_id: sessionId,\n      error: `GPT analysis failed: ${JSON.stringify($input.item.json.error)}`\n    }\n  }];\n}\n\nlet facts = {};\nlet summary = '';\nlet parseFailed = false;\nlet parseError = null;\n\ntry {\n  const parsed = typeof gptResponse === 'string' ? JSON.parse(gptResponse) : gptResponse;\n  summary = parsed.summary || '';\n  const { summary: _s, ...rest } = parsed;\n  facts = rest;\n} catch (e) {\n  parseFailed = true;\n  parseError = `Failed to parse GPT response: ${e.message}`;\n}\n\nif (parseFailed) {\n  return [{\n    json: {\n      _gpt_failed: true,\n      session_id: sessionId,\n      error: parseError\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    _gpt_failed: false,\n    session_id: sessionId,\n    summary,\n    facts\n  }\n}];"
+      },
+      "notes": "Parses GPT JSON response. Sets _gpt_failed=true on error, routes to failure branch. On success builds {session_id, summary, facts}."
+    },
+    {
+      "id": "7",
+      "name": "Check GPT Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1560, 300],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json._gpt_failed }}",
+              "value2": false
+            }
+          ]
+        }
+      },
+      "notes": "Routes to success callback (true) or failure notification (false)."
+    },
+    {
+      "id": "8",
+      "name": "Post Analysis Result Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1780, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.QORA_BACKEND_URL }}/api/v1/internal/analysis-result",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-Secret",
+              "value": "={{ $env.QORA_INTERNAL_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "={{ JSON.stringify({session_id: $json.session_id, summary: $json.summary, facts: $json.facts}) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "notes": "Posts spec-compliant payload {session_id, summary, facts} to QORA internal API. QORA persists result and runs verification comparison."
+    },
+    {
+      "id": "9",
+      "name": "Log GPT Failure",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1780, 420],
+      "parameters": {},
+      "notes": "Failure notification: reached when GPT analysis fails after all retries (2 retries per maxTries=3). Records failure event in n8n execution history. session_id and error detail are available in $json."
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Transcript": {
+      "main": [
+        [
+          {
+            "node": "Fetch Extraction Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Extraction Config": {
+      "main": [
+        [
+          {
+            "node": "Assemble Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble Prompt": {
+      "main": [
+        [
+          {
+            "node": "OpenAI GPT Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI GPT Analysis": {
+      "main": [
+        [
+          {
+            "node": "Parse GPT Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse GPT Response": {
+      "main": [
+        [
+          {
+            "node": "Check GPT Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check GPT Success": {
+      "main": [
+        [
+          {
+            "node": "Post Analysis Result Callback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log GPT Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "description": "QORA post-call analysis pipeline. Triggered by QORA backend when a call ends. Fetches transcript + config, calls GPT-4o-mini with up to 2 retries, posts results back to QORA callback endpoint or logs failure.",
+    "version": "2.0.0",
+    "requiredEnvVars": [
+      "QORA_BACKEND_URL — base URL of the QORA backend (e.g. https://api.qora.example.com)",
+      "QORA_INTERNAL_SECRET — matches INTERNAL_API_SECRET in QORA .env (header: X-Internal-Secret)",
+      "OPENAI_API_KEY — for the OpenAI node credential"
+    ],
+    "authContract": {
+      "inbound": "X-Webhook-Signature: hmac-sha256(N8N_WEBHOOK_SECRET, body) — verify in webhook node",
+      "outbound": "X-Internal-Secret: <QORA_INTERNAL_SECRET> — all QORA internal API calls"
+    },
+    "retryStrategy": "Built-in n8n retry on OpenAI node: maxTries=3 (1 initial + 2 retries). continueOnFail=true routes to 'Log GPT Failure' node after all retries exhausted.",
+    "callbackContract": "POST /api/v1/internal/analysis-result with {session_id, summary, facts} — spec-compliant, no 'status' field",
+    "notes": "Import this JSON into n8n via Settings > Import Workflow. Set QORA_INTERNAL_SECRET env var and configure OpenAI node credential."
+  }
+}

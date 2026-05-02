@@ -132,6 +132,12 @@ class Client(Base):
         String, nullable=False, default="America/Argentina/Buenos_Aires"
     )
 
+    # Issue #35 — Per-client extraction configuration (JSON stored as Text, nullable)
+    # NULL = use base config + generic prompt (backward compat)
+    extraction_config: Mapped[str | None] = mapped_column(
+        Text, nullable=True, default=None
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )

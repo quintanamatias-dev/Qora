@@ -12,6 +12,12 @@ import { fetchMetrics, fetchCallSessions, fetchTranscript } from './calls'
 import { fetchLeads, fetchLead } from './leads'
 import { fetchClient, fetchClients, createClient, updateClient, deactivateClient } from './clients'
 import { fetchAgents, createAgent, updateAgent, deactivateAgent, makeAgentDefault } from './agents'
+import {
+  fetchAnalyticsOverview,
+  fetchAnalyticsServiceIssues,
+  fetchAnalyticsInterests,
+  fetchAnalyticsAgentStats,
+} from './analytics'
 import type {
   CallMetricsResponse,
   Lead,
@@ -23,6 +29,11 @@ import type {
   UpdateClientPayload,
   CreateAgentPayload,
   UpdateAgentPayload,
+  AnalyticsParams,
+  AnalyticsOverviewResponse,
+  AnalyticsServiceIssuesResponse,
+  AnalyticsInterestsResponse,
+  AnalyticsAgentStatsResponse,
 } from './types'
 
 interface MetricsParams {
@@ -230,5 +241,65 @@ export function useMakeAgentDefault(clientId: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agents', clientId] })
     },
+  })
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Analytics Query Hooks
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * useAnalyticsOverview — fetches overview metrics for a client
+ * queryKey: ['analytics-overview', clientId, params]
+ * Disabled when clientId is empty/undefined.
+ */
+export function useAnalyticsOverview(clientId: string, params: AnalyticsParams) {
+  return useQuery<AnalyticsOverviewResponse>({
+    queryKey: ['analytics-overview', clientId, params],
+    queryFn: () => fetchAnalyticsOverview(clientId, params),
+    enabled: Boolean(clientId),
+    staleTime: 60_000,
+  })
+}
+
+/**
+ * useAnalyticsServiceIssues — fetches ranked service issues for a client
+ * queryKey: ['analytics-service-issues', clientId, params]
+ * Disabled when clientId is empty/undefined.
+ */
+export function useAnalyticsServiceIssues(clientId: string, params: AnalyticsParams) {
+  return useQuery<AnalyticsServiceIssuesResponse>({
+    queryKey: ['analytics-service-issues', clientId, params],
+    queryFn: () => fetchAnalyticsServiceIssues(clientId, params),
+    enabled: Boolean(clientId),
+    staleTime: 60_000,
+  })
+}
+
+/**
+ * useAnalyticsInterests — fetches top interests with trends for a client
+ * queryKey: ['analytics-interests', clientId, params]
+ * Disabled when clientId is empty/undefined.
+ */
+export function useAnalyticsInterests(clientId: string, params: AnalyticsParams) {
+  return useQuery<AnalyticsInterestsResponse>({
+    queryKey: ['analytics-interests', clientId, params],
+    queryFn: () => fetchAnalyticsInterests(clientId, params),
+    enabled: Boolean(clientId),
+    staleTime: 60_000,
+  })
+}
+
+/**
+ * useAnalyticsAgentStats — fetches per-agent statistics for a client
+ * queryKey: ['analytics-agent-stats', clientId, params]
+ * Disabled when clientId is empty/undefined.
+ */
+export function useAnalyticsAgentStats(clientId: string, params: AnalyticsParams) {
+  return useQuery<AnalyticsAgentStatsResponse>({
+    queryKey: ['analytics-agent-stats', clientId, params],
+    queryFn: () => fetchAnalyticsAgentStats(clientId, params),
+    enabled: Boolean(clientId),
+    staleTime: 60_000,
   })
 }

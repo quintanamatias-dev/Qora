@@ -1,11 +1,14 @@
 """Unit tests for analysis_schema.py — standalone, zero app imports.
 
-TDD: RED phase — written before analysis_schema.py exists.
-Spec: sdd/qora-post-call-analysis/spec — Requirement: Analysis Schema Module
+TDD: RED phase updated for qora-outcome (Issue #50).
+Spec: sdd/qora-outcome/spec — Requirement: Call Outcome Classification Schema
 
 These tests verify:
 - analysis_schema is importable without any app context
 - All models instantiate with valid data
+- CallOutcome uses 11 Literal classifications + confidence: Literal["low","medium","high"]
+- engagement_quality field MUST NOT exist
+- OutcomeClassification/EngagementQuality enums MUST NOT be importable
 - Enums reject invalid values (ValidationError)
 - PostCallAnalysis generates a valid JSON schema
 - Defaults work: empty lists for DetectedInterests fields
@@ -31,117 +34,308 @@ def test_analysis_schema_importable_standalone():
     assert hasattr(mod, "CallOutcome")
     assert hasattr(mod, "DetectedInterests")
     assert hasattr(mod, "IdentifiedProblem")
-    assert hasattr(mod, "OutcomeClassification")
-    assert hasattr(mod, "EngagementQuality")
+    # OutcomeClassification and EngagementQuality MUST NOT be exported post-outcome
+    assert not hasattr(mod, "OutcomeClassification"), (
+        "OutcomeClassification must be removed from analysis_schema exports (qora-outcome spec)"
+    )
+    assert not hasattr(mod, "EngagementQuality"), (
+        "EngagementQuality must be removed from analysis_schema exports (qora-outcome spec)"
+    )
     assert hasattr(mod, "Urgency")
-    assert hasattr(mod, "ANALYSIS_SYSTEM_PROMPT")
 
 
 def test_analysis_schema_no_app_imports():
-    """analysis_schema module only imports pydantic and enum — no app.* dependencies."""
+    """app.analysis package only imports pydantic and enum — no foreign app dependencies.
+
+    The schema lives in ``app/analysis/`` (split into enums, schema, universal/).
+    Internal cross-imports between these submodules are allowed; what must stay
+    forbidden is FastAPI, SQLAlchemy, structlog, or any non-analysis ``app.*``
+    module so the package remains copy-pastable into other runtimes.
+    """
     import ast
     import pathlib
 
-    schema_path = (
-        pathlib.Path(__file__).parent.parent.parent / "app" / "analysis_schema.py"
+    package_root = (
+        pathlib.Path(__file__).parent.parent.parent / "app" / "analysis"
     )
-    source = schema_path.read_text()
+    forbidden_prefixes = ("fastapi", "sqlalchemy", "structlog")
+    allowed_app_prefix = "app.analysis"
+
+    for py_file in package_root.rglob("*.py"):
+        source = py_file.read_text()
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                module_name = ""
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    module_name = node.module
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        module_name = alias.name
+                for prefix in forbidden_prefixes:
+                    assert not module_name.startswith(prefix), (
+                        f"{py_file} must not import '{module_name}' — "
+                        f"found forbidden prefix '{prefix}'"
+                    )
+                if module_name.startswith("app.") and not module_name.startswith(
+                    allowed_app_prefix
+                ):
+                    raise AssertionError(
+                        f"{py_file} must not import '{module_name}' — only "
+                        f"'app.analysis.*' internal imports are permitted"
+                    )
+
+
+# ---------------------------------------------------------------------------
+# Scenario: CallOutcome — 11-classification system (qora-outcome spec)
+# ---------------------------------------------------------------------------
+
+_VALID_11_CLASSIFICATIONS = [
+    "no_answer",
+    "busy",
+    "callback_requested",
+    "completed_positive",
+    "completed_neutral",
+    "completed_negative",
+    "do_not_contact",
+    "wrong_number",
+    "hostile",
+    "confused",
+    "technical_issue",
+]
+
+
+@pytest.mark.parametrize("classification", _VALID_11_CLASSIFICATIONS)
+def test_call_outcome_accepts_all_11_classifications(classification):
+    """CallOutcome accepts each of the 11 valid Literal classification values."""
+    from app.analysis_schema import CallOutcome
+
+    outcome = CallOutcome(
+        classification=classification,
+        reason=f"Test reason for {classification}",
+        confidence="medium",
+    )
+    assert outcome.classification == classification
+    assert outcome.confidence == "medium"
+    # engagement_quality must NOT exist
+    assert not hasattr(outcome, "engagement_quality"), (
+        "engagement_quality must be removed from CallOutcome (qora-outcome spec)"
+    )
+
+
+@pytest.mark.parametrize("confidence", ["low", "medium", "high"])
+def test_call_outcome_accepts_all_confidence_levels(confidence):
+    """CallOutcome accepts confidence: 'low', 'medium', 'high'."""
+    from app.analysis_schema import CallOutcome
+
+    outcome = CallOutcome(
+        classification="completed_positive",
+        reason="Lead agreed to purchase.",
+        confidence=confidence,
+    )
+    assert outcome.confidence == confidence
+
+
+def test_call_outcome_rejects_old_classification_interested():
+    """CallOutcome raises ValidationError for legacy 'interested' classification."""
+    from pydantic import ValidationError
+    from app.analysis_schema import CallOutcome
+
+    with pytest.raises(ValidationError):
+        CallOutcome(
+            classification="interested",  # OLD value — must be rejected
+            reason="Some reason.",
+            confidence="medium",
+        )
+
+
+def test_call_outcome_rejects_old_classification_follow_up():
+    """CallOutcome raises ValidationError for legacy 'follow_up' classification."""
+    from pydantic import ValidationError
+    from app.analysis_schema import CallOutcome
+
+    with pytest.raises(ValidationError):
+        CallOutcome(
+            classification="follow_up",  # OLD value — must be rejected
+            reason="Some reason.",
+            confidence="low",
+        )
+
+
+def test_call_outcome_rejects_invalid_classification():
+    """CallOutcome raises ValidationError when classification is not in 11 valid values."""
+    from pydantic import ValidationError
+    from app.analysis_schema import CallOutcome
+
+    with pytest.raises(ValidationError):
+        CallOutcome(
+            classification="very_interested",  # NOT a valid value
+            reason="Some reason.",
+            confidence="high",
+        )
+
+
+def test_call_outcome_rejects_invalid_confidence():
+    """CallOutcome raises ValidationError when confidence is not low/medium/high."""
+    from pydantic import ValidationError
+    from app.analysis_schema import CallOutcome
+
+    with pytest.raises(ValidationError):
+        CallOutcome(
+            classification="busy",
+            reason="Lead was busy.",
+            confidence="extreme",  # NOT valid
+        )
+
+
+def test_call_outcome_no_engagement_quality_field():
+    """CallOutcome must NOT have an engagement_quality field."""
+    from app.analysis_schema import CallOutcome
+
+    outcome = CallOutcome(
+        classification="no_answer",
+        reason="No answer.",
+        confidence="low",
+    )
+    assert not hasattr(outcome, "engagement_quality"), (
+        "engagement_quality must NOT exist on CallOutcome (qora-outcome spec)"
+    )
+    # Also verify model fields don't include engagement_quality
+    assert "engagement_quality" not in CallOutcome.model_fields
+
+
+def test_call_outcome_rejects_engagement_quality_as_extra_field():
+    """CallOutcome raises ValidationError or ignores engagement_quality (not stored)."""
+    from app.analysis_schema import CallOutcome
+
+    # Pydantic v2 by default ignores extra fields — confirm it doesn't store it
+    outcome = CallOutcome(
+        classification="busy",
+        reason="Lead was driving.",
+        confidence="low",
+        engagement_quality="high",  # should be ignored or rejected
+    )
+    assert not hasattr(outcome, "engagement_quality")
+
+
+# ---------------------------------------------------------------------------
+# Scenario: OutcomeClassification and EngagementQuality enums must NOT exist
+# ---------------------------------------------------------------------------
+
+
+def test_outcome_classification_enum_removed_from_enums():
+    """OutcomeClassification class must NOT exist in enums.py (qora-outcome spec)."""
+    import app.analysis.enums as enums_mod
+
+    assert not hasattr(enums_mod, "OutcomeClassification"), (
+        "OutcomeClassification must be deleted from enums.py (qora-outcome spec)"
+    )
+
+
+def test_engagement_quality_enum_removed_from_enums():
+    """EngagementQuality class must NOT exist in enums.py (qora-outcome spec)."""
+    import app.analysis.enums as enums_mod
+
+    assert not hasattr(enums_mod, "EngagementQuality"), (
+        "EngagementQuality must be deleted from enums.py (qora-outcome spec)"
+    )
+
+
+def test_outcome_classification_not_importable_from_analysis():
+    """OutcomeClassification must NOT be importable from app.analysis (qora-outcome spec)."""
+    import app.analysis as analysis_pkg
+
+    assert not hasattr(analysis_pkg, "OutcomeClassification"), (
+        "OutcomeClassification must be removed from app.analysis exports"
+    )
+
+
+def test_engagement_quality_not_importable_from_analysis():
+    """EngagementQuality must NOT be importable from app.analysis (qora-outcome spec)."""
+    import app.analysis as analysis_pkg
+
+    assert not hasattr(analysis_pkg, "EngagementQuality"), (
+        "EngagementQuality must be removed from app.analysis exports"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Scenario: outcome.py imports — no enums.py references
+# ---------------------------------------------------------------------------
+
+
+def test_outcome_py_does_not_import_from_enums():
+    """outcome.py must NOT import OutcomeClassification or EngagementQuality from enums."""
+    import ast
+    import pathlib
+
+    outcome_path = (
+        pathlib.Path(__file__).parent.parent.parent
+        / "app" / "analysis" / "universal" / "outcome.py"
+    )
+    source = outcome_path.read_text()
     tree = ast.parse(source)
 
-    forbidden_prefixes = ("app.", "fastapi", "sqlalchemy", "structlog")
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            module_name = ""
-            if isinstance(node, ast.ImportFrom) and node.module:
-                module_name = node.module
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    module_name = alias.name
-            for prefix in forbidden_prefixes:
-                assert not module_name.startswith(prefix), (
-                    f"analysis_schema.py must not import '{module_name}' — "
-                    f"found forbidden prefix '{prefix}'"
+        if isinstance(node, ast.ImportFrom) and node.module:
+            if "enums" in node.module:
+                imported_names = [alias.name for alias in node.names]
+                assert "OutcomeClassification" not in imported_names, (
+                    "outcome.py must NOT import OutcomeClassification from enums"
+                )
+                assert "EngagementQuality" not in imported_names, (
+                    "outcome.py must NOT import EngagementQuality from enums"
                 )
 
 
 # ---------------------------------------------------------------------------
-# Scenario: CallOutcome — valid instantiation
+# Scenario: Default factory — _default_call_outcome()
 # ---------------------------------------------------------------------------
 
 
-def test_call_outcome_valid():
-    """CallOutcome model accepts valid enum values and fields."""
-    from app.analysis_schema import (
-        CallOutcome,
-        OutcomeClassification,
-        EngagementQuality,
-    )
+def test_default_call_outcome_returns_no_answer_with_low_confidence():
+    """_default_call_outcome() returns classification='no_answer' and confidence='low'."""
+    from app.analysis.schema import _default_call_outcome
 
-    outcome = CallOutcome(
-        classification=OutcomeClassification.interested,
-        reason="Lead was enthusiastic about todo riesgo coverage.",
-        engagement_quality=EngagementQuality.high,
-    )
-    assert outcome.classification == OutcomeClassification.interested
-    assert outcome.reason == "Lead was enthusiastic about todo riesgo coverage."
-    assert outcome.engagement_quality == EngagementQuality.high
+    outcome = _default_call_outcome()
+    assert outcome.classification == "no_answer"
+    assert outcome.confidence == "low"
+    assert outcome.reason  # non-empty
+    assert not hasattr(outcome, "engagement_quality")
 
 
-def test_call_outcome_string_enum_values():
-    """CallOutcome accepts string versions of enum values (Pydantic v2 coercion)."""
-    from app.analysis_schema import CallOutcome
+def test_default_call_outcome_no_engagement_quality():
+    """_default_call_outcome() must NOT set engagement_quality."""
+    from app.analysis.schema import _default_call_outcome, CallOutcome
 
-    outcome = CallOutcome(
-        classification="not_interested",
-        reason="Lead already has insurance.",
-        engagement_quality="low",
-    )
-    assert outcome.classification.value == "not_interested"
-    assert outcome.engagement_quality.value == "low"
+    _default_call_outcome()  # ensure it doesn't raise
+    assert "engagement_quality" not in CallOutcome.model_fields
 
 
 # ---------------------------------------------------------------------------
-# Scenario: Schema rejects invalid enum values
+# Scenario: outcome.py DIMENSION prompt — 11 classifications + no engagement_quality
 # ---------------------------------------------------------------------------
 
 
-def test_call_outcome_rejects_invalid_classification():
-    """CallOutcome raises ValidationError when classification is invalid."""
-    from pydantic import ValidationError
-    from app.analysis_schema import CallOutcome
+def test_outcome_dimension_prompt_includes_all_11_classifications():
+    """DIMENSION['prompt'] in outcome.py must mention all 11 classification strings."""
+    from app.analysis.universal import outcome as outcome_mod
 
-    with pytest.raises(ValidationError):
-        CallOutcome(
-            classification="very_interested",  # NOT a valid enum value
-            reason="Some reason.",
-            engagement_quality="high",
+    prompt = outcome_mod.DIMENSION["prompt"]
+    for classification in _VALID_11_CLASSIFICATIONS:
+        assert classification in prompt, (
+            f"outcome.py DIMENSION prompt missing classification: {classification}"
         )
 
 
-def test_call_outcome_rejects_invalid_engagement_quality():
-    """CallOutcome raises ValidationError when engagement_quality is invalid."""
-    from pydantic import ValidationError
-    from app.analysis_schema import CallOutcome
+def test_outcome_dimension_prompt_no_engagement_quality():
+    """DIMENSION['prompt'] must NOT mention engagement_quality."""
+    from app.analysis.universal import outcome as outcome_mod
 
-    with pytest.raises(ValidationError):
-        CallOutcome(
-            classification="interested",
-            reason="Some reason.",
-            engagement_quality="extreme",  # NOT a valid enum value
-        )
-
-
-def test_identified_problem_rejects_invalid_urgency():
-    """IdentifiedProblem raises ValidationError when urgency is invalid."""
-    from pydantic import ValidationError
-    from app.analysis_schema import IdentifiedProblem
-
-    with pytest.raises(ValidationError):
-        IdentifiedProblem(
-            primary_need="Needs coverage for new car.",
-            pain_points=["no coverage"],
-            urgency="critical",  # NOT a valid enum value
-        )
+    prompt = outcome_mod.DIMENSION["prompt"]
+    assert "engagement_quality" not in prompt, (
+        "outcome.py DIMENSION prompt must not reference engagement_quality (qora-outcome spec)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +397,19 @@ def test_identified_problem_pain_points_defaults_empty():
     assert problem.pain_points == []
 
 
+def test_identified_problem_rejects_invalid_urgency():
+    """IdentifiedProblem raises ValidationError when urgency is invalid."""
+    from pydantic import ValidationError
+    from app.analysis_schema import IdentifiedProblem
+
+    with pytest.raises(ValidationError):
+        IdentifiedProblem(
+            primary_need="Needs coverage for new car.",
+            pain_points=["no coverage"],
+            urgency="critical",  # NOT a valid enum value
+        )
+
+
 # ---------------------------------------------------------------------------
 # Scenario: PostCallAnalysis — full schema generation
 # ---------------------------------------------------------------------------
@@ -219,7 +426,6 @@ def test_post_call_analysis_json_schema_contains_required_keys():
     assert "summary" in properties
     assert "objections" in properties
     assert "interest_level" in properties
-    assert "current_insurance" in properties
     assert "next_action_suggested" in properties
     assert "misc_notes" in properties
 
@@ -236,8 +442,6 @@ def test_post_call_analysis_valid_full_instance():
         CallOutcome,
         DetectedInterests,
         IdentifiedProblem,
-        OutcomeClassification,
-        EngagementQuality,
         Urgency,
     )
 
@@ -249,9 +453,9 @@ def test_post_call_analysis_valid_full_instance():
         next_action_suggested="send_quote",
         misc_notes="Car year: 2022",
         call_outcome=CallOutcome(
-            classification=OutcomeClassification.interested,
+            classification="completed_positive",
             reason="Lead requested a quote.",
-            engagement_quality=EngagementQuality.high,
+            confidence="high",
         ),
         detected_interests=DetectedInterests(
             products=["todo_riesgo"],
@@ -267,7 +471,7 @@ def test_post_call_analysis_valid_full_instance():
 
     assert analysis.summary == "Lead was very interested in todo riesgo coverage."
     assert analysis.interest_level == 85
-    assert analysis.call_outcome.classification == OutcomeClassification.interested
+    assert analysis.call_outcome.classification == "completed_positive"
     assert analysis.detected_interests.products == ["todo_riesgo"]
     assert analysis.identified_problem.urgency == Urgency.high
 
@@ -291,7 +495,7 @@ def test_post_call_analysis_model_dump_contains_axes():
         call_outcome=CallOutcome(
             classification="busy",
             reason="Lead was driving.",
-            engagement_quality="none",
+            confidence="low",
         ),
         detected_interests=DetectedInterests(),
         identified_problem=IdentifiedProblem(
@@ -307,61 +511,30 @@ def test_post_call_analysis_model_dump_contains_axes():
     # call_outcome is a nested dict
     assert dumped["call_outcome"]["classification"] == "busy"
     assert dumped["identified_problem"]["urgency"] == "low"
+    # engagement_quality must NOT be in dumped call_outcome
+    assert "engagement_quality" not in dumped["call_outcome"]
 
 
 # ---------------------------------------------------------------------------
-# Scenario: ANALYSIS_SYSTEM_PROMPT is non-empty string
+# Scenario: Edge cases — defaults, extra fields, model_config
 # ---------------------------------------------------------------------------
 
 
-def test_analysis_system_prompt_is_non_empty_string():
-    """ANALYSIS_SYSTEM_PROMPT is a non-empty string."""
-    from app.analysis_schema import ANALYSIS_SYSTEM_PROMPT
+def test_post_call_analysis_constructs_with_no_args():
+    """PostCallAnalysis() with no args is valid — every field has a default.
 
-    assert isinstance(ANALYSIS_SYSTEM_PROMPT, str)
-    assert len(ANALYSIS_SYSTEM_PROMPT) > 50  # meaningful prompt, not a stub
+    This is a deliberate architectural choice for the per-dimension pipeline:
+    asyncio.gather(return_exceptions=True) leaves a failed dimension's field
+    unset, and PostCallAnalysis(**fields) must still validate so the caller
+    can persist a partial analysis.
+    """
+    from app.analysis_schema import PostCallAnalysis
 
-
-def test_analysis_system_prompt_mentions_axes():
-    """ANALYSIS_SYSTEM_PROMPT references all 3 analysis axes."""
-    from app.analysis_schema import ANALYSIS_SYSTEM_PROMPT
-
-    prompt_lower = ANALYSIS_SYSTEM_PROMPT.lower()
-    assert "call_outcome" in prompt_lower or "outcome" in prompt_lower
-    assert "detected_interests" in prompt_lower or "interest" in prompt_lower
-    assert "identified_problem" in prompt_lower or "problem" in prompt_lower
-
-
-# ---------------------------------------------------------------------------
-# Scenario: Edge cases — unknown keys, extra fields, model_config
-# ---------------------------------------------------------------------------
-
-
-def test_post_call_analysis_rejects_unknown_fields():
-    """PostCallAnalysis does NOT silently ignore unknown fields (strict by default)."""
-    from pydantic import ValidationError
-    from app.analysis_schema import (
-        PostCallAnalysis,
-        DetectedInterests,
-        IdentifiedProblem,
-    )
-
-    # Missing required call_outcome → should raise
-    with pytest.raises(ValidationError):
-        PostCallAnalysis(
-            summary="Test.",
-            objections=[],
-            interest_level=50,
-            current_insurance=None,
-            next_action_suggested="wait",
-            misc_notes="",
-            # call_outcome is MISSING — required field
-            detected_interests=DetectedInterests(),
-            identified_problem=IdentifiedProblem(
-                primary_need="Test need.",
-                urgency="low",
-            ),
-        )
+    analysis = PostCallAnalysis()
+    assert analysis.summary == ""
+    assert analysis.objections == []
+    assert analysis.interest_level == 0
+    assert analysis.next_action_suggested == "wait"
 
 
 def test_detected_interests_with_empty_buying_signals():
@@ -377,80 +550,22 @@ def test_detected_interests_with_empty_buying_signals():
     assert interests.buying_signals == []
 
 
-def test_post_call_analysis_current_insurance_nullable():
-    """PostCallAnalysis.current_insurance can be None (nullable field)."""
-    from app.analysis_schema import (
-        PostCallAnalysis,
-        CallOutcome,
-        DetectedInterests,
-        IdentifiedProblem,
-    )
+def test_call_outcome_all_11_classifications_valid():
+    """Every one of the 11 valid classifications creates a valid CallOutcome."""
+    from app.analysis_schema import CallOutcome
 
-    analysis = PostCallAnalysis(
-        summary="Lead was not interested.",
-        objections=["already covered"],
-        interest_level=10,
-        current_insurance=None,  # explicit None
-        next_action_suggested="do_not_call",
-        misc_notes="",
-        call_outcome=CallOutcome(
-            classification="not_interested",
-            reason="Lead already has insurance and is satisfied.",
-            engagement_quality="low",
-        ),
-        detected_interests=DetectedInterests(),
-        identified_problem=IdentifiedProblem(
-            primary_need="No current need — satisfied with existing coverage.",
-            urgency="low",
-        ),
-    )
-    assert analysis.current_insurance is None
-    dumped = analysis.model_dump()
-    assert dumped["current_insurance"] is None
-
-
-def test_call_outcome_all_classifications_valid():
-    """Every OutcomeClassification value creates a valid CallOutcome."""
-    from app.analysis_schema import CallOutcome, OutcomeClassification
-
-    for classification in OutcomeClassification:
+    for classification in _VALID_11_CLASSIFICATIONS:
         outcome = CallOutcome(
             classification=classification,
-            reason=f"Test reason for {classification.value}",
-            engagement_quality="medium",
+            reason=f"Test reason for {classification}",
+            confidence="medium",
         )
         assert outcome.classification == classification
 
 
 # ---------------------------------------------------------------------------
-# Scenario: Enum values are correct
+# Scenario: Urgency enum values are correct
 # ---------------------------------------------------------------------------
-
-
-def test_outcome_classification_all_values():
-    """OutcomeClassification contains the 7 expected values."""
-    from app.analysis_schema import OutcomeClassification
-
-    expected = {
-        "interested",
-        "not_interested",
-        "busy",
-        "follow_up",
-        "no_answer",
-        "hostile",
-        "confused",
-    }
-    actual = {e.value for e in OutcomeClassification}
-    assert actual == expected
-
-
-def test_engagement_quality_all_values():
-    """EngagementQuality contains high/medium/low/none."""
-    from app.analysis_schema import EngagementQuality
-
-    expected = {"high", "medium", "low", "none"}
-    actual = {e.value for e in EngagementQuality}
-    assert actual == expected
 
 
 def test_urgency_all_values():
@@ -497,7 +612,7 @@ def test_post_call_analysis_data_corrections_defaults_to_empty_string():
         call_outcome=CallOutcome(
             classification="busy",
             reason="Lead was driving.",
-            engagement_quality="none",
+            confidence="low",
         ),
         detected_interests=DetectedInterests(),
         identified_problem=IdentifiedProblem(
@@ -529,9 +644,9 @@ def test_post_call_analysis_data_corrections_accepts_string():
         misc_notes="",
         data_corrections="car_model: Polo Trend",
         call_outcome=CallOutcome(
-            classification="interested",
+            classification="callback_requested",
             reason="Lead engaged.",
-            engagement_quality="high",
+            confidence="high",
         ),
         detected_interests=DetectedInterests(),
         identified_problem=IdentifiedProblem(
@@ -565,7 +680,7 @@ def test_post_call_analysis_data_corrections_rejects_dict():
             call_outcome=CallOutcome(
                 classification="busy",
                 reason="Test.",
-                engagement_quality="none",
+                confidence="low",
             ),
             detected_interests=DetectedInterests(),
             identified_problem=IdentifiedProblem(
@@ -575,11 +690,407 @@ def test_post_call_analysis_data_corrections_rejects_dict():
         )
 
 
-def test_analysis_system_prompt_mentions_data_corrections():
-    """ANALYSIS_SYSTEM_PROMPT instructs LLM about data_corrections field."""
-    from app.analysis_schema import ANALYSIS_SYSTEM_PROMPT
+# ===========================================================================
+# Issue #35 — Enhanced Per-Call Extraction
+# Phase 1: 4 new universal axis models
+# ===========================================================================
 
-    prompt_lower = ANALYSIS_SYSTEM_PROMPT.lower()
+
+# ---------------------------------------------------------------------------
+# ServiceIssuesAxis
+# ---------------------------------------------------------------------------
+
+
+def test_service_issues_axis_defaults_to_empty_list():
+    """ServiceIssuesAxis.issues defaults to empty list when not provided."""
+    from app.analysis_schema import ServiceIssuesAxis
+
+    axis = ServiceIssuesAxis()
+    assert axis.issues == []
+
+
+def test_service_issues_axis_accepts_list_of_service_issues():
+    """ServiceIssuesAxis.issues accepts a list of ServiceIssue objects."""
+    from app.analysis_schema import ServiceIssuesAxis
+    from app.analysis.universal.service_issues import ServiceIssue
+
+    issues = [
+        ServiceIssue(
+            category="delay",
+            description="Provider was very slow.",
+            source="current_provider",
+            severity="medium",
+            evidence="They took 3 weeks to process my claim.",
+            confidence="high",
+        ),
+        ServiceIssue(
+            category="billing_issue",
+            description="Wrong charge applied.",
+            source="previous_provider",
+            severity="high",
+            evidence="Me cobraron de más el mes pasado.",
+            confidence="high",
+        ),
+    ]
+    axis = ServiceIssuesAxis(issues=issues)
+    assert len(axis.issues) == 2
+    assert axis.issues[0].category == "delay"
+    assert axis.issues[1].category == "billing_issue"
+
+
+# ---------------------------------------------------------------------------
+# ProfileFactsAxis
+# ---------------------------------------------------------------------------
+
+
+def test_profile_facts_axis_defaults_to_empty_list():
+    """ProfileFactsAxis.facts defaults to empty list when not provided."""
+    from app.analysis_schema import ProfileFactsAxis
+
+    axis = ProfileFactsAxis()
+    assert axis.facts == []
+
+
+def test_profile_facts_axis_accepts_populated_list():
+    """ProfileFactsAxis.facts accepts a list of personal/professional facts."""
+    from app.analysis_schema import ProfileFactsAxis
+
+    axis = ProfileFactsAxis(
+        facts=["works in tech", "has 2 kids", "lives in Buenos Aires"]
+    )
+    assert len(axis.facts) == 3
+    assert "works in tech" in axis.facts
+
+
+# ---------------------------------------------------------------------------
+# CommitmentsAxis
+# ---------------------------------------------------------------------------
+
+
+def test_commitments_axis_defaults_to_empty_list():
+    """CommitmentsAxis.commitments defaults to empty list."""
+    from app.analysis.universal.commitments import CommitmentsAxis
+
+    axis = CommitmentsAxis()
+    assert axis.commitments == []
+
+
+def test_commitments_axis_accepts_commitment_objects():
+    """CommitmentsAxis.commitments accepts a list of Commitment objects."""
+    from app.analysis.universal.commitments import CommitmentsAxis, Commitment
+
+    c = Commitment(
+        type="callback",
+        owner="agent",
+        description="Agent will call back.",
+        due="tomorrow",
+        strength="strong",
+        evidence="Le llamo mañana.",
+        confidence="high",
+    )
+    axis = CommitmentsAxis(commitments=[c])
+    assert len(axis.commitments) == 1
+    assert axis.commitments[0].type == "callback"
+
+
+# ---------------------------------------------------------------------------
+# AbandonmentReasonAxis
+# ---------------------------------------------------------------------------
+
+
+def test_abandonment_reason_axis_defaults_to_none():
+    """AbandonmentReasonAxis.reason defaults to None (nullable)."""
+    from app.analysis_schema import AbandonmentReasonAxis
+
+    axis = AbandonmentReasonAxis()
+    assert axis.reason is None
+
+
+def test_abandonment_reason_axis_accepts_string():
+    """AbandonmentReasonAxis.reason accepts a non-None string."""
+    from app.analysis_schema import AbandonmentReasonAxis
+
+    axis = AbandonmentReasonAxis(reason="Lead said they found a cheaper provider")
+    assert axis.reason == "Lead said they found a cheaper provider"
+
+
+# ---------------------------------------------------------------------------
+# PostCallAnalysis now includes the 4 new axes
+# ---------------------------------------------------------------------------
+
+
+def test_post_call_analysis_has_four_new_axes():
+    """PostCallAnalysis includes all 4 new universal axis fields."""
+    from app.analysis_schema import PostCallAnalysis
+
+    schema = PostCallAnalysis.model_json_schema()
+    props = schema.get("properties", {})
+
+    assert "service_issues" in props, "PostCallAnalysis must have service_issues axis"
+    assert "profile_facts" in props, "PostCallAnalysis must have profile_facts axis"
     assert (
-        "data_corrections" in prompt_lower or "correction" in prompt_lower
-    ), "ANALYSIS_SYSTEM_PROMPT must mention data_corrections — Issue #21"
+        "commitments" in props
+    ), "PostCallAnalysis must have commitments axis"
+    assert (
+        "abandonment_reason" in props
+    ), "PostCallAnalysis must have abandonment_reason axis"
+
+
+def test_post_call_analysis_new_axes_have_correct_defaults():
+    """PostCallAnalysis new axes default to empty lists / None without explicit data."""
+    from app.analysis_schema import (
+        PostCallAnalysis,
+        CallOutcome,
+        DetectedInterests,
+        IdentifiedProblem,
+    )
+
+    analysis = PostCallAnalysis(
+        summary="Test.",
+        objections=[],
+        interest_level=50,
+        current_insurance=None,
+        next_action_suggested="wait",
+        misc_notes="",
+        call_outcome=CallOutcome(
+            classification="busy",
+            reason="Lead was driving.",
+            confidence="low",
+        ),
+        detected_interests=DetectedInterests(),
+        identified_problem=IdentifiedProblem(
+            primary_need="Unknown.",
+            urgency="low",
+        ),
+    )
+
+    assert analysis.service_issues.issues == []
+    assert analysis.profile_facts.facts == []
+    assert analysis.commitments.commitments == []
+    assert analysis.abandonment_reason.reason is None
+
+
+def test_post_call_analysis_new_axes_accept_data():
+    """PostCallAnalysis accepts populated data for all 4 new axes."""
+    from app.analysis_schema import (
+        PostCallAnalysis,
+        CallOutcome,
+        DetectedInterests,
+        IdentifiedProblem,
+        ServiceIssuesAxis,
+        ProfileFactsAxis,
+        AbandonmentReasonAxis,
+    )
+    from app.analysis.universal.commitments import CommitmentsAxis, Commitment
+    from app.analysis.universal.service_issues import ServiceIssue
+
+    c = Commitment(
+        type="callback",
+        owner="agent",
+        description="Will call back Friday.",
+        due="this_week",
+        strength="strong",
+        evidence="Le llamo el viernes.",
+        confidence="high",
+    )
+    issue = ServiceIssue(
+        category="billing_issue",
+        description="Lead was overcharged.",
+        source="current_provider",
+        severity="high",
+        evidence="Me cobraron de más.",
+        confidence="high",
+    )
+    analysis = PostCallAnalysis(
+        summary="Full analysis.",
+        objections=[],
+        interest_level=75,
+        current_insurance=None,
+        next_action_suggested="call_again",
+        misc_notes="",
+        call_outcome=CallOutcome(
+            classification="completed_positive",
+            reason="Lead engaged well.",
+            confidence="high",
+        ),
+        detected_interests=DetectedInterests(),
+        identified_problem=IdentifiedProblem(
+            primary_need="Needs a solution.",
+            urgency="medium",
+        ),
+        service_issues=ServiceIssuesAxis(issues=[issue]),
+        profile_facts=ProfileFactsAxis(facts=["manager at startup"]),
+        commitments=CommitmentsAxis(commitments=[c]),
+        abandonment_reason=AbandonmentReasonAxis(reason="Found competitor cheaper"),
+    )
+
+    assert len(analysis.service_issues.issues) == 1
+    assert analysis.service_issues.issues[0].category == "billing_issue"
+    assert analysis.profile_facts.facts == ["manager at startup"]
+    assert len(analysis.commitments.commitments) == 1
+    assert analysis.commitments.commitments[0].type == "callback"
+    assert analysis.abandonment_reason.reason == "Found competitor cheaper"
+
+
+# ===========================================================================
+# Per-dimension analyze() coroutine — every module must have one
+# ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "mod",
+    [
+        __import__("app.analysis.universal.summary", fromlist=["x"]),
+        __import__("app.analysis.universal.objections", fromlist=["x"]),
+        __import__("app.analysis.universal.interest_level", fromlist=["x"]),
+        __import__("app.analysis.universal.next_action", fromlist=["x"]),
+        __import__("app.analysis.universal.misc_notes", fromlist=["x"]),
+        __import__("app.analysis.universal.data_corrections", fromlist=["x"]),
+        __import__("app.analysis.universal.outcome", fromlist=["x"]),
+        __import__("app.analysis.universal.interests", fromlist=["x"]),
+        __import__("app.analysis.universal.problem", fromlist=["x"]),
+        __import__("app.analysis.universal.service_issues", fromlist=["x"]),
+        __import__("app.analysis.universal.profile_facts", fromlist=["x"]),
+        __import__("app.analysis.universal.commitments", fromlist=["x"]),
+        __import__("app.analysis.universal.abandonment", fromlist=["x"]),
+    ],
+    ids=lambda m: m.DIMENSION["name"],
+)
+def test_dimension_module_contract(mod):
+    """Every dimension module exposes DIMENSION dict, target_field, and async analyze()."""
+    import inspect
+    from app.analysis import PostCallAnalysis
+
+    assert hasattr(mod, "DIMENSION"), f"{mod.__name__} must define DIMENSION"
+    assert hasattr(mod, "analyze"), f"{mod.__name__} must define analyze()"
+    assert inspect.iscoroutinefunction(mod.analyze), "analyze must be async"
+
+    dim = mod.DIMENSION
+    for key in ("name", "schema", "target_field", "prompt", "model"):
+        assert key in dim, f"{mod.__name__}.DIMENSION missing key: {key}"
+
+    target = dim["target_field"]
+    assert (
+        target in PostCallAnalysis.model_fields
+    ), f"{mod.__name__} target_field {target!r} is not a PostCallAnalysis field"
+
+
+def test_dimension_modules_cover_all_post_call_analysis_fields():
+    """Every PostCallAnalysis field is owned by exactly one dimension module."""
+    from app.analysis import PostCallAnalysis
+    from app.analysis.universal import DIMENSION_MODULES
+
+    target_fields = [mod.DIMENSION["target_field"] for mod in DIMENSION_MODULES]
+    assert len(target_fields) == len(set(target_fields)), (
+        f"Duplicate target_field across dimensions: {target_fields}"
+    )
+    expected = set(PostCallAnalysis.model_fields.keys())
+    assert set(target_fields) == expected, (
+        f"Mismatch — extra: {set(target_fields) - expected}, "
+        f"missing: {expected - set(target_fields)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dimension_analyze_returns_unwrapped_value_for_simple_axes():
+    """Simple-wrapper analyze() returns the inner primitive, not the axis model."""
+    from unittest.mock import AsyncMock, MagicMock
+    from app.analysis.universal import (
+        SummaryAxis,
+        ObjectionsAxis,
+        InterestLevelAxis,
+        NextActionAxis,
+        MiscNotesAxis,
+        DataCorrectionsAxis,
+        summary as summary_mod,
+        objections as objections_mod,
+        interest_level as interest_level_mod,
+        next_action as next_action_mod,
+        misc_notes as misc_notes_mod,
+        data_corrections as data_corrections_mod,
+    )
+
+    cases = [
+        (summary_mod, SummaryAxis(text="hi"), str, "hi"),
+        (objections_mod, ObjectionsAxis(items=["p"]), list, ["p"]),
+        (interest_level_mod, InterestLevelAxis(score=42), int, 42),
+        (next_action_mod, NextActionAxis(action="wait"), str, "wait"),
+        (misc_notes_mod, MiscNotesAxis(notes="ok"), str, "ok"),
+        (data_corrections_mod, DataCorrectionsAxis(corrections=""), str, ""),
+    ]
+    for mod, parsed, expected_type, expected_value in cases:
+        client = AsyncMock()
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.parsed = parsed
+        client.beta.chat.completions.parse = AsyncMock(return_value=response)
+        result = await mod.analyze("transcript", client)
+        assert isinstance(result, expected_type), (
+            f"{mod.__name__}.analyze returned {type(result)}, expected {expected_type}"
+        )
+        assert result == expected_value
+
+
+@pytest.mark.asyncio
+async def test_dimension_analyze_returns_axis_for_complex_axes():
+    """Complex-axis analyze() returns the parsed axis model unchanged."""
+    from unittest.mock import AsyncMock, MagicMock
+    from app.analysis.universal import (
+        CallOutcome,
+        DetectedInterests,
+        IdentifiedProblem,
+        ServiceIssuesAxis,
+        ProfileFactsAxis,
+        CommitmentsAxis,
+        AbandonmentReasonAxis,
+        outcome as outcome_mod,
+        interests as interests_mod,
+        problem as problem_mod,
+        service_issues as service_issues_mod,
+        profile_facts as profile_facts_mod,
+        commitments as commitments_mod,
+        abandonment as abandonment_mod,
+    )
+
+    cases = [
+        (
+            outcome_mod,
+            CallOutcome(classification="busy", reason="r", confidence="low"),
+        ),
+        (interests_mod, DetectedInterests()),
+        (problem_mod, IdentifiedProblem(primary_need="n", urgency="low")),
+        (service_issues_mod, ServiceIssuesAxis()),
+        (profile_facts_mod, ProfileFactsAxis()),
+        (commitments_mod, CommitmentsAxis()),
+        (abandonment_mod, AbandonmentReasonAxis()),
+    ]
+    for mod, parsed in cases:
+        client = AsyncMock()
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.parsed = parsed
+        client.beta.chat.completions.parse = AsyncMock(return_value=response)
+        result = await mod.analyze("transcript", client)
+        assert result is parsed
+
+
+def test_dimension_modules_iteration_order_is_stable():
+    """DIMENSION_MODULES order is stable so the summarizer fan-out is deterministic."""
+    from app.analysis.universal import DIMENSION_MODULES
+
+    names = [mod.DIMENSION["name"] for mod in DIMENSION_MODULES]
+    assert names == [
+        "summary",
+        "objections",
+        "interest_level",
+        "next_action",
+        "misc_notes",
+        "data_corrections",
+        "outcome",
+        "interests",
+        "problem",
+        "service_issues",
+        "profile_facts",
+        "commitments",
+        "abandonment_reason",
+    ]

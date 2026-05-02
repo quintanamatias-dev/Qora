@@ -59,22 +59,26 @@ export type CallStatus = 'initiated' | 'in_progress' | 'completed' | 'failed' | 
 // ──────────────────────────────────────────────────────────────────────────────
 
 export type OutcomeClassification =
-  | 'interested'
-  | 'not_interested'
-  | 'busy'
-  | 'follow_up'
   | 'no_answer'
+  | 'busy'
+  | 'callback_requested'
+  | 'completed_positive'
+  | 'completed_neutral'
+  | 'completed_negative'
+  | 'do_not_contact'
+  | 'wrong_number'
   | 'hostile'
   | 'confused'
+  | 'technical_issue'
 
-export type EngagementQuality = 'high' | 'medium' | 'low' | 'none'
+export type OutcomeConfidence = 'low' | 'medium' | 'high'
 
 export type Urgency = 'high' | 'medium' | 'low'
 
 export interface CallOutcome {
   classification: OutcomeClassification
   reason: string
-  engagement_quality: EngagementQuality
+  confidence: OutcomeConfidence
 }
 
 export interface DetectedInterests {
@@ -202,4 +206,72 @@ export interface UpdateAgentPayload {
   voice_id?: string
   system_prompt?: string | null
   tools_enabled?: string[]
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Analytics
+// ──────────────────────────────────────────────────────────────────────────────
+
+export type AnalyticsPeriod = 'day' | 'week' | 'month' | 'custom'
+
+export interface AnalyticsParams {
+  period: AnalyticsPeriod
+  agentId?: string
+  startDate?: string
+  endDate?: string
+}
+
+export interface AnalyticsOverviewResponse {
+  total_calls: number
+  outcome_distribution: Record<string, number>
+  avg_call_duration_seconds: number | null
+  conversion_rate: number | null
+  period: string
+  start_date: string
+  end_date: string
+  agent_id: string | null
+}
+
+export interface ServiceIssueItem {
+  issue: string
+  count: number
+  rank: number
+}
+
+export interface AnalyticsServiceIssuesResponse {
+  issues: ServiceIssueItem[]
+  period: string
+  start_date: string
+  end_date: string
+  agent_id: string | null
+}
+
+export interface InterestItem {
+  interest: string
+  count: number
+  trend: 'up' | 'down' | 'stable'
+  previous_count: number
+}
+
+export interface AnalyticsInterestsResponse {
+  interests: InterestItem[]
+  period: string
+  start_date: string
+  end_date: string
+  agent_id: string | null
+}
+
+export interface AgentStatItem {
+  agent_id: string
+  agent_name: string | null
+  total_calls: number
+  outcome_distribution: Record<string, number>
+  conversion_rate: number | null
+}
+
+export interface AnalyticsAgentStatsResponse {
+  agents: AgentStatItem[]
+  period: string
+  start_date: string
+  end_date: string
 }
