@@ -113,6 +113,7 @@ def _axis_for_dimension(analysis_obj, target_field: str, schema_cls):
         "call_outcome",
         "detected_interests",
         "identified_problem",
+        "objections",          # qora-objections: now returns ObjectionsAxis directly
         "service_issues",
         "profile_facts",
         "commitments",
@@ -125,7 +126,8 @@ def _axis_for_dimension(analysis_obj, target_field: str, schema_cls):
     if schema_cls is SummaryAxis:
         return SummaryAxis(text=analysis_obj.summary)
     if schema_cls is ObjectionsAxis:
-        return ObjectionsAxis(items=list(analysis_obj.objections))
+        # Fallback (should not reach here — objections is in complex_targets)
+        return analysis_obj.objections
     if schema_cls is InterestLevelAxis:
         return InterestLevelAxis(score=int(analysis_obj.interest_level))
     if schema_cls is NextActionAxis:
@@ -231,10 +233,20 @@ def _make_full_analysis_payload():
         DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.objections import ObjectionsAxis, Objection
 
     return PostCallAnalysis(
         summary="Lead was very interested in todo riesgo coverage for their Toyota.",
-        objections=["price too high"],
+        objections=ObjectionsAxis(objections=[
+            Objection(
+                category="price",
+                strength="medium",
+                resolution_status="unresolved",
+                evidence="El precio es muy alto.",
+                description="Price too high.",
+                confidence="high",
+            )
+        ]),
         interest_level=85,
         current_insurance="La Caja",
         next_action_suggested="send_quote",
@@ -496,9 +508,10 @@ async def test_summarizer_sets_do_not_call_flag(seeded_db):
         ],
     )
 
+    from app.analysis.universal.objections import ObjectionsAxis as _OA
     dnc_analysis = PostCallAnalysis(
         summary="El lead pidió no ser contactado más.",
-        objections=["no quiere ser contactado"],
+        objections=_OA(),
         interest_level=0,
         current_insurance=None,
         next_action_suggested="do_not_call",
@@ -556,9 +569,10 @@ async def test_summarizer_do_not_contact_classification_sets_do_not_call(seeded_
         ],
     )
 
+    from app.analysis.universal.objections import ObjectionsAxis as _OA
     do_not_contact_analysis = PostCallAnalysis(
         summary="Lead pidió explícitamente no ser contactado.",
-        objections=["do not contact"],
+        objections=_OA(),
         interest_level=0,
         current_insurance=None,
         next_action_suggested="wait",  # NOT "do_not_call" — testing the classification path
@@ -612,9 +626,10 @@ async def test_summarizer_other_classification_does_not_set_do_not_call(seeded_d
         ],
     )
 
+    from app.analysis.universal.objections import ObjectionsAxis as _OA
     positive_analysis = PostCallAnalysis(
         summary="Lead interesado.",
-        objections=[],
+        objections=_OA(),
         interest_level=80,
         current_insurance=None,
         next_action_suggested="call_again",
@@ -668,9 +683,10 @@ async def test_upsert_call_analysis_does_not_write_engagement_quality(seeded_db)
         ],
     )
 
+    from app.analysis.universal.objections import ObjectionsAxis as _OA
     analysis = PostCallAnalysis(
         summary="Lead quiere cotizar.",
-        objections=[],
+        objections=_OA(),
         interest_level=75,
         current_insurance=None,
         next_action_suggested="send_quote",
@@ -728,9 +744,10 @@ async def test_summarizer_does_not_set_do_not_call_for_other_actions(seeded_db):
         ],
     )
 
+    from app.analysis.universal.objections import ObjectionsAxis as _OA
     call_again_analysis = PostCallAnalysis(
         summary="Lead interesado, prefiere ser contactado la próxima semana.",
-        objections=[],
+        objections=_OA(),
         interest_level=70,
         current_insurance=None,
         next_action_suggested="call_again",
@@ -1133,10 +1150,11 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
         ],
     )
 
+    from app.analysis.universal.objections import ObjectionsAxis as _OA
     # --- First run ---
     first_analysis = PostCallAnalysis(
         summary="First run summary.",
-        objections=["precio"],
+        objections=_OA(),
         interest_level=40,
         current_insurance=None,
         next_action_suggested="call_again",
@@ -1175,7 +1193,7 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
     # --- Second run (re-summarize, e.g. via webhook) ---
     second_analysis = PostCallAnalysis(
         summary="Second run summary — updated.",
-        objections=["precio", "no time"],
+        objections=_OA(),
         interest_level=85,
         current_insurance="La Caja",
         next_action_suggested="send_quote",
@@ -1229,7 +1247,7 @@ async def test_summarizer_unknown_extra_fields_ignored(seeded_db):
     # should NOT raise and should NOT include the extra fields in model_dump().
     raw_data = {
         "summary": "Test summary",
-        "objections": [],
+        "objections": {"objections": []},  # ObjectionsAxis dict format (qora-objections)
         "interest_level": 70,
         "current_insurance": None,
         "next_action_suggested": "call_again",
@@ -1620,9 +1638,10 @@ async def test_summarizer_dual_write_do_not_call_creates_fact_row(seeded_db):
         ],
     )
 
+    from app.analysis.universal.objections import ObjectionsAxis as _OA
     dnc_analysis = PostCallAnalysis(
         summary="Lead no quiere ser contactado.",
-        objections=["no quiere ser contactado"],
+        objections=_OA(),
         interest_level=0,
         current_insurance=None,
         next_action_suggested="do_not_call",
@@ -1808,9 +1827,10 @@ async def test_summarizer_critical2_data_corrections_create_lead_profile_facts(
         ],
     )
 
+    from app.analysis.universal.objections import ObjectionsAxis as _OA
     corrections_analysis = PostCallAnalysis(
         summary="Lead tiene un Polo 2022.",
-        objections=[],
+        objections=_OA(),
         interest_level=70,
         current_insurance=None,
         next_action_suggested="send_quote",
@@ -1953,9 +1973,10 @@ async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
         ],
     )
 
+    from app.analysis.universal.objections import ObjectionsAxis as _OA
     axes_analysis = PostCallAnalysis(
         summary="Lead con problemas de servicio anterior.",
-        objections=["bad service"],
+        objections=_OA(),
         interest_level=60,
         current_insurance="La Caja",
         next_action_suggested="send_quote",
@@ -2065,9 +2086,10 @@ async def test_call_analysis_abandonment_reason_persisted_when_set(seeded_db):
         ],
     )
 
+    from app.analysis.universal.objections import ObjectionsAxis as _OA
     abandon_analysis = PostCallAnalysis(
         summary="Lead encontró mejor oferta.",
-        objections=["found cheaper"],
+        objections=_OA(),
         interest_level=10,
         current_insurance=None,
         next_action_suggested="wait",
@@ -2491,3 +2513,196 @@ async def test_list_facts_all_5_axes_persisted(seeded_db):
     assert (
         "buying_signal:" in by_prefix
     ), f"Missing 'buying_signal:' rows. Got prefixes: {list(by_prefix.keys())}"
+
+
+# ===========================================================================
+# qora-objections Phase 3 — Structured objections integration
+# ===========================================================================
+
+
+def test_merge_facts_into_lead_extracts_category_from_ObjectionsAxis():
+    """_merge_facts_into_lead: structured ObjectionsAxis → lead.objections_heard gets flat categories.
+
+    Site 1: When facts['objections'] is a model_dump() of ObjectionsAxis,
+    lead.objections_heard must receive the category strings, NOT dicts.
+    """
+    from app.summarizer import _merge_facts_into_lead
+    from unittest.mock import MagicMock, AsyncMock, patch
+    from app.analysis.universal.objections import ObjectionsAxis, Objection
+
+    axis = ObjectionsAxis(objections=[
+        Objection(
+            category="price",
+            strength="high",
+            resolution_status="unresolved",
+            evidence="El precio es muy alto.",
+            description="Price objection.",
+            confidence="high",
+        ),
+        Objection(
+            category="trust",
+            strength="medium",
+            resolution_status="unresolved",
+            evidence="No confío en la empresa.",
+            description="Trust objection.",
+            confidence="medium",
+        ),
+    ])
+    # facts is the model_dump() output of PostCallAnalysis
+    facts = {"objections": axis.model_dump()}
+
+    lead = MagicMock()
+    lead.objections_heard = None
+    lead.extracted_facts = None
+
+    import asyncio
+
+    async def run():
+        with patch("app.summarizer._write_lead_profile_facts", new_callable=AsyncMock):
+            with patch("app.summarizer._write_interest_history"):
+                with patch("app.summarizer._write_correction_facts", new_callable=AsyncMock):
+                    from sqlalchemy.ext.asyncio import AsyncSession
+                    db = AsyncMock(spec=AsyncSession)
+                    with patch("sqlalchemy.future.select"), patch("app.summarizer.select") as mock_select:
+                        mock_select.return_value = MagicMock()
+                        db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=lead)))
+                        await _merge_facts_into_lead(db, "lead-id", "summary", facts)
+
+    asyncio.get_event_loop().run_until_complete(run())
+
+    # lead.objections_heard must contain flat category strings
+    assert lead.objections_heard is not None
+    assert "price" in lead.objections_heard, (
+        "lead.objections_heard must contain 'price' category string"
+    )
+    assert "trust" in lead.objections_heard, (
+        "lead.objections_heard must contain 'trust' category string"
+    )
+    # Must NOT contain dicts
+    for item in lead.objections_heard:
+        assert isinstance(item, str), (
+            f"lead.objections_heard items must be strings, got: {type(item)}"
+        )
+
+
+def test_upsert_call_analysis_stores_objections_as_structured_json():
+    """_upsert_call_analysis: ObjectionsAxis.model_dump()['objections'] → JSON array of dicts.
+
+    Site 2: ca.objections must be serialized structured dicts, NOT flat strings.
+    """
+    from app.summarizer import _to_json_list
+    from app.analysis.universal.objections import ObjectionsAxis, Objection
+    import json
+
+    axis = ObjectionsAxis(objections=[
+        Objection(
+            category="timing",
+            strength="low",
+            resolution_status="resolved",
+            evidence="No tengo tiempo ahora.",
+            description="Timing objection.",
+            confidence="medium",
+        ),
+    ])
+    # Simulate what upsert does with the structured axis
+    raw = (axis.model_dump() or {}).get("objections")
+    result = _to_json_list(raw)
+    parsed = json.loads(result)
+
+    assert len(parsed) == 1
+    assert isinstance(parsed[0], dict), "Each objection must be serialized as dict"
+    assert parsed[0]["category"] == "timing"
+    assert "strength" in parsed[0]
+    assert "resolution_status" in parsed[0]
+
+
+@pytest.mark.asyncio
+async def test_write_lead_profile_facts_creates_objection_namespace_rows(seeded_db):
+    """_write_lead_profile_facts: ObjectionsAxis → 'objection:' namespace LeadProfileFact rows.
+
+    Site 3: _LIST_AXES must include ('objection:', ...) following the service_issue pattern.
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.leads.models import LeadProfileFact
+    from app.analysis.universal.objections import ObjectionsAxis, Objection
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "¿Tiene alguna objeción?"),
+            ("user", "El precio es muy alto y no confío en la cobertura"),
+        ],
+    )
+
+    from app.analysis_schema import (
+        PostCallAnalysis,
+        CallOutcome,
+        DetectedInterests,
+        IdentifiedProblem,
+    )
+
+    axis = ObjectionsAxis(objections=[
+        Objection(
+            category="price",
+            strength="high",
+            resolution_status="unresolved",
+            evidence="El precio es muy alto.",
+            description="Price objection.",
+            confidence="high",
+        ),
+        Objection(
+            category="trust",
+            strength="medium",
+            resolution_status="unresolved",
+            evidence="No confío en la cobertura.",
+            description="Trust objection.",
+            confidence="medium",
+        ),
+    ])
+
+    objections_analysis = PostCallAnalysis(
+        summary="Lead has price and trust objections.",
+        objections=axis,
+        interest_level=40,
+        current_insurance=None,
+        next_action_suggested="call_again",
+        misc_notes="",
+        call_outcome=CallOutcome(
+            classification="completed_neutral",
+            reason="Lead not ready yet.",
+            confidence="medium",
+        ),
+        detected_interests=DetectedInterests(),
+        identified_problem=IdentifiedProblem(
+            primary_need="Needs cheaper coverage.",
+            urgency="medium",
+        ),
+    )
+
+    mock_client = _make_mock_client(_make_parse_response(objections_analysis))
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == "test-lead-sum-001",
+                LeadProfileFact.fact_key.startswith("objection:"),
+                LeadProfileFact.superseded_at == None,  # noqa: E711
+            )
+        )
+        rows = list(result.scalars().all())
+
+    objection_keys = {r.fact_key for r in rows}
+    assert "objection:price" in objection_keys, (
+        f"Expected 'objection:price' LeadProfileFact row. Got: {objection_keys}"
+    )
+    assert "objection:trust" in objection_keys, (
+        f"Expected 'objection:trust' LeadProfileFact row. Got: {objection_keys}"
+    )

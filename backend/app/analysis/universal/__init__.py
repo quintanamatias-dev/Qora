@@ -34,7 +34,7 @@ from app.analysis.universal.interest_level import InterestLevelAxis
 from app.analysis.universal.interests import DetectedInterests
 from app.analysis.universal.misc_notes import MiscNotesAxis
 from app.analysis.universal.next_action import NextActionAxis
-from app.analysis.universal.objections import ObjectionsAxis
+from app.analysis.universal.objections import Objection, ObjectionsAxis
 from app.analysis.universal.outcome import CallOutcome
 from app.analysis.universal.problem import IdentifiedProblem
 from app.analysis.universal.profile_facts import ProfileFactsAxis
@@ -64,6 +64,7 @@ UNIVERSAL_DIMENSIONS: list[dict] = [mod.DIMENSION for mod in DIMENSION_MODULES]
 
 __all__ = [
     "SummaryAxis",
+    "Objection",
     "ObjectionsAxis",
     "InterestLevelAxis",
     "NextActionAxis",

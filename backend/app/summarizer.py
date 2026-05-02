@@ -304,7 +304,8 @@ async def _merge_facts_into_lead(
         elif isinstance(lead.objections_heard, list):
             existing_objections = list(lead.objections_heard)
 
-    new_objections = facts.get("objections") or []
+    raw_objections = (facts.get("objections") or {}).get("objections") or []
+    new_objections = [o["category"] for o in raw_objections if isinstance(o, dict) and o.get("category")]
     merged_objections = list(set(existing_objections + new_objections))
     lead.objections_heard = merged_objections
 
@@ -489,7 +490,7 @@ async def _upsert_call_analysis(
     ca.current_insurance = facts.get("current_insurance")
     ca.data_corrections = facts.get("data_corrections") or ""
     ca.misc_notes = facts.get("misc_notes") or ""
-    ca.objections = _to_json_list(facts.get("objections"))
+    ca.objections = _to_json_list((facts.get("objections") or {}).get("objections"))
     ca.products = _to_json_list(detected_interests.get("products"))
     ca.specific_needs = _to_json_list(detected_interests.get("specific_needs"))
     ca.buying_signals = _to_json_list(detected_interests.get("buying_signals"))
@@ -678,6 +679,7 @@ async def _write_lead_profile_facts(
         ("profile:", (facts.get("profile_facts") or {}).get("facts") or []),
         ("pain:", (facts.get("identified_problem") or {}).get("pain_points") or []),
         ("service_issue:", (facts.get("service_issues") or {}).get("issues") or []),
+        ("objection:", (facts.get("objections") or {}).get("objections") or []),
         ("signal:", _commitment_descriptions),
         (
             "buying_signal:",
@@ -690,6 +692,8 @@ async def _write_lead_profile_facts(
             continue
         for raw_item in items:
             if namespace_prefix == "service_issue:":
+                normalized = _service_issue_key(raw_item)
+            elif namespace_prefix == "objection:":
                 normalized = _service_issue_key(raw_item)
             else:
                 if not raw_item or not str(raw_item).strip():

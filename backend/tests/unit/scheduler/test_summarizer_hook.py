@@ -73,9 +73,10 @@ def _make_analysis_with_action(next_action: str):
         IdentifiedProblem,
     )
 
+    from app.analysis.universal.objections import ObjectionsAxis as _OA
     return PostCallAnalysis(
         summary="Test summary.",
-        objections=[],
+        objections=_OA(),
         interest_level=60,
         next_action_suggested=next_action,
         misc_notes="",
@@ -124,6 +125,7 @@ def _make_dispatching_client(analysis):
             "call_outcome",
             "detected_interests",
             "identified_problem",
+            "objections",          # qora-objections: complex axis (ObjectionsAxis)
             "service_issues",
             "profile_facts",
             "commitments",
@@ -134,7 +136,8 @@ def _make_dispatching_client(analysis):
         if schema_cls is SummaryAxis:
             return SummaryAxis(text=analysis.summary)
         if schema_cls is ObjectionsAxis:
-            return ObjectionsAxis(items=list(analysis.objections))
+            # Fallback (should not reach here — objections is in complex_targets)
+            return analysis.objections
         if schema_cls is InterestLevelAxis:
             return InterestLevelAxis(score=int(analysis.interest_level))
         if schema_cls is NextActionAxis:

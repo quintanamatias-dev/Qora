@@ -16,6 +16,7 @@ from app.analysis.universal import (
     CommitmentsAxis,
     DetectedInterests,
     IdentifiedProblem,
+    ObjectionsAxis,
     ProfileFactsAxis,
     ServiceIssuesAxis,
 )
@@ -45,8 +46,8 @@ class PostCallAnalysis(BaseModel):
         default="",
         description="Concise call summary, max 150 tokens, plain language",
     )
-    objections: list[str] = Field(
-        default_factory=list,
+    objections: ObjectionsAxis = Field(
+        default_factory=ObjectionsAxis,
         description="Objections the lead raised during the call",
     )
     interest_level: int = Field(

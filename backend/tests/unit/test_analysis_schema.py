@@ -444,10 +444,11 @@ def test_post_call_analysis_valid_full_instance():
         IdentifiedProblem,
         Urgency,
     )
+    from app.analysis.universal.objections import ObjectionsAxis as _OA
 
     analysis = PostCallAnalysis(
         summary="Lead was very interested in todo riesgo coverage.",
-        objections=["price too high"],
+        objections=_OA(),
         interest_level=85,
         current_insurance="La Caja",
         next_action_suggested="send_quote",
@@ -484,10 +485,11 @@ def test_post_call_analysis_model_dump_contains_axes():
         DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.objections import ObjectionsAxis as _OA
 
     analysis = PostCallAnalysis(
         summary="Test summary.",
-        objections=[],
+        objections=_OA(),
         interest_level=50,
         current_insurance=None,
         next_action_suggested="wait",
@@ -529,12 +531,90 @@ def test_post_call_analysis_constructs_with_no_args():
     can persist a partial analysis.
     """
     from app.analysis_schema import PostCallAnalysis
+    from app.analysis.universal.objections import ObjectionsAxis
 
     analysis = PostCallAnalysis()
     assert analysis.summary == ""
-    assert analysis.objections == []
+    # objections is now ObjectionsAxis (qora-objections spec)
+    assert isinstance(analysis.objections, ObjectionsAxis)
+    assert analysis.objections.objections == []
     assert analysis.interest_level == 0
     assert analysis.next_action_suggested == "wait"
+
+
+# ---------------------------------------------------------------------------
+# Scenario: PostCallAnalysis.objections is now ObjectionsAxis (qora-objections)
+# ---------------------------------------------------------------------------
+
+
+def test_post_call_analysis_objections_field_is_ObjectionsAxis():
+    """PostCallAnalysis.objections field must be ObjectionsAxis, not list[str]."""
+    from app.analysis_schema import PostCallAnalysis
+    from app.analysis.universal.objections import ObjectionsAxis
+
+    analysis = PostCallAnalysis()
+    assert isinstance(analysis.objections, ObjectionsAxis), (
+        "PostCallAnalysis.objections must be ObjectionsAxis (qora-objections spec)"
+    )
+
+
+def test_post_call_analysis_objections_default_is_empty_axis():
+    """PostCallAnalysis() default objections is ObjectionsAxis with empty list."""
+    from app.analysis_schema import PostCallAnalysis
+    from app.analysis.universal.objections import ObjectionsAxis
+
+    analysis = PostCallAnalysis()
+    assert isinstance(analysis.objections, ObjectionsAxis)
+    assert analysis.objections.objections == []
+
+
+def test_post_call_analysis_accepts_ObjectionsAxis():
+    """PostCallAnalysis accepts a populated ObjectionsAxis for objections field."""
+    from app.analysis_schema import PostCallAnalysis
+    from app.analysis.universal.objections import ObjectionsAxis, Objection
+
+    obj = Objection(
+        category="price",
+        strength="high",
+        resolution_status="unresolved",
+        evidence="El precio es muy alto para mi presupuesto.",
+        description="Lead objects to the price being too high.",
+        confidence="high",
+    )
+    analysis = PostCallAnalysis(objections=ObjectionsAxis(objections=[obj]))
+    assert isinstance(analysis.objections, ObjectionsAxis)
+    assert len(analysis.objections.objections) == 1
+    assert analysis.objections.objections[0].category == "price"
+
+
+def test_post_call_analysis_objections_model_dump_is_dict():
+    """PostCallAnalysis.model_dump() produces objections as a nested dict (not list[str])."""
+    from app.analysis_schema import PostCallAnalysis
+    from app.analysis.universal.objections import ObjectionsAxis, Objection
+
+    obj = Objection(
+        category="trust",
+        strength="medium",
+        resolution_status="partially_resolved",
+        evidence="No confío en seguros.",
+        description="Lead does not trust the insurance company.",
+        confidence="medium",
+    )
+    analysis = PostCallAnalysis(objections=ObjectionsAxis(objections=[obj]))
+    dumped = analysis.model_dump()
+    assert isinstance(dumped["objections"], dict), (
+        "model_dump()['objections'] must be a dict (ObjectionsAxis)"
+    )
+    assert "objections" in dumped["objections"]
+    assert isinstance(dumped["objections"]["objections"], list)
+    assert dumped["objections"]["objections"][0]["category"] == "trust"
+
+
+def test_Objection_importable_from_universal():
+    """Objection must be importable from app.analysis.universal (qora-objections spec)."""
+    from app.analysis.universal import Objection  # noqa: F401 — import test
+
+    assert Objection is not None
 
 
 def test_detected_interests_with_empty_buying_signals():
@@ -601,10 +681,11 @@ def test_post_call_analysis_data_corrections_defaults_to_empty_string():
         DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.objections import ObjectionsAxis as _OA
 
     analysis = PostCallAnalysis(
         summary="Test.",
-        objections=[],
+        objections=_OA(),
         interest_level=50,
         current_insurance=None,
         next_action_suggested="wait",
@@ -634,10 +715,11 @@ def test_post_call_analysis_data_corrections_accepts_string():
         DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.objections import ObjectionsAxis as _OA
 
     analysis = PostCallAnalysis(
         summary="Lead corrected car model.",
-        objections=[],
+        objections=_OA(),
         interest_level=70,
         current_insurance=None,
         next_action_suggested="call_again",
@@ -667,11 +749,12 @@ def test_post_call_analysis_data_corrections_rejects_dict():
         DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.objections import ObjectionsAxis as _OA
 
     with pytest.raises((ValidationError, Exception)):
         PostCallAnalysis(
             summary="Test.",
-            objections=[],
+            objections=_OA(),
             interest_level=50,
             current_insurance=None,
             next_action_suggested="wait",
@@ -844,10 +927,11 @@ def test_post_call_analysis_new_axes_have_correct_defaults():
         DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.objections import ObjectionsAxis as _OA
 
     analysis = PostCallAnalysis(
         summary="Test.",
-        objections=[],
+        objections=_OA(),
         interest_level=50,
         current_insurance=None,
         next_action_suggested="wait",
@@ -901,9 +985,10 @@ def test_post_call_analysis_new_axes_accept_data():
         evidence="Me cobraron de más.",
         confidence="high",
     )
+    from app.analysis.universal.objections import ObjectionsAxis as _OA
     analysis = PostCallAnalysis(
         summary="Full analysis.",
-        objections=[],
+        objections=_OA(),
         interest_level=75,
         current_insurance=None,
         next_action_suggested="call_again",
@@ -993,17 +1078,19 @@ def test_dimension_modules_cover_all_post_call_analysis_fields():
 
 @pytest.mark.asyncio
 async def test_dimension_analyze_returns_unwrapped_value_for_simple_axes():
-    """Simple-wrapper analyze() returns the inner primitive, not the axis model."""
+    """Simple-wrapper analyze() returns the inner primitive, not the axis model.
+
+    NOTE: objections was moved to complex-axis group (qora-objections spec —
+    analyze() now returns ObjectionsAxis, not an unwrapped list).
+    """
     from unittest.mock import AsyncMock, MagicMock
     from app.analysis.universal import (
         SummaryAxis,
-        ObjectionsAxis,
         InterestLevelAxis,
         NextActionAxis,
         MiscNotesAxis,
         DataCorrectionsAxis,
         summary as summary_mod,
-        objections as objections_mod,
         interest_level as interest_level_mod,
         next_action as next_action_mod,
         misc_notes as misc_notes_mod,
@@ -1012,7 +1099,6 @@ async def test_dimension_analyze_returns_unwrapped_value_for_simple_axes():
 
     cases = [
         (summary_mod, SummaryAxis(text="hi"), str, "hi"),
-        (objections_mod, ObjectionsAxis(items=["p"]), list, ["p"]),
         (interest_level_mod, InterestLevelAxis(score=42), int, 42),
         (next_action_mod, NextActionAxis(action="wait"), str, "wait"),
         (misc_notes_mod, MiscNotesAxis(notes="ok"), str, "ok"),
@@ -1033,17 +1119,22 @@ async def test_dimension_analyze_returns_unwrapped_value_for_simple_axes():
 
 @pytest.mark.asyncio
 async def test_dimension_analyze_returns_axis_for_complex_axes():
-    """Complex-axis analyze() returns the parsed axis model unchanged."""
+    """Complex-axis analyze() returns the parsed axis model unchanged.
+
+    objections is now a complex axis (qora-objections spec — returns ObjectionsAxis).
+    """
     from unittest.mock import AsyncMock, MagicMock
     from app.analysis.universal import (
         CallOutcome,
         DetectedInterests,
         IdentifiedProblem,
+        ObjectionsAxis,
         ServiceIssuesAxis,
         ProfileFactsAxis,
         CommitmentsAxis,
         AbandonmentReasonAxis,
         outcome as outcome_mod,
+        objections as objections_mod,
         interests as interests_mod,
         problem as problem_mod,
         service_issues as service_issues_mod,
@@ -1057,6 +1148,7 @@ async def test_dimension_analyze_returns_axis_for_complex_axes():
             outcome_mod,
             CallOutcome(classification="busy", reason="r", confidence="low"),
         ),
+        (objections_mod, ObjectionsAxis()),
         (interests_mod, DetectedInterests()),
         (problem_mod, IdentifiedProblem(primary_need="n", urgency="low")),
         (service_issues_mod, ServiceIssuesAxis()),
@@ -1094,3 +1186,142 @@ def test_dimension_modules_iteration_order_is_stable():
         "commitments",
         "abandonment_reason",
     ]
+
+
+# ===========================================================================
+# Phase 4 — Isolation regression tests
+# Prove other dimensions are UNTOUCHED by qora-objections changes
+# ===========================================================================
+
+
+def test_service_issues_axis_unchanged_after_objections_integration():
+    """ServiceIssuesAxis still works exactly as before — qora-objections changes did not affect it."""
+    from app.analysis.universal.service_issues import ServiceIssue, ServiceIssuesAxis
+
+    issue = ServiceIssue(
+        category="delay",
+        description="Claim took too long.",
+        source="current_provider",
+        severity="high",
+        evidence="Tardaron 4 semanas.",
+        confidence="high",
+    )
+    axis = ServiceIssuesAxis(issues=[issue])
+    assert len(axis.issues) == 1
+    assert axis.issues[0].category == "delay"
+    assert axis.issues[0].severity == "high"
+    # Default is still empty list
+    empty = ServiceIssuesAxis()
+    assert empty.issues == []
+
+
+def test_commitments_axis_unchanged_after_objections_integration():
+    """CommitmentsAxis still works exactly as before — qora-objections changes did not affect it."""
+    from app.analysis.universal.commitments import Commitment, CommitmentsAxis
+
+    c = Commitment(
+        type="receive_quote",
+        owner="agent",
+        description="Agent will send quote by end of day.",
+        due="today",
+        strength="strong",
+        evidence="Le mando la cotización hoy.",
+        confidence="high",
+    )
+    axis = CommitmentsAxis(commitments=[c])
+    assert len(axis.commitments) == 1
+    assert axis.commitments[0].type == "receive_quote"
+    # Default is empty
+    empty = CommitmentsAxis()
+    assert empty.commitments == []
+
+
+def test_call_outcome_unchanged_after_objections_integration():
+    """CallOutcome still accepts all 11 valid classifications — untouched by qora-objections."""
+    from app.analysis_schema import CallOutcome
+
+    for classification in _VALID_11_CLASSIFICATIONS:
+        outcome = CallOutcome(
+            classification=classification,
+            reason=f"Isolation check for {classification}",
+            confidence="low",
+        )
+        assert outcome.classification == classification
+        assert not hasattr(outcome, "engagement_quality")
+
+
+def test_service_issues_target_field_mapping_unchanged():
+    """service_issues dimension target_field still maps to 'service_issues' in PostCallAnalysis."""
+    from app.analysis.universal import DIMENSION_MODULES, service_issues as si_mod
+
+    # Find service_issues module in DIMENSION_MODULES
+    si_dim = next(
+        m.DIMENSION for m in DIMENSION_MODULES if m.DIMENSION["name"] == "service_issues"
+    )
+    assert si_dim["target_field"] == "service_issues"
+    assert si_dim["schema"] is si_mod.ServiceIssuesAxis
+
+
+def test_objections_target_field_mapping_is_correct():
+    """objections dimension target_field maps to 'objections' — now ObjectionsAxis."""
+    from app.analysis.universal import DIMENSION_MODULES
+    from app.analysis.universal.objections import ObjectionsAxis
+
+    obj_dim = next(
+        m.DIMENSION for m in DIMENSION_MODULES if m.DIMENSION["name"] == "objections"
+    )
+    assert obj_dim["target_field"] == "objections"
+    assert obj_dim["schema"] is ObjectionsAxis
+
+
+def test_dimension_modules_cover_all_post_call_analysis_fields_still_correct():
+    """All 13 PostCallAnalysis fields are covered by exactly one dimension after qora-objections."""
+    from app.analysis import PostCallAnalysis
+    from app.analysis.universal import DIMENSION_MODULES
+
+    target_fields = [mod.DIMENSION["target_field"] for mod in DIMENSION_MODULES]
+    # No duplicates
+    assert len(target_fields) == len(set(target_fields)), (
+        f"Duplicate target_field: {target_fields}"
+    )
+    # Every field is covered
+    expected = set(PostCallAnalysis.model_fields.keys())
+    assert set(target_fields) == expected, (
+        f"Mismatch — extra: {set(target_fields) - expected}, "
+        f"missing: {expected - set(target_fields)}"
+    )
+
+
+def test_analysis_schema_no_forbidden_imports_after_objections():
+    """app.analysis package still has no fastapi/sqlalchemy/structlog imports after qora-objections changes."""
+    import ast
+    import pathlib
+
+    package_root = (
+        pathlib.Path(__file__).parent.parent.parent / "app" / "analysis"
+    )
+    forbidden_prefixes = ("fastapi", "sqlalchemy", "structlog")
+    allowed_app_prefix = "app.analysis"
+
+    for py_file in package_root.rglob("*.py"):
+        source = py_file.read_text()
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                module_name = ""
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    module_name = node.module
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        module_name = alias.name
+                for prefix in forbidden_prefixes:
+                    assert not module_name.startswith(prefix), (
+                        f"{py_file} must not import '{module_name}'"
+                    )
+                if module_name.startswith("app.") and not module_name.startswith(
+                    allowed_app_prefix
+                ):
+                    raise AssertionError(
+                        f"{py_file} must not import '{module_name}' — only "
+                        f"'app.analysis.*' internal imports are permitted"
+                    )
