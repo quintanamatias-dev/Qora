@@ -301,17 +301,42 @@ def _format_axis(key: str, axis_dict: dict) -> str:
         return f"{base} — {reason}".strip(" —") if (base and reason) else base or reason
 
     if key == "detected_interests":
-        products = axis_dict.get("products") or []
-        needs = axis_dict.get("specific_needs") or []
-        signals = axis_dict.get("buying_signals") or []
-        parts = []
-        if products:
-            parts.append(f"products={products}")
-        if needs:
-            parts.append(f"needs={needs}")
-        if signals:
-            parts.append(f"signals={signals}")
-        return ", ".join(parts) if parts else ""
+        # qora-interest-pipeline: handle new InterestsAxis format (items list)
+        # Legacy format used products/specific_needs/buying_signals flat lists.
+        items = axis_dict.get("items")
+        if items is not None:
+            # New format: list of InterestItem dicts
+            if not items:
+                return ""
+            product_names = [
+                i.get("product", "?")
+                for i in items
+                if isinstance(i, dict)
+            ]
+            parts = []
+            if product_names:
+                parts.append(f"productos={product_names}")
+            # Collect all needs across items
+            all_needs = []
+            for i in items:
+                if isinstance(i, dict):
+                    all_needs.extend(i.get("needs") or [])
+            if all_needs:
+                parts.append(f"needs={list(dict.fromkeys(all_needs))}")
+            return ", ".join(parts) if parts else ""
+        else:
+            # Legacy format: flat products/specific_needs/buying_signals
+            products = axis_dict.get("products") or []
+            needs = axis_dict.get("specific_needs") or []
+            signals = axis_dict.get("buying_signals") or []
+            parts = []
+            if products:
+                parts.append(f"products={products}")
+            if needs:
+                parts.append(f"needs={needs}")
+            if signals:
+                parts.append(f"signals={signals}")
+            return ", ".join(parts) if parts else ""
 
     if key == "identified_problem":
         primary = axis_dict.get("primary_need", "")

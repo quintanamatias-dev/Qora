@@ -69,9 +69,9 @@ def _make_analysis_with_action(next_action: str):
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis
 
     from app.analysis.universal.objections import ObjectionsAxis as _OA
     return PostCallAnalysis(
@@ -85,7 +85,7 @@ def _make_analysis_with_action(next_action: str):
             reason="Lead asked to be called again.",
             confidence="medium",
         ),
-        detected_interests=DetectedInterests(),
+        detected_interests=InterestsAxis(),
         identified_problem=IdentifiedProblem(
             primary_need="Needs coverage.",
             urgency="medium",
@@ -100,12 +100,14 @@ def _make_dispatching_client(analysis):
     to ``beta.chat.completions.parse(response_format=Schema)``, returns a
     response whose ``parsed`` is the per-dimension axis derived from the full
     PostCallAnalysis payload.
+
+    qora-interest-pipeline: also handles InterestsAxis and InterestLevelResult
+    for the 2-phase pipeline.
     """
     from app.analysis.universal import (
         DIMENSION_MODULES,
         SummaryAxis,
         ObjectionsAxis,
-        InterestLevelAxis,
         NextActionAxis,
         MiscNotesAxis,
         DataCorrectionsAxis,
@@ -114,6 +116,8 @@ def _make_dispatching_client(analysis):
         CommitmentsAxis,  # noqa: F401
         AbandonmentReasonAxis,  # noqa: F401
     )
+    from app.analysis.universal.interest.interests import InterestsAxis
+    from app.analysis.universal.interest.interest_level import InterestLevelResult, ProductScore
 
     schema_to_target = {
         mod.DIMENSION["schema"]: mod.DIMENSION["target_field"]
@@ -121,9 +125,29 @@ def _make_dispatching_client(analysis):
     }
 
     def _build_axis(target_field, schema_cls):
+        # Handle pipeline schemas
+        if schema_cls is InterestsAxis:
+            return analysis.detected_interests  # InterestsAxis
+        if schema_cls is InterestLevelResult:
+            il = analysis.interest_level or 0
+            return InterestLevelResult.model_construct(
+                per_product=[
+                    ProductScore.model_construct(
+                        product="auto_todo_riesgo",
+                        score=il,
+                        reason="Mock.",
+                    )
+                ] if il > 0 else [],
+                general_score=il,
+                level="high" if il >= 61 else "medium" if il >= 41 else "low",
+                reason="Mock.",
+                positive_signals=[],
+                negative_signals=[],
+                confidence="medium",
+            )
+
         complex_targets = {
             "call_outcome",
-            "detected_interests",
             "identified_problem",
             "objections",          # qora-objections: complex axis (ObjectionsAxis)
             "service_issues",
@@ -138,8 +162,6 @@ def _make_dispatching_client(analysis):
         if schema_cls is ObjectionsAxis:
             # Fallback (should not reach here — objections is in complex_targets)
             return analysis.objections
-        if schema_cls is InterestLevelAxis:
-            return InterestLevelAxis(score=int(analysis.interest_level))
         if schema_cls is NextActionAxis:
             return NextActionAxis(action=str(analysis.next_action_suggested))
         if schema_cls is MiscNotesAxis:

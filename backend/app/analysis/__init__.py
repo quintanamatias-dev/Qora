@@ -6,8 +6,11 @@ so the package can be copy-pasted into other runtimes.
 
 Each universal dimension under ``app.analysis.universal`` owns its own
 prompt, schema, and an ``analyze(transcript, client)`` coroutine. The
-summarizer fans 13 calls out via ``asyncio.gather`` and assembles the
-results into ``PostCallAnalysis``.
+summarizer fans 11 calls out via ``asyncio.gather`` for the independent
+dimensions PLUS runs the 2-phase interest pipeline sequentially.
+
+qora-interest-pipeline: DetectedInterests (old flat-list model) replaced by
+InterestsAxis (catalog-validated model from interest/ package).
 """
 
 from __future__ import annotations
@@ -18,9 +21,9 @@ from app.analysis.universal import (
     AbandonmentReasonAxis,
     CallOutcome,
     CommitmentsAxis,
-    DetectedInterests,
     DIMENSION_MODULES,
     IdentifiedProblem,
+    InterestsAxis,
     ProfileFactsAxis,
     ServiceIssue,
     ServiceIssuesAxis,
@@ -30,7 +33,7 @@ from app.analysis.universal import (
 __all__ = [
     "Urgency",
     "CallOutcome",
-    "DetectedInterests",
+    "InterestsAxis",
     "IdentifiedProblem",
     "ServiceIssue",
     "ServiceIssuesAxis",

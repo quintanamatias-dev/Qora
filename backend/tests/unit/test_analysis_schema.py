@@ -32,8 +32,12 @@ def test_analysis_schema_importable_standalone():
     # Module exposes the required symbols
     assert hasattr(mod, "PostCallAnalysis")
     assert hasattr(mod, "CallOutcome")
-    assert hasattr(mod, "DetectedInterests")
     assert hasattr(mod, "IdentifiedProblem")
+    # qora-interest-pipeline: DetectedInterests replaced by InterestsAxis
+    assert not hasattr(mod, "DetectedInterests"), (
+        "DetectedInterests (old model) must be removed from analysis_schema exports "
+        "(qora-interest-pipeline spec — use InterestsAxis instead)"
+    )
     # OutcomeClassification and EngagementQuality MUST NOT be exported post-outcome
     assert not hasattr(mod, "OutcomeClassification"), (
         "OutcomeClassification must be removed from analysis_schema exports (qora-outcome spec)"
@@ -339,32 +343,37 @@ def test_outcome_dimension_prompt_no_engagement_quality():
 
 
 # ---------------------------------------------------------------------------
-# Scenario: DetectedInterests — defaults to empty lists
+# Scenario: InterestsAxis (new) — replaces old DetectedInterests
+# qora-interest-pipeline spec: detected_interests field now uses InterestsAxis
 # ---------------------------------------------------------------------------
 
 
 def test_detected_interests_defaults_to_empty_lists():
-    """DetectedInterests fields default to empty lists when not provided."""
-    from app.analysis_schema import DetectedInterests
+    """InterestsAxis defaults to empty items list when not provided.
 
-    interests = DetectedInterests()
-    assert interests.products == []
-    assert interests.specific_needs == []
-    assert interests.buying_signals == []
+    qora-interest-pipeline: detected_interests now uses InterestsAxis (items: list[InterestItem])
+    instead of the old DetectedInterests (products/specific_needs/buying_signals).
+    """
+    from app.analysis.universal.interest.interests import InterestsAxis
+
+    axis = InterestsAxis()
+    assert axis.items == []
 
 
 def test_detected_interests_with_data():
-    """DetectedInterests accepts populated list fields."""
-    from app.analysis_schema import DetectedInterests
+    """InterestsAxis accepts populated InterestItem list."""
+    from app.analysis.universal.interest.interests import InterestsAxis, InterestItem
 
-    interests = DetectedInterests(
-        products=["todo_riesgo", "terceros_completo"],
-        specific_needs=["precio_competitivo"],
-        buying_signals=["asked about monthly price"],
+    item = InterestItem(
+        product="auto_todo_riesgo",
+        needs=["precio_competitivo"],
+        evidence="Me interesa el todo riesgo.",
+        confidence="high",
     )
-    assert "todo_riesgo" in interests.products
-    assert "precio_competitivo" in interests.specific_needs
-    assert "asked about monthly price" in interests.buying_signals
+    axis = InterestsAxis(items=[item])
+    assert len(axis.items) == 1
+    assert axis.items[0].product == "auto_todo_riesgo"
+    assert "precio_competitivo" in axis.items[0].needs
 
 
 # ---------------------------------------------------------------------------
@@ -440,12 +449,18 @@ def test_post_call_analysis_valid_full_instance():
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
         Urgency,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis, InterestItem
     from app.analysis.universal.objections import ObjectionsAxis as _OA
 
+    item = InterestItem(
+        product="auto_todo_riesgo",
+        needs=["precio_competitivo"],
+        evidence="Me interesa el todo riesgo.",
+        confidence="high",
+    )
     analysis = PostCallAnalysis(
         summary="Lead was very interested in todo riesgo coverage.",
         objections=_OA(),
@@ -458,11 +473,7 @@ def test_post_call_analysis_valid_full_instance():
             reason="Lead requested a quote.",
             confidence="high",
         ),
-        detected_interests=DetectedInterests(
-            products=["todo_riesgo"],
-            specific_needs=["cobertura_amplia"],
-            buying_signals=["asked for price"],
-        ),
+        detected_interests=InterestsAxis(items=[item]),
         identified_problem=IdentifiedProblem(
             primary_need="Needs comprehensive vehicle coverage.",
             pain_points=["no current insurance"],
@@ -473,7 +484,8 @@ def test_post_call_analysis_valid_full_instance():
     assert analysis.summary == "Lead was very interested in todo riesgo coverage."
     assert analysis.interest_level == 85
     assert analysis.call_outcome.classification == "completed_positive"
-    assert analysis.detected_interests.products == ["todo_riesgo"]
+    assert len(analysis.detected_interests.items) == 1
+    assert analysis.detected_interests.items[0].product == "auto_todo_riesgo"
     assert analysis.identified_problem.urgency == Urgency.high
 
 
@@ -482,9 +494,9 @@ def test_post_call_analysis_model_dump_contains_axes():
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.objections import ObjectionsAxis as _OA
 
     analysis = PostCallAnalysis(
@@ -499,7 +511,7 @@ def test_post_call_analysis_model_dump_contains_axes():
             reason="Lead was driving.",
             confidence="low",
         ),
-        detected_interests=DetectedInterests(),
+        detected_interests=InterestsAxis(),
         identified_problem=IdentifiedProblem(
             primary_need="Unknown.",
             urgency="low",
@@ -513,6 +525,8 @@ def test_post_call_analysis_model_dump_contains_axes():
     # call_outcome is a nested dict
     assert dumped["call_outcome"]["classification"] == "busy"
     assert dumped["identified_problem"]["urgency"] == "low"
+    # detected_interests has items key (new InterestsAxis format)
+    assert "items" in dumped["detected_interests"]
     # engagement_quality must NOT be in dumped call_outcome
     assert "engagement_quality" not in dumped["call_outcome"]
 
@@ -618,16 +632,22 @@ def test_Objection_importable_from_universal():
 
 
 def test_detected_interests_with_empty_buying_signals():
-    """DetectedInterests with products but empty buying_signals is valid."""
-    from app.analysis_schema import DetectedInterests
+    """InterestsAxis with items but empty needs is valid.
 
-    interests = DetectedInterests(
-        products=["todo_riesgo"],
-        specific_needs=[],
-        buying_signals=[],
+    qora-interest-pipeline: buying_signals field removed; needs is per-item.
+    """
+    from app.analysis.universal.interest.interests import InterestsAxis, InterestItem
+
+    item = InterestItem(
+        product="auto_todo_riesgo",
+        needs=[],
+        evidence="Me interesa el todo riesgo.",
+        confidence="low",
     )
-    assert interests.products == ["todo_riesgo"]
-    assert interests.buying_signals == []
+    axis = InterestsAxis(items=[item])
+    assert len(axis.items) == 1
+    assert axis.items[0].product == "auto_todo_riesgo"
+    assert axis.items[0].needs == []
 
 
 def test_call_outcome_all_11_classifications_valid():
@@ -678,9 +698,9 @@ def test_post_call_analysis_data_corrections_defaults_to_empty_string():
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.objections import ObjectionsAxis as _OA
 
     analysis = PostCallAnalysis(
@@ -695,7 +715,7 @@ def test_post_call_analysis_data_corrections_defaults_to_empty_string():
             reason="Lead was driving.",
             confidence="low",
         ),
-        detected_interests=DetectedInterests(),
+        detected_interests=InterestsAxis(),
         identified_problem=IdentifiedProblem(
             primary_need="Unknown.",
             urgency="low",
@@ -712,9 +732,9 @@ def test_post_call_analysis_data_corrections_accepts_string():
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.objections import ObjectionsAxis as _OA
 
     analysis = PostCallAnalysis(
@@ -730,7 +750,7 @@ def test_post_call_analysis_data_corrections_accepts_string():
             reason="Lead engaged.",
             confidence="high",
         ),
-        detected_interests=DetectedInterests(),
+        detected_interests=InterestsAxis(),
         identified_problem=IdentifiedProblem(
             primary_need="Needs coverage.",
             urgency="medium",
@@ -746,9 +766,9 @@ def test_post_call_analysis_data_corrections_rejects_dict():
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.objections import ObjectionsAxis as _OA
 
     with pytest.raises((ValidationError, Exception)):
@@ -765,7 +785,7 @@ def test_post_call_analysis_data_corrections_rejects_dict():
                 reason="Test.",
                 confidence="low",
             ),
-            detected_interests=DetectedInterests(),
+            detected_interests=InterestsAxis(),
             identified_problem=IdentifiedProblem(
                 primary_need="Unknown.",
                 urgency="low",
@@ -924,9 +944,9 @@ def test_post_call_analysis_new_axes_have_correct_defaults():
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.objections import ObjectionsAxis as _OA
 
     analysis = PostCallAnalysis(
@@ -941,7 +961,7 @@ def test_post_call_analysis_new_axes_have_correct_defaults():
             reason="Lead was driving.",
             confidence="low",
         ),
-        detected_interests=DetectedInterests(),
+        detected_interests=InterestsAxis(),
         identified_problem=IdentifiedProblem(
             primary_need="Unknown.",
             urgency="low",
@@ -959,12 +979,12 @@ def test_post_call_analysis_new_axes_accept_data():
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
         ServiceIssuesAxis,
         ProfileFactsAxis,
         AbandonmentReasonAxis,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.commitments import CommitmentsAxis, Commitment
     from app.analysis.universal.service_issues import ServiceIssue
 
@@ -998,7 +1018,7 @@ def test_post_call_analysis_new_axes_accept_data():
             reason="Lead engaged well.",
             confidence="high",
         ),
-        detected_interests=DetectedInterests(),
+        detected_interests=InterestsAxis(),
         identified_problem=IdentifiedProblem(
             primary_need="Needs a solution.",
             urgency="medium",
@@ -1027,12 +1047,10 @@ def test_post_call_analysis_new_axes_accept_data():
     [
         __import__("app.analysis.universal.summary", fromlist=["x"]),
         __import__("app.analysis.universal.objections", fromlist=["x"]),
-        __import__("app.analysis.universal.interest_level", fromlist=["x"]),
         __import__("app.analysis.universal.next_action", fromlist=["x"]),
         __import__("app.analysis.universal.misc_notes", fromlist=["x"]),
         __import__("app.analysis.universal.data_corrections", fromlist=["x"]),
         __import__("app.analysis.universal.outcome", fromlist=["x"]),
-        __import__("app.analysis.universal.interests", fromlist=["x"]),
         __import__("app.analysis.universal.problem", fromlist=["x"]),
         __import__("app.analysis.universal.service_issues", fromlist=["x"]),
         __import__("app.analysis.universal.profile_facts", fromlist=["x"]),
@@ -1042,7 +1060,11 @@ def test_post_call_analysis_new_axes_accept_data():
     ids=lambda m: m.DIMENSION["name"],
 )
 def test_dimension_module_contract(mod):
-    """Every dimension module exposes DIMENSION dict, target_field, and async analyze()."""
+    """Every dimension module exposes DIMENSION dict, target_field, and async analyze().
+
+    NOTE: interest_level and interests are no longer in DIMENSION_MODULES —
+    they are orchestrated by the 2-phase interest pipeline in summarizer.py.
+    """
     import inspect
     from app.analysis import PostCallAnalysis
 
@@ -1061,15 +1083,24 @@ def test_dimension_module_contract(mod):
 
 
 def test_dimension_modules_cover_all_post_call_analysis_fields():
-    """Every PostCallAnalysis field is owned by exactly one dimension module."""
+    """Every PostCallAnalysis field is owned by exactly one dimension module OR
+    handled by the interest pipeline.
+
+    qora-interest-pipeline: interest_level and detected_interests are now
+    orchestrated by the 2-phase pipeline, NOT by DIMENSION_MODULES. The
+    remaining 11 modules must cover all other PostCallAnalysis fields.
+    """
     from app.analysis import PostCallAnalysis
     from app.analysis.universal import DIMENSION_MODULES
+
+    # Fields managed by the interest pipeline (not in DIMENSION_MODULES)
+    _PIPELINE_FIELDS = {"interest_level", "detected_interests"}
 
     target_fields = [mod.DIMENSION["target_field"] for mod in DIMENSION_MODULES]
     assert len(target_fields) == len(set(target_fields)), (
         f"Duplicate target_field across dimensions: {target_fields}"
     )
-    expected = set(PostCallAnalysis.model_fields.keys())
+    expected = set(PostCallAnalysis.model_fields.keys()) - _PIPELINE_FIELDS
     assert set(target_fields) == expected, (
         f"Mismatch — extra: {set(target_fields) - expected}, "
         f"missing: {expected - set(target_fields)}"
@@ -1082,16 +1113,16 @@ async def test_dimension_analyze_returns_unwrapped_value_for_simple_axes():
 
     NOTE: objections was moved to complex-axis group (qora-objections spec —
     analyze() now returns ObjectionsAxis, not an unwrapped list).
+    NOTE: interest_level is no longer in DIMENSION_MODULES (qora-interest-pipeline
+    spec — it's orchestrated by the 2-phase pipeline, not parallel gather).
     """
     from unittest.mock import AsyncMock, MagicMock
     from app.analysis.universal import (
         SummaryAxis,
-        InterestLevelAxis,
         NextActionAxis,
         MiscNotesAxis,
         DataCorrectionsAxis,
         summary as summary_mod,
-        interest_level as interest_level_mod,
         next_action as next_action_mod,
         misc_notes as misc_notes_mod,
         data_corrections as data_corrections_mod,
@@ -1099,7 +1130,6 @@ async def test_dimension_analyze_returns_unwrapped_value_for_simple_axes():
 
     cases = [
         (summary_mod, SummaryAxis(text="hi"), str, "hi"),
-        (interest_level_mod, InterestLevelAxis(score=42), int, 42),
         (next_action_mod, NextActionAxis(action="wait"), str, "wait"),
         (misc_notes_mod, MiscNotesAxis(notes="ok"), str, "ok"),
         (data_corrections_mod, DataCorrectionsAxis(corrections=""), str, ""),
@@ -1122,11 +1152,12 @@ async def test_dimension_analyze_returns_axis_for_complex_axes():
     """Complex-axis analyze() returns the parsed axis model unchanged.
 
     objections is now a complex axis (qora-objections spec — returns ObjectionsAxis).
+    NOTE: interests is no longer in DIMENSION_MODULES (qora-interest-pipeline spec
+    — it's orchestrated by the 2-phase pipeline via run_interest_pipeline()).
     """
     from unittest.mock import AsyncMock, MagicMock
     from app.analysis.universal import (
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
         ObjectionsAxis,
         ServiceIssuesAxis,
@@ -1135,7 +1166,6 @@ async def test_dimension_analyze_returns_axis_for_complex_axes():
         AbandonmentReasonAxis,
         outcome as outcome_mod,
         objections as objections_mod,
-        interests as interests_mod,
         problem as problem_mod,
         service_issues as service_issues_mod,
         profile_facts as profile_facts_mod,
@@ -1149,7 +1179,6 @@ async def test_dimension_analyze_returns_axis_for_complex_axes():
             CallOutcome(classification="busy", reason="r", confidence="low"),
         ),
         (objections_mod, ObjectionsAxis()),
-        (interests_mod, DetectedInterests()),
         (problem_mod, IdentifiedProblem(primary_need="n", urgency="low")),
         (service_issues_mod, ServiceIssuesAxis()),
         (profile_facts_mod, ProfileFactsAxis()),
@@ -1167,19 +1196,22 @@ async def test_dimension_analyze_returns_axis_for_complex_axes():
 
 
 def test_dimension_modules_iteration_order_is_stable():
-    """DIMENSION_MODULES order is stable so the summarizer fan-out is deterministic."""
+    """DIMENSION_MODULES order is stable so the summarizer fan-out is deterministic.
+
+    qora-interest-pipeline: interest_level and interests are removed from
+    DIMENSION_MODULES (11 entries, down from 13). They are now orchestrated
+    by the 2-phase interest pipeline.
+    """
     from app.analysis.universal import DIMENSION_MODULES
 
     names = [mod.DIMENSION["name"] for mod in DIMENSION_MODULES]
     assert names == [
         "summary",
         "objections",
-        "interest_level",
         "next_action",
         "misc_notes",
         "data_corrections",
         "outcome",
-        "interests",
         "problem",
         "service_issues",
         "profile_facts",
@@ -1275,20 +1307,169 @@ def test_objections_target_field_mapping_is_correct():
 
 
 def test_dimension_modules_cover_all_post_call_analysis_fields_still_correct():
-    """All 13 PostCallAnalysis fields are covered by exactly one dimension after qora-objections."""
+    """All 11 non-pipeline PostCallAnalysis fields are covered by exactly one dimension.
+
+    qora-interest-pipeline: interest_level and detected_interests are now
+    pipeline fields — not in DIMENSION_MODULES. The 11 remaining dimensions
+    cover all other PostCallAnalysis fields.
+    """
     from app.analysis import PostCallAnalysis
     from app.analysis.universal import DIMENSION_MODULES
+
+    # Fields managed by the interest pipeline (not in DIMENSION_MODULES)
+    _PIPELINE_FIELDS = {"interest_level", "detected_interests"}
 
     target_fields = [mod.DIMENSION["target_field"] for mod in DIMENSION_MODULES]
     # No duplicates
     assert len(target_fields) == len(set(target_fields)), (
         f"Duplicate target_field: {target_fields}"
     )
-    # Every field is covered
-    expected = set(PostCallAnalysis.model_fields.keys())
+    # Every non-pipeline field is covered
+    expected = set(PostCallAnalysis.model_fields.keys()) - _PIPELINE_FIELDS
     assert set(target_fields) == expected, (
         f"Mismatch — extra: {set(target_fields) - expected}, "
         f"missing: {expected - set(target_fields)}"
+    )
+
+
+# ===========================================================================
+# qora-interest-pipeline Phase 5 — Integration isolation tests
+# ===========================================================================
+
+
+def test_dimension_modules_count_is_11_after_interest_pipeline():
+    """DIMENSION_MODULES has exactly 11 entries after qora-interest-pipeline.
+
+    interest_level and interests are removed (now handled by run_interest_pipeline).
+    """
+    from app.analysis.universal import DIMENSION_MODULES
+
+    assert len(DIMENSION_MODULES) == 11, (
+        f"Expected 11 DIMENSION_MODULES (interest pipeline extracted), "
+        f"got {len(DIMENSION_MODULES)}: {[m.DIMENSION['name'] for m in DIMENSION_MODULES]}"
+    )
+
+
+def test_interest_item_importable_from_universal():
+    """InterestItem must be importable from app.analysis.universal (qora-interest-pipeline spec)."""
+    from app.analysis.universal import InterestItem  # noqa: F401
+
+    assert InterestItem is not None
+
+
+def test_interests_axis_importable_from_universal():
+    """InterestsAxis must be importable from app.analysis.universal."""
+    from app.analysis.universal import InterestsAxis  # noqa: F401
+
+    assert InterestsAxis is not None
+
+
+def test_run_interest_pipeline_importable_from_universal():
+    """run_interest_pipeline must be importable from app.analysis.universal."""
+    from app.analysis.universal import run_interest_pipeline  # noqa: F401
+
+    assert run_interest_pipeline is not None
+
+
+def test_interest_level_stays_int_in_schema():
+    """PostCallAnalysis.interest_level field type is still int (AD-4 — no consumer breakage)."""
+    from app.analysis.schema import PostCallAnalysis
+
+    field_info = PostCallAnalysis.model_fields["interest_level"]
+    # Field annotation must be int (not a Pydantic model)
+    import typing
+    annotation = field_info.annotation
+    assert annotation is int or annotation == int, (
+        f"interest_level must remain int in PostCallAnalysis (AD-4), got {annotation}"
+    )
+
+
+def test_detected_interests_in_schema_uses_new_model():
+    """PostCallAnalysis.detected_interests field type is InterestsAxis (new pipeline model)."""
+    from app.analysis.schema import PostCallAnalysis
+    from app.analysis.universal.interest.interests import InterestsAxis
+
+    field_info = PostCallAnalysis.model_fields["detected_interests"]
+    annotation = field_info.annotation
+    assert annotation is InterestsAxis, (
+        f"detected_interests must use InterestsAxis from interest/ package, got {annotation}"
+    )
+
+
+def test_interests_axis_default_has_empty_items():
+    """InterestsAxis() with no args has items=[] (safe default for pipeline failures)."""
+    from app.analysis.universal.interest.interests import InterestsAxis
+
+    axis = InterestsAxis()
+    assert axis.items == []
+
+
+def test_interest_item_has_required_fields():
+    """InterestItem has product, needs, evidence, confidence fields."""
+    from app.analysis.universal.interest.interests import InterestItem
+
+    item = InterestItem(
+        product="auto_todo_riesgo",
+        needs=["precio_competitivo"],
+        evidence="Me interesa el todo riesgo.",
+        confidence="high",
+    )
+    assert item.product == "auto_todo_riesgo"
+    assert item.needs == ["precio_competitivo"]
+    assert item.evidence == "Me interesa el todo riesgo."
+    assert item.confidence == "high"
+
+
+def test_interest_level_result_importable():
+    """InterestLevelResult must be importable from app.analysis.universal."""
+    from app.analysis.universal import InterestLevelResult  # noqa: F401
+
+    assert InterestLevelResult is not None
+
+
+def test_old_interests_module_no_longer_in_dimension_modules():
+    """The old interests.py module (universal/interests.py) must NOT be in DIMENSION_MODULES.
+
+    qora-interest-pipeline: interests.py was DELETED. No module should exist there.
+    """
+    import importlib.util
+
+    # The old module must NOT be importable (it was deleted)
+    spec = importlib.util.find_spec("app.analysis.universal.interests")
+    assert spec is None, (
+        "app.analysis.universal.interests must be DELETED "
+        "(qora-interest-pipeline spec — module was moved to interest/interests.py)"
+    )
+
+    # Also verify DIMENSION_MODULES doesn't have an interests dimension
+    from app.analysis.universal import DIMENSION_MODULES
+    dim_names = [mod.DIMENSION["name"] for mod in DIMENSION_MODULES]
+    assert "interests" not in dim_names, (
+        "interests must be removed from DIMENSION_MODULES "
+        "(qora-interest-pipeline spec)"
+    )
+
+
+def test_old_interest_level_module_no_longer_in_dimension_modules():
+    """The old interest_level.py module (universal/interest_level.py) must NOT be in DIMENSION_MODULES.
+
+    qora-interest-pipeline: interest_level.py was DELETED. No module should exist there.
+    """
+    import importlib.util
+
+    # The old module must NOT be importable (it was deleted)
+    spec = importlib.util.find_spec("app.analysis.universal.interest_level")
+    assert spec is None, (
+        "app.analysis.universal.interest_level must be DELETED "
+        "(qora-interest-pipeline spec — module was moved to interest/interest_level.py)"
+    )
+
+    # Also verify DIMENSION_MODULES doesn't have an interest_level dimension
+    from app.analysis.universal import DIMENSION_MODULES
+    dim_names = [mod.DIMENSION["name"] for mod in DIMENSION_MODULES]
+    assert "interest_level" not in dim_names, (
+        "interest_level must be removed from DIMENSION_MODULES "
+        "(qora-interest-pipeline spec)"
     )
 
 

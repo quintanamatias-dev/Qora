@@ -4,8 +4,11 @@ Each module in this package owns a Pydantic schema, a focused system prompt,
 and an ``analyze(transcript, client)`` coroutine that runs ONE OpenAI call
 and returns the unwrapped value that drops directly into PostCallAnalysis.
 
-The summarizer iterates ``DIMENSION_MODULES`` (one entry per module) and runs
-all 13 ``analyze`` coroutines in parallel via ``asyncio.gather``.
+qora-interest-pipeline: The summarizer now runs 11 independent dimensions in
+parallel (``DIMENSION_MODULES``) PLUS a sequential 2-phase interest pipeline
+via ``run_interest_pipeline``. The old ``interests`` and ``interest_level``
+modules are no longer in ``DIMENSION_MODULES`` — they are orchestrated by
+the pipeline.
 """
 
 from __future__ import annotations
@@ -16,8 +19,6 @@ from app.analysis.universal import (
     abandonment,
     commitments,
     data_corrections,
-    interest_level,
-    interests,
     misc_notes,
     next_action,
     objections,
@@ -30,8 +31,15 @@ from app.analysis.universal import (
 from app.analysis.universal.abandonment import AbandonmentReasonAxis
 from app.analysis.universal.commitments import CommitmentsAxis
 from app.analysis.universal.data_corrections import DataCorrectionsAxis
-from app.analysis.universal.interest_level import InterestLevelAxis
-from app.analysis.universal.interests import DetectedInterests
+
+# qora-interest-pipeline: InterestItem, InterestsAxis, InterestLevelResult,
+# and run_interest_pipeline are imported from the new interest/ package.
+from app.analysis.universal.interest import (
+    InterestItem,
+    InterestLevelResult,
+    InterestsAxis,
+    run_interest_pipeline,
+)
 from app.analysis.universal.misc_notes import MiscNotesAxis
 from app.analysis.universal.next_action import NextActionAxis
 from app.analysis.universal.objections import Objection, ObjectionsAxis
@@ -44,15 +52,18 @@ from app.analysis.universal.summary import SummaryAxis
 # Ordered list of dimension modules — one entry per per-dimension analyzer.
 # The summarizer fans out one OpenAI call per module via ``mod.analyze`` and
 # merges the unwrapped results into PostCallAnalysis using ``DIMENSION["target_field"]``.
+#
+# qora-interest-pipeline: DIMENSION_MODULES has 11 entries (down from 13).
+# ``interests`` and ``interest_level`` are handled by the 2-phase pipeline:
+#   Phase 1: interests.analyze() — runs in parallel with the 11 here
+#   Phase 2: interest_level.analyze() — runs after Phase 1 completes
 DIMENSION_MODULES: list[ModuleType] = [
     summary,
     objections,
-    interest_level,
     next_action,
     misc_notes,
     data_corrections,
     outcome,
-    interests,
     problem,
     service_issues,
     profile_facts,
@@ -66,18 +77,22 @@ __all__ = [
     "SummaryAxis",
     "Objection",
     "ObjectionsAxis",
-    "InterestLevelAxis",
     "NextActionAxis",
     "MiscNotesAxis",
     "DataCorrectionsAxis",
     "CallOutcome",
-    "DetectedInterests",
     "IdentifiedProblem",
     "ServiceIssue",
     "ServiceIssuesAxis",
     "ProfileFactsAxis",
     "CommitmentsAxis",
     "AbandonmentReasonAxis",
+    # qora-interest-pipeline: new exports from interest/ package
+    "InterestItem",
+    "InterestsAxis",
+    "InterestLevelResult",
+    "run_interest_pipeline",
+    # Module collections
     "UNIVERSAL_DIMENSIONS",
     "DIMENSION_MODULES",
 ]

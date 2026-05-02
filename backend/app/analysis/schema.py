@@ -1,9 +1,15 @@
 """Composite root schema — PostCallAnalysis.
 
-Aggregates the 13 universal dimensions into one Pydantic model. Each field
+Aggregates the universal dimensions into one Pydantic model. Each field
 has a default so the summarizer's per-dimension orchestrator can leave a
 field unset when its dimension call fails (asyncio.gather with
 return_exceptions=True), and the model still validates.
+
+qora-interest-pipeline:
+- ``detected_interests`` type changed from old ``DetectedInterests``
+  (flat lists) to ``InterestsAxis`` (catalog-validated items).
+- ``interest_level: int = Field(default=0)`` stays UNCHANGED (AD-4).
+  Rich per-product data goes into ``extra_axes_data`` via summarizer.
 """
 
 from __future__ import annotations
@@ -14,8 +20,8 @@ from app.analysis.universal import (
     AbandonmentReasonAxis,
     CallOutcome,
     CommitmentsAxis,
-    DetectedInterests,
     IdentifiedProblem,
+    InterestsAxis,
     ObjectionsAxis,
     ProfileFactsAxis,
     ServiceIssuesAxis,
@@ -79,9 +85,11 @@ class PostCallAnalysis(BaseModel):
         default_factory=_default_call_outcome,
         description="Semantic classification of the call result",
     )
-    detected_interests: DetectedInterests = Field(
-        default_factory=DetectedInterests,
-        description="Insurance products, specific needs, and buying signals detected in the transcript",
+    # qora-interest-pipeline: type changed from old DetectedInterests (flat lists)
+    # to InterestsAxis (catalog-validated items from the interest/ package).
+    detected_interests: InterestsAxis = Field(
+        default_factory=InterestsAxis,
+        description="Insurance products and needs detected in the transcript (catalog-validated)",
     )
     identified_problem: IdentifiedProblem = Field(
         default_factory=_default_identified_problem,

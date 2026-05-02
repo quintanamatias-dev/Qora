@@ -109,8 +109,19 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
     user_turns = sum(1 for t in turns if t.role == "user")
     agent_turns = sum(1 for t in turns if t.role == "agent")
 
+    # qora-interest-pipeline: Load previous interest_level from Lead for 70/30 formula
+    previous_interest_level: int | None = None
+    if cs.lead_id:
+        prev_result = await db.execute(
+            select(Lead.interest_level).where(Lead.id == cs.lead_id)
+        )
+        previous_interest_level = prev_result.scalar_one_or_none()
+
     try:
-        summary, facts = await _call_gpt_summarize(transcript_text)
+        summary, facts = await _call_gpt_summarize(
+            transcript_text,
+            previous_interest_level=previous_interest_level,
+        )
     except Exception as gpt_exc:
         error_msg = str(gpt_exc)
         logger.warning(
@@ -197,44 +208,133 @@ def _get_openai_client() -> tuple[AsyncOpenAI, str]:
     return client, model
 
 
-async def _call_gpt_summarize(transcript_text: str) -> tuple[str, dict[str, Any]]:
-    """Run all 13 universal dimensions in parallel and assemble PostCallAnalysis.
+async def _call_gpt_summarize(
+    transcript_text: str,
+    *,
+    previous_interest_level: int | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Run 11 universal dimensions in parallel and the 2-phase interest pipeline.
 
-    Each module under ``app.analysis.universal`` owns one OpenAI call. Results
-    are gathered with ``return_exceptions=True`` so one failed dimension does
-    not poison the others — the failed field falls back to PostCallAnalysis's
-    schema default.
+    qora-interest-pipeline: The old monolithic 13-parallel gather is replaced by:
+    - Phase 1: 11 independent dimensions in parallel via asyncio.gather
+    - Phase 2: Interest pipeline (interests → interest_level sequential) via run_interest_pipeline
+
+    Both run concurrently at the top level. Results are merged into PostCallAnalysis.
 
     Returns:
         Tuple of (summary_text, extracted_facts_dict).
 
     Raises:
-        RuntimeError: When ALL 13 dimensions fail (no usable analysis).
+        RuntimeError: When ALL 11 independent dimensions AND the interest pipeline fail.
     """
+    from app.analysis.universal.interest import run_interest_pipeline
+
     client, _model = _get_openai_client()
 
-    results = await asyncio.gather(
-        *[mod.analyze(transcript_text, client) for mod in DIMENSION_MODULES],
+    # Run 11 independent dimensions + interest pipeline concurrently
+    independent_results_raw, pipeline_raw = await asyncio.gather(
+        asyncio.gather(
+            *[mod.analyze(transcript_text, client) for mod in DIMENSION_MODULES],
+            return_exceptions=True,
+        ),
+        run_interest_pipeline(
+            transcript_text,
+            client,
+            previous_score=previous_interest_level,
+        ),
         return_exceptions=True,
     )
 
     fields: dict[str, Any] = {}
     failures = 0
-    for mod, result in zip(DIMENSION_MODULES, results):
-        dim_name = mod.DIMENSION["name"]
-        if isinstance(result, Exception):
+
+    # -------------------------------------------------------------------
+    # Process 11 independent dimensions
+    # -------------------------------------------------------------------
+    if isinstance(independent_results_raw, Exception):
+        # The inner gather itself failed (extremely rare)
+        failures += len(DIMENSION_MODULES)
+        logger.error(
+            "dimension_gather_failed",
+            error=str(independent_results_raw),
+            error_type=type(independent_results_raw).__name__,
+        )
+    else:
+        for mod, result in zip(DIMENSION_MODULES, independent_results_raw):
+            dim_name = mod.DIMENSION["name"]
+            if isinstance(result, Exception):
+                failures += 1
+                logger.error(
+                    "dimension_analysis_failed",
+                    dimension=dim_name,
+                    error=str(result),
+                    error_type=type(result).__name__,
+                )
+                continue
+            fields[mod.DIMENSION["target_field"]] = result
+
+    # -------------------------------------------------------------------
+    # Process interest pipeline result
+    # -------------------------------------------------------------------
+    if isinstance(pipeline_raw, Exception):
+        # run_interest_pipeline itself raised (should not happen — it catches internally)
+        failures += 1
+        logger.error(
+            "interest_pipeline_exception",
+            error=str(pipeline_raw),
+            error_type=type(pipeline_raw).__name__,
+        )
+        # Leave interest_level and detected_interests at schema defaults (0 / empty)
+    else:
+        interests_result, level_result = pipeline_raw
+
+        # Check if Agent 1 (interests) returned an error dict
+        interests_is_error = isinstance(interests_result, dict) and "error" in interests_result
+        level_is_error = isinstance(level_result, dict) and "error" in level_result
+
+        if interests_is_error:
+            # Agent 1 failed — store error in extra_axes_data, leave fields at defaults
             failures += 1
             logger.error(
-                "dimension_analysis_failed",
-                dimension=dim_name,
-                error=str(result),
-                error_type=type(result).__name__,
+                "interest_pipeline_failed",
+                interests_error=interests_result.get("error"),
+                level_error=level_result.get("error") if level_is_error else None,
             )
-            continue
-        fields[mod.DIMENSION["target_field"]] = result
+            fields.setdefault("extra_axes_data", {})
+            fields["extra_axes_data"]["interest_pipeline_error"] = {
+                "interests": interests_result,
+                "interest_level": level_result,
+            }
+            # Fields stay at schema defaults (InterestsAxis(), 0)
+        else:
+            # Agent 1 succeeded — set detected_interests
+            fields["detected_interests"] = interests_result
 
-    if failures == len(DIMENSION_MODULES):
-        # All dimensions blew up — no useful analysis.
+            if level_is_error:
+                # Agent 2 failed — store error marker, keep interests result
+                logger.error(
+                    "interest_level_pipeline_failed",
+                    error=level_result.get("error"),
+                )
+                fields.setdefault("extra_axes_data", {})
+                fields["extra_axes_data"]["interest_pipeline_error"] = {
+                    "interest_level": level_result,
+                }
+                # interest_level stays at schema default (0)
+            else:
+                # Both agents succeeded — extract int score for interest_level field
+                from app.analysis.universal.interest.interest_level import InterestLevelResult
+
+                if isinstance(level_result, InterestLevelResult):
+                    fields["interest_level"] = level_result.general_score
+                    # Store rich detail in extra_axes_data for monitoring/analytics
+                    fields.setdefault("extra_axes_data", {})
+                    fields["extra_axes_data"]["interest_pipeline"] = level_result.model_dump()
+                else:
+                    fields["interest_level"] = 0
+
+    total_dims = len(DIMENSION_MODULES) + 1  # 11 + interest pipeline (counts as 1)
+    if failures >= len(DIMENSION_MODULES) + 1:
         raise RuntimeError(
             f"all {failures} dimension analyses failed — see dimension_analysis_failed logs"
         )
@@ -491,9 +591,19 @@ async def _upsert_call_analysis(
     ca.data_corrections = facts.get("data_corrections") or ""
     ca.misc_notes = facts.get("misc_notes") or ""
     ca.objections = _to_json_list((facts.get("objections") or {}).get("objections"))
-    ca.products = _to_json_list(detected_interests.get("products"))
-    ca.specific_needs = _to_json_list(detected_interests.get("specific_needs"))
-    ca.buying_signals = _to_json_list(detected_interests.get("buying_signals"))
+    # qora-interest-pipeline: detected_interests now uses InterestsAxis (items: list[InterestItem])
+    # Extract product IDs from items for the products column (backward compat)
+    items = detected_interests.get("items") or []
+    products_list = [item["product"] for item in items if isinstance(item, dict) and item.get("product")]
+    ca.products = _to_json_list(products_list)
+    # specific_needs: flatten all needs from all items
+    specific_needs_flat = []
+    for item in items:
+        if isinstance(item, dict):
+            specific_needs_flat.extend(item.get("needs") or [])
+    ca.specific_needs = _to_json_list(list(dict.fromkeys(specific_needs_flat)))  # dedup
+    # buying_signals: no longer in InterestsAxis — set to empty list
+    ca.buying_signals = _to_json_list([])
     ca.pain_points = _to_json_list(identified_problem.get("pain_points"))
     # Issue #35 — 4 new universal axes
     ca.service_issues = _to_json_list((facts.get("service_issues") or {}).get("issues"))
@@ -675,6 +785,8 @@ async def _write_lead_profile_facts(
         for c in (facts.get("commitments") or {}).get("commitments") or []
         if c.get("description")
     ]
+    # qora-interest-pipeline: detected_interests no longer has buying_signals.
+    # The buying_signal: namespace is kept for backward compat but uses an empty list.
     _LIST_AXES: list[tuple[str, list[Any]]] = [
         ("profile:", (facts.get("profile_facts") or {}).get("facts") or []),
         ("pain:", (facts.get("identified_problem") or {}).get("pain_points") or []),
@@ -683,7 +795,7 @@ async def _write_lead_profile_facts(
         ("signal:", _commitment_descriptions),
         (
             "buying_signal:",
-            (facts.get("detected_interests") or {}).get("buying_signals") or [],
+            [],  # qora-interest-pipeline: buying_signals removed from InterestsAxis
         ),
     ]
 

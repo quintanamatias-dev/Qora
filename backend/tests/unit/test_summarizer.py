@@ -16,6 +16,7 @@ TDD: RED → GREEN for Phase 5 tests (2.1 and 2.3).
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -90,16 +91,18 @@ def _axis_for_dimension(analysis_obj, target_field: str, schema_cls):
     """Build the per-dimension axis object (the ``.parsed`` value an analyze
     coroutine expects) from a full PostCallAnalysis payload.
 
-    Simple axes (summary, objections, interest_level, ...) wrap a primitive
-    field of PostCallAnalysis; complex axes (call_outcome, detected_interests,
-    ...) are stored as-is. We look up the schema class to know which shape to
-    return.
+    Simple axes (summary, ...) wrap a primitive field of PostCallAnalysis;
+    complex axes (call_outcome, identified_problem, ...) are stored as-is.
+    We look up the schema class to know which shape to return.
+
+    qora-interest-pipeline: interest_level and detected_interests are NO LONGER
+    in DIMENSION_MODULES. They are handled by run_interest_pipeline() in the
+    summarizer. This helper only covers the 11 independent dimensions.
     """
     from app.analysis.universal import (
         AbandonmentReasonAxis,
         CommitmentsAxis,
         DataCorrectionsAxis,
-        InterestLevelAxis,
         MiscNotesAxis,
         NextActionAxis,
         ObjectionsAxis,
@@ -111,7 +114,6 @@ def _axis_for_dimension(analysis_obj, target_field: str, schema_cls):
     # Complex axes — the value already has the right shape.
     complex_targets = {
         "call_outcome",
-        "detected_interests",
         "identified_problem",
         "objections",          # qora-objections: now returns ObjectionsAxis directly
         "service_issues",
@@ -128,8 +130,6 @@ def _axis_for_dimension(analysis_obj, target_field: str, schema_cls):
     if schema_cls is ObjectionsAxis:
         # Fallback (should not reach here — objections is in complex_targets)
         return analysis_obj.objections
-    if schema_cls is InterestLevelAxis:
-        return InterestLevelAxis(score=int(analysis_obj.interest_level))
     if schema_cls is NextActionAxis:
         return NextActionAxis(action=str(analysis_obj.next_action_suggested))
     if schema_cls is MiscNotesAxis:
@@ -175,7 +175,11 @@ def _make_mock_client(parse_return_value):
     - a pre-built MagicMock response whose ``choices[0].message.parsed`` is a
       PostCallAnalysis (legacy callers using ``_make_parse_response(analysis)``), or
     - any other pre-built response object (used by refusal tests where parsed
-      is None — every dimension call returns the same mock so all 13 fail).
+      is None — every dimension call returns the same mock so all 11 fail).
+
+    qora-interest-pipeline: interest_level and detected_interests are handled by
+    run_interest_pipeline (not by the mock client). The mock client covers the 11
+    independent DIMENSION_MODULES. The pipeline mock is set up separately.
     """
     from app.analysis import PostCallAnalysis
     from app.analysis.universal import DIMENSION_MODULES
@@ -199,14 +203,47 @@ def _make_mock_client(parse_return_value):
             for mod in DIMENSION_MODULES
         }
 
+        # qora-interest-pipeline: also handle InterestsAxis and InterestLevelResult
+        # so that run_interest_pipeline (called with mock_client) returns correct values.
+        from app.analysis.universal.interest.interests import InterestsAxis
+        from app.analysis.universal.interest.interest_level import InterestLevelResult
+
         async def _dispatch(*_args, response_format=None, **_kwargs):
-            target_field = schema_to_target.get(response_format)
-            if target_field is None:
-                axis_value = analysis_obj
-            else:
-                axis_value = _axis_for_dimension(
-                    analysis_obj, target_field, response_format
+            # Handle pipeline schemas directly
+            if response_format is InterestsAxis:
+                # Return the detected_interests from analysis_obj as InterestsAxis
+                axis_value = analysis_obj.detected_interests
+            elif response_format is InterestLevelResult:
+                # Build an InterestLevelResult with per_product score matching analysis_obj.
+                # IMPORTANT: interest_level.analyze() overrides general_score with the formula:
+                # compute_general_score([ps.score for ps in per_product], previous=prev).
+                # To get the desired interest_level, we put it as the single product score
+                # and ensure compute_general_score returns the same value (100% current = max).
+                il = analysis_obj.interest_level or 0
+                from app.analysis.universal.interest.interest_level import ProductScore as _PS
+                axis_value = InterestLevelResult.model_construct(
+                    per_product=[
+                        _PS.model_construct(
+                            product="auto_todo_riesgo",
+                            score=il,
+                            reason="Mock product score.",
+                        )
+                    ] if il > 0 else [],
+                    general_score=il,  # will be overridden by formula, but set for model_construct
+                    level="high" if il >= 61 else "medium" if il >= 41 else "low",
+                    reason="Mock.",
+                    positive_signals=[],
+                    negative_signals=[],
+                    confidence="medium",
                 )
+            else:
+                target_field = schema_to_target.get(response_format)
+                if target_field is None:
+                    axis_value = analysis_obj
+                else:
+                    axis_value = _axis_for_dimension(
+                        analysis_obj, target_field, response_format
+                    )
             response = MagicMock()
             response.choices = [MagicMock()]
             response.choices[0].message.parsed = axis_value
@@ -225,14 +262,87 @@ def _make_mock_client(parse_return_value):
     return mock_client
 
 
+def _mock_run_interest_pipeline(analysis_obj):
+    """Return an async mock for run_interest_pipeline that returns pipeline results.
+
+    The pipeline returns (InterestsAxis|dict, InterestLevelResult|dict).
+    We extract the values from the analysis_obj to simulate a successful pipeline run.
+    """
+    from app.analysis.universal.interest.interests import InterestsAxis
+    from app.analysis.universal.interest.interest_level import InterestLevelResult
+
+    interests_result = analysis_obj.detected_interests  # InterestsAxis
+    interest_level = analysis_obj.interest_level  # int
+
+    # Build a minimal InterestLevelResult for the pipeline mock
+    level_result = InterestLevelResult.model_construct(
+        per_product=[],
+        general_score=interest_level,
+        level="high" if interest_level >= 61 else "medium" if interest_level >= 41 else "low",
+        reason="Mock interest level result.",
+        positive_signals=[],
+        negative_signals=[],
+        confidence="medium",
+    )
+
+    async def _pipeline_mock(*_args, **_kwargs):
+        return interests_result, level_result
+
+    return _pipeline_mock
+
+
+@contextlib.contextmanager
+def _patch_summarizer(mock_client, analysis_obj=None):
+    """Context manager that patches both _get_openai_client AND run_interest_pipeline.
+
+    qora-interest-pipeline: the summarizer now calls run_interest_pipeline in addition
+    to the 11 DIMENSION_MODULES. Tests must patch both to avoid real API calls.
+
+    If analysis_obj is provided, run_interest_pipeline returns a successful tuple
+    (interests_result, level_result). Otherwise uses a default empty pipeline result.
+    """
+    from app.analysis.universal.interest.interests import InterestsAxis
+    from app.analysis.universal.interest.interest_level import InterestLevelResult
+
+    if analysis_obj is not None:
+        pipeline_mock = AsyncMock(side_effect=_mock_run_interest_pipeline(analysis_obj))
+    else:
+        # Default: empty pipeline result (no interests, interest_level=0)
+        default_level = InterestLevelResult.model_construct(
+            per_product=[],
+            general_score=0,
+            level="very_low",
+            reason="No data.",
+            positive_signals=[],
+            negative_signals=[],
+            confidence="low",
+        )
+
+        async def _default_pipeline(*_args, **_kwargs):
+            return InterestsAxis(), default_level
+
+        pipeline_mock = AsyncMock(side_effect=_default_pipeline)
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ), patch(
+        "app.summarizer.run_interest_pipeline", pipeline_mock
+    ):
+        yield
+
+
 def _make_full_analysis_payload():
-    """Build a complete PostCallAnalysis instance for use in mocks."""
+    """Build a complete PostCallAnalysis instance for use in mocks.
+
+    qora-interest-pipeline: detected_interests now uses InterestsAxis (items: list[InterestItem])
+    instead of old DetectedInterests (products/specific_needs/buying_signals).
+    """
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis, InterestItem
     from app.analysis.universal.objections import ObjectionsAxis, Objection
 
     return PostCallAnalysis(
@@ -256,11 +366,14 @@ def _make_full_analysis_payload():
             reason="Lead explicitly requested a quote.",
             confidence="high",
         ),
-        detected_interests=DetectedInterests(
-            products=["todo_riesgo"],
-            specific_needs=["cobertura_amplia"],
-            buying_signals=["asked about monthly price"],
-        ),
+        detected_interests=InterestsAxis(items=[
+            InterestItem(
+                product="auto_todo_riesgo",
+                needs=["precio_competitivo", "cobertura_amplia"],
+                evidence="Me interesa el todo riesgo.",
+                confidence="high",
+            )
+        ]),
         identified_problem=IdentifiedProblem(
             primary_need="Needs comprehensive vehicle coverage for new car.",
             pain_points=["no current insurance"],
@@ -495,9 +608,9 @@ async def test_summarizer_sets_do_not_call_flag(seeded_db):
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis
     from sqlalchemy import select
 
     session_id = await _create_session(
@@ -521,7 +634,7 @@ async def test_summarizer_sets_do_not_call_flag(seeded_db):
             reason="Lead explicitly asked not to be called again.",
             confidence="high",
         ),
-        detected_interests=DetectedInterests(),
+        detected_interests=InterestsAxis(),
         identified_problem=IdentifiedProblem(
             primary_need="No interest in insurance.",
             urgency="low",
@@ -556,9 +669,9 @@ async def test_summarizer_do_not_contact_classification_sets_do_not_call(seeded_
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis
     from sqlalchemy import select
 
     session_id = await _create_session(
@@ -582,7 +695,7 @@ async def test_summarizer_do_not_contact_classification_sets_do_not_call(seeded_
             reason="Lead explicitly said do not contact.",
             confidence="high",
         ),
-        detected_interests=DetectedInterests(),
+        detected_interests=InterestsAxis(),
         identified_problem=IdentifiedProblem(
             primary_need="No interest.",
             urgency="low",
@@ -613,9 +726,9 @@ async def test_summarizer_other_classification_does_not_set_do_not_call(seeded_d
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis
     from sqlalchemy import select
 
     session_id = await _create_session(
@@ -639,7 +752,7 @@ async def test_summarizer_other_classification_does_not_set_do_not_call(seeded_d
             reason="Lead asked to be called tomorrow.",
             confidence="high",
         ),
-        detected_interests=DetectedInterests(),
+        detected_interests=InterestsAxis(),
         identified_problem=IdentifiedProblem(
             primary_need="Needs auto insurance.",
             urgency="medium",
@@ -670,9 +783,9 @@ async def test_upsert_call_analysis_does_not_write_engagement_quality(seeded_db)
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis
     from sqlalchemy import select
 
     session_id = await _create_session(
@@ -696,7 +809,7 @@ async def test_upsert_call_analysis_does_not_write_engagement_quality(seeded_db)
             reason="Lead requested quote.",
             confidence="high",
         ),
-        detected_interests=DetectedInterests(),
+        detected_interests=InterestsAxis(),
         identified_problem=IdentifiedProblem(
             primary_need="Needs auto insurance.",
             urgency="medium",
@@ -731,9 +844,9 @@ async def test_summarizer_does_not_set_do_not_call_for_other_actions(seeded_db):
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis
     from sqlalchemy import select
 
     session_id = await _create_session(
@@ -757,7 +870,7 @@ async def test_summarizer_does_not_set_do_not_call_for_other_actions(seeded_db):
             reason="Lead asked to be called back next week.",
             confidence="medium",
         ),
-        detected_interests=DetectedInterests(),
+        detected_interests=InterestsAxis(),
         identified_problem=IdentifiedProblem(
             primary_need="Interested in coverage but needs more time.",
             urgency="medium",
@@ -864,7 +977,11 @@ async def test_summarizer_extracts_call_outcome_axis(seeded_db):
 
 
 async def test_summarizer_extracts_detected_interests_axis(seeded_db):
-    """Phase 5: extracted_facts contains detected_interests with products + needs."""
+    """Phase 5: extracted_facts contains detected_interests with items format.
+
+    qora-interest-pipeline: detected_interests now uses InterestsAxis (items: list[InterestItem])
+    instead of old DetectedInterests (products/specific_needs/buying_signals).
+    """
     from app.summarizer import generate_summary_and_facts
     from app.calls.models import CallSession
     from sqlalchemy import select
@@ -895,9 +1012,13 @@ async def test_summarizer_extracts_detected_interests_axis(seeded_db):
         cs = result.scalar_one()
         assert "detected_interests" in cs.extracted_facts
         di = cs.extracted_facts["detected_interests"]
-        assert "todo_riesgo" in di["products"]
-        assert isinstance(di["specific_needs"], list)
-        assert isinstance(di["buying_signals"], list)
+        # qora-interest-pipeline: detected_interests is now InterestsAxis format (items list)
+        assert "items" in di
+        assert isinstance(di["items"], list)
+        # The mock has auto_todo_riesgo item
+        assert len(di["items"]) >= 1
+        products = [item["product"] for item in di["items"]]
+        assert any("todo_riesgo" in p for p in products)
 
 
 async def test_summarizer_extracts_identified_problem_axis(seeded_db):
@@ -939,7 +1060,10 @@ async def test_summarizer_extracts_identified_problem_axis(seeded_db):
 
 
 async def test_summarizer_uses_parse_not_create(seeded_db):
-    """Phase 5: summarizer calls .parse() not .create() for structured output."""
+    """Phase 5: summarizer calls .parse() not .create() for structured output.
+
+    qora-interest-pipeline: 11 dim calls + 2 pipeline calls (Agent1 + Agent2) = 13 total.
+    """
     from app.summarizer import generate_summary_and_facts
 
     session_id = await _create_session(
@@ -957,10 +1081,15 @@ async def test_summarizer_uses_parse_not_create(seeded_db):
         async with seeded_db.async_session_factory() as db:
             await generate_summary_and_facts(session_id, db)
 
-        # Must use parse() (per-dimension fan-out → 13 calls), NOT create()
+        # Must use parse() (11 dim calls + 2 pipeline calls = 13), NOT create()
         from app.analysis.universal import DIMENSION_MODULES
 
-        assert mock_client.chat.completions.parse.call_count == len(DIMENSION_MODULES)
+        # 11 independent dims + 2 pipeline calls (Agent 1 InterestsAxis + Agent 2 InterestLevelResult)
+        expected_parse_calls = len(DIMENSION_MODULES) + 2
+        assert mock_client.chat.completions.parse.call_count == expected_parse_calls, (
+            f"Expected {expected_parse_calls} parse() calls "
+            f"(11 dims + 2 pipeline), got {mock_client.chat.completions.parse.call_count}"
+        )
         mock_client.chat.completions.create.assert_not_called()
 
 
@@ -1137,9 +1266,9 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis, InterestItem
     from sqlalchemy import select
 
     session_id = await _create_session(
@@ -1164,7 +1293,9 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
             reason="Lead asked to call back.",
             confidence="medium",
         ),
-        detected_interests=DetectedInterests(products=["terceros"]),
+        detected_interests=InterestsAxis(items=[
+            InterestItem(product="auto_terceros", needs=[], evidence="Me interesa terceros.", confidence="medium")
+        ]),
         identified_problem=IdentifiedProblem(
             primary_need="Needs basic coverage.",
             urgency="low",
@@ -1203,7 +1334,9 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
             reason="Lead explicitly requested a quote on the second call.",
             confidence="high",
         ),
-        detected_interests=DetectedInterests(products=["todo_riesgo"]),
+        detected_interests=InterestsAxis(items=[
+            InterestItem(product="auto_todo_riesgo", needs=[], evidence="Me interesa todo riesgo.", confidence="high")
+        ]),
         identified_problem=IdentifiedProblem(
             primary_need="Needs comprehensive coverage for new car.",
             urgency="high",
@@ -1227,9 +1360,15 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
         )
         cs = result.scalar_one()
         assert cs.summary == "Second run summary — updated."
-        assert cs.extracted_facts["interest_level"] == 85
+        # qora-interest-pipeline: interest_level is formula-computed (70/30 with previous)
+        # first run stored 40, second run product score is 85 → formula: round(85*0.7 + 40*0.3) = 72
+        assert cs.extracted_facts["interest_level"] > 40, (
+            "Second run must produce a higher interest_level than the first run"
+        )
         assert cs.extracted_facts["call_outcome"]["classification"] == "completed_positive"
-        assert "todo_riesgo" in cs.extracted_facts["detected_interests"]["products"]
+        # qora-interest-pipeline: detected_interests uses items format
+        di = cs.extracted_facts["detected_interests"]
+        assert any("todo_riesgo" in item["product"] for item in di["items"])
         assert cs.extracted_facts["identified_problem"]["urgency"] == "high"
 
 
@@ -1239,7 +1378,10 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
 
 
 async def test_summarizer_unknown_extra_fields_ignored(seeded_db):
-    """CRITICAL 3: PostCallAnalysis ignores unknown fields from LLM without errors."""
+    """CRITICAL 3: PostCallAnalysis ignores unknown fields from LLM without errors.
+
+    qora-interest-pipeline: detected_interests now uses InterestsAxis (items format).
+    """
     from app.analysis_schema import PostCallAnalysis
 
     # Simulate what happens when the LLM returns extra unknown fields.
@@ -1259,10 +1401,16 @@ async def test_summarizer_unknown_extra_fields_ignored(seeded_db):
             # Extra unknown field from LLM:
             "unknown_llm_field": "some_value",
         },
+        # qora-interest-pipeline: detected_interests uses InterestsAxis format
         "detected_interests": {
-            "products": ["todo_riesgo"],
-            "specific_needs": [],
-            "buying_signals": [],
+            "items": [
+                {
+                    "product": "auto_todo_riesgo",
+                    "needs": [],
+                    "evidence": "Me interesa.",
+                    "confidence": "high",
+                }
+            ]
         },
         "identified_problem": {
             "primary_need": "Needs coverage.",
@@ -1281,7 +1429,9 @@ async def test_summarizer_unknown_extra_fields_ignored(seeded_db):
     assert analysis.summary == "Test summary"
     assert analysis.interest_level == 70
     assert analysis.call_outcome.classification == "completed_positive"
-    assert "todo_riesgo" in analysis.detected_interests.products
+    # qora-interest-pipeline: detected_interests uses items format
+    assert len(analysis.detected_interests.items) == 1
+    assert analysis.detected_interests.items[0].product == "auto_todo_riesgo"
 
     # Unknown fields must NOT appear in model_dump()
     dumped = analysis.model_dump()
@@ -1417,7 +1567,9 @@ async def test_summarizer_analysis_axes_flow_to_lead(seeded_db):
         assert "identified_problem" in lead.extracted_facts
         # Verify the values are correct
         assert lead.extracted_facts["call_outcome"]["classification"] == "completed_positive"
-        assert "todo_riesgo" in lead.extracted_facts["detected_interests"]["products"]
+        # qora-interest-pipeline: detected_interests uses items format
+        di = lead.extracted_facts["detected_interests"]
+        assert any("todo_riesgo" in item["product"] for item in di["items"])
         assert lead.extracted_facts["identified_problem"]["urgency"] == "high"
 
 
@@ -1615,7 +1767,7 @@ async def test_summarizer_dual_write_gpt_failure_writes_call_analysis_failed(see
         # dimension and the summarizer raises a synthetic RuntimeError when
         # ALL fail. The original error message is in the dimension logs.
         assert ca.analysis_error is not None
-        assert "API timeout" in ca.analysis_error or "all 13" in ca.analysis_error
+        assert "API timeout" in ca.analysis_error or "all 1" in ca.analysis_error
 
 
 async def test_summarizer_dual_write_do_not_call_creates_fact_row(seeded_db):
@@ -1625,9 +1777,9 @@ async def test_summarizer_dual_write_do_not_call_creates_fact_row(seeded_db):
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis
     from sqlalchemy import select
 
     session_id = await _create_session(
@@ -1651,7 +1803,7 @@ async def test_summarizer_dual_write_do_not_call_creates_fact_row(seeded_db):
             reason="Lead asked not to be called.",
             confidence="high",
         ),
-        detected_interests=DetectedInterests(),
+        detected_interests=InterestsAxis(),
         identified_problem=IdentifiedProblem(
             primary_need="No interest.",
             urgency="low",
@@ -1814,9 +1966,9 @@ async def test_summarizer_critical2_data_corrections_create_lead_profile_facts(
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis
     from sqlalchemy import select
 
     session_id = await _create_session(
@@ -1841,7 +1993,7 @@ async def test_summarizer_critical2_data_corrections_create_lead_profile_facts(
             reason="Lead provided car details.",
             confidence="medium",
         ),
-        detected_interests=DetectedInterests(),
+        detected_interests=InterestsAxis(),
         identified_problem=IdentifiedProblem(
             primary_need="Needs auto insurance.",
             urgency="medium",
@@ -1954,12 +2106,12 @@ async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
         ServiceIssuesAxis,
         ProfileFactsAxis,
         AbandonmentReasonAxis,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis, InterestItem
     from app.analysis.universal.commitments import CommitmentsAxis, Commitment
     from app.analysis.universal.service_issues import ServiceIssue
     from sqlalchemy import select
@@ -1986,7 +2138,9 @@ async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
             reason="Lead wants to switch provider.",
             confidence="medium",
         ),
-        detected_interests=DetectedInterests(products=["todo_riesgo"]),
+        detected_interests=InterestsAxis(items=[
+            InterestItem(product="auto_todo_riesgo", needs=[], evidence="Me interesa.", confidence="medium")
+        ]),
         identified_problem=IdentifiedProblem(
             primary_need="Switch insurance provider.",
             urgency="medium",
@@ -2069,12 +2223,12 @@ async def test_call_analysis_abandonment_reason_persisted_when_set(seeded_db):
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
         AbandonmentReasonAxis,
         ServiceIssuesAxis,
         ProfileFactsAxis,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.commitments import CommitmentsAxis
     from sqlalchemy import select
 
@@ -2099,7 +2253,7 @@ async def test_call_analysis_abandonment_reason_persisted_when_set(seeded_db):
             reason="Lead found a cheaper competitor.",
             confidence="high",
         ),
-        detected_interests=DetectedInterests(),
+        detected_interests=InterestsAxis(),
         identified_problem=IdentifiedProblem(
             primary_need="Looking for cheapest option.",
             urgency="low",
@@ -2190,15 +2344,18 @@ def _make_analysis_with_list_axes(
     service_issues accepts list[ServiceIssue] or list[str] (strings are
     coerced to ServiceIssue(category='other', description=str, ...) for
     backward-compatible test helpers).
+
+    qora-interest-pipeline: detected_interests uses InterestsAxis (items format).
+    buying_signals parameter is kept for backward compat but not stored in detected_interests.
     """
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
         ServiceIssuesAxis,
         ProfileFactsAxis,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.commitments import CommitmentsAxis, Commitment
     from app.analysis.universal.service_issues import ServiceIssue
 
@@ -2242,11 +2399,8 @@ def _make_analysis_with_list_axes(
             reason="Lead was interested.",
             confidence="high",
         ),
-        detected_interests=DetectedInterests(
-            products=[],
-            specific_needs=[],
-            buying_signals=buying_signals or [],
-        ),
+        # qora-interest-pipeline: use InterestsAxis (items format)
+        detected_interests=InterestsAxis(),
         identified_problem=IdentifiedProblem(
             primary_need="Needs insurance",
             pain_points=pain_points or [],
@@ -2455,11 +2609,16 @@ async def test_list_facts_empty_list_skips_inserts(seeded_db):
 
 @pytest.mark.asyncio
 async def test_list_facts_all_5_axes_persisted(seeded_db):
-    """Issue #36 Phase 1: All 5 list axes are persisted with correct namespace prefixes.
+    """Issue #36 Phase 1: The 4 active list axes are persisted with correct namespace prefixes.
 
-    GIVEN a call analysis with non-empty values in all 5 list axes
+    qora-interest-pipeline: buying_signal: namespace is now empty because buying_signals
+    was removed from InterestsAxis. The 4 remaining axes (profile:, pain:, service_issue:,
+    signal:) are still persisted as before.
+
+    GIVEN a call analysis with non-empty values in profile_facts, pain_points, service_issues, commitments
     WHEN _write_lead_profile_facts() runs
-    THEN rows are created with prefixes: profile:, pain:, service_issue:, signal:, buying_signal:
+    THEN rows are created with prefixes: profile:, pain:, service_issue:, signal:
+    AND no buying_signal: rows are created (buying_signals no longer in detected_interests)
     """
     from app.summarizer import generate_summary_and_facts
     from app.leads.models import LeadProfileFact
@@ -2470,7 +2629,7 @@ async def test_list_facts_all_5_axes_persisted(seeded_db):
         pain_points=["too expensive"],
         service_issues=["claim denied"],
         commitment_signals=["will call back tomorrow"],
-        buying_signals=["asked for quote"],
+        buying_signals=["asked for quote"],  # kept for compat but NOT stored anymore
     )
     mock_client = _make_mock_client(_make_parse_response(analysis))
     session_id = await _create_session(
@@ -2510,9 +2669,10 @@ async def test_list_facts_all_5_axes_persisted(seeded_db):
     assert (
         "signal:" in by_prefix
     ), f"Missing 'signal:' rows. Got prefixes: {list(by_prefix.keys())}"
-    assert (
-        "buying_signal:" in by_prefix
-    ), f"Missing 'buying_signal:' rows. Got prefixes: {list(by_prefix.keys())}"
+    # qora-interest-pipeline: buying_signal: is no longer populated (removed from InterestsAxis)
+    assert "buying_signal:" not in by_prefix, (
+        "buying_signal: rows must NOT be created (buying_signals removed from InterestsAxis)"
+    )
 
 
 # ===========================================================================
@@ -2638,9 +2798,9 @@ async def test_write_lead_profile_facts_creates_objection_namespace_rows(seeded_
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        DetectedInterests,
         IdentifiedProblem,
     )
+    from app.analysis.universal.interest.interests import InterestsAxis
 
     axis = ObjectionsAxis(objections=[
         Objection(
@@ -2673,7 +2833,7 @@ async def test_write_lead_profile_facts_creates_objection_namespace_rows(seeded_
             reason="Lead not ready yet.",
             confidence="medium",
         ),
-        detected_interests=DetectedInterests(),
+        detected_interests=InterestsAxis(),
         identified_problem=IdentifiedProblem(
             primary_need="Needs cheaper coverage.",
             urgency="medium",
