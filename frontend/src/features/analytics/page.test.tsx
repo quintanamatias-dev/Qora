@@ -26,8 +26,7 @@ import { AnalyticsDashboardPage } from './page'
 
 const overviewFixture = {
   total_calls: 24,
-  outcome_distribution: { interested: 12, not_interested: 8, busy: 4 },
-  engagement_distribution: { high: 5, medium: 10, low: 7, none: 2 },
+  outcome_distribution: { completed_positive: 12, completed_negative: 8, busy: 4 },
   avg_call_duration_seconds: 120.5,
   conversion_rate: 0.5,
   period: 'month',
@@ -64,8 +63,7 @@ const agentStatsFixture = {
       agent_id: 'agent-1',
       agent_name: 'Alice',
       total_calls: 15,
-      outcome_distribution: { interested: 8, not_interested: 7 },
-      avg_engagement_quality: 'high',
+      outcome_distribution: { completed_positive: 8, completed_negative: 7 },
       conversion_rate: 0.53,
     },
   ],

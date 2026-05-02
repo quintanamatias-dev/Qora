@@ -1,8 +1,9 @@
 /**
  * OverviewSection — Presentational component for analytics overview metrics
  *
- * Shows: total_calls, conversion_rate, engagement distribution breakdown
+ * Shows: total_calls, conversion_rate, outcome distribution breakdown
  * Design: container-presentational pattern, receives data as props.
+ * Issue #50: removed engagement_distribution (field dropped from schema).
  */
 
 import type { AnalyticsOverviewResponse } from '@/api/types'
@@ -32,8 +33,8 @@ export function OverviewSection({ data }: OverviewSectionProps) {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard label="Total Calls" value={data.total_calls} />
         <StatCard label="Conversion Rate" value={convRate} />
-        {Object.entries(data.engagement_distribution).map(([key, count]) => (
-          <StatCard key={key} label={`Engagement: ${key}`} value={count} />
+        {Object.entries(data.outcome_distribution).map(([key, count]) => (
+          <StatCard key={key} label={`Outcome: ${key}`} value={count} />
         ))}
       </div>
     </div>

@@ -107,7 +107,6 @@ async def test_overview_default_period_returns_200(analytics_client):
     data = response.json()
     assert "total_calls" in data
     assert "outcome_distribution" in data
-    assert "engagement_distribution" in data
     assert "conversion_rate" in data
     assert "period" in data
     assert "start_date" in data

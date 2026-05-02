@@ -17,7 +17,6 @@ import { routes } from '../../router'
 const overviewFixture = {
   total_calls: 5,
   outcome_distribution: {},
-  engagement_distribution: {},
   avg_call_duration_seconds: null,
   conversion_rate: null,
   period: 'month',

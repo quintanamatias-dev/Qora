@@ -12,7 +12,7 @@ results into ``PostCallAnalysis``.
 
 from __future__ import annotations
 
-from app.analysis.enums import EngagementQuality, OutcomeClassification, Urgency
+from app.analysis.enums import Urgency
 from app.analysis.schema import PostCallAnalysis
 from app.analysis.universal import (
     AbandonmentReasonAxis,
@@ -28,8 +28,6 @@ from app.analysis.universal import (
 )
 
 __all__ = [
-    "OutcomeClassification",
-    "EngagementQuality",
     "Urgency",
     "CallOutcome",
     "DetectedInterests",

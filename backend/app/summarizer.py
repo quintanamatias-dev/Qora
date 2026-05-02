@@ -328,8 +328,11 @@ async def _merge_facts_into_lead(
     new_facts_clean = {k: v for k, v in facts.items() if v is not None}
     lead.extracted_facts = {**existing_facts, **new_facts_clean}
 
-    # do_not_call ← True if suggested
+    # do_not_call ← True if suggested via next_action OR via do_not_contact classification
     if facts.get("next_action_suggested") == "do_not_call":
+        lead.do_not_call = True
+    call_outcome = facts.get("call_outcome") or {}
+    if call_outcome.get("classification") == "do_not_contact":
         lead.do_not_call = True
 
     # next_action ← latest suggested action
@@ -479,7 +482,6 @@ async def _upsert_call_analysis(
     ca.summary = summary
     ca.interest_level = facts.get("interest_level")
     ca.classification = _str_or_none(call_outcome.get("classification"))
-    ca.engagement_quality = _str_or_none(call_outcome.get("engagement_quality"))
     ca.outcome_reason = call_outcome.get("reason")
     ca.urgency = _str_or_none(identified_problem.get("urgency"))
     ca.primary_need = identified_problem.get("primary_need")
@@ -548,7 +550,7 @@ def _str_or_none(value: Any) -> str | None:
     """
     if value is None:
         return None
-    # Handle enum values (e.g. OutcomeClassification.interested → 'interested')
+    # Handle enum-like values that expose .value
     if hasattr(value, "value"):
         return str(value.value)
     return str(value)

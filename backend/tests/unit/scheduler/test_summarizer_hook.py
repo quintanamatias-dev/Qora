@@ -80,9 +80,9 @@ def _make_analysis_with_action(next_action: str):
         next_action_suggested=next_action,
         misc_notes="",
         call_outcome=CallOutcome(
-            classification="follow_up",
+            classification="callback_requested",
             reason="Lead asked to be called again.",
-            engagement_quality="medium",
+            confidence="medium",
         ),
         detected_interests=DetectedInterests(),
         identified_problem=IdentifiedProblem(

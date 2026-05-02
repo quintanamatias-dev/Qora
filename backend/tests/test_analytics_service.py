@@ -64,8 +64,7 @@ async def _seed_call_analysis(
     client_id: str = "quintana-seguros",
     session_id: str | None = None,
     lead_id: str = "lead-svc-001",
-    classification: str = "interested",
-    engagement_quality: str = "high",
+    classification: str = "completed_positive",
     service_issues: list[str] | list[dict] | None = None,
     analyzed_at: datetime | None = None,
     agent_id: str | None = None,
@@ -95,7 +94,6 @@ async def _seed_call_analysis(
             lead_id=lead_id,
             client_id=client_id,
             classification=classification,
-            engagement_quality=engagement_quality,
             service_issues=json.dumps(service_issues or []),
             analyzed_at=ts,
         )
@@ -159,7 +157,10 @@ async def test_overview_empty_period(analytics_service_db):
     assert result["total_calls"] == 0
     assert result["conversion_rate"] is None
     assert result["outcome_distribution"] == {}
-    assert result["engagement_distribution"] == {}
+    # engagement_distribution must NOT exist (qora-outcome spec)
+    assert "engagement_distribution" not in result, (
+        "engagement_distribution must be removed from analytics response (qora-outcome spec)"
+    )
 
 
 async def test_overview_counts_calls_in_period(analytics_service_db):
@@ -169,14 +170,12 @@ async def test_overview_counts_calls_in_period(analytics_service_db):
     ts = datetime.now(timezone.utc)
     await _seed_call_analysis(
         analytics_service_db,
-        classification="interested",
-        engagement_quality="high",
+        classification="completed_positive",
         analyzed_at=ts,
     )
     await _seed_call_analysis(
         analytics_service_db,
-        classification="not_interested",
-        engagement_quality="low",
+        classification="completed_negative",
         analyzed_at=ts,
     )
 
@@ -194,25 +193,25 @@ async def test_overview_counts_calls_in_period(analytics_service_db):
         )
 
     assert result["total_calls"] == 2
-    assert result["outcome_distribution"]["interested"] == 1
-    assert result["outcome_distribution"]["not_interested"] == 1
-    assert result["engagement_distribution"]["high"] == 1
-    assert result["engagement_distribution"]["low"] == 1
+    assert result["outcome_distribution"]["completed_positive"] == 1
+    assert result["outcome_distribution"]["completed_negative"] == 1
+    # engagement_distribution must NOT be in result
+    assert "engagement_distribution" not in result
 
 
 async def test_overview_conversion_rate(analytics_service_db):
-    """Conversion rate = interested / total_calls."""
+    """Conversion rate = completed_positive / total_calls (qora-outcome spec)."""
     from app.analytics.service import get_overview
 
     ts = datetime.now(timezone.utc)
-    # 2 interested + 2 not_interested = 50%
+    # 2 completed_positive + 2 completed_negative = 50%
     for _ in range(2):
         await _seed_call_analysis(
-            analytics_service_db, classification="interested", analyzed_at=ts
+            analytics_service_db, classification="completed_positive", analyzed_at=ts
         )
     for _ in range(2):
         await _seed_call_analysis(
-            analytics_service_db, classification="not_interested", analyzed_at=ts
+            analytics_service_db, classification="completed_negative", analyzed_at=ts
         )
 
     date_from = ts - timedelta(hours=1)
@@ -256,14 +255,14 @@ async def test_overview_agent_filter(analytics_service_db):
     # 1 call for agent-test-001
     await _seed_call_analysis(
         analytics_service_db,
-        classification="interested",
+        classification="completed_positive",
         analyzed_at=ts,
         agent_id="agent-test-001",
     )
     # 1 call without agent
     await _seed_call_analysis(
         analytics_service_db,
-        classification="not_interested",
+        classification="completed_negative",
         analyzed_at=ts,
         agent_id=None,
     )
@@ -283,7 +282,7 @@ async def test_overview_agent_filter(analytics_service_db):
 
     # Only the agent-test-001 call
     assert result["total_calls"] == 1
-    assert result["outcome_distribution"]["interested"] == 1
+    assert result["outcome_distribution"]["completed_positive"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -612,7 +611,7 @@ async def test_agent_stats_null_agent_bucketed(analytics_service_db):
     ts = datetime.now(timezone.utc)
     await _seed_call_analysis(
         analytics_service_db,
-        classification="interested",
+        classification="completed_positive",
         analyzed_at=ts,
         agent_id=None,
     )
@@ -634,6 +633,10 @@ async def test_agent_stats_null_agent_bucketed(analytics_service_db):
     unassigned = agents[0]
     assert unassigned["agent_id"] == "unassigned"
     assert unassigned["total_calls"] == 1
+    # avg_engagement_quality must NOT be present (qora-outcome spec)
+    assert "avg_engagement_quality" not in unassigned, (
+        "avg_engagement_quality must be removed from agent stats (qora-outcome spec)"
+    )
 
 
 async def test_agent_stats_multi_agent(analytics_service_db):
@@ -660,13 +663,13 @@ async def test_agent_stats_multi_agent(analytics_service_db):
     ts = datetime.now(timezone.utc)
     await _seed_call_analysis(
         analytics_service_db,
-        classification="interested",
+        classification="completed_positive",
         analyzed_at=ts,
         agent_id="agent-multi-000",
     )
     await _seed_call_analysis(
         analytics_service_db,
-        classification="not_interested",
+        classification="completed_negative",
         analyzed_at=ts,
         agent_id="agent-multi-001",
     )
@@ -738,6 +741,62 @@ async def test_agent_stats_cross_client_isolation(analytics_service_db):
 
     # quintana-seguros has NO calls → empty
     assert result["agents"] == []
+
+
+async def test_agent_stats_conversion_rate_uses_completed_positive(analytics_service_db):
+    """qora-outcome spec: agent stats conversion_rate counts completed_positive (not 'interested')."""
+    from app.analytics.service import get_agent_stats
+    from app.tenants.models import Agent
+
+    async with analytics_service_db.async_session_factory() as sess:
+        agent = Agent(
+            id="agent-conv-001",
+            client_id="quintana-seguros",
+            slug="agent-conv",
+            name="Conv Agent",
+            voice_id="pNInz6obpgDQGcFmaJgB",
+            model="gpt-4o-mini",
+            is_active=True,
+            is_default=False,
+        )
+        sess.add(agent)
+        await sess.commit()
+
+    ts = datetime.now(timezone.utc)
+    # 1 completed_positive + 1 completed_negative → 50% conversion
+    await _seed_call_analysis(
+        analytics_service_db,
+        classification="completed_positive",
+        analyzed_at=ts,
+        agent_id="agent-conv-001",
+    )
+    await _seed_call_analysis(
+        analytics_service_db,
+        classification="completed_negative",
+        analyzed_at=ts,
+        agent_id="agent-conv-001",
+    )
+
+    date_from = ts - timedelta(hours=1)
+    date_to = ts + timedelta(hours=1)
+
+    assert analytics_service_db.async_session_factory is not None
+    async with analytics_service_db.async_session_factory() as sess:
+        result = await get_agent_stats(
+            sess,
+            client_id="quintana-seguros",
+            date_from=date_from,
+            date_to=date_to,
+        )
+
+    agents = result["agents"]
+    agent_entry = next(a for a in agents if a["agent_id"] == "agent-conv-001")
+    assert agent_entry["total_calls"] == 2
+    assert agent_entry["conversion_rate"] == pytest.approx(0.5), (
+        "conversion_rate must count completed_positive only (qora-outcome spec)"
+    )
+    # avg_engagement_quality must NOT exist
+    assert "avg_engagement_quality" not in agent_entry
 
 
 # ---------------------------------------------------------------------------

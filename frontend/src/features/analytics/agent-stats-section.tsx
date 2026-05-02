@@ -1,8 +1,9 @@
 /**
  * AgentStatsSection — Per-agent call statistics table
  *
- * Shows: agent name, total calls, conversion rate, engagement quality
+ * Shows: agent name, total calls, conversion rate
  * Design: presentational, receives data as props.
+ * Issue #50: removed avg_engagement_quality column (field dropped from schema).
  */
 
 import type { AnalyticsAgentStatsResponse } from '@/api/types'
@@ -25,7 +26,6 @@ export function AgentStatsSection({ data }: AgentStatsSectionProps) {
                 <th className="text-left py-2 px-3 font-medium">Agent</th>
                 <th className="text-right py-2 px-3 font-medium">Calls</th>
                 <th className="text-right py-2 px-3 font-medium">Conversion</th>
-                <th className="text-right py-2 px-3 font-medium">Engagement</th>
               </tr>
             </thead>
             <tbody>
@@ -44,9 +44,6 @@ export function AgentStatsSection({ data }: AgentStatsSectionProps) {
                     {agent.conversion_rate !== null
                       ? `${(agent.conversion_rate * 100).toFixed(1)}%`
                       : 'N/A'}
-                  </td>
-                  <td className="py-2 px-3 text-right text-on-surface">
-                    {agent.avg_engagement_quality ?? 'N/A'}
                   </td>
                 </tr>
               ))}

@@ -19,14 +19,14 @@ from app.analysis.universal import (
     ProfileFactsAxis,
     ServiceIssuesAxis,
 )
-from app.analysis.enums import EngagementQuality, OutcomeClassification, Urgency
+from app.analysis.enums import Urgency
 
 
 def _default_call_outcome() -> CallOutcome:
     return CallOutcome(
-        classification=OutcomeClassification.no_answer,
+        classification="no_answer",
         reason="dimension analysis failed or not produced",
-        engagement_quality=EngagementQuality.none,
+        confidence="low",
     )
 
 
@@ -76,7 +76,7 @@ class PostCallAnalysis(BaseModel):
 
     call_outcome: CallOutcome = Field(
         default_factory=_default_call_outcome,
-        description="Semantic classification of the call result and lead engagement quality",
+        description="Semantic classification of the call result",
     )
     detected_interests: DetectedInterests = Field(
         default_factory=DetectedInterests,

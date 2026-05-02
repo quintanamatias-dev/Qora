@@ -704,8 +704,8 @@ def test_format_confirmed_facts_renders_nested_dict_call_outcome():
 
     facts = {
         "call_outcome": {
-            "classification": "interested",
-            "engagement_quality": "high",
+            "classification": "completed_positive",
+            "confidence": "high",
             "reason": "Lead asked for a quote",
         }
     }
@@ -714,7 +714,53 @@ def test_format_confirmed_facts_renders_nested_dict_call_outcome():
     # Must produce some output (not empty)
     assert result.strip() != "", "call_outcome dict must produce output"
     # Must contain recognizable content from the nested dict
-    assert "interested" in result or "Resultado" in result or "call_outcome" in result
+    assert "completed_positive" in result or "Resultado" in result or "call_outcome" in result
+
+
+# ---------------------------------------------------------------------------
+# qora-outcome: _format_axis("call_outcome") — no engagement_quality
+# ---------------------------------------------------------------------------
+
+
+def test_format_axis_call_outcome_renders_classification_reason_confidence():
+    """_format_axis('call_outcome') renders classification, reason, and confidence."""
+    from app.memory import _format_axis
+
+    axis_dict = {
+        "classification": "completed_positive",
+        "reason": "Lead bought the policy",
+        "confidence": "high",
+    }
+    result = _format_axis("call_outcome", axis_dict)
+
+    assert "completed_positive" in result, (
+        "_format_axis must include classification in output"
+    )
+    assert "Lead bought the policy" in result, (
+        "_format_axis must include reason in output"
+    )
+    assert "engagement" not in result.lower(), (
+        "_format_axis must NOT mention engagement (qora-outcome spec)"
+    )
+
+
+def test_format_axis_call_outcome_does_not_read_engagement_quality():
+    """_format_axis('call_outcome') does NOT read or render engagement_quality."""
+    from app.memory import _format_axis
+
+    # Even if legacy data has engagement_quality, it must not appear in output
+    axis_dict_with_legacy = {
+        "classification": "completed_negative",
+        "reason": "Lead declined.",
+        "confidence": "medium",
+        "engagement_quality": "high",  # legacy field — must be ignored
+    }
+    result = _format_axis("call_outcome", axis_dict_with_legacy)
+
+    assert "engagement" not in result.lower(), (
+        "_format_axis must NOT reference engagement even when field is present (qora-outcome spec)"
+    )
+    assert "completed_negative" in result
 
 
 def test_format_confirmed_facts_lists_joined_as_string():

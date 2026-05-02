@@ -59,22 +59,26 @@ export type CallStatus = 'initiated' | 'in_progress' | 'completed' | 'failed' | 
 // ──────────────────────────────────────────────────────────────────────────────
 
 export type OutcomeClassification =
-  | 'interested'
-  | 'not_interested'
-  | 'busy'
-  | 'follow_up'
   | 'no_answer'
+  | 'busy'
+  | 'callback_requested'
+  | 'completed_positive'
+  | 'completed_neutral'
+  | 'completed_negative'
+  | 'do_not_contact'
+  | 'wrong_number'
   | 'hostile'
   | 'confused'
+  | 'technical_issue'
 
-export type EngagementQuality = 'high' | 'medium' | 'low' | 'none'
+export type OutcomeConfidence = 'low' | 'medium' | 'high'
 
 export type Urgency = 'high' | 'medium' | 'low'
 
 export interface CallOutcome {
   classification: OutcomeClassification
   reason: string
-  engagement_quality: EngagementQuality
+  confidence: OutcomeConfidence
 }
 
 export interface DetectedInterests {
@@ -220,7 +224,6 @@ export interface AnalyticsParams {
 export interface AnalyticsOverviewResponse {
   total_calls: number
   outcome_distribution: Record<string, number>
-  engagement_distribution: Record<string, number>
   avg_call_duration_seconds: number | null
   conversion_rate: number | null
   period: string
@@ -263,7 +266,6 @@ export interface AgentStatItem {
   agent_name: string | null
   total_calls: number
   outcome_distribution: Record<string, number>
-  avg_engagement_quality: string | null
   conversion_rate: number | null
 }
 

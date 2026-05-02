@@ -184,9 +184,9 @@ def _valid_facts(interest_level: int = 70) -> dict:
         "misc_notes": "",
         "data_corrections": "",
         "call_outcome": {
-            "classification": "interested",
+            "classification": "completed_positive",
             "reason": "Lead asked for quote.",
-            "engagement_quality": "high",
+            "confidence": "high",
         },
         "detected_interests": {
             "products": ["todo_riesgo"],
@@ -418,3 +418,108 @@ def test_migration_build_interest_history_row_valid_value_unchanged():
 
     assert row is not None
     assert row["interest_level"] == 50
+
+
+# ===========================================================================
+# qora-outcome: migrate_drop_engagement_quality.py tests (Task 2.3 RED → GREEN)
+# ===========================================================================
+
+
+@pytest_asyncio.fixture
+async def fresh_db_with_engagement_quality(tmp_path: Path):
+    """DB that starts with call_analyses.engagement_quality column present."""
+    from app.core.config import Settings
+    from app.core import database as db_module
+    from sqlalchemy import text
+
+    settings = Settings(
+        openai_api_key=SecretStr("sk-test"),
+        elevenlabs_api_key=SecretStr("el-test"),
+        database_url=f"sqlite+aiosqlite:///{tmp_path}/drop_eq_test.db",
+    )
+    await db_module.init_db(settings)
+
+    # Add engagement_quality column back (simulates pre-migration state)
+    engine = db_module.engine
+    assert engine is not None
+    async with engine.begin() as conn:
+        # Check if column already exists (from old schema); if not, add it
+        result = await conn.execute(text("PRAGMA table_info(call_analyses)"))
+        cols = [row[1] for row in result.fetchall()]
+        if "engagement_quality" not in cols:
+            await conn.execute(
+                text("ALTER TABLE call_analyses ADD COLUMN engagement_quality TEXT")
+            )
+
+    yield settings.database_url, db_module
+
+    await db_module.close_db()
+
+
+@pytest_asyncio.fixture
+async def fresh_db_without_engagement_quality(tmp_path: Path):
+    """DB that does NOT have call_analyses.engagement_quality column."""
+    from app.core.config import Settings
+    from app.core import database as db_module
+
+    settings = Settings(
+        openai_api_key=SecretStr("sk-test"),
+        elevenlabs_api_key=SecretStr("el-test"),
+        database_url=f"sqlite+aiosqlite:///{tmp_path}/no_eq_test.db",
+    )
+    await db_module.init_db(settings)
+
+    # Verify column doesn't exist (post-migration state from updated model)
+    from sqlalchemy import text
+
+    engine = db_module.engine
+    assert engine is not None
+    async with engine.begin() as conn:
+        result = await conn.execute(text("PRAGMA table_info(call_analyses)"))
+        cols = [row[1] for row in result.fetchall()]
+        assert "engagement_quality" not in cols, (
+            "Test setup error: engagement_quality should not exist in new schema"
+        )
+
+    yield settings.database_url, db_module
+
+    await db_module.close_db()
+
+
+async def test_drop_engagement_quality_migration_drops_column(
+    fresh_db_with_engagement_quality,
+):
+    """qora-outcome: migration drops engagement_quality column from call_analyses."""
+    from scripts.migrate_drop_engagement_quality import run_migration
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    db_url, db_module = fresh_db_with_engagement_quality
+
+    # Run migration
+    result = await run_migration(db_url)
+    assert result["engagement_quality"] == "dropped"
+
+    # Verify column no longer exists
+    engine = create_async_engine(db_url, echo=False)
+    async with engine.connect() as conn:
+        rows = await conn.execute(text("PRAGMA table_info(call_analyses)"))
+        col_names = [row[1] for row in rows.fetchall()]
+    await engine.dispose()
+
+    assert "engagement_quality" not in col_names, (
+        "engagement_quality column must be dropped after migration"
+    )
+
+
+async def test_drop_engagement_quality_migration_is_idempotent(
+    fresh_db_without_engagement_quality,
+):
+    """qora-outcome: running migration when column doesn't exist is a no-op."""
+    from scripts.migrate_drop_engagement_quality import run_migration
+
+    db_url, db_module = fresh_db_without_engagement_quality
+
+    # Run migration on DB that already doesn't have the column
+    result = await run_migration(db_url)
+    assert result["engagement_quality"] == "skipped"

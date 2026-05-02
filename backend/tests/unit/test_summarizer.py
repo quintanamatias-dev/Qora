@@ -240,9 +240,9 @@ def _make_full_analysis_payload():
         next_action_suggested="send_quote",
         misc_notes="Car make: Toyota",
         call_outcome=CallOutcome(
-            classification="interested",
+            classification="completed_positive",
             reason="Lead explicitly requested a quote.",
-            engagement_quality="high",
+            confidence="high",
         ),
         detected_interests=DetectedInterests(
             products=["todo_riesgo"],
@@ -506,7 +506,7 @@ async def test_summarizer_sets_do_not_call_flag(seeded_db):
         call_outcome=CallOutcome(
             classification="hostile",
             reason="Lead explicitly asked not to be called again.",
-            engagement_quality="low",
+            confidence="high",
         ),
         detected_interests=DetectedInterests(),
         identified_problem=IdentifiedProblem(
@@ -529,6 +529,183 @@ async def test_summarizer_sets_do_not_call_flag(seeded_db):
         result = await db.execute(select(Lead).where(Lead.id == "test-lead-sum-001"))
         lead = result.scalar_one()
         assert lead.do_not_call is True
+
+
+# ---------------------------------------------------------------------------
+# qora-outcome: do_not_contact classification → lead.do_not_call = True
+# ---------------------------------------------------------------------------
+
+
+async def test_summarizer_do_not_contact_classification_sets_do_not_call(seeded_db):
+    """qora-outcome spec: classification='do_not_contact' → lead.do_not_call = True."""
+    from app.summarizer import generate_summary_and_facts
+    from app.leads.models import Lead
+    from app.analysis_schema import (
+        PostCallAnalysis,
+        CallOutcome,
+        DetectedInterests,
+        IdentifiedProblem,
+    )
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "Hola, llamo de Quintana Seguros"),
+            ("user", "No me contacten nunca más"),
+        ],
+    )
+
+    do_not_contact_analysis = PostCallAnalysis(
+        summary="Lead pidió explícitamente no ser contactado.",
+        objections=["do not contact"],
+        interest_level=0,
+        current_insurance=None,
+        next_action_suggested="wait",  # NOT "do_not_call" — testing the classification path
+        misc_notes="",
+        call_outcome=CallOutcome(
+            classification="do_not_contact",
+            reason="Lead explicitly said do not contact.",
+            confidence="high",
+        ),
+        detected_interests=DetectedInterests(),
+        identified_problem=IdentifiedProblem(
+            primary_need="No interest.",
+            urgency="low",
+        ),
+    )
+
+    mock_client = _make_mock_client(_make_parse_response(do_not_contact_analysis))
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(select(Lead).where(Lead.id == "test-lead-sum-001"))
+        lead = result.scalar_one()
+        assert lead.do_not_call is True, (
+            "do_not_contact classification must set lead.do_not_call=True (qora-outcome spec)"
+        )
+
+
+async def test_summarizer_other_classification_does_not_set_do_not_call(seeded_db):
+    """qora-outcome spec: non-do_not_contact classifications do NOT change lead.do_not_call."""
+    from app.summarizer import generate_summary_and_facts
+    from app.leads.models import Lead
+    from app.analysis_schema import (
+        PostCallAnalysis,
+        CallOutcome,
+        DetectedInterests,
+        IdentifiedProblem,
+    )
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "Hola, llamo de Quintana Seguros"),
+            ("user", "Me interesa, llámeme mañana"),
+        ],
+    )
+
+    positive_analysis = PostCallAnalysis(
+        summary="Lead interesado.",
+        objections=[],
+        interest_level=80,
+        current_insurance=None,
+        next_action_suggested="call_again",
+        misc_notes="",
+        call_outcome=CallOutcome(
+            classification="callback_requested",
+            reason="Lead asked to be called tomorrow.",
+            confidence="high",
+        ),
+        detected_interests=DetectedInterests(),
+        identified_problem=IdentifiedProblem(
+            primary_need="Needs auto insurance.",
+            urgency="medium",
+        ),
+    )
+
+    mock_client = _make_mock_client(_make_parse_response(positive_analysis))
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(select(Lead).where(Lead.id == "test-lead-sum-001"))
+        lead = result.scalar_one()
+        assert lead.do_not_call is False, (
+            "Non-do_not_contact classification must NOT change lead.do_not_call"
+        )
+
+
+async def test_upsert_call_analysis_does_not_write_engagement_quality(seeded_db):
+    """qora-outcome spec: _upsert_call_analysis must NOT write engagement_quality."""
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.models import CallAnalysis
+    from app.analysis_schema import (
+        PostCallAnalysis,
+        CallOutcome,
+        DetectedInterests,
+        IdentifiedProblem,
+    )
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "Hola"),
+            ("user", "Quiero cotizar"),
+        ],
+    )
+
+    analysis = PostCallAnalysis(
+        summary="Lead quiere cotizar.",
+        objections=[],
+        interest_level=75,
+        current_insurance=None,
+        next_action_suggested="send_quote",
+        misc_notes="",
+        call_outcome=CallOutcome(
+            classification="completed_positive",
+            reason="Lead requested quote.",
+            confidence="high",
+        ),
+        detected_interests=DetectedInterests(),
+        identified_problem=IdentifiedProblem(
+            primary_need="Needs auto insurance.",
+            urgency="medium",
+        ),
+    )
+
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+        )
+        ca = result.scalar_one()
+        assert ca.classification == "completed_positive"
+        # engagement_quality column must NOT exist on CallAnalysis model
+        assert not hasattr(ca, "engagement_quality"), (
+            "CallAnalysis must NOT have engagement_quality column (qora-outcome spec)"
+        )
 
 
 async def test_summarizer_does_not_set_do_not_call_for_other_actions(seeded_db):
@@ -559,9 +736,9 @@ async def test_summarizer_does_not_set_do_not_call_for_other_actions(seeded_db):
         next_action_suggested="call_again",
         misc_notes="",
         call_outcome=CallOutcome(
-            classification="follow_up",
+            classification="callback_requested",
             reason="Lead asked to be called back next week.",
-            engagement_quality="medium",
+            confidence="medium",
         ),
         detected_interests=DetectedInterests(),
         identified_problem=IdentifiedProblem(
@@ -660,8 +837,11 @@ async def test_summarizer_extracts_call_outcome_axis(seeded_db):
         assert cs.extracted_facts is not None
         assert "call_outcome" in cs.extracted_facts
         co = cs.extracted_facts["call_outcome"]
-        assert co["classification"] == "interested"
-        assert co["engagement_quality"] == "high"
+        assert co["classification"] == "completed_positive"
+        assert "engagement_quality" not in co, (
+            "engagement_quality must NOT be in call_outcome (qora-outcome spec)"
+        )
+        assert co["confidence"] in ("low", "medium", "high")
         assert isinstance(co["reason"], str)
         assert len(co["reason"]) > 0
 
@@ -962,9 +1142,9 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
         next_action_suggested="call_again",
         misc_notes="",
         call_outcome=CallOutcome(
-            classification="follow_up",
+            classification="callback_requested",
             reason="Lead asked to call back.",
-            engagement_quality="medium",
+            confidence="medium",
         ),
         detected_interests=DetectedInterests(products=["terceros"]),
         identified_problem=IdentifiedProblem(
@@ -1001,9 +1181,9 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
         next_action_suggested="send_quote",
         misc_notes="Car: Toyota",
         call_outcome=CallOutcome(
-            classification="interested",
+            classification="completed_positive",
             reason="Lead explicitly requested a quote on the second call.",
-            engagement_quality="high",
+            confidence="high",
         ),
         detected_interests=DetectedInterests(products=["todo_riesgo"]),
         identified_problem=IdentifiedProblem(
@@ -1030,7 +1210,7 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
         cs = result.scalar_one()
         assert cs.summary == "Second run summary — updated."
         assert cs.extracted_facts["interest_level"] == 85
-        assert cs.extracted_facts["call_outcome"]["classification"] == "interested"
+        assert cs.extracted_facts["call_outcome"]["classification"] == "completed_positive"
         assert "todo_riesgo" in cs.extracted_facts["detected_interests"]["products"]
         assert cs.extracted_facts["identified_problem"]["urgency"] == "high"
 
@@ -1055,9 +1235,9 @@ async def test_summarizer_unknown_extra_fields_ignored(seeded_db):
         "next_action_suggested": "call_again",
         "misc_notes": "",
         "call_outcome": {
-            "classification": "interested",
+            "classification": "completed_positive",
             "reason": "Lead showed interest.",
-            "engagement_quality": "high",
+            "confidence": "high",
             # Extra unknown field from LLM:
             "unknown_llm_field": "some_value",
         },
@@ -1082,7 +1262,7 @@ async def test_summarizer_unknown_extra_fields_ignored(seeded_db):
     # Core fields must be preserved correctly
     assert analysis.summary == "Test summary"
     assert analysis.interest_level == 70
-    assert analysis.call_outcome.classification.value == "interested"
+    assert analysis.call_outcome.classification == "completed_positive"
     assert "todo_riesgo" in analysis.detected_interests.products
 
     # Unknown fields must NOT appear in model_dump()
@@ -1218,7 +1398,7 @@ async def test_summarizer_analysis_axes_flow_to_lead(seeded_db):
         assert "detected_interests" in lead.extracted_facts
         assert "identified_problem" in lead.extracted_facts
         # Verify the values are correct
-        assert lead.extracted_facts["call_outcome"]["classification"] == "interested"
+        assert lead.extracted_facts["call_outcome"]["classification"] == "completed_positive"
         assert "todo_riesgo" in lead.extracted_facts["detected_interests"]["products"]
         assert lead.extracted_facts["identified_problem"]["urgency"] == "high"
 
@@ -1261,7 +1441,7 @@ async def test_summarizer_dual_write_creates_call_analysis(seeded_db):
         assert ca is not None
         assert ca.lead_id == "test-lead-sum-001"
         assert ca.interest_level == 85
-        assert ca.classification == "interested"
+        assert ca.classification == "completed_positive"
         assert ca.analysis_status == "ok"
 
 
@@ -1450,7 +1630,7 @@ async def test_summarizer_dual_write_do_not_call_creates_fact_row(seeded_db):
         call_outcome=CallOutcome(
             classification="hostile",
             reason="Lead asked not to be called.",
-            engagement_quality="low",
+            confidence="high",
         ),
         detected_interests=DetectedInterests(),
         identified_problem=IdentifiedProblem(
@@ -1637,9 +1817,9 @@ async def test_summarizer_critical2_data_corrections_create_lead_profile_facts(
         misc_notes="",
         data_corrections="car_model: Polo\ncar_year: 2022",
         call_outcome=CallOutcome(
-            classification="interested",
+            classification="completed_neutral",
             reason="Lead provided car details.",
-            engagement_quality="medium",
+            confidence="medium",
         ),
         detected_interests=DetectedInterests(),
         identified_problem=IdentifiedProblem(
@@ -1781,9 +1961,9 @@ async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
         next_action_suggested="send_quote",
         misc_notes="",
         call_outcome=CallOutcome(
-            classification="interested",
+            classification="completed_neutral",
             reason="Lead wants to switch provider.",
-            engagement_quality="medium",
+            confidence="medium",
         ),
         detected_interests=DetectedInterests(products=["todo_riesgo"]),
         identified_problem=IdentifiedProblem(
@@ -1893,9 +2073,9 @@ async def test_call_analysis_abandonment_reason_persisted_when_set(seeded_db):
         next_action_suggested="wait",
         misc_notes="",
         call_outcome=CallOutcome(
-            classification="not_interested",
+            classification="completed_negative",
             reason="Lead found a cheaper competitor.",
-            engagement_quality="low",
+            confidence="high",
         ),
         detected_interests=DetectedInterests(),
         identified_problem=IdentifiedProblem(
@@ -2036,9 +2216,9 @@ def _make_analysis_with_list_axes(
         current_insurance="OSDE",
         next_action_suggested="send_quote",
         call_outcome=CallOutcome(
-            classification="interested",
+            classification="completed_positive",
             reason="Lead was interested.",
-            engagement_quality="high",
+            confidence="high",
         ),
         detected_interests=DetectedInterests(
             products=[],

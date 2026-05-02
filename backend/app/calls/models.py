@@ -112,7 +112,6 @@ class CallAnalysis(Base):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     interest_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
     classification: Mapped[str | None] = mapped_column(String, nullable=True)
-    engagement_quality: Mapped[str | None] = mapped_column(String, nullable=True)
     outcome_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     urgency: Mapped[str | None] = mapped_column(String, nullable=True)
     primary_need: Mapped[str | None] = mapped_column(Text, nullable=True)

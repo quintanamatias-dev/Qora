@@ -31,7 +31,6 @@ class AnalyticsOverviewResponse(BaseModel):
 
     total_calls: int
     outcome_distribution: dict[str, int]
-    engagement_distribution: dict[str, int]
     avg_call_duration_seconds: float | None
     conversion_rate: float | None
     period: str
@@ -99,7 +98,6 @@ class AgentStatItem(BaseModel):
     agent_name: str | None
     total_calls: int
     outcome_distribution: dict[str, int]
-    avg_engagement_quality: str | None
     conversion_rate: float | None
 
 

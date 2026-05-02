@@ -6,7 +6,6 @@ Queries are async-first, multi-tenant-safe, and use text() for json_each() extra
 
 from __future__ import annotations
 
-from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -82,14 +81,6 @@ def _compute_trend(current: int, previous: int) -> str:
     return "stable"
 
 
-def _modal_value(values: list[str]) -> str | None:
-    """Return the most frequent value in a list, or None if empty."""
-    if not values:
-        return None
-    counter = Counter(values)
-    return counter.most_common(1)[0][0]
-
-
 # ---------------------------------------------------------------------------
 # get_overview
 # ---------------------------------------------------------------------------
@@ -113,7 +104,6 @@ async def get_overview(
     stmt = (
         select(
             CallAnalysis.classification,
-            CallAnalysis.engagement_quality,
             CallSession.duration_seconds,
         )
         .join(CallSession, CallSession.id == CallAnalysis.session_id)
@@ -130,26 +120,19 @@ async def get_overview(
 
     total_calls = len(rows)
     outcome_distribution: dict[str, int] = {}
-    engagement_distribution: dict[str, int] = {}
     durations: list[float] = []
-    interested_count = 0
+    completed_positive_count = 0
 
     for row in rows:
         classification = row.classification
-        engagement = row.engagement_quality
         duration = row.duration_seconds
 
         if classification:
             outcome_distribution[classification] = (
                 outcome_distribution.get(classification, 0) + 1
             )
-            if classification == "interested":
-                interested_count += 1
-
-        if engagement:
-            engagement_distribution[engagement] = (
-                engagement_distribution.get(engagement, 0) + 1
-            )
+            if classification == "completed_positive":
+                completed_positive_count += 1
 
         if duration is not None:
             durations.append(float(duration))
@@ -158,13 +141,12 @@ async def get_overview(
         sum(durations) / len(durations) if durations else None
     )
     conversion_rate: float | None = (
-        interested_count / total_calls if total_calls > 0 else None
+        completed_positive_count / total_calls if total_calls > 0 else None
     )
 
     return {
         "total_calls": total_calls,
         "outcome_distribution": outcome_distribution,
-        "engagement_distribution": engagement_distribution,
         "avg_call_duration_seconds": avg_call_duration_seconds,
         "conversion_rate": conversion_rate,
     }
@@ -378,7 +360,6 @@ async def get_agent_stats(
             CallSession.agent_id,
             Agent.name.label("agent_name"),
             CallAnalysis.classification,
-            CallAnalysis.engagement_quality,
         )
         .join(CallSession, CallSession.id == CallAnalysis.session_id)
         .outerjoin(Agent, Agent.id == CallSession.agent_id)
@@ -398,7 +379,6 @@ async def get_agent_stats(
         bucket_id = raw_agent_id if raw_agent_id is not None else "unassigned"
         agent_name = row.agent_name if raw_agent_id is not None else None
         classification = row.classification
-        engagement = row.engagement_quality
 
         if bucket_id not in agent_data:
             agent_data[bucket_id] = {
@@ -406,8 +386,7 @@ async def get_agent_stats(
                 "agent_name": agent_name,
                 "total_calls": 0,
                 "outcome_distribution": {},
-                "engagement_values": [],
-                "interested_count": 0,
+                "completed_positive_count": 0,
             }
 
         entry = agent_data[bucket_id]
@@ -417,18 +396,14 @@ async def get_agent_stats(
             entry["outcome_distribution"][classification] = (
                 entry["outcome_distribution"].get(classification, 0) + 1
             )
-            if classification == "interested":
-                entry["interested_count"] += 1
-
-        if engagement:
-            entry["engagement_values"].append(engagement)
+            if classification == "completed_positive":
+                entry["completed_positive_count"] += 1
 
     # Build response
     agents = []
     for entry in agent_data.values():
         total = entry["total_calls"]
-        conversion_rate = entry["interested_count"] / total if total > 0 else None
-        avg_engagement = _modal_value(entry["engagement_values"])
+        conversion_rate = entry["completed_positive_count"] / total if total > 0 else None
 
         agents.append(
             {
@@ -436,7 +411,6 @@ async def get_agent_stats(
                 "agent_name": entry["agent_name"],
                 "total_calls": total,
                 "outcome_distribution": entry["outcome_distribution"],
-                "avg_engagement_quality": avg_engagement,
                 "conversion_rate": conversion_rate,
             }
         )

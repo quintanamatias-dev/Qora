@@ -43,7 +43,6 @@ CREATE TABLE IF NOT EXISTS call_analyses (
     summary TEXT,
     interest_level INTEGER,
     classification TEXT,
-    engagement_quality TEXT,
     outcome_reason TEXT,
     urgency TEXT,
     primary_need TEXT,
@@ -168,7 +167,6 @@ def _build_call_analysis_row(
         "summary": facts.get("summary") or "",
         "interest_level": facts.get("interest_level"),
         "classification": call_outcome.get("classification"),
-        "engagement_quality": call_outcome.get("engagement_quality"),
         "outcome_reason": call_outcome.get("reason"),
         "urgency": identified_problem.get("urgency"),
         "primary_need": identified_problem.get("primary_need"),
@@ -372,7 +370,7 @@ async def run_migration(database_url: str) -> dict:
                         """
                         INSERT INTO call_analyses
                             (id, session_id, lead_id, client_id, summary, interest_level,
-                             classification, engagement_quality, outcome_reason, urgency,
+                             classification, outcome_reason, urgency,
                              primary_need, next_action_suggested, current_insurance,
                              data_corrections, misc_notes, objections, products,
                              specific_needs, buying_signals, pain_points,
@@ -381,7 +379,7 @@ async def run_migration(database_url: str) -> dict:
                              analyzed_at, analysis_status, analysis_error)
                         VALUES
                             (:id, :session_id, :lead_id, :client_id, :summary, :interest_level,
-                             :classification, :engagement_quality, :outcome_reason, :urgency,
+                             :classification, :outcome_reason, :urgency,
                              :primary_need, :next_action_suggested, :current_insurance,
                              :data_corrections, :misc_notes, :objections, :products,
                              :specific_needs, :buying_signals, :pain_points,

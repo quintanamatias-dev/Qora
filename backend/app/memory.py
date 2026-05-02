@@ -293,15 +293,12 @@ def _format_axis(key: str, axis_dict: dict) -> str:
 
     if key == "call_outcome":
         classification = axis_dict.get("classification", "")
-        quality = axis_dict.get("engagement_quality", "")
         reason = axis_dict.get("reason", "")
-        if classification and quality:
-            core = f"{classification} ({quality} engagement)"
-        elif classification:
-            core = str(classification)
-        else:
-            core = str(quality) if quality else ""
-        return f"{core} — {reason}".strip(" —") if (core and reason) else core or reason
+        confidence = axis_dict.get("confidence", "")
+        core = str(classification) if classification else ""
+        suffix = f" [{confidence}]" if confidence else ""
+        base = f"{core}{suffix}"
+        return f"{base} — {reason}".strip(" —") if (base and reason) else base or reason
 
     if key == "detected_interests":
         products = axis_dict.get("products") or []
