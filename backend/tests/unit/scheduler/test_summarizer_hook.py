@@ -114,7 +114,7 @@ def _make_dispatching_client(analysis):
         ServiceIssuesAxis,  # noqa: F401 — used via DIMENSION_MODULES dynamic dispatch
         ProfileFactsAxis,  # noqa: F401
         CommitmentsAxis,  # noqa: F401
-        AbandonmentReasonAxis,  # noqa: F401
+        # qora-abandonment: AbandonmentReasonAxis removed from universal exports
     )
     from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.interest.interest_level import InterestLevelResult, ProductScore
@@ -146,6 +146,7 @@ def _make_dispatching_client(analysis):
                 confidence="medium",
             )
 
+        # qora-abandonment: abandonment_reason removed from complex_targets
         complex_targets = {
             "call_outcome",
             "identified_problem",
@@ -153,7 +154,6 @@ def _make_dispatching_client(analysis):
             "service_issues",
             "profile_facts",
             "commitments",
-            "abandonment_reason",
         }
         if target_field in complex_targets:
             return getattr(analysis, target_field)

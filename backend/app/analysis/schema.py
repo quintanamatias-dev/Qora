@@ -17,7 +17,6 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from app.analysis.universal import (
-    AbandonmentReasonAxis,
     CallOutcome,
     CommitmentsAxis,
     InterestsAxis,
@@ -103,7 +102,4 @@ class PostCallAnalysis(BaseModel):
         default_factory=CommitmentsAxis,
         description="Concrete commitments and next-step actions identified in the call",
     )
-    abandonment_reason: AbandonmentReasonAxis = Field(
-        default_factory=AbandonmentReasonAxis,
-        description="Why the lead disengaged or wants to stop, if applicable",
-    )
+

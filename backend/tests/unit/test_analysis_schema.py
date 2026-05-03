@@ -904,33 +904,54 @@ def test_commitments_axis_accepts_commitment_objects():
 
 
 # ---------------------------------------------------------------------------
-# AbandonmentReasonAxis
+# AbandonmentReasonAxis — qora-abandonment: COMPLETELY REMOVED
+# The module abandonment.py was deleted. These tests verify the replacement.
 # ---------------------------------------------------------------------------
 
 
-def test_abandonment_reason_axis_defaults_to_none():
-    """AbandonmentReasonAxis.reason defaults to None (nullable)."""
-    from app.analysis_schema import AbandonmentReasonAxis
+def test_abandonment_module_deleted_and_not_importable():
+    """abandonment.py was deleted — module must not be importable at all.
 
-    axis = AbandonmentReasonAxis()
-    assert axis.reason is None
+    qora-abandonment: The AbandonmentReasonAxis class is gone. Its signal
+    is now captured by CallOutcome.was_abrupt + CallOutcome.abandonment_trigger.
+    """
+    import importlib.util
+
+    spec = importlib.util.find_spec("app.analysis.universal.abandonment")
+    assert spec is None, (
+        "app.analysis.universal.abandonment must be deleted (qora-abandonment spec)"
+    )
 
 
-def test_abandonment_reason_axis_accepts_string():
-    """AbandonmentReasonAxis.reason accepts a non-None string."""
-    from app.analysis_schema import AbandonmentReasonAxis
+def test_call_outcome_replaces_abandonment_reason_axis():
+    """CallOutcome.was_abrupt + abandonment_trigger replace AbandonmentReasonAxis.
 
-    axis = AbandonmentReasonAxis(reason="Lead said they found a cheaper provider")
-    assert axis.reason == "Lead said they found a cheaper provider"
+    The old AbandonmentReasonAxis.reason is superseded by two typed fields:
+    - was_abrupt: bool | None
+    - abandonment_trigger: AbandonmentTrigger | None
+    """
+    from app.analysis.universal.outcome import CallOutcome
+
+    # Non-completed classification: can have both fields
+    outcome = CallOutcome(
+        classification="do_not_contact",
+        reason="Lead found competitor.",
+        confidence="high",
+        was_abrupt=False,
+        abandonment_trigger="no_interest",
+    )
+    assert outcome.was_abrupt is False
+    assert outcome.abandonment_trigger == "no_interest"
 
 
 # ---------------------------------------------------------------------------
-# PostCallAnalysis now includes the 4 new axes
+# PostCallAnalysis now includes 3 new axis fields (service_issues, profile_facts, commitments)
+# qora-abandonment: abandonment_reason axis REMOVED from PostCallAnalysis
 # ---------------------------------------------------------------------------
 
 
-def test_post_call_analysis_has_four_new_axes():
-    """PostCallAnalysis includes all 4 new universal axis fields."""
+def test_post_call_analysis_has_three_new_axes_without_abandonment():
+    """PostCallAnalysis includes service_issues, profile_facts, commitments (abandonment_reason REMOVED)."""
     from app.analysis_schema import PostCallAnalysis
 
     schema = PostCallAnalysis.model_json_schema()
@@ -942,12 +963,16 @@ def test_post_call_analysis_has_four_new_axes():
         "commitments" in props
     ), "PostCallAnalysis must have commitments axis"
     assert (
-        "abandonment_reason" in props
-    ), "PostCallAnalysis must have abandonment_reason axis"
+        "abandonment_reason" not in props
+    ), "PostCallAnalysis must NOT have abandonment_reason axis (qora-abandonment)"
 
 
 def test_post_call_analysis_new_axes_have_correct_defaults():
-    """PostCallAnalysis new axes default to empty lists / None without explicit data."""
+    """PostCallAnalysis new axes default to empty lists without explicit data.
+
+    qora-abandonment: abandonment_reason removed; service_issues, profile_facts,
+    commitments remain. CallOutcome.was_abrupt and abandonment_trigger default to None.
+    """
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
@@ -975,17 +1000,24 @@ def test_post_call_analysis_new_axes_have_correct_defaults():
     assert analysis.service_issues.issues == []
     assert analysis.profile_facts.facts == []
     assert analysis.commitments.commitments == []
-    assert analysis.abandonment_reason.reason is None
+    # qora-abandonment: abandonment_reason no longer on PostCallAnalysis
+    assert not hasattr(analysis, "abandonment_reason")
+    # was_abrupt + abandonment_trigger live on call_outcome now
+    assert analysis.call_outcome.was_abrupt is None
+    assert analysis.call_outcome.abandonment_trigger is None
 
 
 def test_post_call_analysis_new_axes_accept_data():
-    """PostCallAnalysis accepts populated data for all 4 new axes."""
+    """PostCallAnalysis accepts populated data for service_issues, profile_facts, commitments.
+
+    qora-abandonment: abandonment_reason field REMOVED. was_abrupt + abandonment_trigger
+    now live on call_outcome and are tested separately.
+    """
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
         ServiceIssuesAxis,
         ProfileFactsAxis,
-        AbandonmentReasonAxis,
     )
     from app.analysis.universal.problem import ProblemAxis, PainPoint
     from app.analysis.universal.interest.interests import InterestsAxis
@@ -1035,7 +1067,6 @@ def test_post_call_analysis_new_axes_accept_data():
         service_issues=ServiceIssuesAxis(issues=[issue]),
         profile_facts=ProfileFactsAxis(facts=["manager at startup"]),
         commitments=CommitmentsAxis(commitments=[c]),
-        abandonment_reason=AbandonmentReasonAxis(reason="Found competitor cheaper"),
     )
 
     assert len(analysis.service_issues.issues) == 1
@@ -1043,7 +1074,8 @@ def test_post_call_analysis_new_axes_accept_data():
     assert analysis.profile_facts.facts == ["manager at startup"]
     assert len(analysis.commitments.commitments) == 1
     assert analysis.commitments.commitments[0].type == "callback"
-    assert analysis.abandonment_reason.reason == "Found competitor cheaper"
+    # qora-abandonment: abandonment_reason no longer on PostCallAnalysis
+    assert not hasattr(analysis, "abandonment_reason")
 
 
 # ===========================================================================
@@ -1064,7 +1096,7 @@ def test_post_call_analysis_new_axes_accept_data():
         __import__("app.analysis.universal.service_issues", fromlist=["x"]),
         __import__("app.analysis.universal.profile_facts", fromlist=["x"]),
         __import__("app.analysis.universal.commitments", fromlist=["x"]),
-        __import__("app.analysis.universal.abandonment", fromlist=["x"]),
+        # qora-abandonment: abandonment module REMOVED from DIMENSION_MODULES
     ],
     ids=lambda m: m.DIMENSION["name"],
 )
@@ -1073,6 +1105,7 @@ def test_dimension_module_contract(mod):
 
     NOTE: interest_level and interests are no longer in DIMENSION_MODULES —
     they are orchestrated by the 2-phase interest pipeline in summarizer.py.
+    NOTE: abandonment is no longer in DIMENSION_MODULES (qora-abandonment spec).
     """
     import inspect
     from app.analysis import PostCallAnalysis
@@ -1163,6 +1196,7 @@ async def test_dimension_analyze_returns_axis_for_complex_axes():
     objections is now a complex axis (qora-objections spec — returns ObjectionsAxis).
     NOTE: interests is no longer in DIMENSION_MODULES (qora-interest-pipeline spec
     — it's orchestrated by the 2-phase pipeline via run_interest_pipeline()).
+    NOTE: abandonment is no longer in DIMENSION_MODULES (qora-abandonment spec).
     """
     from unittest.mock import AsyncMock, MagicMock
     from app.analysis.universal import (
@@ -1172,14 +1206,12 @@ async def test_dimension_analyze_returns_axis_for_complex_axes():
         ServiceIssuesAxis,
         ProfileFactsAxis,
         CommitmentsAxis,
-        AbandonmentReasonAxis,
         outcome as outcome_mod,
         objections as objections_mod,
         problem as problem_mod,
         service_issues as service_issues_mod,
         profile_facts as profile_facts_mod,
         commitments as commitments_mod,
-        abandonment as abandonment_mod,
     )
 
     cases = [
@@ -1192,7 +1224,6 @@ async def test_dimension_analyze_returns_axis_for_complex_axes():
         (service_issues_mod, ServiceIssuesAxis()),
         (profile_facts_mod, ProfileFactsAxis()),
         (commitments_mod, CommitmentsAxis()),
-        (abandonment_mod, AbandonmentReasonAxis()),
     ]
     for mod, parsed in cases:
         client = AsyncMock()
@@ -1210,6 +1241,7 @@ def test_dimension_modules_iteration_order_is_stable():
     qora-interest-pipeline: interest_level and interests are removed from
     DIMENSION_MODULES (11 entries, down from 13). They are now orchestrated
     by the 2-phase interest pipeline.
+    qora-abandonment: abandonment_reason removed (10 entries, down from 11).
     """
     from app.analysis.universal import DIMENSION_MODULES
 
@@ -1225,7 +1257,6 @@ def test_dimension_modules_iteration_order_is_stable():
         "service_issues",
         "profile_facts",
         "commitments",
-        "abandonment_reason",
     ]
 
 
@@ -1316,11 +1347,12 @@ def test_objections_target_field_mapping_is_correct():
 
 
 def test_dimension_modules_cover_all_post_call_analysis_fields_still_correct():
-    """All 11 non-pipeline PostCallAnalysis fields are covered by exactly one dimension.
+    """All 10 non-pipeline PostCallAnalysis fields are covered by exactly one dimension.
 
     qora-interest-pipeline: interest_level and detected_interests are now
-    pipeline fields — not in DIMENSION_MODULES. The 11 remaining dimensions
+    pipeline fields — not in DIMENSION_MODULES. The 10 remaining dimensions
     cover all other PostCallAnalysis fields.
+    qora-abandonment: abandonment_reason removed from PostCallAnalysis.
     """
     from app.analysis import PostCallAnalysis
     from app.analysis.universal import DIMENSION_MODULES
@@ -1346,15 +1378,16 @@ def test_dimension_modules_cover_all_post_call_analysis_fields_still_correct():
 # ===========================================================================
 
 
-def test_dimension_modules_count_is_11_after_interest_pipeline():
-    """DIMENSION_MODULES has exactly 11 entries after qora-interest-pipeline.
+def test_dimension_modules_count_is_10_after_interest_pipeline_and_abandonment():
+    """DIMENSION_MODULES has exactly 10 entries after qora-interest-pipeline and qora-abandonment.
 
-    interest_level and interests are removed (now handled by run_interest_pipeline).
+    interest_level and interests removed (run_interest_pipeline).
+    abandonment_reason removed (absorbed into CallOutcome fields).
     """
     from app.analysis.universal import DIMENSION_MODULES
 
-    assert len(DIMENSION_MODULES) == 11, (
-        f"Expected 11 DIMENSION_MODULES (interest pipeline extracted), "
+    assert len(DIMENSION_MODULES) == 10, (
+        f"Expected 10 DIMENSION_MODULES (interest pipeline + abandonment extracted), "
         f"got {len(DIMENSION_MODULES)}: {[m.DIMENSION['name'] for m in DIMENSION_MODULES]}"
     )
 
@@ -1386,9 +1419,8 @@ def test_interest_level_stays_int_in_schema():
 
     field_info = PostCallAnalysis.model_fields["interest_level"]
     # Field annotation must be int (not a Pydantic model)
-    import typing
     annotation = field_info.annotation
-    assert annotation is int or annotation == int, (
+    assert annotation is int, (
         f"interest_level must remain int in PostCallAnalysis (AD-4), got {annotation}"
     )
 
@@ -1480,6 +1512,382 @@ def test_old_interest_level_module_no_longer_in_dimension_modules():
         "interest_level must be removed from DIMENSION_MODULES "
         "(qora-interest-pipeline spec)"
     )
+
+
+# ===========================================================================
+# qora-abandonment — Task 1.1
+# AbandonmentTrigger Literal, new CallOutcome fields, model_validator
+# ===========================================================================
+
+_VALID_ABANDONMENT_TRIGGERS = [
+    "price_shock",
+    "lost_patience",
+    "external_interruption",
+    "objection_escalation",
+    "no_interest",
+    "technical_failure",
+    "time_constraint",
+    "other",
+]
+
+_COMPLETED_CLASSIFICATIONS = [
+    "completed_positive",
+    "completed_neutral",
+    "completed_negative",
+    "callback_requested",
+]
+
+_NON_COMPLETED_CLASSIFICATIONS = [
+    "no_answer",
+    "busy",
+    "do_not_contact",
+    "wrong_number",
+    "hostile",
+    "confused",
+    "technical_issue",
+]
+
+
+def test_abandonment_trigger_type_importable_from_outcome():
+    """AbandonmentTrigger must be importable from app.analysis.universal.outcome."""
+    from app.analysis.universal.outcome import AbandonmentTrigger  # noqa: F401
+
+    assert AbandonmentTrigger is not None
+
+
+@pytest.mark.parametrize("trigger", _VALID_ABANDONMENT_TRIGGERS)
+def test_call_outcome_accepts_all_8_abandonment_triggers(trigger):
+    """CallOutcome accepts each of the 8 AbandonmentTrigger values when classification is hostile."""
+    from app.analysis.universal.outcome import CallOutcome
+
+    outcome = CallOutcome(
+        classification="hostile",
+        reason="Lead hung up.",
+        confidence="high",
+        was_abrupt=True,
+        abandonment_trigger=trigger,
+    )
+    assert outcome.abandonment_trigger == trigger
+    assert outcome.was_abrupt is True
+
+
+def test_call_outcome_rejects_invalid_abandonment_trigger():
+    """CallOutcome raises ValidationError for an unknown abandonment_trigger value."""
+    from pydantic import ValidationError
+    from app.analysis.universal.outcome import CallOutcome
+
+    with pytest.raises(ValidationError):
+        CallOutcome(
+            classification="hostile",
+            reason="Lead hung up.",
+            confidence="high",
+            was_abrupt=True,
+            abandonment_trigger="rage_quit",  # NOT a valid value
+        )
+
+
+def test_call_outcome_new_fields_default_to_none():
+    """CallOutcome.was_abrupt and abandonment_trigger default to None."""
+    from app.analysis.universal.outcome import CallOutcome
+
+    outcome = CallOutcome(
+        classification="no_answer",
+        reason="No answer.",
+        confidence="low",
+    )
+    assert outcome.was_abrupt is None
+    assert outcome.abandonment_trigger is None
+
+
+@pytest.mark.parametrize("classification", _COMPLETED_CLASSIFICATIONS)
+def test_call_outcome_validator_nullifies_fields_for_completed_outcomes(classification):
+    """model_validator: completed/callback classifications force was_abrupt=None, abandonment_trigger=None."""
+    from app.analysis.universal.outcome import CallOutcome
+
+    outcome = CallOutcome(
+        classification=classification,
+        reason="Call completed.",
+        confidence="high",
+        was_abrupt=True,
+        abandonment_trigger="price_shock",
+    )
+    # Validator must override the supplied values
+    assert outcome.was_abrupt is None, (
+        f"was_abrupt must be None for classification={classification!r}"
+    )
+    assert outcome.abandonment_trigger is None, (
+        f"abandonment_trigger must be None for classification={classification!r}"
+    )
+
+
+@pytest.mark.parametrize("classification", _NON_COMPLETED_CLASSIFICATIONS)
+def test_call_outcome_validator_preserves_fields_for_non_completed_outcomes(classification):
+    """model_validator: non-completed classifications keep was_abrupt + abandonment_trigger as set."""
+    from app.analysis.universal.outcome import CallOutcome
+
+    outcome = CallOutcome(
+        classification=classification,
+        reason="Lead disengaged.",
+        confidence="medium",
+        was_abrupt=True,
+        abandonment_trigger="lost_patience",
+    )
+    assert outcome.was_abrupt is True
+    assert outcome.abandonment_trigger == "lost_patience"
+
+
+def test_call_outcome_paired_fields_both_none_is_valid():
+    """CallOutcome with was_abrupt=None and abandonment_trigger=None is valid for any classification."""
+    from app.analysis.universal.outcome import CallOutcome
+
+    outcome = CallOutcome(
+        classification="no_answer",
+        reason="Voicemail.",
+        confidence="low",
+        was_abrupt=None,
+        abandonment_trigger=None,
+    )
+    assert outcome.was_abrupt is None
+    assert outcome.abandonment_trigger is None
+
+
+def test_call_outcome_was_abrupt_false_with_trigger_is_valid():
+    """was_abrupt=False with an abandonment_trigger is valid (polite disengagement with known reason)."""
+    from app.analysis.universal.outcome import CallOutcome
+
+    outcome = CallOutcome(
+        classification="do_not_contact",
+        reason="Lead calmly asked not to be contacted.",
+        confidence="high",
+        was_abrupt=False,
+        abandonment_trigger="no_interest",
+    )
+    assert outcome.was_abrupt is False
+    assert outcome.abandonment_trigger == "no_interest"
+
+
+def test_call_outcome_model_dump_includes_new_fields():
+    """model_dump() includes was_abrupt and abandonment_trigger in the output dict."""
+    from app.analysis.universal.outcome import CallOutcome
+
+    outcome = CallOutcome(
+        classification="hostile",
+        reason="Lead was rude.",
+        confidence="high",
+        was_abrupt=True,
+        abandonment_trigger="lost_patience",
+    )
+    dumped = outcome.model_dump()
+    assert "was_abrupt" in dumped
+    assert "abandonment_trigger" in dumped
+    assert dumped["was_abrupt"] is True
+    assert dumped["abandonment_trigger"] == "lost_patience"
+
+
+def test_call_outcome_model_dump_new_fields_null_for_completed():
+    """model_dump() shows was_abrupt=None + abandonment_trigger=None for completed outcomes."""
+    from app.analysis.universal.outcome import CallOutcome
+
+    outcome = CallOutcome(
+        classification="completed_positive",
+        reason="Lead agreed to a quote.",
+        confidence="high",
+        was_abrupt=True,
+        abandonment_trigger="price_shock",
+    )
+    dumped = outcome.model_dump()
+    assert dumped["was_abrupt"] is None
+    assert dumped["abandonment_trigger"] is None
+
+
+# ===========================================================================
+# qora-abandonment — Task 1.2
+# Remove abandonment from schema.py + __init__.py (11 → 10)
+# ===========================================================================
+
+
+def test_post_call_analysis_has_no_abandonment_reason_field():
+    """PostCallAnalysis MUST NOT have an abandonment_reason field after qora-abandonment."""
+    from app.analysis.schema import PostCallAnalysis
+
+    assert "abandonment_reason" not in PostCallAnalysis.model_fields, (
+        "PostCallAnalysis.abandonment_reason must be REMOVED (qora-abandonment spec)"
+    )
+
+
+def test_abandonment_reason_axis_not_imported_in_schema():
+    """AbandonmentReasonAxis must NOT be imported or used in schema.py."""
+    import ast
+    import pathlib
+
+    schema_path = (
+        pathlib.Path(__file__).parent.parent.parent / "app" / "analysis" / "schema.py"
+    )
+    source = schema_path.read_text()
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            imported_names = [alias.name for alias in node.names]
+            assert "AbandonmentReasonAxis" not in imported_names, (
+                "schema.py must NOT import AbandonmentReasonAxis (qora-abandonment spec)"
+            )
+
+
+def test_dimension_modules_count_is_10_after_abandonment():
+    """DIMENSION_MODULES has exactly 10 entries after qora-abandonment removes abandonment."""
+    from app.analysis.universal import DIMENSION_MODULES
+
+    names = [mod.DIMENSION["name"] for mod in DIMENSION_MODULES]
+    assert len(DIMENSION_MODULES) == 10, (
+        f"Expected 10 DIMENSION_MODULES after qora-abandonment, "
+        f"got {len(DIMENSION_MODULES)}: {names}"
+    )
+
+
+def test_abandonment_not_in_dimension_modules():
+    """abandonment_reason MUST NOT be in DIMENSION_MODULES after qora-abandonment."""
+    from app.analysis.universal import DIMENSION_MODULES
+
+    names = [mod.DIMENSION["name"] for mod in DIMENSION_MODULES]
+    assert "abandonment_reason" not in names, (
+        f"abandonment_reason must be removed from DIMENSION_MODULES: {names}"
+    )
+
+
+def test_abandonment_module_not_exported_from_universal_init():
+    """abandonment and AbandonmentReasonAxis must NOT be in __all__ of app.analysis.universal.
+
+    NOTE: Python makes submodules accessible as attributes once imported anywhere in the
+    process (sys.modules side-effect). We check __all__ (explicit public API) instead of
+    hasattr to avoid false positives from test ordering.
+    """
+    import app.analysis.universal as univ
+
+    assert "AbandonmentReasonAxis" not in univ.__all__, (
+        "AbandonmentReasonAxis must be removed from app.analysis.universal __all__"
+    )
+    assert "abandonment" not in univ.__all__, (
+        "abandonment must be removed from app.analysis.universal __all__"
+    )
+
+
+def test_dimension_modules_order_is_correct_after_abandonment():
+    """DIMENSION_MODULES order is stable with 10 entries (abandonment removed)."""
+    from app.analysis.universal import DIMENSION_MODULES
+
+    names = [mod.DIMENSION["name"] for mod in DIMENSION_MODULES]
+    assert names == [
+        "summary",
+        "objections",
+        "next_action",
+        "misc_notes",
+        "data_corrections",
+        "outcome",
+        "problem",
+        "service_issues",
+        "profile_facts",
+        "commitments",
+    ], f"Unexpected DIMENSION_MODULES order: {names}"
+
+
+# ===========================================================================
+# qora-abandonment — Task 2.1
+# Outcome prompt includes abandonment instructions + DO NOT block
+# ===========================================================================
+
+
+def test_outcome_prompt_contains_abandonment_was_abrupt_instruction():
+    """DIMENSION['prompt'] in outcome.py must contain was_abrupt field instruction."""
+    from app.analysis.universal import outcome as outcome_mod
+
+    prompt = outcome_mod.DIMENSION["prompt"]
+    assert "was_abrupt" in prompt, (
+        "outcome.py DIMENSION prompt must contain was_abrupt instruction"
+    )
+
+
+def test_outcome_prompt_contains_abandonment_trigger_instruction():
+    """DIMENSION['prompt'] in outcome.py must contain abandonment_trigger field instruction."""
+    from app.analysis.universal import outcome as outcome_mod
+
+    prompt = outcome_mod.DIMENSION["prompt"]
+    assert "abandonment_trigger" in prompt, (
+        "outcome.py DIMENSION prompt must contain abandonment_trigger instruction"
+    )
+
+
+def test_outcome_prompt_contains_do_not_block_for_completed():
+    """DIMENSION['prompt'] must include explicit DO NOT block for completed/callback outcomes."""
+    from app.analysis.universal import outcome as outcome_mod
+
+    prompt = outcome_mod.DIMENSION["prompt"]
+    assert "DO NOT" in prompt, (
+        "outcome.py DIMENSION prompt must contain DO NOT block (canonical pattern)"
+    )
+    assert "completed_positive" in prompt, (
+        "DO NOT block must name completed_positive"
+    )
+    assert "callback_requested" in prompt, (
+        "DO NOT block must name callback_requested"
+    )
+
+
+def test_outcome_prompt_lists_all_8_abandonment_trigger_values():
+    """DIMENSION['prompt'] must mention all 8 AbandonmentTrigger values."""
+    from app.analysis.universal import outcome as outcome_mod
+
+    prompt = outcome_mod.DIMENSION["prompt"]
+    for trigger in [
+        "price_shock", "lost_patience", "external_interruption",
+        "objection_escalation", "no_interest", "technical_failure",
+        "time_constraint", "other",
+    ]:
+        assert trigger in prompt, (
+            f"outcome.py DIMENSION prompt missing abandonment trigger: {trigger}"
+        )
+
+
+# ===========================================================================
+# qora-abandonment — Task 4.1
+# Confirm abandonment.py is deleted and all references removed
+# ===========================================================================
+
+
+def test_abandonment_module_is_deleted():
+    """abandonment.py must be deleted from app.analysis.universal (qora-abandonment spec)."""
+    import importlib.util
+
+    spec = importlib.util.find_spec("app.analysis.universal.abandonment")
+    assert spec is None, (
+        "app.analysis.universal.abandonment module must be DELETED (qora-abandonment spec)"
+    )
+
+
+def test_abandonment_reason_axis_not_importable_from_analysis():
+    """AbandonmentReasonAxis must NOT be importable from app.analysis (qora-abandonment spec)."""
+    import app.analysis as analysis_pkg
+
+    assert not hasattr(analysis_pkg, "AbandonmentReasonAxis"), (
+        "AbandonmentReasonAxis must be removed from app.analysis (qora-abandonment)"
+    )
+    assert "AbandonmentReasonAxis" not in analysis_pkg.__all__, (
+        "AbandonmentReasonAxis must be removed from app.analysis.__all__"
+    )
+
+
+def test_abandonment_trigger_importable_from_universal():
+    """AbandonmentTrigger must be importable from app.analysis.universal (qora-abandonment spec)."""
+    from app.analysis.universal import AbandonmentTrigger  # noqa: F401
+
+    assert AbandonmentTrigger is not None
+
+
+def test_abandonment_trigger_importable_from_analysis():
+    """AbandonmentTrigger must be importable from app.analysis (qora-abandonment spec)."""
+    from app.analysis import AbandonmentTrigger  # noqa: F401
+
+    assert AbandonmentTrigger is not None
 
 
 def test_analysis_schema_no_forbidden_imports_after_objections():

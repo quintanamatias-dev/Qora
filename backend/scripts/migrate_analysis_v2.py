@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS call_analyses (
     profile_facts TEXT NOT NULL DEFAULT '[]',
     commitment_signals TEXT NOT NULL DEFAULT '[]',
     abandonment_reason TEXT,
+    was_abrupt BOOLEAN,
+    abandonment_trigger TEXT,
     extra_axes_data TEXT,
     analyzed_at DATETIME NOT NULL,
     analysis_status TEXT NOT NULL DEFAULT 'ok',
@@ -157,7 +159,11 @@ def _build_call_analysis_row(
     service_issues_data = facts.get("service_issues") or {}
     profile_facts_data = facts.get("profile_facts") or {}
     commitment_signals_data = facts.get("commitment_signals") or {}
-    abandonment_reason_data = facts.get("abandonment_reason") or {}
+
+    # qora-abandonment: was_abrupt + abandonment_trigger from call_outcome dict.
+    # abandonment_reason kept as DEPRECATED NULL column (AD-4).
+    was_abrupt = call_outcome.get("was_abrupt")
+    abandonment_trigger = call_outcome.get("abandonment_trigger")
 
     return {
         "id": str(uuid.uuid4()),
@@ -194,11 +200,11 @@ def _build_call_analysis_row(
             if isinstance(commitment_signals_data, dict)
             else None
         ),
-        "abandonment_reason": (
-            abandonment_reason_data.get("reason")
-            if isinstance(abandonment_reason_data, dict)
-            else None
-        ),
+        # DEPRECATED: abandonment_reason stays NULL for all migrated rows (AD-4)
+        "abandonment_reason": None,
+        # qora-abandonment: new columns from call_outcome dict
+        "was_abrupt": was_abrupt,
+        "abandonment_trigger": abandonment_trigger,
         "extra_axes_data": None,  # not populated during migration from legacy JSON
         "analyzed_at": _utcnow_str(),
         "analysis_status": "ok",
@@ -375,7 +381,8 @@ async def run_migration(database_url: str) -> dict:
                              data_corrections, misc_notes, objections, products,
                              specific_needs, buying_signals, pain_points,
                              service_issues, profile_facts, commitment_signals,
-                             abandonment_reason, extra_axes_data,
+                             abandonment_reason, was_abrupt, abandonment_trigger,
+                             extra_axes_data,
                              analyzed_at, analysis_status, analysis_error)
                         VALUES
                             (:id, :session_id, :lead_id, :client_id, :summary, :interest_level,
@@ -384,7 +391,8 @@ async def run_migration(database_url: str) -> dict:
                              :data_corrections, :misc_notes, :objections, :products,
                              :specific_needs, :buying_signals, :pain_points,
                              :service_issues, :profile_facts, :commitment_signals,
-                             :abandonment_reason, :extra_axes_data,
+                             :abandonment_reason, :was_abrupt, :abandonment_trigger,
+                             :extra_axes_data,
                              :analyzed_at, :analysis_status, :analysis_error)
                         """
                     ),

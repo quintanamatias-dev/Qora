@@ -9,6 +9,9 @@ parallel (``DIMENSION_MODULES``) PLUS a sequential 2-phase interest pipeline
 via ``run_interest_pipeline``. The old ``interests`` and ``interest_level``
 modules are no longer in ``DIMENSION_MODULES`` — they are orchestrated by
 the pipeline.
+
+qora-abandonment: ``abandonment`` dimension removed (11 → 10 DIMENSION_MODULES).
+Abandonment signal absorbed into ``CallOutcome`` as ``was_abrupt`` + ``abandonment_trigger``.
 """
 
 from __future__ import annotations
@@ -16,7 +19,6 @@ from __future__ import annotations
 from types import ModuleType
 
 from app.analysis.universal import (
-    abandonment,
     commitments,
     data_corrections,
     misc_notes,
@@ -28,7 +30,6 @@ from app.analysis.universal import (
     service_issues,
     summary,
 )
-from app.analysis.universal.abandonment import AbandonmentReasonAxis
 from app.analysis.universal.commitments import CommitmentsAxis
 from app.analysis.universal.data_corrections import DataCorrectionsAxis
 
@@ -43,7 +44,7 @@ from app.analysis.universal.interest import (
 from app.analysis.universal.misc_notes import MiscNotesAxis
 from app.analysis.universal.next_action import NextActionAxis
 from app.analysis.universal.objections import Objection, ObjectionsAxis
-from app.analysis.universal.outcome import CallOutcome
+from app.analysis.universal.outcome import AbandonmentTrigger, CallOutcome
 from app.analysis.universal.problem import IdentifiedProblem, PainPoint, ProblemAxis
 from app.analysis.universal.profile_facts import ProfileFactsAxis
 from app.analysis.universal.service_issues import ServiceIssue, ServiceIssuesAxis
@@ -53,9 +54,10 @@ from app.analysis.universal.summary import SummaryAxis
 # The summarizer fans out one OpenAI call per module via ``mod.analyze`` and
 # merges the unwrapped results into PostCallAnalysis using ``DIMENSION["target_field"]``.
 #
-# qora-interest-pipeline: DIMENSION_MODULES has 11 entries (down from 13).
+# qora-interest-pipeline: DIMENSION_MODULES had 11 entries (down from 13).
+# qora-abandonment: DIMENSION_MODULES now has 10 entries (abandonment removed).
 # ``interests`` and ``interest_level`` are handled by the 2-phase pipeline:
-#   Phase 1: interests.analyze() — runs in parallel with the 11 here
+#   Phase 1: interests.analyze() — runs in parallel with the 10 here
 #   Phase 2: interest_level.analyze() — runs after Phase 1 completes
 DIMENSION_MODULES: list[ModuleType] = [
     summary,
@@ -68,7 +70,6 @@ DIMENSION_MODULES: list[ModuleType] = [
     service_issues,
     profile_facts,
     commitments,
-    abandonment,
 ]
 
 UNIVERSAL_DIMENSIONS: list[dict] = [mod.DIMENSION for mod in DIMENSION_MODULES]
@@ -81,6 +82,7 @@ __all__ = [
     "MiscNotesAxis",
     "DataCorrectionsAxis",
     "CallOutcome",
+    "AbandonmentTrigger",
     "IdentifiedProblem",
     "PainPoint",
     "ProblemAxis",
@@ -88,7 +90,6 @@ __all__ = [
     "ServiceIssuesAxis",
     "ProfileFactsAxis",
     "CommitmentsAxis",
-    "AbandonmentReasonAxis",
     # qora-interest-pipeline: new exports from interest/ package
     "InterestItem",
     "InterestsAxis",

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -129,7 +129,12 @@ class CallAnalysis(Base):
     service_issues: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     profile_facts: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     commitment_signals: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    # DEPRECATED (qora-abandonment AD-4): abandonment_reason kept for backward compat,
+    # receives NULL going forward. New records use was_abrupt + abandonment_trigger.
     abandonment_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # qora-abandonment: new columns absorb signal from deleted abandonment dimension
+    was_abrupt: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    abandonment_trigger: Mapped[str | None] = mapped_column(String, nullable=True)
     extra_axes_data: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Audit / metadata
     analyzed_at: Mapped[datetime] = mapped_column(

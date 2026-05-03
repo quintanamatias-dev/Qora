@@ -523,3 +523,144 @@ async def test_drop_engagement_quality_migration_is_idempotent(
     # Run migration on DB that already doesn't have the column
     result = await run_migration(db_url)
     assert result["engagement_quality"] == "skipped"
+
+
+# ===========================================================================
+# qora-abandonment Task 3.2 — migrate_abandonment_to_outcome.py
+# ===========================================================================
+
+
+@pytest_asyncio.fixture
+async def fresh_db_for_abandonment_migration(tmp_path: Path):
+    """DB without was_abrupt / abandonment_trigger columns (pre-migration state)."""
+    from app.core.config import Settings
+    from app.core import database as db_module
+
+    settings = Settings(
+        openai_api_key=SecretStr("sk-test"),
+        elevenlabs_api_key=SecretStr("el-test"),
+        database_url=f"sqlite+aiosqlite:///{tmp_path}/abandonment_migration_test.db",
+    )
+    await db_module.init_db(settings)
+
+    yield settings.database_url, db_module
+
+    await db_module.close_db()
+
+
+async def test_abandonment_migration_adds_was_abrupt_column(
+    fresh_db_for_abandonment_migration,
+):
+    """qora-abandonment: migration adds was_abrupt column to call_analyses."""
+    from scripts.migrate_abandonment_to_outcome import run_migration
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    db_url, _db_module = fresh_db_for_abandonment_migration
+
+    result = await run_migration(db_url)
+    assert result["was_abrupt"] in ("added", "skipped")
+
+    engine = create_async_engine(db_url, echo=False)
+    async with engine.connect() as conn:
+        rows = await conn.execute(text("PRAGMA table_info(call_analyses)"))
+        col_names = [row[1] for row in rows.fetchall()]
+    await engine.dispose()
+
+    assert "was_abrupt" in col_names, "was_abrupt column must exist after migration"
+
+
+async def test_abandonment_migration_adds_abandonment_trigger_column(
+    fresh_db_for_abandonment_migration,
+):
+    """qora-abandonment: migration adds abandonment_trigger column to call_analyses."""
+    from scripts.migrate_abandonment_to_outcome import run_migration
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    db_url, _db_module = fresh_db_for_abandonment_migration
+
+    result = await run_migration(db_url)
+    assert result["abandonment_trigger"] in ("added", "skipped")
+
+    engine = create_async_engine(db_url, echo=False)
+    async with engine.connect() as conn:
+        rows = await conn.execute(text("PRAGMA table_info(call_analyses)"))
+        col_names = [row[1] for row in rows.fetchall()]
+    await engine.dispose()
+
+    assert "abandonment_trigger" in col_names, (
+        "abandonment_trigger column must exist after migration"
+    )
+
+
+async def test_abandonment_migration_is_idempotent(
+    fresh_db_for_abandonment_migration,
+):
+    """qora-abandonment: running migration twice is safe (both runs succeed).
+
+    On a DB created by init_db (SQLAlchemy), the columns already exist in the schema.
+    The migration must be safe in BOTH cases:
+    - Columns don't exist → adds them
+    - Columns already exist → skips them (idempotent)
+    """
+    from scripts.migrate_abandonment_to_outcome import run_migration
+
+    db_url, _db_module = fresh_db_for_abandonment_migration
+
+    # First run: either adds or skips depending on init_db schema
+    result1 = await run_migration(db_url)
+    assert result1["was_abrupt"] in ("added", "skipped")
+    assert result1["abandonment_trigger"] in ("added", "skipped")
+
+    # Second run: always skips (columns now exist)
+    result2 = await run_migration(db_url)
+    assert result2["was_abrupt"] == "skipped"
+    assert result2["abandonment_trigger"] == "skipped"
+
+
+# ===========================================================================
+# qora-abandonment Task 3.1 — migrate_analysis_v2 DDL includes new columns
+# ===========================================================================
+
+
+def test_migration_build_call_analysis_row_does_not_include_abandonment_reason_field():
+    """qora-abandonment: _build_call_analysis_row must include was_abrupt + abandonment_trigger."""
+    from scripts.migrate_analysis_v2 import _build_call_analysis_row
+
+    facts = {
+        "call_outcome": {
+            "classification": "hostile",
+            "reason": "Lead hung up.",
+            "confidence": "high",
+            "was_abrupt": True,
+            "abandonment_trigger": "lost_patience",
+        },
+        "interest_level": 20,
+    }
+    row = _build_call_analysis_row("sess-1", "lead-1", "client-1", facts)
+
+    assert "was_abrupt" in row, "Row must include was_abrupt from call_outcome"
+    assert "abandonment_trigger" in row, "Row must include abandonment_trigger from call_outcome"
+    assert row["was_abrupt"] is True
+    assert row["abandonment_trigger"] == "lost_patience"
+
+
+def test_migration_build_call_analysis_row_was_abrupt_null_for_completed():
+    """qora-abandonment: was_abrupt + abandonment_trigger are None when call completed."""
+    from scripts.migrate_analysis_v2 import _build_call_analysis_row
+
+    facts = {
+        "call_outcome": {
+            "classification": "completed_positive",
+            "reason": "Lead agreed.",
+            "confidence": "high",
+            "was_abrupt": None,
+            "abandonment_trigger": None,
+        },
+        "interest_level": 90,
+    }
+    row = _build_call_analysis_row("sess-2", "lead-2", "client-2", facts)
+
+    assert row["was_abrupt"] is None
+    assert row["abandonment_trigger"] is None
