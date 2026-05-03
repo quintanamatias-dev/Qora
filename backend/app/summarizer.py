@@ -611,8 +611,11 @@ async def _upsert_call_analysis(
     ca.commitment_signals = _to_json_list(
         [c.get("description", "") for c in (facts.get("commitments") or {}).get("commitments") or []]
     )
-    _abandonment = facts.get("abandonment_reason") or {}
-    ca.abandonment_reason = _abandonment.get("reason")
+    # qora-abandonment: abandonment_reason is DEPRECATED (AD-4), set NULL for new records.
+    # was_abrupt + abandonment_trigger are read from call_outcome dict.
+    ca.abandonment_reason = None
+    ca.was_abrupt = call_outcome.get("was_abrupt")
+    ca.abandonment_trigger = call_outcome.get("abandonment_trigger")
     ca.extra_axes_data = (
         json.dumps(facts.get("extra_axes_data"))
         if facts.get("extra_axes_data") is not None

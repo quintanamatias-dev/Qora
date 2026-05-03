@@ -100,7 +100,6 @@ def _axis_for_dimension(analysis_obj, target_field: str, schema_cls):
     summarizer. This helper only covers the 11 independent dimensions.
     """
     from app.analysis.universal import (
-        AbandonmentReasonAxis,
         CommitmentsAxis,
         DataCorrectionsAxis,
         MiscNotesAxis,
@@ -112,6 +111,7 @@ def _axis_for_dimension(analysis_obj, target_field: str, schema_cls):
     )
 
     # Complex axes — the value already has the right shape.
+    # qora-abandonment: abandonment_reason removed from complex_targets
     complex_targets = {
         "call_outcome",
         "identified_problem",
@@ -119,7 +119,6 @@ def _axis_for_dimension(analysis_obj, target_field: str, schema_cls):
         "service_issues",
         "profile_facts",
         "commitments",
-        "abandonment_reason",
     }
     if target_field in complex_targets:
         return getattr(analysis_obj, target_field)
@@ -146,10 +145,7 @@ def _axis_for_dimension(analysis_obj, target_field: str, schema_cls):
         return CommitmentsAxis(
             commitments=list(analysis_obj.commitments.commitments)
         )
-    if schema_cls is AbandonmentReasonAxis:
-        return AbandonmentReasonAxis(
-            reason=getattr(analysis_obj.abandonment_reason, "reason", None)
-        )
+    # qora-abandonment: AbandonmentReasonAxis no longer in DIMENSION_MODULES
     raise AssertionError(f"Unknown axis schema: {schema_cls!r}")
 
 
@@ -268,7 +264,6 @@ def _mock_run_interest_pipeline(analysis_obj):
     The pipeline returns (InterestsAxis|dict, InterestLevelResult|dict).
     We extract the values from the analysis_obj to simulate a successful pipeline run.
     """
-    from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.interest.interest_level import InterestLevelResult
 
     interests_result = analysis_obj.detected_interests  # InterestsAxis
@@ -1097,14 +1092,15 @@ async def test_summarizer_uses_parse_not_create(seeded_db):
         async with seeded_db.async_session_factory() as db:
             await generate_summary_and_facts(session_id, db)
 
-        # Must use parse() (11 dim calls + 2 pipeline calls = 13), NOT create()
+        # Must use parse() (10 dim calls + 2 pipeline calls = 12), NOT create()
+        # qora-abandonment: 11 → 10 DIMENSION_MODULES (abandonment removed)
         from app.analysis.universal import DIMENSION_MODULES
 
-        # 11 independent dims + 2 pipeline calls (Agent 1 InterestsAxis + Agent 2 InterestLevelResult)
+        # 10 independent dims + 2 pipeline calls (Agent 1 InterestsAxis + Agent 2 InterestLevelResult)
         expected_parse_calls = len(DIMENSION_MODULES) + 2
         assert mock_client.chat.completions.parse.call_count == expected_parse_calls, (
             f"Expected {expected_parse_calls} parse() calls "
-            f"(11 dims + 2 pipeline), got {mock_client.chat.completions.parse.call_count}"
+            f"(10 dims + 2 pipeline), got {mock_client.chat.completions.parse.call_count}"
         )
         mock_client.chat.completions.create.assert_not_called()
 
@@ -2125,7 +2121,7 @@ async def test_call_analysis_has_five_new_columns(seeded_db):
         ca = result.scalar_one_or_none()
         assert ca is not None
 
-        # Verify 5 new columns exist on the ORM model
+        # Verify new columns exist on the ORM model
         assert hasattr(
             ca, "service_issues"
         ), "CallAnalysis must have service_issues column"
@@ -2135,16 +2131,28 @@ async def test_call_analysis_has_five_new_columns(seeded_db):
         assert hasattr(
             ca, "commitment_signals"
         ), "CallAnalysis must have commitment_signals column"
+        # qora-abandonment: abandonment_reason stays in CallAnalysis as DEPRECATED column (AD-4)
         assert hasattr(
             ca, "abandonment_reason"
-        ), "CallAnalysis must have abandonment_reason column"
+        ), "CallAnalysis must still have abandonment_reason column (DEPRECATED, AD-4)"
+        # qora-abandonment: new columns were_abrupt + abandonment_trigger on CallAnalysis
+        assert hasattr(
+            ca, "was_abrupt"
+        ), "CallAnalysis must have was_abrupt column (qora-abandonment)"
+        assert hasattr(
+            ca, "abandonment_trigger"
+        ), "CallAnalysis must have abandonment_trigger column (qora-abandonment)"
         assert hasattr(
             ca, "extra_axes_data"
         ), "CallAnalysis must have extra_axes_data column"
 
 
 async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
-    """Phase 3: Summarizer persists service_issues (structured JSON), profile_facts, commitment_signals, abandonment_reason."""
+    """Phase 3: Summarizer persists service_issues, profile_facts, commitment_signals.
+
+    qora-abandonment: abandonment_reason field removed from PostCallAnalysis.
+    was_abrupt + abandonment_trigger now come from call_outcome dict.
+    """
     from app.summarizer import generate_summary_and_facts
     from app.calls.models import CallAnalysis
     from app.analysis_schema import (
@@ -2153,7 +2161,6 @@ async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
         IdentifiedProblem,
         ServiceIssuesAxis,
         ProfileFactsAxis,
-        AbandonmentReasonAxis,
     )
     from app.analysis.universal.interest.interests import InterestsAxis, InterestItem
     from app.analysis.universal.commitments import CommitmentsAxis, Commitment
@@ -2223,7 +2230,6 @@ async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
                 )
             ]
         ),
-        abandonment_reason=AbandonmentReasonAxis(reason=None),
     )
 
     mock_client = _make_mock_client(_make_parse_response(axes_analysis))
@@ -2256,19 +2262,22 @@ async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
         signals = json.loads(ca.commitment_signals)
         assert "asked for quote comparison" in signals
 
-        # abandonment_reason: None → stored as NULL
+        # qora-abandonment: abandonment_reason DEPRECATED → stays NULL for new records
         assert ca.abandonment_reason is None
 
 
-async def test_call_analysis_abandonment_reason_persisted_when_set(seeded_db):
-    """Phase 3: abandonment_reason is stored as text when the lead disengaged."""
+async def test_call_analysis_was_abrupt_and_trigger_persisted(seeded_db):
+    """qora-abandonment: was_abrupt + abandonment_trigger are persisted from call_outcome dict.
+
+    When call_outcome has was_abrupt=True and abandonment_trigger='no_interest',
+    those values must be written to CallAnalysis.was_abrupt and .abandonment_trigger.
+    """
     from app.summarizer import generate_summary_and_facts
     from app.calls.models import CallAnalysis
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
         IdentifiedProblem,
-        AbandonmentReasonAxis,
         ServiceIssuesAxis,
         ProfileFactsAxis,
     )
@@ -2286,16 +2295,18 @@ async def test_call_analysis_abandonment_reason_persisted_when_set(seeded_db):
 
     from app.analysis.universal.objections import ObjectionsAxis as _OA
     abandon_analysis = PostCallAnalysis(
-        summary="Lead encontró mejor oferta.",
+        summary="Lead disengaged.",
         objections=_OA(),
         interest_level=10,
         current_insurance=None,
         next_action_suggested="wait",
         misc_notes="",
         call_outcome=CallOutcome(
-            classification="completed_negative",
+            classification="do_not_contact",
             reason="Lead found a cheaper competitor.",
             confidence="high",
+            was_abrupt=False,
+            abandonment_trigger="no_interest",
         ),
         detected_interests=InterestsAxis(),
         identified_problem=IdentifiedProblem(
@@ -2305,9 +2316,6 @@ async def test_call_analysis_abandonment_reason_persisted_when_set(seeded_db):
         service_issues=ServiceIssuesAxis(),
         profile_facts=ProfileFactsAxis(),
         commitments=CommitmentsAxis(),
-        abandonment_reason=AbandonmentReasonAxis(
-            reason="Found a cheaper provider elsewhere"
-        ),
     )
 
     mock_client = _make_mock_client(_make_parse_response(abandon_analysis))
@@ -2324,7 +2332,11 @@ async def test_call_analysis_abandonment_reason_persisted_when_set(seeded_db):
             select(CallAnalysis).where(CallAnalysis.session_id == session_id)
         )
         ca = result.scalar_one()
-        assert ca.abandonment_reason == "Found a cheaper provider elsewhere"
+        # qora-abandonment: new fields from call_outcome dict
+        assert ca.was_abrupt is False
+        assert ca.abandonment_trigger == "no_interest"
+        # Old deprecated column should be NULL for new records
+        assert ca.abandonment_reason is None
 
 
 async def test_call_analysis_null_axes_on_failure(seeded_db):
@@ -2361,7 +2373,10 @@ async def test_call_analysis_null_axes_on_failure(seeded_db):
         assert ca.service_issues == "[]"
         assert ca.profile_facts == "[]"
         assert ca.commitment_signals == "[]"
-        assert ca.abandonment_reason is None
+        assert ca.abandonment_reason is None  # DEPRECATED but still present
+        # qora-abandonment: new columns default to None on failure
+        assert ca.was_abrupt is None
+        assert ca.abandonment_trigger is None
         assert ca.extra_axes_data is None
 
 

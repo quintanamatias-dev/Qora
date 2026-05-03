@@ -6,8 +6,12 @@ Adds to `call_analyses`:
   - service_issues    TEXT NOT NULL DEFAULT '[]'
   - profile_facts     TEXT NOT NULL DEFAULT '[]'
   - commitment_signals TEXT NOT NULL DEFAULT '[]'
-  - abandonment_reason TEXT (nullable)
   - extra_axes_data    TEXT (nullable)
+
+NOTE (qora-abandonment): abandonment_reason was removed from this list.
+  It is still present in the DB schema as a DEPRECATED column (AD-4) but is no
+  longer added by this script. Use migrate_abandonment_to_outcome.py to add
+  was_abrupt + abandonment_trigger instead.
 
 Adds to `clients`:
   - extraction_config  TEXT (nullable)
@@ -32,11 +36,13 @@ import sys
 # ---------------------------------------------------------------------------
 
 # call_analyses new columns: (column_name, DDL_type_and_default)
+# qora-abandonment: abandonment_reason removed — kept in DB as DEPRECATED col (AD-4)
+# but not added by this script. was_abrupt + abandonment_trigger added by
+# migrate_abandonment_to_outcome.py instead.
 _CALL_ANALYSES_NEW_COLUMNS = [
     ("service_issues", "TEXT NOT NULL DEFAULT '[]'"),
     ("profile_facts", "TEXT NOT NULL DEFAULT '[]'"),
     ("commitment_signals", "TEXT NOT NULL DEFAULT '[]'"),
-    ("abandonment_reason", "TEXT"),
     ("extra_axes_data", "TEXT"),
 ]
 

@@ -736,7 +736,7 @@ async def test_interest_level_analyze_returns_result():
 @pytest.mark.asyncio
 async def test_interest_level_analyze_with_previous_score():
     """analyze() with previous_score passes it for formula computation."""
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock
 
     from app.analysis.universal.interest.interest_level import (
         InterestLevelResult,
@@ -822,7 +822,7 @@ async def test_pipeline_returns_both_results_on_success():
 @pytest.mark.asyncio
 async def test_pipeline_passes_interests_output_to_agent2():
     """run_interest_pipeline() feeds Agent 1 output into Agent 2 call."""
-    from unittest.mock import AsyncMock, call, patch
+    from unittest.mock import AsyncMock, patch
 
     from app.analysis.universal.interest import run_interest_pipeline
     from app.analysis.universal.interest.interest_level import InterestLevelResult
