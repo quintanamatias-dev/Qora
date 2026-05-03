@@ -44,7 +44,7 @@ from app.analysis.universal.misc_notes import MiscNotesAxis
 from app.analysis.universal.next_action import NextActionAxis
 from app.analysis.universal.objections import Objection, ObjectionsAxis
 from app.analysis.universal.outcome import CallOutcome
-from app.analysis.universal.problem import IdentifiedProblem
+from app.analysis.universal.problem import IdentifiedProblem, PainPoint, ProblemAxis
 from app.analysis.universal.profile_facts import ProfileFactsAxis
 from app.analysis.universal.service_issues import ServiceIssue, ServiceIssuesAxis
 from app.analysis.universal.summary import SummaryAxis
@@ -82,6 +82,8 @@ __all__ = [
     "DataCorrectionsAxis",
     "CallOutcome",
     "IdentifiedProblem",
+    "PainPoint",
+    "ProblemAxis",
     "ServiceIssue",
     "ServiceIssuesAxis",
     "ProfileFactsAxis",

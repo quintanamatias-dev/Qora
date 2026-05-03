@@ -382,40 +382,53 @@ def test_detected_interests_with_data():
 
 
 def test_identified_problem_valid():
-    """IdentifiedProblem model accepts valid data including urgency enum."""
-    from app.analysis_schema import IdentifiedProblem, Urgency
+    """ProblemAxis (IdentifiedProblem alias) accepts valid PainPoint objects."""
+    from app.analysis.universal.problem import ProblemAxis, PainPoint
 
-    problem = IdentifiedProblem(
-        primary_need="Needs affordable coverage for a new vehicle.",
-        pain_points=["current plan too expensive", "bad claim experience"],
-        urgency=Urgency.high,
+    pp1 = PainPoint(
+        category="cost",
+        description="Current plan too expensive",
+        evidence="El seguro actual es muy caro",
+        urgency="high",
+        confidence="high",
+        is_primary=True,
     )
-    assert problem.primary_need == "Needs affordable coverage for a new vehicle."
+    pp2 = PainPoint(
+        category="bad_experience",
+        description="Bad claim experience",
+        evidence="Tardaron mucho en procesar mi siniestro",
+        urgency="medium",
+        confidence="medium",
+    )
+    problem = ProblemAxis(pain_points=[pp1, pp2])
     assert len(problem.pain_points) == 2
-    assert problem.urgency == Urgency.high
+    assert problem.pain_points[0].category == "cost"
+    assert problem.pain_points[0].is_primary is True
+    assert problem.pain_points[1].category == "bad_experience"
 
 
 def test_identified_problem_pain_points_defaults_empty():
-    """IdentifiedProblem.pain_points defaults to empty list."""
-    from app.analysis_schema import IdentifiedProblem
+    """ProblemAxis.pain_points defaults to empty list."""
+    from app.analysis.universal.problem import ProblemAxis
 
-    problem = IdentifiedProblem(
-        primary_need="Needs any coverage.",
-        urgency="low",
-    )
+    problem = ProblemAxis()
     assert problem.pain_points == []
 
 
-def test_identified_problem_rejects_invalid_urgency():
-    """IdentifiedProblem raises ValidationError when urgency is invalid."""
+def test_identified_problem_rejects_invalid_category():
+    """ProblemAxis raises ValidationError when PainPoint has invalid category."""
     from pydantic import ValidationError
-    from app.analysis_schema import IdentifiedProblem
+    from app.analysis.universal.problem import ProblemAxis
 
     with pytest.raises(ValidationError):
-        IdentifiedProblem(
-            primary_need="Needs coverage for new car.",
-            pain_points=["no coverage"],
-            urgency="critical",  # NOT a valid enum value
+        ProblemAxis(
+            pain_points=[{
+                "category": "INVALID_CATEGORY",
+                "description": "something",
+                "evidence": "some quote",
+                "urgency": "medium",
+                "confidence": "high",
+            }]
         )
 
 
@@ -449,9 +462,8 @@ def test_post_call_analysis_valid_full_instance():
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        IdentifiedProblem,
-        Urgency,
     )
+    from app.analysis.universal.problem import ProblemAxis, PainPoint
     from app.analysis.universal.interest.interests import InterestsAxis, InterestItem
     from app.analysis.universal.objections import ObjectionsAxis as _OA
 
@@ -460,6 +472,14 @@ def test_post_call_analysis_valid_full_instance():
         needs=["precio_competitivo"],
         evidence="Me interesa el todo riesgo.",
         confidence="high",
+    )
+    pp = PainPoint(
+        category="cost",
+        description="Needs comprehensive vehicle coverage.",
+        evidence="No tengo seguro actualmente",
+        urgency="high",
+        confidence="high",
+        is_primary=True,
     )
     analysis = PostCallAnalysis(
         summary="Lead was very interested in todo riesgo coverage.",
@@ -474,11 +494,7 @@ def test_post_call_analysis_valid_full_instance():
             confidence="high",
         ),
         detected_interests=InterestsAxis(items=[item]),
-        identified_problem=IdentifiedProblem(
-            primary_need="Needs comprehensive vehicle coverage.",
-            pain_points=["no current insurance"],
-            urgency=Urgency.high,
-        ),
+        identified_problem=ProblemAxis(pain_points=[pp]),
     )
 
     assert analysis.summary == "Lead was very interested in todo riesgo coverage."
@@ -486,7 +502,8 @@ def test_post_call_analysis_valid_full_instance():
     assert analysis.call_outcome.classification == "completed_positive"
     assert len(analysis.detected_interests.items) == 1
     assert analysis.detected_interests.items[0].product == "auto_todo_riesgo"
-    assert analysis.identified_problem.urgency == Urgency.high
+    assert len(analysis.identified_problem.pain_points) == 1
+    assert analysis.identified_problem.pain_points[0].urgency == "high"
 
 
 def test_post_call_analysis_model_dump_contains_axes():
@@ -494,8 +511,8 @@ def test_post_call_analysis_model_dump_contains_axes():
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        IdentifiedProblem,
     )
+    from app.analysis.universal.problem import ProblemAxis
     from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.objections import ObjectionsAxis as _OA
 
@@ -512,10 +529,7 @@ def test_post_call_analysis_model_dump_contains_axes():
             confidence="low",
         ),
         detected_interests=InterestsAxis(),
-        identified_problem=IdentifiedProblem(
-            primary_need="Unknown.",
-            urgency="low",
-        ),
+        identified_problem=ProblemAxis(),
     )
 
     dumped = analysis.model_dump()
@@ -524,7 +538,9 @@ def test_post_call_analysis_model_dump_contains_axes():
     assert "identified_problem" in dumped
     # call_outcome is a nested dict
     assert dumped["call_outcome"]["classification"] == "busy"
-    assert dumped["identified_problem"]["urgency"] == "low"
+    # identified_problem has pain_points key (new ProblemAxis format)
+    assert "pain_points" in dumped["identified_problem"]
+    assert isinstance(dumped["identified_problem"]["pain_points"], list)
     # detected_interests has items key (new InterestsAxis format)
     assert "items" in dumped["detected_interests"]
     # engagement_quality must NOT be in dumped call_outcome
@@ -698,8 +714,8 @@ def test_post_call_analysis_data_corrections_defaults_to_empty_string():
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        IdentifiedProblem,
     )
+    from app.analysis.universal.problem import ProblemAxis
     from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.objections import ObjectionsAxis as _OA
 
@@ -716,10 +732,7 @@ def test_post_call_analysis_data_corrections_defaults_to_empty_string():
             confidence="low",
         ),
         detected_interests=InterestsAxis(),
-        identified_problem=IdentifiedProblem(
-            primary_need="Unknown.",
-            urgency="low",
-        ),
+        identified_problem=ProblemAxis(),
     )
 
     assert (
@@ -732,8 +745,8 @@ def test_post_call_analysis_data_corrections_accepts_string():
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        IdentifiedProblem,
     )
+    from app.analysis.universal.problem import ProblemAxis
     from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.objections import ObjectionsAxis as _OA
 
@@ -751,10 +764,7 @@ def test_post_call_analysis_data_corrections_accepts_string():
             confidence="high",
         ),
         detected_interests=InterestsAxis(),
-        identified_problem=IdentifiedProblem(
-            primary_need="Needs coverage.",
-            urgency="medium",
-        ),
+        identified_problem=ProblemAxis(),
     )
 
     assert analysis.data_corrections == "car_model: Polo Trend"
@@ -766,8 +776,8 @@ def test_post_call_analysis_data_corrections_rejects_dict():
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        IdentifiedProblem,
     )
+    from app.analysis.universal.problem import ProblemAxis
     from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.objections import ObjectionsAxis as _OA
 
@@ -786,10 +796,7 @@ def test_post_call_analysis_data_corrections_rejects_dict():
                 confidence="low",
             ),
             detected_interests=InterestsAxis(),
-            identified_problem=IdentifiedProblem(
-                primary_need="Unknown.",
-                urgency="low",
-            ),
+            identified_problem=ProblemAxis(),
         )
 
 
@@ -944,8 +951,8 @@ def test_post_call_analysis_new_axes_have_correct_defaults():
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        IdentifiedProblem,
     )
+    from app.analysis.universal.problem import ProblemAxis
     from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.objections import ObjectionsAxis as _OA
 
@@ -962,10 +969,7 @@ def test_post_call_analysis_new_axes_have_correct_defaults():
             confidence="low",
         ),
         detected_interests=InterestsAxis(),
-        identified_problem=IdentifiedProblem(
-            primary_need="Unknown.",
-            urgency="low",
-        ),
+        identified_problem=ProblemAxis(),
     )
 
     assert analysis.service_issues.issues == []
@@ -979,11 +983,11 @@ def test_post_call_analysis_new_axes_accept_data():
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        IdentifiedProblem,
         ServiceIssuesAxis,
         ProfileFactsAxis,
         AbandonmentReasonAxis,
     )
+    from app.analysis.universal.problem import ProblemAxis, PainPoint
     from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.commitments import CommitmentsAxis, Commitment
     from app.analysis.universal.service_issues import ServiceIssue
@@ -1005,6 +1009,14 @@ def test_post_call_analysis_new_axes_accept_data():
         evidence="Me cobraron de más.",
         confidence="high",
     )
+    pp = PainPoint(
+        category="cost",
+        description="Needs a solution.",
+        evidence="Me está saliendo muy caro",
+        urgency="medium",
+        confidence="high",
+        is_primary=True,
+    )
     from app.analysis.universal.objections import ObjectionsAxis as _OA
     analysis = PostCallAnalysis(
         summary="Full analysis.",
@@ -1019,10 +1031,7 @@ def test_post_call_analysis_new_axes_accept_data():
             confidence="high",
         ),
         detected_interests=InterestsAxis(),
-        identified_problem=IdentifiedProblem(
-            primary_need="Needs a solution.",
-            urgency="medium",
-        ),
+        identified_problem=ProblemAxis(pain_points=[pp]),
         service_issues=ServiceIssuesAxis(issues=[issue]),
         profile_facts=ProfileFactsAxis(facts=["manager at startup"]),
         commitments=CommitmentsAxis(commitments=[c]),
@@ -1158,8 +1167,8 @@ async def test_dimension_analyze_returns_axis_for_complex_axes():
     from unittest.mock import AsyncMock, MagicMock
     from app.analysis.universal import (
         CallOutcome,
-        IdentifiedProblem,
         ObjectionsAxis,
+        ProblemAxis,
         ServiceIssuesAxis,
         ProfileFactsAxis,
         CommitmentsAxis,
@@ -1179,7 +1188,7 @@ async def test_dimension_analyze_returns_axis_for_complex_axes():
             CallOutcome(classification="busy", reason="r", confidence="low"),
         ),
         (objections_mod, ObjectionsAxis()),
-        (problem_mod, IdentifiedProblem(primary_need="n", urgency="low")),
+        (problem_mod, ProblemAxis()),
         (service_issues_mod, ServiceIssuesAxis()),
         (profile_facts_mod, ProfileFactsAxis()),
         (commitments_mod, CommitmentsAxis()),

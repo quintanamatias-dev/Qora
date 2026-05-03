@@ -87,11 +87,43 @@ export interface DetectedInterests {
   buying_signals: string[]
 }
 
-export interface IdentifiedProblem {
-  primary_need: string
-  pain_points: string[]
-  urgency: Urgency
+// ──────────────────────────────────────────────────────────────────────────────
+// Problem Axis Types (qora-problem, Issue #52)
+// Replaces flat IdentifiedProblem with structured PainPoint model
+// ──────────────────────────────────────────────────────────────────────────────
+
+export type PainPointCategory =
+  | 'cost'
+  | 'coverage'
+  | 'renewal'
+  | 'bad_experience'
+  | 'lack_of_clarity'
+  | 'new_need'
+  | 'risk_exposure'
+  | 'comparison'
+  | 'deadline'
+  | 'dissatisfaction'
+  | 'other'
+
+export type PainUrgency = 'low' | 'medium' | 'high' | 'unknown'
+export type PainConfidence = 'low' | 'medium' | 'high'
+
+export interface PainPoint {
+  category: PainPointCategory
+  description: string
+  evidence: string
+  urgency: PainUrgency
+  confidence: PainConfidence
+  is_primary: boolean
 }
+
+export interface ProblemAxis {
+  pain_points: PainPoint[]
+}
+
+// Backward-compat alias: detail-page.tsx and other consumers use IdentifiedProblem
+// Now typed as ProblemAxis — consumers should migrate to ProblemAxis over time
+export type IdentifiedProblem = ProblemAxis
 
 export interface CallSession {
   id: string

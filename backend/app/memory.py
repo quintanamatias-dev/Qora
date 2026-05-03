@@ -339,13 +339,40 @@ def _format_axis(key: str, axis_dict: dict) -> str:
             return ", ".join(parts) if parts else ""
 
     if key == "identified_problem":
-        primary = axis_dict.get("primary_need", "")
-        urgency = axis_dict.get("urgency", "")
         pain_points = axis_dict.get("pain_points") or []
-        core = f"{primary} ({urgency})" if (primary and urgency) else primary or urgency
-        if pain_points:
-            core += f" — {', '.join(pain_points)}"
-        return core
+        if not pain_points:
+            return ""
+        # New structured format: pain_points is list[dict] (PainPoint objects)
+        # Legacy format: pain_points is list[str]
+        first = pain_points[0] if pain_points else None
+        if isinstance(first, dict):
+            # New ProblemAxis format
+            primary_pain = next(
+                (p for p in pain_points if isinstance(p, dict) and p.get("is_primary")),
+                pain_points[0] if pain_points else None,
+            )
+            if primary_pain is None:
+                return ""
+            description = primary_pain.get("description", "")
+            urgency = primary_pain.get("urgency", "")
+            core = f"{description} ({urgency})" if (description and urgency) else description or urgency
+            # Append non-primary pain categories as bullets
+            others = [
+                p.get("category", "")
+                for p in pain_points
+                if isinstance(p, dict) and p is not primary_pain and p.get("category")
+            ]
+            if others:
+                core += f" — {', '.join(others)}"
+            return core
+        else:
+            # Legacy format: list of plain strings
+            primary = axis_dict.get("primary_need", "")
+            urgency = axis_dict.get("urgency", "")
+            core = f"{primary} ({urgency})" if (primary and urgency) else primary or urgency
+            if pain_points:
+                core += f" — {', '.join(str(p) for p in pain_points)}"
+            return core
 
     # Generic fallback for unknown nested dicts
     pairs = []

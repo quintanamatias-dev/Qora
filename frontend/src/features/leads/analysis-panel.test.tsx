@@ -1,27 +1,50 @@
 /**
- * AnalysisPanel — Unit tests
+ * AnalysisPanel — Unit tests (qora-problem update, Issue #52)
  *
- * Spec: sdd/qora-post-call-analysis/spec — Requirements:
- *   - Detected Interests Chips
- *   - Identified Problem Card
+ * Spec: sdd/qora-problem/spec — Requirements:
+ *   - ProblemAxis / PainPoint rendering
+ *   - Detected Interests Chips (unchanged)
+ *   - Graceful degradation
  *
  * TDD Layer: Unit (pure presentational component)
- * TDD: RED phase — tests written before analysis-panel.tsx exists
  *
- * Tests:
- * - Chips render for detected interests products
+ * Tests cover:
+ * - Chips render for detected interests products (unchanged)
  * - Empty interests section is hidden
- * - Problem card renders with primary_need, pain_points, urgency
- * - Missing analysis data → graceful degradation (no crash, no UI)
+ * - Pain point card renders with category, description, evidence, urgency
+ * - Primary pain point has primary indicator
+ * - Non-primary pain points have no primary indicator
+ * - Empty pain_points renders gracefully (no crash)
+ * - null/undefined problem renders gracefully
  */
 
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { AnalysisPanel } from './analysis-panel'
-import type { DetectedInterests, IdentifiedProblem } from '@/api/types'
+import type { DetectedInterests, ProblemAxis, PainPoint } from '@/api/types'
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Scenario: Chips render for detected interests
+// Test fixture helpers
+// ──────────────────────────────────────────────────────────────────────────────
+
+function makePainPoint(overrides: Partial<PainPoint> = {}): PainPoint {
+  return {
+    category: 'cost',
+    description: 'El lead quiere pagar menos por su seguro',
+    evidence: 'Quiero pagar menos, el seguro actual es muy caro',
+    urgency: 'medium',
+    confidence: 'high',
+    is_primary: false,
+    ...overrides,
+  }
+}
+
+function makeProblemAxis(pain_points: PainPoint[] = []): ProblemAxis {
+  return { pain_points }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Scenario: Chips render for detected interests (unchanged from prior tests)
 // ──────────────────────────────────────────────────────────────────────────────
 
 describe('AnalysisPanel — detected interests chips', () => {
@@ -88,62 +111,100 @@ describe('AnalysisPanel — empty interests hidden', () => {
 })
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Scenario: Identified problem card renders
+// Scenario: PainPoint card renders (qora-problem new schema)
 // ──────────────────────────────────────────────────────────────────────────────
 
-describe('AnalysisPanel — identified problem card', () => {
-  it('renders primary_need text when problem is present', () => {
-    const problem: IdentifiedProblem = {
-      primary_need: 'Needs comprehensive coverage for new Toyota.',
-      pain_points: ['no current insurance', 'worried about accidents'],
-      urgency: 'high',
-    }
+describe('AnalysisPanel — PainPoint rendering', () => {
+  it('renders pain point description', () => {
+    const problem = makeProblemAxis([
+      makePainPoint({ description: 'El lead quiere cobertura más amplia', is_primary: true }),
+    ])
     render(<AnalysisPanel interests={null} problem={problem} />)
 
-    expect(
-      screen.getByText('Needs comprehensive coverage for new Toyota.')
-    ).toBeInTheDocument()
+    expect(screen.getByText('El lead quiere cobertura más amplia')).toBeInTheDocument()
   })
 
-  it('renders each pain point in the problem card', () => {
-    const problem: IdentifiedProblem = {
-      primary_need: 'Needs coverage.',
-      pain_points: ['no current insurance', 'worried about accidents'],
-      urgency: 'medium',
-    }
+  it('renders category badge for each pain point', () => {
+    const problem = makeProblemAxis([
+      makePainPoint({ category: 'cost' }),
+    ])
     render(<AnalysisPanel interests={null} problem={problem} />)
 
-    expect(screen.getByText('no current insurance')).toBeInTheDocument()
-    expect(screen.getByText('worried about accidents')).toBeInTheDocument()
+    // Category badge should be visible
+    const badge = screen.getByTestId('pain-point-category')
+    expect(badge).toBeInTheDocument()
   })
 
-  it('renders urgency indicator — high urgency is visible', () => {
-    const problem: IdentifiedProblem = {
-      primary_need: 'Needs immediate coverage.',
-      pain_points: [],
-      urgency: 'high',
-    }
+  it('renders evidence quote for each pain point', () => {
+    const problem = makeProblemAxis([
+      makePainPoint({ evidence: 'El seguro actual me está costando mucho' }),
+    ])
     render(<AnalysisPanel interests={null} problem={problem} />)
 
-    // Should show "high urgency" indicator text
-    expect(screen.getByText(/high urgency/i)).toBeInTheDocument()
+    expect(screen.getByTestId('pain-point-evidence')).toBeInTheDocument()
+    expect(screen.getByText(/El seguro actual me está costando mucho/)).toBeInTheDocument()
   })
 
-  it('renders urgency indicator — low urgency is visible', () => {
-    const problem: IdentifiedProblem = {
-      primary_need: 'Needs attention eventually.',
-      pain_points: [],
-      urgency: 'low',
-    }
+  it('renders urgency for each pain point', () => {
+    const problem = makeProblemAxis([
+      makePainPoint({ urgency: 'high' }),
+    ])
     render(<AnalysisPanel interests={null} problem={problem} />)
 
-    // Should show "low urgency" indicator text
-    expect(screen.getByText(/low urgency/i)).toBeInTheDocument()
+    expect(screen.getByTestId('pain-point-urgency')).toBeInTheDocument()
+  })
+
+  it('renders multiple pain points', () => {
+    const problem = makeProblemAxis([
+      makePainPoint({ category: 'cost', description: 'Costo elevado', is_primary: true }),
+      makePainPoint({ category: 'bad_experience', description: 'Mala experiencia pasada' }),
+    ])
+    render(<AnalysisPanel interests={null} problem={problem} />)
+
+    const descriptions = screen.getAllByTestId('pain-point-description')
+    expect(descriptions).toHaveLength(2)
+    expect(screen.getByText('Costo elevado')).toBeInTheDocument()
+    expect(screen.getByText('Mala experiencia pasada')).toBeInTheDocument()
   })
 })
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Scenario: Graceful degradation — no problem data
+// Scenario: Primary indicator
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('AnalysisPanel — primary pain indicator', () => {
+  it('shows primary indicator when is_primary=true', () => {
+    const problem = makeProblemAxis([
+      makePainPoint({ is_primary: true }),
+    ])
+    render(<AnalysisPanel interests={null} problem={problem} />)
+
+    expect(screen.getByTestId('pain-point-primary')).toBeInTheDocument()
+  })
+
+  it('does NOT show primary indicator when is_primary=false', () => {
+    const problem = makeProblemAxis([
+      makePainPoint({ is_primary: false }),
+    ])
+    render(<AnalysisPanel interests={null} problem={problem} />)
+
+    expect(screen.queryByTestId('pain-point-primary')).not.toBeInTheDocument()
+  })
+
+  it('shows primary indicator for primary pain, not for non-primary', () => {
+    const problem = makeProblemAxis([
+      makePainPoint({ category: 'cost', description: 'Primary one', is_primary: true }),
+      makePainPoint({ category: 'bad_experience', description: 'Non-primary', is_primary: false }),
+    ])
+    render(<AnalysisPanel interests={null} problem={problem} />)
+
+    const primaryBadges = screen.getAllByTestId('pain-point-primary')
+    expect(primaryBadges).toHaveLength(1)
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Scenario: Graceful degradation — empty / null problem
 // ──────────────────────────────────────────────────────────────────────────────
 
 describe('AnalysisPanel — graceful degradation', () => {
@@ -151,7 +212,6 @@ describe('AnalysisPanel — graceful degradation', () => {
     const { container } = render(
       <AnalysisPanel interests={null} problem={null} />
     )
-    // Should render empty / no content
     expect(container.firstChild).toBeNull()
   })
 
@@ -173,5 +233,21 @@ describe('AnalysisPanel — graceful degradation', () => {
       <AnalysisPanel interests={null} problem={undefined} />
     )
     expect(queryByTestId('analysis-problem')).not.toBeInTheDocument()
+  })
+
+  it('does not render problem card when pain_points is empty', () => {
+    const problem = makeProblemAxis([])  // empty pain_points
+    const { queryByTestId } = render(
+      <AnalysisPanel interests={null} problem={problem} />
+    )
+    expect(queryByTestId('analysis-problem')).not.toBeInTheDocument()
+  })
+
+  it('renders problem card when pain_points has items', () => {
+    const problem = makeProblemAxis([makePainPoint()])
+    const { queryByTestId } = render(
+      <AnalysisPanel interests={null} problem={problem} />
+    )
+    expect(queryByTestId('analysis-problem')).toBeInTheDocument()
   })
 })
