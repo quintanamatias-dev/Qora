@@ -333,8 +333,7 @@ async def _call_gpt_summarize(
                 else:
                     fields["interest_level"] = 0
 
-    total_dims = len(DIMENSION_MODULES) + 1  # 11 + interest pipeline (counts as 1)
-    if failures >= len(DIMENSION_MODULES) + 1:
+    if failures >= len(DIMENSION_MODULES) + 1:  # 11 + interest pipeline (counts as 1)
         raise RuntimeError(
             f"all {failures} dimension analyses failed — see dimension_analysis_failed logs"
         )
@@ -584,8 +583,9 @@ async def _upsert_call_analysis(
     ca.interest_level = facts.get("interest_level")
     ca.classification = _str_or_none(call_outcome.get("classification"))
     ca.outcome_reason = call_outcome.get("reason")
-    ca.urgency = _str_or_none(identified_problem.get("urgency"))
-    ca.primary_need = identified_problem.get("primary_need")
+    _primary_pain = _get_primary_pain(identified_problem)
+    ca.urgency = _str_or_none(_primary_pain.get("urgency")) if _primary_pain else None
+    ca.primary_need = _primary_pain.get("description") if _primary_pain else None
     ca.next_action_suggested = facts.get("next_action_suggested")
     ca.current_insurance = facts.get("current_insurance")
     ca.data_corrections = facts.get("data_corrections") or ""
@@ -653,6 +653,22 @@ async def _upsert_call_analysis_failed(
     ca.analysis_error = error_msg
 
 
+def _get_primary_pain(identified_problem: dict) -> dict | None:
+    """Find the primary PainPoint from identified_problem dict, or None if absent.
+
+    Looks for the first PainPoint with is_primary=True. If none marked, returns
+    the first pain point in the list (fallback). Returns None for empty lists.
+    """
+    pains = identified_problem.get("pain_points") or []
+    for p in pains:
+        if isinstance(p, dict) and p.get("is_primary"):
+            return p
+    # If no explicit primary, fall back to first item if available
+    if pains and isinstance(pains[0], dict):
+        return pains[0]
+    return None
+
+
 def _str_or_none(value: Any) -> str | None:
     """Return string representation of value, or None if value is None.
 
@@ -672,6 +688,28 @@ def _to_json_list(value: Any) -> str:
     if isinstance(value, list):
         return json.dumps(value)
     return "[]"
+
+
+def _pain_point_key(raw_item: Any) -> str | None:
+    """Normalize pain point payloads to one analytics/profile key.
+
+    New payloads store structured PainPoint dicts (category + description).
+    Legacy payloads may still be plain strings — keep supporting them.
+    Uses category as the primary key for dedup/aggregation.
+    """
+    if isinstance(raw_item, dict):
+        # Prefer category for consistent dedup across calls
+        category = raw_item.get("category")
+        if category and str(category).strip():
+            return str(category).strip().lower()
+        # Fall back to description snippet if no category
+        description = raw_item.get("description")
+        if description and str(description).strip():
+            return str(description).strip().lower()[:80]  # cap at 80 chars
+        return None
+    if not raw_item or not str(raw_item).strip():
+        return None
+    return str(raw_item).strip().lower()
 
 
 def _service_issue_key(raw_item: Any) -> str | None:
@@ -733,7 +771,8 @@ async def _write_lead_profile_facts(
     if na is not None:
         singular_facts["next_action"] = str(na)
 
-    pn = identified_problem.get("primary_need")
+    _primary = _get_primary_pain(identified_problem)
+    pn = _primary.get("description") if _primary else None
     if pn is not None:
         singular_facts["primary_need"] = str(pn)
 
@@ -807,6 +846,8 @@ async def _write_lead_profile_facts(
                 normalized = _service_issue_key(raw_item)
             elif namespace_prefix == "objection:":
                 normalized = _service_issue_key(raw_item)
+            elif namespace_prefix == "pain:":
+                normalized = _pain_point_key(raw_item)
             else:
                 if not raw_item or not str(raw_item).strip():
                     continue

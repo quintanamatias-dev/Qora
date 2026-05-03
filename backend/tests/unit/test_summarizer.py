@@ -336,12 +336,14 @@ def _make_full_analysis_payload():
 
     qora-interest-pipeline: detected_interests now uses InterestsAxis (items: list[InterestItem])
     instead of old DetectedInterests (products/specific_needs/buying_signals).
+    qora-problem: identified_problem now uses ProblemAxis (pain_points: list[PainPoint])
+    instead of old IdentifiedProblem (primary_need, pain_points: list[str], urgency).
     """
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        IdentifiedProblem,
     )
+    from app.analysis.universal.problem import ProblemAxis, PainPoint
     from app.analysis.universal.interest.interests import InterestsAxis, InterestItem
     from app.analysis.universal.objections import ObjectionsAxis, Objection
 
@@ -374,11 +376,16 @@ def _make_full_analysis_payload():
                 confidence="high",
             )
         ]),
-        identified_problem=IdentifiedProblem(
-            primary_need="Needs comprehensive vehicle coverage for new car.",
-            pain_points=["no current insurance"],
-            urgency="high",
-        ),
+        identified_problem=ProblemAxis(pain_points=[
+            PainPoint(
+                category="cost",
+                description="Needs comprehensive vehicle coverage for new car.",
+                evidence="No tengo seguro actualmente para el auto nuevo.",
+                urgency="high",
+                confidence="high",
+                is_primary=True,
+            )
+        ]),
     )
 
 
@@ -1053,10 +1060,19 @@ async def test_summarizer_extracts_identified_problem_axis(seeded_db):
         cs = result.scalar_one()
         assert "identified_problem" in cs.extracted_facts
         ip = cs.extracted_facts["identified_problem"]
-        assert isinstance(ip["primary_need"], str)
-        assert len(ip["primary_need"]) > 0
-        assert ip["urgency"] == "high"
+        # qora-problem: identified_problem is now ProblemAxis format
+        assert "pain_points" in ip
         assert isinstance(ip["pain_points"], list)
+        # The mock payload has 1 PainPoint(category="cost", urgency="high", is_primary=True)
+        assert len(ip["pain_points"]) >= 1
+        primary = next(
+            (p for p in ip["pain_points"] if isinstance(p, dict) and p.get("is_primary")),
+            ip["pain_points"][0] if ip["pain_points"] else None,
+        )
+        assert primary is not None
+        assert primary["urgency"] == "high"
+        assert isinstance(primary["description"], str)
+        assert len(primary["description"]) > 0
 
 
 async def test_summarizer_uses_parse_not_create(seeded_db):
@@ -1266,8 +1282,8 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        IdentifiedProblem,
     )
+    from app.analysis.universal.problem import ProblemAxis, PainPoint
     from app.analysis.universal.interest.interests import InterestsAxis, InterestItem
     from sqlalchemy import select
 
@@ -1296,10 +1312,16 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
         detected_interests=InterestsAxis(items=[
             InterestItem(product="auto_terceros", needs=[], evidence="Me interesa terceros.", confidence="medium")
         ]),
-        identified_problem=IdentifiedProblem(
-            primary_need="Needs basic coverage.",
-            urgency="low",
-        ),
+        identified_problem=ProblemAxis(pain_points=[
+            PainPoint(
+                category="coverage",
+                description="Needs basic coverage.",
+                evidence="No tengo seguro actualmente.",
+                urgency="low",
+                confidence="medium",
+                is_primary=True,
+            )
+        ]),
     )
 
     mock_client_first = _make_mock_client(_make_parse_response(first_analysis))
@@ -1337,10 +1359,16 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
         detected_interests=InterestsAxis(items=[
             InterestItem(product="auto_todo_riesgo", needs=[], evidence="Me interesa todo riesgo.", confidence="high")
         ]),
-        identified_problem=IdentifiedProblem(
-            primary_need="Needs comprehensive coverage for new car.",
-            urgency="high",
-        ),
+        identified_problem=ProblemAxis(pain_points=[
+            PainPoint(
+                category="cost",
+                description="Needs comprehensive coverage for new car.",
+                evidence="Necesito cobertura completa para el auto nuevo.",
+                urgency="high",
+                confidence="high",
+                is_primary=True,
+            )
+        ]),
     )
 
     mock_client_second = _make_mock_client(_make_parse_response(second_analysis))
@@ -1369,7 +1397,15 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
         # qora-interest-pipeline: detected_interests uses items format
         di = cs.extracted_facts["detected_interests"]
         assert any("todo_riesgo" in item["product"] for item in di["items"])
-        assert cs.extracted_facts["identified_problem"]["urgency"] == "high"
+        # qora-problem: identified_problem uses ProblemAxis format
+        ip = cs.extracted_facts["identified_problem"]
+        assert "pain_points" in ip
+        primary = next(
+            (p for p in ip["pain_points"] if isinstance(p, dict) and p.get("is_primary")),
+            ip["pain_points"][0] if ip["pain_points"] else None,
+        )
+        assert primary is not None
+        assert primary["urgency"] == "high"
 
 
 # ---------------------------------------------------------------------------
@@ -1570,7 +1606,15 @@ async def test_summarizer_analysis_axes_flow_to_lead(seeded_db):
         # qora-interest-pipeline: detected_interests uses items format
         di = lead.extracted_facts["detected_interests"]
         assert any("todo_riesgo" in item["product"] for item in di["items"])
-        assert lead.extracted_facts["identified_problem"]["urgency"] == "high"
+        # qora-problem: identified_problem uses ProblemAxis format
+        ip = lead.extracted_facts["identified_problem"]
+        assert "pain_points" in ip
+        primary = next(
+            (p for p in ip["pain_points"] if isinstance(p, dict) and p.get("is_primary")),
+            ip["pain_points"][0] if ip["pain_points"] else None,
+        )
+        assert primary is not None
+        assert primary["urgency"] == "high"
 
 
 # ===========================================================================
@@ -2347,14 +2391,17 @@ def _make_analysis_with_list_axes(
 
     qora-interest-pipeline: detected_interests uses InterestsAxis (items format).
     buying_signals parameter is kept for backward compat but not stored in detected_interests.
+
+    qora-problem: identified_problem uses ProblemAxis (pain_points: list[PainPoint]).
+    pain_points parameter accepts list[str] (coerced to PainPoint objects) or list[PainPoint].
     """
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
-        IdentifiedProblem,
         ServiceIssuesAxis,
         ProfileFactsAxis,
     )
+    from app.analysis.universal.problem import ProblemAxis, PainPoint
     from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.commitments import CommitmentsAxis, Commitment
     from app.analysis.universal.service_issues import ServiceIssue
@@ -2389,6 +2436,25 @@ def _make_analysis_with_list_axes(
         for item in raw_issues
     ]
 
+    # Convert plain strings to PainPoint objects for backward-compatible helpers
+    raw_pains = pain_points or []
+    pain_point_objects = []
+    for i, item in enumerate(raw_pains):
+        if isinstance(item, PainPoint):
+            pain_point_objects.append(item)
+        else:
+            # Coerce string to PainPoint — use "cost" as default category
+            pain_point_objects.append(
+                PainPoint(
+                    category="cost",
+                    description=str(item),
+                    evidence=str(item),
+                    urgency="medium",
+                    confidence="medium",
+                    is_primary=(i == 0),  # first one is primary
+                )
+            )
+
     return PostCallAnalysis(
         summary="Test summary",
         interest_level=70,
@@ -2401,11 +2467,8 @@ def _make_analysis_with_list_axes(
         ),
         # qora-interest-pipeline: use InterestsAxis (items format)
         detected_interests=InterestsAxis(),
-        identified_problem=IdentifiedProblem(
-            primary_need="Needs insurance",
-            pain_points=pain_points or [],
-            urgency="medium",
-        ),
+        # qora-problem: use ProblemAxis (pain_points: list[PainPoint])
+        identified_problem=ProblemAxis(pain_points=pain_point_objects),
         service_issues=ServiceIssuesAxis(issues=issue_objects),
         profile_facts=ProfileFactsAxis(facts=profile_facts_list or []),
         commitments=CommitmentsAxis(commitments=commitment_objects),
@@ -2521,17 +2584,18 @@ async def test_list_facts_cross_call_dedup_no_duplicate_insert(seeded_db):
 
 @pytest.mark.asyncio
 async def test_list_facts_case_insensitive_dedup(seeded_db):
-    """Issue #36 Phase 1: Deduplication is case-insensitive (normalized to lowercase).
+    """Issue #36 Phase 1: Deduplication works for pain: namespace (category-based keys).
 
-    GIVEN 'pain:high premiums' exists as active row
-    WHEN new call produces pain_points = ['High Premiums']
-    THEN no new row is inserted (normalized key matches).
+    qora-problem: pain: namespace keys are now derived from PainPoint.category.
+    GIVEN 'pain:cost' exists as active row (from first call with category="cost")
+    WHEN new call produces same pain category
+    THEN no new row is inserted (category-based dedup matches).
     """
     from app.summarizer import generate_summary_and_facts
     from app.leads.models import LeadProfileFact
     from sqlalchemy import select
 
-    # First call — inserts 'pain:high premiums' (normalized)
+    # First call — inserts 'pain:cost' (category-based key, from _make_analysis_with_list_axes coercion)
     analysis1 = _make_analysis_with_list_axes(pain_points=["high premiums"])
     mock_client1 = _make_mock_client(_make_parse_response(analysis1))
     session_id1 = await _create_session(
@@ -2544,7 +2608,7 @@ async def test_list_facts_case_insensitive_dedup(seeded_db):
             await generate_summary_and_facts(session_id1, db)
             await db.commit()
 
-    # Second call — same item but uppercase
+    # Second call — same category (cost) → should dedup to same row
     analysis2 = _make_analysis_with_list_axes(pain_points=["High Premiums"])
     mock_client2 = _make_mock_client(_make_parse_response(analysis2))
     session_id2 = await _create_session(
@@ -2570,7 +2634,8 @@ async def test_list_facts_case_insensitive_dedup(seeded_db):
     assert (
         len(rows) == 1
     ), f"Expected exactly 1 pain: row (dedup), got {len(rows)}: {[r.fact_key for r in rows]}"
-    assert rows[0].fact_key == "pain:high premiums"
+    # qora-problem: pain: key is now derived from category, not description
+    assert rows[0].fact_key == "pain:cost"
 
 
 @pytest.mark.asyncio

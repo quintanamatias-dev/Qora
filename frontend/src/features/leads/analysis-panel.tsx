@@ -3,24 +3,40 @@
  *
  * Spec: sdd/qora-post-call-analysis/spec — Requirements:
  *   - Detected Interests Chips
- *   - Identified Problem Card
+ *   - Identified Problem Card (qora-problem: ProblemAxis / PainPoint)
  *
- * Design: Pure presentational — receives DetectedInterests | null and IdentifiedProblem | null
+ * Design: Pure presentational — receives DetectedInterests | null and ProblemAxis | null
  *   - Renders nothing when both are null/empty (graceful degradation)
  *   - Shows product/need/signal chips when detected_interests has items
- *   - Shows problem card with primary_need, pain_points, and urgency indicator
+ *   - Shows pain point cards: primary highlighted, others listed with category + description
  */
 
-import type { DetectedInterests, IdentifiedProblem, Urgency } from '@/api/types'
+import type { DetectedInterests, ProblemAxis, PainPoint } from '@/api/types'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Urgency label mapping (centralized)
 // ──────────────────────────────────────────────────────────────────────────────
 
-const URGENCY_STYLES: Record<Urgency, string> = {
+const URGENCY_STYLES: Record<string, string> = {
   high: 'text-error',
   medium: 'text-warning',
   low: 'text-on-surface-variant',
+  unknown: 'text-on-surface-variant',
+}
+
+// Category display labels
+const CATEGORY_LABELS: Record<string, string> = {
+  cost: 'Costo',
+  coverage: 'Cobertura',
+  renewal: 'Renovación',
+  bad_experience: 'Mala experiencia',
+  lack_of_clarity: 'Falta de claridad',
+  new_need: 'Nueva necesidad',
+  risk_exposure: 'Exposición al riesgo',
+  comparison: 'Comparación',
+  deadline: 'Plazo / Urgencia',
+  dissatisfaction: 'Insatisfacción',
+  other: 'Otro',
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -29,7 +45,7 @@ const URGENCY_STYLES: Record<Urgency, string> = {
 
 interface AnalysisPanelProps {
   interests: DetectedInterests | null | undefined
-  problem: IdentifiedProblem | null | undefined
+  problem: ProblemAxis | null | undefined
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -39,10 +55,15 @@ interface AnalysisPanelProps {
 function hasInterests(interests: DetectedInterests | null | undefined): boolean {
   if (!interests) return false
   return (
-    interests.products.length > 0 ||
-    interests.specific_needs.length > 0 ||
-    interests.buying_signals.length > 0
+    (interests.products?.length ?? 0) > 0 ||
+    (interests.specific_needs?.length ?? 0) > 0 ||
+    (interests.buying_signals?.length ?? 0) > 0
   )
+}
+
+function hasProblem(problem: ProblemAxis | null | undefined): boolean {
+  if (!problem) return false
+  return (problem.pain_points?.length ?? 0) > 0
 }
 
 function Chip({ label }: { label: string }) {
@@ -53,16 +74,72 @@ function Chip({ label }: { label: string }) {
   )
 }
 
+function CategoryBadge({ category }: { category: string }) {
+  const label = CATEGORY_LABELS[category] ?? category
+  return (
+    <span
+      data-testid="pain-point-category"
+      className="inline-flex items-center px-1.5 py-0.5 text-xs rounded bg-surface-container-high text-on-surface-variant"
+    >
+      {label}
+    </span>
+  )
+}
+
+function PainPointItem({ point }: { point: PainPoint }) {
+  return (
+    <li className="space-y-1">
+      <div className="flex items-center gap-2 flex-wrap">
+        <CategoryBadge category={point.category} />
+        {point.is_primary && (
+          <span
+            data-testid="pain-point-primary"
+            className="inline-flex items-center px-1.5 py-0.5 text-xs rounded bg-primary/10 text-primary font-medium"
+          >
+            Principal
+          </span>
+        )}
+        <span
+          data-testid="pain-point-urgency"
+          className={['text-xs font-medium uppercase', URGENCY_STYLES[point.urgency] ?? 'text-on-surface-variant'].join(' ')}
+        >
+          {point.urgency}
+        </span>
+      </div>
+      <p data-testid="pain-point-description" className="text-sm text-on-surface">
+        {point.description}
+      </p>
+      {point.evidence && (
+        <p
+          data-testid="pain-point-evidence"
+          className="text-xs text-on-surface-variant italic border-l-2 border-outline/20 pl-2"
+        >
+          "{point.evidence}"
+        </p>
+      )}
+    </li>
+  )
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // AnalysisPanel
 // ──────────────────────────────────────────────────────────────────────────────
 
 export function AnalysisPanel({ interests, problem }: AnalysisPanelProps) {
   const showInterests = hasInterests(interests)
-  const showProblem = !!problem
+  const showProblem = hasProblem(problem)
 
   // Graceful degradation — pre-Phase-5 calls with no analysis data
   if (!showInterests && !showProblem) return null
+
+  // Sort pain points: primary first, then by category
+  const sortedPains = problem?.pain_points
+    ? [...problem.pain_points].sort((a, b) => {
+        if (a.is_primary && !b.is_primary) return -1
+        if (!a.is_primary && b.is_primary) return 1
+        return 0
+      })
+    : []
 
   return (
     <div className="space-y-3 mt-3">
@@ -73,13 +150,13 @@ export function AnalysisPanel({ interests, problem }: AnalysisPanelProps) {
             Detected Interests
           </p>
           <div className="flex flex-wrap gap-1.5">
-            {interests.products.map((product) => (
+            {interests.products?.map((product) => (
               <Chip key={`product-${product}`} label={product} />
             ))}
-            {interests.specific_needs.map((need) => (
+            {interests.specific_needs?.map((need) => (
               <Chip key={`need-${need}`} label={need} />
             ))}
-            {interests.buying_signals.map((signal) => (
+            {interests.buying_signals?.map((signal) => (
               <Chip key={`signal-${signal}`} label={signal} />
             ))}
           </div>
@@ -92,26 +169,12 @@ export function AnalysisPanel({ interests, problem }: AnalysisPanelProps) {
           <p className="text-xs text-on-surface-variant uppercase tracking-wider">
             Identified Problem
           </p>
-          <div className="bg-surface-container-low rounded-md p-3 space-y-2">
-            {/* Primary need */}
-            <p className="text-sm text-on-surface">{problem.primary_need}</p>
-
-            {/* Urgency indicator */}
-            <p className={['text-xs font-medium uppercase', URGENCY_STYLES[problem.urgency]].join(' ')}>
-              {problem.urgency} urgency
-            </p>
-
-            {/* Pain points */}
-            {problem.pain_points.length > 0 && (
-              <ul className="space-y-0.5">
-                {problem.pain_points.map((point) => (
-                  <li key={point} className="text-xs text-on-surface-variant flex items-start gap-1">
-                    <span className="mt-0.5 text-on-surface-variant/60">•</span>
-                    <span>{point}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
+          <div className="bg-surface-container-low rounded-md p-3">
+            <ul className="space-y-3">
+              {sortedPains.map((point, idx) => (
+                <PainPointItem key={`${point.category}-${idx}`} point={point} />
+              ))}
+            </ul>
           </div>
         </div>
       )}

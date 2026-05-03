@@ -20,13 +20,12 @@ from app.analysis.universal import (
     AbandonmentReasonAxis,
     CallOutcome,
     CommitmentsAxis,
-    IdentifiedProblem,
     InterestsAxis,
     ObjectionsAxis,
+    ProblemAxis,
     ProfileFactsAxis,
     ServiceIssuesAxis,
 )
-from app.analysis.enums import Urgency
 
 
 def _default_call_outcome() -> CallOutcome:
@@ -37,12 +36,8 @@ def _default_call_outcome() -> CallOutcome:
     )
 
 
-def _default_identified_problem() -> IdentifiedProblem:
-    return IdentifiedProblem(
-        primary_need="",
-        pain_points=[],
-        urgency=Urgency.low,
-    )
+def _default_identified_problem() -> ProblemAxis:
+    return ProblemAxis(pain_points=[])
 
 
 class PostCallAnalysis(BaseModel):
@@ -91,7 +86,7 @@ class PostCallAnalysis(BaseModel):
         default_factory=InterestsAxis,
         description="Insurance products and needs detected in the transcript (catalog-validated)",
     )
-    identified_problem: IdentifiedProblem = Field(
+    identified_problem: ProblemAxis = Field(
         default_factory=_default_identified_problem,
         description="The underlying need or problem driving the lead's potential purchase",
     )
