@@ -192,7 +192,9 @@ def test_problem_axis_accepts_exactly_5():
     """ProblemAxis accepts exactly 5 PainPoint objects (boundary — valid)."""
     from app.analysis.universal.problem import PainPoint, ProblemAxis
 
-    items = [PainPoint(**_make_pain_point(category=cat)) for cat in _VALID_CATEGORIES[:5]]
+    items = [
+        PainPoint(**_make_pain_point(category=cat)) for cat in _VALID_CATEGORIES[:5]
+    ]
     axis = ProblemAxis(pain_points=items)
     assert len(axis.pain_points) == 5
 
@@ -201,7 +203,9 @@ def test_problem_axis_rejects_6():
     """ProblemAxis raises ValidationError when given 6 PainPoint objects (max_length=5)."""
     from app.analysis.universal.problem import PainPoint, ProblemAxis
 
-    items = [PainPoint(**_make_pain_point(category=cat)) for cat in _VALID_CATEGORIES[:6]]
+    items = [
+        PainPoint(**_make_pain_point(category=cat)) for cat in _VALID_CATEGORIES[:6]
+    ]
     with pytest.raises(ValidationError):
         ProblemAxis(pain_points=items)
 
@@ -278,9 +282,7 @@ def test_prompt_contains_all_11_categories(category):
     """DIMENSION['prompt'] contains each of the 11 category strings verbatim."""
     from app.analysis.universal.problem import DIMENSION
 
-    assert category in DIMENSION["prompt"], (
-        f"Prompt is missing category: {category}"
-    )
+    assert category in DIMENSION["prompt"], f"Prompt is missing category: {category}"
 
 
 # ---------------------------------------------------------------------------
@@ -326,9 +328,9 @@ def test_prompt_contains_bad_experience_boundary():
     from app.analysis.universal.problem import DIMENSION
 
     prompt = DIMENSION["prompt"]
-    assert "bad_experience" in prompt, (
-        "Prompt must mention bad_experience boundary (vs objections)"
-    )
+    assert (
+        "bad_experience" in prompt
+    ), "Prompt must mention bad_experience boundary (vs objections)"
 
 
 # ---------------------------------------------------------------------------
@@ -362,9 +364,9 @@ async def test_analyze_returns_problem_axis():
 
     result = await analyze("some transcript", client)
 
-    assert isinstance(result, ProblemAxis), (
-        f"analyze() must return ProblemAxis, got {type(result)}"
-    )
+    assert isinstance(
+        result, ProblemAxis
+    ), f"analyze() must return ProblemAxis, got {type(result)}"
     assert result is expected
 
 
@@ -408,7 +410,9 @@ def test_pain_point_all_fields_preserved_in_model_dump():
     dumped = pp.model_dump()
     assert dumped["category"] == "risk_exposure"
     assert dumped["description"] == "No tiene cobertura adecuada para su situación"
-    assert dumped["evidence"] == "Mi situación actual tiene riesgos que no están cubiertos"
+    assert (
+        dumped["evidence"] == "Mi situación actual tiene riesgos que no están cubiertos"
+    )
     assert dumped["urgency"] == "high"
     assert dumped["confidence"] == "medium"
     assert dumped["is_primary"] is True

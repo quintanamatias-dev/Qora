@@ -74,12 +74,13 @@ def _make_analysis_with_action(next_action: str):
     from app.analysis.universal.interest.interests import InterestsAxis
 
     from app.analysis.universal.objections import ObjectionsAxis as _OA
+
     return PostCallAnalysis(
         summary="Test summary.",
         objections=_OA(),
         interest_level=60,
         next_action_suggested=next_action,
-        misc_notes="",
+        # qora-misc-notes: misc_notes managed by standalone pipeline
         call_outcome=CallOutcome(
             classification="callback_requested",
             reason="Lead asked to be called again.",
@@ -117,7 +118,10 @@ def _make_dispatching_client(analysis):
         # qora-abandonment: AbandonmentReasonAxis removed from universal exports
     )
     from app.analysis.universal.interest.interests import InterestsAxis
-    from app.analysis.universal.interest.interest_level import InterestLevelResult, ProductScore
+    from app.analysis.universal.interest.interest_level import (
+        InterestLevelResult,
+        ProductScore,
+    )
 
     schema_to_target = {
         mod.DIMENSION["schema"]: mod.DIMENSION["target_field"]
@@ -137,7 +141,9 @@ def _make_dispatching_client(analysis):
                         score=il,
                         reason="Mock.",
                     )
-                ] if il > 0 else [],
+                ]
+                if il > 0
+                else [],
                 general_score=il,
                 level="high" if il >= 61 else "medium" if il >= 41 else "low",
                 reason="Mock.",
@@ -150,7 +156,7 @@ def _make_dispatching_client(analysis):
         complex_targets = {
             "call_outcome",
             "identified_problem",
-            "objections",          # qora-objections: complex axis (ObjectionsAxis)
+            "objections",  # qora-objections: complex axis (ObjectionsAxis)
             "service_issues",
             "profile_facts",
             "commitments",
@@ -164,8 +170,10 @@ def _make_dispatching_client(analysis):
             return analysis.objections
         if schema_cls is NextActionAxis:
             return NextActionAxis(action=str(analysis.next_action_suggested))
+        # qora-misc-notes: misc_notes is no longer in DIMENSION_MODULES
+        # This branch should never be reached
         if schema_cls is MiscNotesAxis:
-            return MiscNotesAxis(notes=str(analysis.misc_notes or ""))
+            return analysis.misc_notes
         if schema_cls is DataCorrectionsAxis:
             return DataCorrectionsAxis(corrections="")
         raise AssertionError(f"Unknown schema: {schema_cls!r}")

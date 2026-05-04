@@ -96,7 +96,7 @@ def _make_mock_analysis():
         interest_level=70,
         current_insurance=None,
         next_action_suggested="send_quote",
-        misc_notes="",
+        # qora-misc-notes: misc_notes managed by standalone pipeline
         call_outcome=CallOutcome(
             classification="completed_positive",
             reason="Lead engaged.",

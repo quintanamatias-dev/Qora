@@ -30,9 +30,7 @@ class InterestItem(BaseModel):
     """A single detected product interest with supporting context."""
 
     product: str = Field(
-        description=(
-            "Insurance product ID — must be one of the listed catalog values"
-        ),
+        description=("Insurance product ID — must be one of the listed catalog values"),
     )
     needs: list[str] = Field(
         default_factory=list,

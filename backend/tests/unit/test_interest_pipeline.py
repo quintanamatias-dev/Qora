@@ -229,8 +229,7 @@ def test_interests_axis_accepts_up_to_5_items():
     from app.analysis.universal.interest.interests import InterestItem, InterestsAxis
 
     items = [
-        InterestItem(**_make_interest_item(product=p))
-        for p in _EXPECTED_PRODUCTS[:5]
+        InterestItem(**_make_interest_item(product=p)) for p in _EXPECTED_PRODUCTS[:5]
     ]
     axis = InterestsAxis(items=items)
     assert len(axis.items) == 5
@@ -241,8 +240,7 @@ def test_interests_axis_rejects_6_items():
     from app.analysis.universal.interest.interests import InterestItem, InterestsAxis
 
     items = [
-        InterestItem(**_make_interest_item(product=p))
-        for p in _EXPECTED_PRODUCTS[:6]
+        InterestItem(**_make_interest_item(product=p)) for p in _EXPECTED_PRODUCTS[:6]
     ]
     with pytest.raises(ValidationError):
         InterestsAxis(items=items)
@@ -278,9 +276,7 @@ def test_prompt_contains_all_9_products(product):
     """DIMENSION['prompt'] contains each of the 9 product IDs verbatim."""
     from app.analysis.universal.interest.interests import DIMENSION
 
-    assert product in DIMENSION["prompt"], (
-        f"Prompt is missing product: {product}"
-    )
+    assert product in DIMENSION["prompt"], f"Prompt is missing product: {product}"
 
 
 @pytest.mark.parametrize("need", _EXPECTED_NEEDS)
@@ -299,9 +295,9 @@ def test_prompt_has_constraints_block():
     assert "CONSTRAINTS" in prompt, "Prompt must have a CONSTRAINTS block"
     assert "5" in prompt, "Prompt must mention max 5 constraint"
     # Accept 'empty' or '[]' as empty-if-none indicator
-    assert "empty" in prompt or "[]" in prompt, (
-        "Prompt must mention empty fallback when no interests detected"
-    )
+    assert (
+        "empty" in prompt or "[]" in prompt
+    ), "Prompt must mention empty fallback when no interests detected"
 
 
 def test_prompt_has_do_not_block():
@@ -369,9 +365,9 @@ async def test_analyze_returns_interests_axis():
 
     result = await analyze("some transcript", client)
 
-    assert isinstance(result, InterestsAxis), (
-        f"analyze() must return InterestsAxis, got {type(result)}"
-    )
+    assert isinstance(
+        result, InterestsAxis
+    ), f"analyze() must return InterestsAxis, got {type(result)}"
     assert result is expected
 
 
@@ -516,9 +512,7 @@ def test_interest_level_result_positive_signals_max_3():
 
     with pytest.raises(ValidationError):
         InterestLevelResult(
-            **_make_interest_level_result(
-                positive_signals=["a", "b", "c", "d"]
-            )
+            **_make_interest_level_result(positive_signals=["a", "b", "c", "d"])
         )
 
 
@@ -530,9 +524,7 @@ def test_interest_level_result_negative_signals_max_3():
 
     with pytest.raises(ValidationError):
         InterestLevelResult(
-            **_make_interest_level_result(
-                negative_signals=["a", "b", "c", "d"]
-            )
+            **_make_interest_level_result(negative_signals=["a", "b", "c", "d"])
         )
 
 
@@ -705,7 +697,13 @@ async def test_interest_level_analyze_returns_result():
     )
     # LLM returns per_product with score=80; previous_score=None → general_score=80
     llm_raw = InterestLevelResult(
-        per_product=[{"product": "auto_todo_riesgo", "score": 80, "reason": "expressed clear interest"}],
+        per_product=[
+            {
+                "product": "auto_todo_riesgo",
+                "score": 80,
+                "reason": "expressed clear interest",
+            }
+        ],
         general_score=99,  # LLM placeholder — will be overridden by formula
         level="very_high",
         reason="Strong buying signals",
@@ -720,7 +718,9 @@ async def test_interest_level_analyze_returns_result():
     response.choices[0].message.parsed = llm_raw
     client.beta.chat.completions.parse = AsyncMock(return_value=response)
 
-    result = await analyze("some transcript", client, interests=interests, previous_score=None)
+    result = await analyze(
+        "some transcript", client, interests=interests, previous_score=None
+    )
 
     assert isinstance(result, InterestLevelResult)
     # Formula: no previous → general_score = max([80]) = 80
@@ -1008,9 +1008,9 @@ async def test_pipeline_error_markers_are_distinguishable_from_empty_success():
         )
 
     # Success result is InterestsAxis, NOT a dict → distinguishable from error
-    assert isinstance(interests_result, InterestsAxis), (
-        "Success path must return InterestsAxis, not a dict"
-    )
-    assert isinstance(level_result, InterestLevelResult), (
-        "Success path must return InterestLevelResult, not a dict"
-    )
+    assert isinstance(
+        interests_result, InterestsAxis
+    ), "Success path must return InterestsAxis, not a dict"
+    assert isinstance(
+        level_result, InterestLevelResult
+    ), "Success path must return InterestLevelResult, not a dict"

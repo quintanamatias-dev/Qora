@@ -484,13 +484,15 @@ def test_post_call_analysis_valid_full_instance():
         confidence="high",
         is_primary=True,
     )
+    from app.analysis.universal.misc_notes import MiscNotesAxis
+
     analysis = PostCallAnalysis(
         summary="Lead was very interested in todo riesgo coverage.",
         objections=_OA(),
         interest_level=85,
         current_insurance="La Caja",
         next_action_suggested="send_quote",
-        misc_notes="Car year: 2022",
+        misc_notes=MiscNotesAxis(),  # qora-misc-notes: was str "Car year: 2022"
         call_outcome=CallOutcome(
             classification="completed_positive",
             reason="Lead requested a quote.",
@@ -525,7 +527,9 @@ def test_post_call_analysis_model_dump_contains_axes():
         interest_level=50,
         current_insurance=None,
         next_action_suggested="wait",
-        misc_notes="",
+        misc_notes=__import__(
+            "app.analysis.universal.misc_notes", fromlist=["MiscNotesAxis"]
+        ).MiscNotesAxis(),  # qora-misc-notes
         call_outcome=CallOutcome(
             classification="busy",
             reason="Lead was driving.",
@@ -728,7 +732,9 @@ def test_post_call_analysis_data_corrections_defaults_to_empty_string():
         interest_level=50,
         current_insurance=None,
         next_action_suggested="wait",
-        misc_notes="",
+        misc_notes=__import__(
+            "app.analysis.universal.misc_notes", fromlist=["MiscNotesAxis"]
+        ).MiscNotesAxis(),  # qora-misc-notes
         call_outcome=CallOutcome(
             classification="busy",
             reason="Lead was driving.",
@@ -759,7 +765,9 @@ def test_post_call_analysis_data_corrections_accepts_string():
         interest_level=70,
         current_insurance=None,
         next_action_suggested="call_again",
-        misc_notes="",
+        misc_notes=__import__(
+            "app.analysis.universal.misc_notes", fromlist=["MiscNotesAxis"]
+        ).MiscNotesAxis(),  # qora-misc-notes
         data_corrections="car_model: Polo Trend",
         call_outcome=CallOutcome(
             classification="callback_requested",
@@ -791,7 +799,9 @@ def test_post_call_analysis_data_corrections_rejects_dict():
             interest_level=50,
             current_insurance=None,
             next_action_suggested="wait",
-            misc_notes="",
+            misc_notes=__import__(
+                "app.analysis.universal.misc_notes", fromlist=["MiscNotesAxis"]
+            ).MiscNotesAxis(),  # qora-misc-notes
             data_corrections={"car_model": "Polo Trend"},  # dict — must be rejected
             call_outcome=CallOutcome(
                 classification="busy",
@@ -1171,7 +1181,9 @@ def test_post_call_analysis_new_axes_have_correct_defaults():
         interest_level=50,
         current_insurance=None,
         next_action_suggested="wait",
-        misc_notes="",
+        misc_notes=__import__(
+            "app.analysis.universal.misc_notes", fromlist=["MiscNotesAxis"]
+        ).MiscNotesAxis(),  # qora-misc-notes
         call_outcome=CallOutcome(
             classification="busy",
             reason="Lead was driving.",
@@ -1253,7 +1265,9 @@ def test_post_call_analysis_new_axes_accept_data():
         interest_level=75,
         current_insurance=None,
         next_action_suggested="call_again",
-        misc_notes="",
+        misc_notes=__import__(
+            "app.analysis.universal.misc_notes", fromlist=["MiscNotesAxis"]
+        ).MiscNotesAxis(),  # qora-misc-notes
         call_outcome=CallOutcome(
             classification="completed_positive",
             reason="Lead engaged well.",
@@ -1288,7 +1302,8 @@ def test_post_call_analysis_new_axes_accept_data():
         __import__("app.analysis.universal.summary", fromlist=["x"]),
         __import__("app.analysis.universal.objections", fromlist=["x"]),
         __import__("app.analysis.universal.next_action", fromlist=["x"]),
-        __import__("app.analysis.universal.misc_notes", fromlist=["x"]),
+        # qora-misc-notes: misc_notes removed from DIMENSION_MODULES (9 → 8)
+        # handled by standalone run_misc_notes_pipeline()
         __import__("app.analysis.universal.data_corrections", fromlist=["x"]),
         __import__("app.analysis.universal.outcome", fromlist=["x"]),
         __import__("app.analysis.universal.problem", fromlist=["x"]),
@@ -1307,6 +1322,8 @@ def test_dimension_module_contract(mod):
     NOTE: abandonment is no longer in DIMENSION_MODULES (qora-abandonment spec).
     NOTE: profile_facts is no longer in DIMENSION_MODULES (qora-profile-facts spec —
     handled by standalone run_profile_facts_pipeline()).
+    NOTE: misc_notes is no longer in DIMENSION_MODULES (qora-misc-notes spec —
+    handled by standalone run_misc_notes_pipeline()).
     """
     import inspect
     from app.analysis import PostCallAnalysis
@@ -1333,12 +1350,19 @@ def test_dimension_modules_cover_all_post_call_analysis_fields():
     orchestrated by the 2-phase pipeline, NOT by DIMENSION_MODULES.
     qora-profile-facts: profile_facts is now handled by run_profile_facts_pipeline(),
     also NOT in DIMENSION_MODULES (10 → 9).
+    qora-misc-notes: misc_notes is now handled by run_misc_notes_pipeline(),
+    also NOT in DIMENSION_MODULES (9 → 8).
     """
     from app.analysis import PostCallAnalysis
     from app.analysis.universal import DIMENSION_MODULES
 
     # Fields managed by standalone pipelines (not in DIMENSION_MODULES)
-    _PIPELINE_FIELDS = {"interest_level", "detected_interests", "profile_facts"}
+    _PIPELINE_FIELDS = {
+        "interest_level",
+        "detected_interests",
+        "profile_facts",
+        "misc_notes",
+    }
 
     target_fields = [mod.DIMENSION["target_field"] for mod in DIMENSION_MODULES]
     assert len(target_fields) == len(
@@ -1359,23 +1383,22 @@ async def test_dimension_analyze_returns_unwrapped_value_for_simple_axes():
     analyze() now returns ObjectionsAxis, not an unwrapped list).
     NOTE: interest_level is no longer in DIMENSION_MODULES (qora-interest-pipeline
     spec — it's orchestrated by the 2-phase pipeline, not parallel gather).
+    NOTE: misc_notes is no longer in DIMENSION_MODULES (qora-misc-notes spec —
+    it's orchestrated by run_misc_notes_pipeline(), not parallel gather).
     """
     from unittest.mock import AsyncMock, MagicMock
     from app.analysis.universal import (
         SummaryAxis,
         NextActionAxis,
-        MiscNotesAxis,
         DataCorrectionsAxis,
         summary as summary_mod,
         next_action as next_action_mod,
-        misc_notes as misc_notes_mod,
         data_corrections as data_corrections_mod,
     )
 
     cases = [
         (summary_mod, SummaryAxis(text="hi"), str, "hi"),
         (next_action_mod, NextActionAxis(action="wait"), str, "wait"),
-        (misc_notes_mod, MiscNotesAxis(notes="ok"), str, "ok"),
         (data_corrections_mod, DataCorrectionsAxis(corrections=""), str, ""),
     ]
     for mod, parsed, expected_type, expected_value in cases:
@@ -1445,6 +1468,8 @@ def test_dimension_modules_iteration_order_is_stable():
     qora-abandonment: abandonment_reason removed (10 entries, down from 11).
     qora-profile-facts: profile_facts removed (9 entries, down from 10).
     Handled by standalone run_profile_facts_pipeline().
+    qora-misc-notes: misc_notes removed (8 entries, down from 9).
+    Handled by standalone run_misc_notes_pipeline().
     """
     from app.analysis.universal import DIMENSION_MODULES
 
@@ -1453,7 +1478,7 @@ def test_dimension_modules_iteration_order_is_stable():
         "summary",
         "objections",
         "next_action",
-        "misc_notes",
+        # qora-misc-notes: misc_notes removed
         "data_corrections",
         "outcome",
         "problem",
@@ -1551,18 +1576,24 @@ def test_objections_target_field_mapping_is_correct():
 
 
 def test_dimension_modules_cover_all_post_call_analysis_fields_still_correct():
-    """All 9 non-pipeline PostCallAnalysis fields are covered by exactly one dimension.
+    """All 8 non-pipeline PostCallAnalysis fields are covered by exactly one dimension.
 
     qora-interest-pipeline: interest_level and detected_interests are now
     pipeline fields — not in DIMENSION_MODULES.
     qora-abandonment: abandonment_reason removed from PostCallAnalysis.
     qora-profile-facts: profile_facts moved to standalone run_profile_facts_pipeline().
+    qora-misc-notes: misc_notes moved to standalone run_misc_notes_pipeline().
     """
     from app.analysis import PostCallAnalysis
     from app.analysis.universal import DIMENSION_MODULES
 
     # Fields managed by standalone pipelines (not in DIMENSION_MODULES)
-    _PIPELINE_FIELDS = {"interest_level", "detected_interests", "profile_facts"}
+    _PIPELINE_FIELDS = {
+        "interest_level",
+        "detected_interests",
+        "profile_facts",
+        "misc_notes",
+    }
 
     target_fields = [mod.DIMENSION["target_field"] for mod in DIMENSION_MODULES]
     # No duplicates
@@ -1582,18 +1613,19 @@ def test_dimension_modules_cover_all_post_call_analysis_fields_still_correct():
 # ===========================================================================
 
 
-def test_dimension_modules_count_is_9_after_interest_pipeline_abandonment_and_profile_facts():
-    """DIMENSION_MODULES has exactly 9 entries after qora-interest-pipeline, qora-abandonment,
-    and qora-profile-facts.
+def test_dimension_modules_count_is_8_after_interest_pipeline_abandonment_profile_facts_misc_notes():
+    """DIMENSION_MODULES has exactly 8 entries after qora-interest-pipeline, qora-abandonment,
+    qora-profile-facts, and qora-misc-notes.
 
     interest_level and interests removed (run_interest_pipeline).
     abandonment_reason removed (absorbed into CallOutcome fields).
     profile_facts removed (run_profile_facts_pipeline standalone).
+    misc_notes removed (run_misc_notes_pipeline standalone).
     """
     from app.analysis.universal import DIMENSION_MODULES
 
-    assert len(DIMENSION_MODULES) == 9, (
-        f"Expected 9 DIMENSION_MODULES (interest pipeline + abandonment + profile_facts extracted), "
+    assert len(DIMENSION_MODULES) == 8, (
+        f"Expected 8 DIMENSION_MODULES (interest pipeline + abandonment + profile_facts + misc_notes extracted), "
         f"got {len(DIMENSION_MODULES)}: {[m.DIMENSION['name'] for m in DIMENSION_MODULES]}"
     )
 
@@ -1944,17 +1976,19 @@ def test_abandonment_reason_axis_not_imported_in_schema():
             ), "schema.py must NOT import AbandonmentReasonAxis (qora-abandonment spec)"
 
 
-def test_dimension_modules_count_is_9_after_abandonment_and_profile_facts():
-    """DIMENSION_MODULES has exactly 9 entries after qora-abandonment and qora-profile-facts.
+def test_dimension_modules_count_is_8_after_abandonment_profile_facts_misc_notes():
+    """DIMENSION_MODULES has exactly 8 entries after qora-abandonment, qora-profile-facts,
+    and qora-misc-notes.
 
     qora-abandonment removed abandonment_reason (11 → 10).
     qora-profile-facts removed profile_facts (10 → 9).
+    qora-misc-notes removed misc_notes (9 → 8).
     """
     from app.analysis.universal import DIMENSION_MODULES
 
     names = [mod.DIMENSION["name"] for mod in DIMENSION_MODULES]
-    assert len(DIMENSION_MODULES) == 9, (
-        f"Expected 9 DIMENSION_MODULES after qora-abandonment and qora-profile-facts, "
+    assert len(DIMENSION_MODULES) == 8, (
+        f"Expected 8 DIMENSION_MODULES after qora-abandonment, qora-profile-facts, and qora-misc-notes, "
         f"got {len(DIMENSION_MODULES)}: {names}"
     )
 
@@ -1986,8 +2020,8 @@ def test_abandonment_module_not_exported_from_universal_init():
     ), "abandonment must be removed from app.analysis.universal __all__"
 
 
-def test_dimension_modules_order_is_correct_after_abandonment_and_profile_facts():
-    """DIMENSION_MODULES order is stable with 9 entries (abandonment + profile_facts removed)."""
+def test_dimension_modules_order_is_correct_after_abandonment_profile_facts_misc_notes():
+    """DIMENSION_MODULES order is stable with 8 entries (abandonment + profile_facts + misc_notes removed)."""
     from app.analysis.universal import DIMENSION_MODULES
 
     names = [mod.DIMENSION["name"] for mod in DIMENSION_MODULES]
@@ -1995,7 +2029,7 @@ def test_dimension_modules_order_is_correct_after_abandonment_and_profile_facts(
         "summary",
         "objections",
         "next_action",
-        "misc_notes",
+        # qora-misc-notes: misc_notes removed (9 → 8)
         "data_corrections",
         "outcome",
         "problem",
@@ -2102,6 +2136,128 @@ def test_abandonment_trigger_importable_from_analysis():
     from app.analysis import AbandonmentTrigger  # noqa: F401
 
     assert AbandonmentTrigger is not None
+
+
+# ===========================================================================
+# qora-misc-notes Phase 1 — MiscNote / MiscNotesAxis schema tests
+# ===========================================================================
+
+
+def test_misc_note_importable_from_misc_notes_module():
+    """MiscNote must be importable from app.analysis.universal.misc_notes."""
+    from app.analysis.universal.misc_notes import MiscNote  # noqa: F401
+
+    assert MiscNote is not None
+
+
+def test_misc_notes_axis_notes_is_list_not_str():
+    """MiscNotesAxis.notes must be list[MiscNote], not str (qora-misc-notes)."""
+    from app.analysis.universal.misc_notes import MiscNotesAxis
+
+    axis = MiscNotesAxis()
+    assert isinstance(
+        axis.notes, list
+    ), "MiscNotesAxis.notes must be list[MiscNote] (qora-misc-notes spec)"
+    assert axis.notes == []
+
+
+def test_misc_note_accepts_valid_enum_types():
+    """MiscNote accepts all 6 valid type literals."""
+    from app.analysis.universal.misc_notes import MiscNote
+
+    valid_types = [
+        "continuity",
+        "pending_topic",
+        "tone_context",
+        "temporary_context",
+        "caution",
+        "other",
+    ]
+    for t in valid_types:
+        note = MiscNote(type=t, note="test note")
+        assert note.type == t
+
+
+def test_misc_note_rejects_invalid_type():
+    """MiscNote raises ValidationError for invalid type value."""
+    from pydantic import ValidationError
+    from app.analysis.universal.misc_notes import MiscNote
+
+    with pytest.raises(ValidationError):
+        MiscNote(type="invalid_type", note="some note")
+
+
+def test_misc_notes_axis_rejects_more_than_5_notes():
+    """MiscNotesAxis raises ValidationError when notes list has more than 5 items."""
+    from pydantic import ValidationError
+    from app.analysis.universal.misc_notes import MiscNote, MiscNotesAxis
+
+    notes = [MiscNote(type="other", note=f"note {i}") for i in range(6)]
+    with pytest.raises(ValidationError):
+        MiscNotesAxis(notes=notes)
+
+
+def test_misc_notes_axis_accepts_exactly_5_notes():
+    """MiscNotesAxis accepts exactly 5 notes — max boundary is inclusive."""
+    from app.analysis.universal.misc_notes import MiscNote, MiscNotesAxis
+
+    notes = [MiscNote(type="other", note=f"note {i}") for i in range(5)]
+    axis = MiscNotesAxis(notes=notes)
+    assert len(axis.notes) == 5
+
+
+def test_misc_notes_axis_defaults_to_empty_list():
+    """MiscNotesAxis() with no args defaults to notes=[] (safe default)."""
+    from app.analysis.universal.misc_notes import MiscNotesAxis
+
+    axis = MiscNotesAxis()
+    assert axis.notes == []
+
+
+def test_misc_note_importable_from_universal():
+    """MiscNote must be importable from app.analysis.universal."""
+    from app.analysis.universal import MiscNote  # noqa: F401
+
+    assert MiscNote is not None
+
+
+def test_run_misc_notes_pipeline_importable_from_universal():
+    """run_misc_notes_pipeline must be importable from app.analysis.universal."""
+    from app.analysis.universal import run_misc_notes_pipeline  # noqa: F401
+
+    assert run_misc_notes_pipeline is not None
+
+
+def test_post_call_analysis_misc_notes_field_is_misc_notes_axis():
+    """PostCallAnalysis.misc_notes must be MiscNotesAxis (not str) after qora-misc-notes."""
+    from app.analysis.schema import PostCallAnalysis
+    from app.analysis.universal.misc_notes import MiscNotesAxis
+
+    analysis = PostCallAnalysis()
+    assert isinstance(
+        analysis.misc_notes, MiscNotesAxis
+    ), "PostCallAnalysis.misc_notes must be MiscNotesAxis (qora-misc-notes spec)"
+    assert analysis.misc_notes.notes == []
+
+
+def test_misc_notes_not_in_dimension_modules():
+    """misc_notes must NOT be in DIMENSION_MODULES after qora-misc-notes extraction."""
+    from app.analysis.universal import DIMENSION_MODULES
+
+    names = [m.DIMENSION["name"] for m in DIMENSION_MODULES]
+    assert (
+        "misc_notes" not in names
+    ), "misc_notes must be removed from DIMENSION_MODULES (qora-misc-notes spec)"
+
+
+def test_dimension_modules_count_is_8_after_misc_notes_extraction():
+    """DIMENSION_MODULES has exactly 8 entries after misc_notes extraction."""
+    from app.analysis.universal import DIMENSION_MODULES
+
+    assert len(DIMENSION_MODULES) == 8, (
+        f"Expected 8 DIMENSION_MODULES after misc_notes extraction, "
+        f"got {len(DIMENSION_MODULES)}: {[m.DIMENSION['name'] for m in DIMENSION_MODULES]}"
+    )
 
 
 def test_analysis_schema_no_forbidden_imports_after_objections():

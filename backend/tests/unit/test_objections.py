@@ -177,7 +177,9 @@ def test_objection_agent_response_summary_can_be_set():
     """agent_response_summary accepts a non-empty string."""
     from app.analysis.universal.objections import Objection
 
-    obj = Objection(**_make_objection(agent_response_summary="Agent explained value proposition."))
+    obj = Objection(
+        **_make_objection(agent_response_summary="Agent explained value proposition.")
+    )
     assert obj.agent_response_summary == "Agent explained value proposition."
 
 
@@ -219,7 +221,9 @@ def test_objections_axis_accepts_exactly_5():
     """ObjectionsAxis accepts exactly 5 Objection objects (boundary — valid)."""
     from app.analysis.universal.objections import Objection, ObjectionsAxis
 
-    items = [Objection(**_make_objection(category=cat)) for cat in _VALID_CATEGORIES[:5]]
+    items = [
+        Objection(**_make_objection(category=cat)) for cat in _VALID_CATEGORIES[:5]
+    ]
     axis = ObjectionsAxis(objections=items)
     assert len(axis.objections) == 5
 
@@ -228,7 +232,9 @@ def test_objections_axis_rejects_6():
     """ObjectionsAxis raises ValidationError when given 6 Objection objects (max_length=5)."""
     from app.analysis.universal.objections import Objection, ObjectionsAxis
 
-    items = [Objection(**_make_objection(category=cat)) for cat in _VALID_CATEGORIES[:6]]
+    items = [
+        Objection(**_make_objection(category=cat)) for cat in _VALID_CATEGORIES[:6]
+    ]
     with pytest.raises(ValidationError):
         ObjectionsAxis(objections=items)
 
@@ -310,9 +316,7 @@ def test_prompt_contains_all_14_categories(category):
     """DIMENSION['prompt'] contains each of the 14 category strings verbatim."""
     from app.analysis.universal.objections import DIMENSION
 
-    assert category in DIMENSION["prompt"], (
-        f"Prompt is missing category: {category}"
-    )
+    assert category in DIMENSION["prompt"], f"Prompt is missing category: {category}"
 
 
 # ---------------------------------------------------------------------------
@@ -325,9 +329,9 @@ def test_prompt_contains_all_5_resolution_statuses(status):
     """DIMENSION['prompt'] contains each of the 5 resolution_status strings verbatim."""
     from app.analysis.universal.objections import DIMENSION
 
-    assert status in DIMENSION["prompt"], (
-        f"Prompt is missing resolution status: {status}"
-    )
+    assert (
+        status in DIMENSION["prompt"]
+    ), f"Prompt is missing resolution status: {status}"
 
 
 # ---------------------------------------------------------------------------
@@ -352,9 +356,9 @@ def test_prompt_contains_max_5_and_empty_guidance():
     prompt = DIMENSION["prompt"]
     assert "5" in prompt, "Prompt must mention max 5 constraint"
     # Accept either 'empty' or '[]' as the empty fallback indicator
-    assert "empty" in prompt or "[]" in prompt, (
-        "Prompt must mention empty array fallback"
-    )
+    assert (
+        "empty" in prompt or "[]" in prompt
+    ), "Prompt must mention empty array fallback"
 
 
 # ---------------------------------------------------------------------------
@@ -369,9 +373,9 @@ def test_prompt_contains_exclusion_language():
     prompt = DIMENSION["prompt"]
     exclusion_words = ["not", "don't", "DO NOT", "never", "NEVER"]
     has_exclusion = any(w in prompt for w in exclusion_words)
-    assert has_exclusion, (
-        f"Prompt must contain exclusion guidance (one of: {exclusion_words})"
-    )
+    assert (
+        has_exclusion
+    ), f"Prompt must contain exclusion guidance (one of: {exclusion_words})"
 
 
 # ---------------------------------------------------------------------------
@@ -406,9 +410,9 @@ async def test_analyze_returns_objections_axis():
 
     result = await analyze("some transcript", client)
 
-    assert isinstance(result, ObjectionsAxis), (
-        f"analyze() must return ObjectionsAxis, got {type(result)}"
-    )
+    assert isinstance(
+        result, ObjectionsAxis
+    ), f"analyze() must return ObjectionsAxis, got {type(result)}"
     assert result is expected
 
 

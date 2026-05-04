@@ -403,7 +403,9 @@ async def get_agent_stats(
     agents = []
     for entry in agent_data.values():
         total = entry["total_calls"]
-        conversion_rate = entry["completed_positive_count"] / total if total > 0 else None
+        conversion_rate = (
+            entry["completed_positive_count"] / total if total > 0 else None
+        )
 
         agents.append(
             {

@@ -477,9 +477,9 @@ async def fresh_db_without_engagement_quality(tmp_path: Path):
     async with engine.begin() as conn:
         result = await conn.execute(text("PRAGMA table_info(call_analyses)"))
         cols = [row[1] for row in result.fetchall()]
-        assert "engagement_quality" not in cols, (
-            "Test setup error: engagement_quality should not exist in new schema"
-        )
+        assert (
+            "engagement_quality" not in cols
+        ), "Test setup error: engagement_quality should not exist in new schema"
 
     yield settings.database_url, db_module
 
@@ -507,9 +507,9 @@ async def test_drop_engagement_quality_migration_drops_column(
         col_names = [row[1] for row in rows.fetchall()]
     await engine.dispose()
 
-    assert "engagement_quality" not in col_names, (
-        "engagement_quality column must be dropped after migration"
-    )
+    assert (
+        "engagement_quality" not in col_names
+    ), "engagement_quality column must be dropped after migration"
 
 
 async def test_drop_engagement_quality_migration_is_idempotent(
@@ -589,9 +589,9 @@ async def test_abandonment_migration_adds_abandonment_trigger_column(
         col_names = [row[1] for row in rows.fetchall()]
     await engine.dispose()
 
-    assert "abandonment_trigger" in col_names, (
-        "abandonment_trigger column must exist after migration"
-    )
+    assert (
+        "abandonment_trigger" in col_names
+    ), "abandonment_trigger column must exist after migration"
 
 
 async def test_abandonment_migration_is_idempotent(
@@ -641,7 +641,9 @@ def test_migration_build_call_analysis_row_does_not_include_abandonment_reason_f
     row = _build_call_analysis_row("sess-1", "lead-1", "client-1", facts)
 
     assert "was_abrupt" in row, "Row must include was_abrupt from call_outcome"
-    assert "abandonment_trigger" in row, "Row must include abandonment_trigger from call_outcome"
+    assert (
+        "abandonment_trigger" in row
+    ), "Row must include abandonment_trigger from call_outcome"
     assert row["was_abrupt"] is True
     assert row["abandonment_trigger"] == "lost_patience"
 

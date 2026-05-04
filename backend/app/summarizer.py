@@ -33,6 +33,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.schema import PostCallAnalysis
 from app.analysis.universal import DIMENSION_MODULES
+from app.analysis.universal.interest import run_interest_pipeline
+from app.analysis.universal.misc_notes import (
+    MiscNotesAxis,
+    _coerce_current_notes,
+    run_misc_notes_pipeline,
+)
 from app.analysis.universal.profile_facts import (
     ProfileFactsAxis,
     run_profile_facts_pipeline,
@@ -128,11 +134,31 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
 
         current_profile_facts = await get_facts_by_namespace(db, cs.lead_id, "profile:")
 
+    # qora-misc-notes: Load previous misc_notes from Lead.extracted_facts for stateful pipeline
+    current_misc_notes = []
+    if cs.lead_id:
+        lead_result = await db.execute(select(Lead).where(Lead.id == cs.lead_id))
+        lead_for_notes = lead_result.scalar_one_or_none()
+        if lead_for_notes is not None:
+            raw_facts = lead_for_notes.extracted_facts or {}
+            if isinstance(raw_facts, str):
+                try:
+                    import json as _json
+
+                    raw_facts = _json.loads(raw_facts)
+                except Exception:
+                    raw_facts = {}
+            raw_misc = (
+                raw_facts.get("misc_notes") if isinstance(raw_facts, dict) else None
+            )
+            current_misc_notes = _coerce_current_notes(raw_misc)
+
     try:
         summary, facts = await _call_gpt_summarize(
             transcript_text,
             previous_interest_level=previous_interest_level,
             current_profile_facts=current_profile_facts,
+            current_misc_notes=current_misc_notes,
             has_lead=bool(cs.lead_id),
         )
     except Exception as gpt_exc:
@@ -226,14 +252,17 @@ async def _call_gpt_summarize(
     *,
     previous_interest_level: int | None = None,
     current_profile_facts: list[dict] | None = None,
+    current_misc_notes: list | None = None,
     has_lead: bool = True,
 ) -> tuple[str, dict[str, Any]]:
-    """Run 9 universal dimensions, the 2-phase interest pipeline, and profile facts pipeline.
+    """Run 8 universal dimensions, the 2-phase interest pipeline, profile facts pipeline,
+    and misc notes pipeline.
 
     qora-interest-pipeline: The old monolithic 13-parallel gather is replaced by:
-    - Phase 1: 9 independent dimensions in parallel via asyncio.gather
+    - Phase 1: 8 independent dimensions in parallel via asyncio.gather
     - Phase 2: Interest pipeline (interests → interest_level sequential) via run_interest_pipeline
     - Phase 3: Profile facts pipeline (stateful) via run_profile_facts_pipeline
+    - Phase 4: Misc notes pipeline (stateful) via run_misc_notes_pipeline
 
     All run concurrently at the top level. Results are merged into PostCallAnalysis.
 
@@ -241,21 +270,26 @@ async def _call_gpt_summarize(
         transcript_text: Formatted transcript string.
         previous_interest_level: Lead's prior interest score for 70/30 formula.
         current_profile_facts: Active profile facts from DB for stateful pipeline.
+        current_misc_notes: Previous misc notes from Lead.extracted_facts for stateful pipeline.
 
     Returns:
         Tuple of (summary_text, extracted_facts_dict).
 
     Raises:
-        RuntimeError: When ALL 9 independent dimensions AND both pipelines fail.
+        RuntimeError: When ALL 8 independent dimensions AND pipelines fail.
     """
-    from app.analysis.universal.interest import run_interest_pipeline
-
     client, _model = _get_openai_client()
     facts_list = current_profile_facts or []
+    notes_list = current_misc_notes or []
 
     if has_lead:
-        # Run 9 independent dimensions + interest pipeline + profile pipeline concurrently
-        independent_results_raw, pipeline_raw, profile_raw = await asyncio.gather(
+        # Run 8 independent dimensions + interest pipeline + profile pipeline + misc notes concurrently
+        (
+            independent_results_raw,
+            pipeline_raw,
+            profile_raw,
+            misc_raw,
+        ) = await asyncio.gather(
             asyncio.gather(
                 *[mod.analyze(transcript_text, client) for mod in DIMENSION_MODULES],
                 return_exceptions=True,
@@ -270,11 +304,17 @@ async def _call_gpt_summarize(
                 client,
                 current_facts=facts_list,
             ),
+            run_misc_notes_pipeline(
+                transcript_text,
+                client,
+                current_notes=notes_list,
+            ),
             return_exceptions=True,
         )
     else:
-        # No lead_id: skip profile pipeline (requires stateful context)
+        # No lead_id: skip stateful pipelines (require context)
         profile_raw = ProfileFactsAxis()
+        misc_raw = MiscNotesAxis()
         independent_results_raw, pipeline_raw = await asyncio.gather(
             asyncio.gather(
                 *[mod.analyze(transcript_text, client) for mod in DIMENSION_MODULES],
@@ -401,7 +441,24 @@ async def _call_gpt_summarize(
             else ProfileFactsAxis()
         )
 
-    if failures >= len(DIMENSION_MODULES) + 1:  # 9 + interest pipeline (counts as 1)
+    # -------------------------------------------------------------------
+    # Process misc notes pipeline result (qora-misc-notes)
+    # -------------------------------------------------------------------
+    if isinstance(misc_raw, Exception):
+        # Misc notes pipeline raised unexpectedly — non-critical, log and use empty axis
+        logger.error(
+            "misc_notes_pipeline_exception",
+            error=str(misc_raw),
+            error_type=type(misc_raw).__name__,
+        )
+        fields["misc_notes"] = MiscNotesAxis()
+    else:
+        # Misc notes pipeline always returns MiscNotesAxis (never raises — catches internally)
+        fields["misc_notes"] = (
+            misc_raw if isinstance(misc_raw, MiscNotesAxis) else MiscNotesAxis()
+        )
+
+    if failures >= len(DIMENSION_MODULES) + 1:  # 8 + interest pipeline (counts as 1)
         raise RuntimeError(
             f"all {failures} dimension analyses failed — see dimension_analysis_failed logs"
         )
@@ -665,7 +722,9 @@ async def _upsert_call_analysis(
     ca.next_action_suggested = facts.get("next_action_suggested")
     ca.current_insurance = facts.get("current_insurance")
     ca.data_corrections = facts.get("data_corrections") or ""
-    ca.misc_notes = facts.get("misc_notes") or ""
+    # qora-misc-notes: misc_notes is now MiscNotesAxis — serialize as JSON (same as profile_facts)
+    _mn_data = facts.get("misc_notes") or {}
+    ca.misc_notes = json.dumps(_mn_data) if _mn_data else json.dumps({"notes": []})
     ca.objections = _to_json_list((facts.get("objections") or {}).get("objections"))
     # qora-interest-pipeline: detected_interests now uses InterestsAxis (items: list[InterestItem])
     # Extract product IDs from items for the products column (backward compat)
