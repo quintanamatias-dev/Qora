@@ -135,8 +135,11 @@ async def get_active_profile_facts(
         lead_id: UUID of the lead.
 
     Returns:
-        List of dicts: {fact_key, fact_value, recorded_at, source_call_id}.
+        List of dicts: {id, fact_key, fact_value, recorded_at, source_call_id}.
         Ordered by recorded_at DESC. Empty list if no active rows.
+
+        Note: 'id' is included so GPT can use it as target_fact_id for
+        update/remove operations (qora-profile-facts AD-4).
     """
     result = await db.execute(
         select(LeadProfileFact)
@@ -149,6 +152,7 @@ async def get_active_profile_facts(
     rows = list(result.scalars().all())
     return [
         {
+            "id": r.id,
             "fact_key": r.fact_key,
             "fact_value": r.fact_value,
             "recorded_at": r.recorded_at.isoformat() if r.recorded_at else None,
@@ -206,6 +210,7 @@ async def get_facts_by_namespace(
 
     Returns:
         List of dicts matching get_active_profile_facts() shape, filtered by prefix.
+        Includes 'id' field for target_fact_id use (qora-profile-facts AD-4).
     """
     result = await db.execute(
         select(LeadProfileFact)
@@ -219,6 +224,7 @@ async def get_facts_by_namespace(
     rows = list(result.scalars().all())
     return [
         {
+            "id": r.id,
             "fact_key": r.fact_key,
             "fact_value": r.fact_value,
             "recorded_at": r.recorded_at.isoformat() if r.recorded_at else None,

@@ -115,7 +115,7 @@ def _axis_for_dimension(analysis_obj, target_field: str, schema_cls):
     complex_targets = {
         "call_outcome",
         "identified_problem",
-        "objections",          # qora-objections: now returns ObjectionsAxis directly
+        "objections",  # qora-objections: now returns ObjectionsAxis directly
         "service_issues",
         "profile_facts",
         "commitments",
@@ -140,11 +140,10 @@ def _axis_for_dimension(analysis_obj, target_field: str, schema_cls):
     if schema_cls is ServiceIssuesAxis:
         return ServiceIssuesAxis(issues=list(analysis_obj.service_issues.issues))
     if schema_cls is ProfileFactsAxis:
-        return ProfileFactsAxis(facts=list(analysis_obj.profile_facts.facts))
+        # qora-profile-facts: ProfileFactsAxis now uses updates (not facts)
+        return ProfileFactsAxis(updates=list(analysis_obj.profile_facts.updates))
     if schema_cls is CommitmentsAxis:
-        return CommitmentsAxis(
-            commitments=list(analysis_obj.commitments.commitments)
-        )
+        return CommitmentsAxis(commitments=list(analysis_obj.commitments.commitments))
     # qora-abandonment: AbandonmentReasonAxis no longer in DIMENSION_MODULES
     raise AssertionError(f"Unknown axis schema: {schema_cls!r}")
 
@@ -216,7 +215,10 @@ def _make_mock_client(parse_return_value):
                 # To get the desired interest_level, we put it as the single product score
                 # and ensure compute_general_score returns the same value (100% current = max).
                 il = analysis_obj.interest_level or 0
-                from app.analysis.universal.interest.interest_level import ProductScore as _PS
+                from app.analysis.universal.interest.interest_level import (
+                    ProductScore as _PS,
+                )
+
                 axis_value = InterestLevelResult.model_construct(
                     per_product=[
                         _PS.model_construct(
@@ -224,7 +226,9 @@ def _make_mock_client(parse_return_value):
                             score=il,
                             reason="Mock product score.",
                         )
-                    ] if il > 0 else [],
+                    ]
+                    if il > 0
+                    else [],
                     general_score=il,  # will be overridden by formula, but set for model_construct
                     level="high" if il >= 61 else "medium" if il >= 41 else "low",
                     reason="Mock.",
@@ -273,7 +277,11 @@ def _mock_run_interest_pipeline(analysis_obj):
     level_result = InterestLevelResult.model_construct(
         per_product=[],
         general_score=interest_level,
-        level="high" if interest_level >= 61 else "medium" if interest_level >= 41 else "low",
+        level="high"
+        if interest_level >= 61
+        else "medium"
+        if interest_level >= 41
+        else "low",
         reason="Mock interest level result.",
         positive_signals=[],
         negative_signals=[],
@@ -318,10 +326,12 @@ def _patch_summarizer(mock_client, analysis_obj=None):
 
         pipeline_mock = AsyncMock(side_effect=_default_pipeline)
 
-    with patch(
-        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
-    ), patch(
-        "app.summarizer.run_interest_pipeline", pipeline_mock
+    with (
+        patch(
+            "app.summarizer._get_openai_client",
+            return_value=(mock_client, "gpt-4o-mini"),
+        ),
+        patch("app.summarizer.run_interest_pipeline", pipeline_mock),
     ):
         yield
 
@@ -344,16 +354,18 @@ def _make_full_analysis_payload():
 
     return PostCallAnalysis(
         summary="Lead was very interested in todo riesgo coverage for their Toyota.",
-        objections=ObjectionsAxis(objections=[
-            Objection(
-                category="price",
-                strength="medium",
-                resolution_status="unresolved",
-                evidence="El precio es muy alto.",
-                description="Price too high.",
-                confidence="high",
-            )
-        ]),
+        objections=ObjectionsAxis(
+            objections=[
+                Objection(
+                    category="price",
+                    strength="medium",
+                    resolution_status="unresolved",
+                    evidence="El precio es muy alto.",
+                    description="Price too high.",
+                    confidence="high",
+                )
+            ]
+        ),
         interest_level=85,
         current_insurance="La Caja",
         next_action_suggested="send_quote",
@@ -363,24 +375,28 @@ def _make_full_analysis_payload():
             reason="Lead explicitly requested a quote.",
             confidence="high",
         ),
-        detected_interests=InterestsAxis(items=[
-            InterestItem(
-                product="auto_todo_riesgo",
-                needs=["precio_competitivo", "cobertura_amplia"],
-                evidence="Me interesa el todo riesgo.",
-                confidence="high",
-            )
-        ]),
-        identified_problem=ProblemAxis(pain_points=[
-            PainPoint(
-                category="cost",
-                description="Needs comprehensive vehicle coverage for new car.",
-                evidence="No tengo seguro actualmente para el auto nuevo.",
-                urgency="high",
-                confidence="high",
-                is_primary=True,
-            )
-        ]),
+        detected_interests=InterestsAxis(
+            items=[
+                InterestItem(
+                    product="auto_todo_riesgo",
+                    needs=["precio_competitivo", "cobertura_amplia"],
+                    evidence="Me interesa el todo riesgo.",
+                    confidence="high",
+                )
+            ]
+        ),
+        identified_problem=ProblemAxis(
+            pain_points=[
+                PainPoint(
+                    category="cost",
+                    description="Needs comprehensive vehicle coverage for new car.",
+                    evidence="No tengo seguro actualmente para el auto nuevo.",
+                    urgency="high",
+                    confidence="high",
+                    is_primary=True,
+                )
+            ]
+        ),
     )
 
 
@@ -624,6 +640,7 @@ async def test_summarizer_sets_do_not_call_flag(seeded_db):
     )
 
     from app.analysis.universal.objections import ObjectionsAxis as _OA
+
     dnc_analysis = PostCallAnalysis(
         summary="El lead pidió no ser contactado más.",
         objections=_OA(),
@@ -685,6 +702,7 @@ async def test_summarizer_do_not_contact_classification_sets_do_not_call(seeded_
     )
 
     from app.analysis.universal.objections import ObjectionsAxis as _OA
+
     do_not_contact_analysis = PostCallAnalysis(
         summary="Lead pidió explícitamente no ser contactado.",
         objections=_OA(),
@@ -716,9 +734,9 @@ async def test_summarizer_do_not_contact_classification_sets_do_not_call(seeded_
     async with seeded_db.async_session_factory() as db:
         result = await db.execute(select(Lead).where(Lead.id == "test-lead-sum-001"))
         lead = result.scalar_one()
-        assert lead.do_not_call is True, (
-            "do_not_contact classification must set lead.do_not_call=True (qora-outcome spec)"
-        )
+        assert (
+            lead.do_not_call is True
+        ), "do_not_contact classification must set lead.do_not_call=True (qora-outcome spec)"
 
 
 async def test_summarizer_other_classification_does_not_set_do_not_call(seeded_db):
@@ -742,6 +760,7 @@ async def test_summarizer_other_classification_does_not_set_do_not_call(seeded_d
     )
 
     from app.analysis.universal.objections import ObjectionsAxis as _OA
+
     positive_analysis = PostCallAnalysis(
         summary="Lead interesado.",
         objections=_OA(),
@@ -773,9 +792,9 @@ async def test_summarizer_other_classification_does_not_set_do_not_call(seeded_d
     async with seeded_db.async_session_factory() as db:
         result = await db.execute(select(Lead).where(Lead.id == "test-lead-sum-001"))
         lead = result.scalar_one()
-        assert lead.do_not_call is False, (
-            "Non-do_not_contact classification must NOT change lead.do_not_call"
-        )
+        assert (
+            lead.do_not_call is False
+        ), "Non-do_not_contact classification must NOT change lead.do_not_call"
 
 
 async def test_upsert_call_analysis_does_not_write_engagement_quality(seeded_db):
@@ -799,6 +818,7 @@ async def test_upsert_call_analysis_does_not_write_engagement_quality(seeded_db)
     )
 
     from app.analysis.universal.objections import ObjectionsAxis as _OA
+
     analysis = PostCallAnalysis(
         summary="Lead quiere cotizar.",
         objections=_OA(),
@@ -834,9 +854,9 @@ async def test_upsert_call_analysis_does_not_write_engagement_quality(seeded_db)
         ca = result.scalar_one()
         assert ca.classification == "completed_positive"
         # engagement_quality column must NOT exist on CallAnalysis model
-        assert not hasattr(ca, "engagement_quality"), (
-            "CallAnalysis must NOT have engagement_quality column (qora-outcome spec)"
-        )
+        assert not hasattr(
+            ca, "engagement_quality"
+        ), "CallAnalysis must NOT have engagement_quality column (qora-outcome spec)"
 
 
 async def test_summarizer_does_not_set_do_not_call_for_other_actions(seeded_db):
@@ -860,6 +880,7 @@ async def test_summarizer_does_not_set_do_not_call_for_other_actions(seeded_db):
     )
 
     from app.analysis.universal.objections import ObjectionsAxis as _OA
+
     call_again_analysis = PostCallAnalysis(
         summary="Lead interesado, prefiere ser contactado la próxima semana.",
         objections=_OA(),
@@ -970,9 +991,9 @@ async def test_summarizer_extracts_call_outcome_axis(seeded_db):
         assert "call_outcome" in cs.extracted_facts
         co = cs.extracted_facts["call_outcome"]
         assert co["classification"] == "completed_positive"
-        assert "engagement_quality" not in co, (
-            "engagement_quality must NOT be in call_outcome (qora-outcome spec)"
-        )
+        assert (
+            "engagement_quality" not in co
+        ), "engagement_quality must NOT be in call_outcome (qora-outcome spec)"
         assert co["confidence"] in ("low", "medium", "high")
         assert isinstance(co["reason"], str)
         assert len(co["reason"]) > 0
@@ -1061,7 +1082,11 @@ async def test_summarizer_extracts_identified_problem_axis(seeded_db):
         # The mock payload has 1 PainPoint(category="cost", urgency="high", is_primary=True)
         assert len(ip["pain_points"]) >= 1
         primary = next(
-            (p for p in ip["pain_points"] if isinstance(p, dict) and p.get("is_primary")),
+            (
+                p
+                for p in ip["pain_points"]
+                if isinstance(p, dict) and p.get("is_primary")
+            ),
             ip["pain_points"][0] if ip["pain_points"] else None,
         )
         assert primary is not None
@@ -1092,15 +1117,20 @@ async def test_summarizer_uses_parse_not_create(seeded_db):
         async with seeded_db.async_session_factory() as db:
             await generate_summary_and_facts(session_id, db)
 
-        # Must use parse() (10 dim calls + 2 pipeline calls = 12), NOT create()
+        # Must use parse() (9 dim calls + 2 interest pipeline calls + 1 profile pipeline = 12),
+        # NOT create().
         # qora-abandonment: 11 → 10 DIMENSION_MODULES (abandonment removed)
+        # qora-profile-facts Phase 3: profile_facts removed from DIMENSION_MODULES (10→9).
+        #   run_profile_facts_pipeline adds 1 more parse() call.
         from app.analysis.universal import DIMENSION_MODULES
 
-        # 10 independent dims + 2 pipeline calls (Agent 1 InterestsAxis + Agent 2 InterestLevelResult)
-        expected_parse_calls = len(DIMENSION_MODULES) + 2
+        # 9 independent dims + 2 interest pipeline calls (InterestsAxis + InterestLevelResult)
+        # + 1 profile facts pipeline call (ProfileFactsAxis) = 12 total
+        expected_parse_calls = len(DIMENSION_MODULES) + 2 + 1
         assert mock_client.chat.completions.parse.call_count == expected_parse_calls, (
             f"Expected {expected_parse_calls} parse() calls "
-            f"(10 dims + 2 pipeline), got {mock_client.chat.completions.parse.call_count}"
+            f"(9 dims + 2 interest pipeline + 1 profile pipeline), "
+            f"got {mock_client.chat.completions.parse.call_count}"
         )
         mock_client.chat.completions.create.assert_not_called()
 
@@ -1292,6 +1322,7 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
     )
 
     from app.analysis.universal.objections import ObjectionsAxis as _OA
+
     # --- First run ---
     first_analysis = PostCallAnalysis(
         summary="First run summary.",
@@ -1305,19 +1336,28 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
             reason="Lead asked to call back.",
             confidence="medium",
         ),
-        detected_interests=InterestsAxis(items=[
-            InterestItem(product="auto_terceros", needs=[], evidence="Me interesa terceros.", confidence="medium")
-        ]),
-        identified_problem=ProblemAxis(pain_points=[
-            PainPoint(
-                category="coverage",
-                description="Needs basic coverage.",
-                evidence="No tengo seguro actualmente.",
-                urgency="low",
-                confidence="medium",
-                is_primary=True,
-            )
-        ]),
+        detected_interests=InterestsAxis(
+            items=[
+                InterestItem(
+                    product="auto_terceros",
+                    needs=[],
+                    evidence="Me interesa terceros.",
+                    confidence="medium",
+                )
+            ]
+        ),
+        identified_problem=ProblemAxis(
+            pain_points=[
+                PainPoint(
+                    category="coverage",
+                    description="Needs basic coverage.",
+                    evidence="No tengo seguro actualmente.",
+                    urgency="low",
+                    confidence="medium",
+                    is_primary=True,
+                )
+            ]
+        ),
     )
 
     mock_client_first = _make_mock_client(_make_parse_response(first_analysis))
@@ -1352,19 +1392,28 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
             reason="Lead explicitly requested a quote on the second call.",
             confidence="high",
         ),
-        detected_interests=InterestsAxis(items=[
-            InterestItem(product="auto_todo_riesgo", needs=[], evidence="Me interesa todo riesgo.", confidence="high")
-        ]),
-        identified_problem=ProblemAxis(pain_points=[
-            PainPoint(
-                category="cost",
-                description="Needs comprehensive coverage for new car.",
-                evidence="Necesito cobertura completa para el auto nuevo.",
-                urgency="high",
-                confidence="high",
-                is_primary=True,
-            )
-        ]),
+        detected_interests=InterestsAxis(
+            items=[
+                InterestItem(
+                    product="auto_todo_riesgo",
+                    needs=[],
+                    evidence="Me interesa todo riesgo.",
+                    confidence="high",
+                )
+            ]
+        ),
+        identified_problem=ProblemAxis(
+            pain_points=[
+                PainPoint(
+                    category="cost",
+                    description="Needs comprehensive coverage for new car.",
+                    evidence="Necesito cobertura completa para el auto nuevo.",
+                    urgency="high",
+                    confidence="high",
+                    is_primary=True,
+                )
+            ]
+        ),
     )
 
     mock_client_second = _make_mock_client(_make_parse_response(second_analysis))
@@ -1386,10 +1435,12 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
         assert cs.summary == "Second run summary — updated."
         # qora-interest-pipeline: interest_level is formula-computed (70/30 with previous)
         # first run stored 40, second run product score is 85 → formula: round(85*0.7 + 40*0.3) = 72
-        assert cs.extracted_facts["interest_level"] > 40, (
-            "Second run must produce a higher interest_level than the first run"
+        assert (
+            cs.extracted_facts["interest_level"] > 40
+        ), "Second run must produce a higher interest_level than the first run"
+        assert (
+            cs.extracted_facts["call_outcome"]["classification"] == "completed_positive"
         )
-        assert cs.extracted_facts["call_outcome"]["classification"] == "completed_positive"
         # qora-interest-pipeline: detected_interests uses items format
         di = cs.extracted_facts["detected_interests"]
         assert any("todo_riesgo" in item["product"] for item in di["items"])
@@ -1397,7 +1448,11 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
         ip = cs.extracted_facts["identified_problem"]
         assert "pain_points" in ip
         primary = next(
-            (p for p in ip["pain_points"] if isinstance(p, dict) and p.get("is_primary")),
+            (
+                p
+                for p in ip["pain_points"]
+                if isinstance(p, dict) and p.get("is_primary")
+            ),
             ip["pain_points"][0] if ip["pain_points"] else None,
         )
         assert primary is not None
@@ -1421,7 +1476,9 @@ async def test_summarizer_unknown_extra_fields_ignored(seeded_db):
     # should NOT raise and should NOT include the extra fields in model_dump().
     raw_data = {
         "summary": "Test summary",
-        "objections": {"objections": []},  # ObjectionsAxis dict format (qora-objections)
+        "objections": {
+            "objections": []
+        },  # ObjectionsAxis dict format (qora-objections)
         "interest_level": 70,
         "current_insurance": None,
         "next_action_suggested": "call_again",
@@ -1598,7 +1655,10 @@ async def test_summarizer_analysis_axes_flow_to_lead(seeded_db):
         assert "detected_interests" in lead.extracted_facts
         assert "identified_problem" in lead.extracted_facts
         # Verify the values are correct
-        assert lead.extracted_facts["call_outcome"]["classification"] == "completed_positive"
+        assert (
+            lead.extracted_facts["call_outcome"]["classification"]
+            == "completed_positive"
+        )
         # qora-interest-pipeline: detected_interests uses items format
         di = lead.extracted_facts["detected_interests"]
         assert any("todo_riesgo" in item["product"] for item in di["items"])
@@ -1606,7 +1666,11 @@ async def test_summarizer_analysis_axes_flow_to_lead(seeded_db):
         ip = lead.extracted_facts["identified_problem"]
         assert "pain_points" in ip
         primary = next(
-            (p for p in ip["pain_points"] if isinstance(p, dict) and p.get("is_primary")),
+            (
+                p
+                for p in ip["pain_points"]
+                if isinstance(p, dict) and p.get("is_primary")
+            ),
             ip["pain_points"][0] if ip["pain_points"] else None,
         )
         assert primary is not None
@@ -1831,6 +1895,7 @@ async def test_summarizer_dual_write_do_not_call_creates_fact_row(seeded_db):
     )
 
     from app.analysis.universal.objections import ObjectionsAxis as _OA
+
     dnc_analysis = PostCallAnalysis(
         summary="Lead no quiere ser contactado.",
         objections=_OA(),
@@ -2020,6 +2085,7 @@ async def test_summarizer_critical2_data_corrections_create_lead_profile_facts(
     )
 
     from app.analysis.universal.objections import ObjectionsAxis as _OA
+
     corrections_analysis = PostCallAnalysis(
         summary="Lead tiene un Polo 2022.",
         objections=_OA(),
@@ -2177,6 +2243,7 @@ async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
     )
 
     from app.analysis.universal.objections import ObjectionsAxis as _OA
+
     axes_analysis = PostCallAnalysis(
         summary="Lead con problemas de servicio anterior.",
         objections=_OA(),
@@ -2189,9 +2256,16 @@ async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
             reason="Lead wants to switch provider.",
             confidence="medium",
         ),
-        detected_interests=InterestsAxis(items=[
-            InterestItem(product="auto_todo_riesgo", needs=[], evidence="Me interesa.", confidence="medium")
-        ]),
+        detected_interests=InterestsAxis(
+            items=[
+                InterestItem(
+                    product="auto_todo_riesgo",
+                    needs=[],
+                    evidence="Me interesa.",
+                    confidence="medium",
+                )
+            ]
+        ),
         identified_problem=IdentifiedProblem(
             primary_need="Switch insurance provider.",
             urgency="medium",
@@ -2216,7 +2290,33 @@ async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
                 ),
             ]
         ),
-        profile_facts=ProfileFactsAxis(facts=["owns a Fiat", "lives in Palermo"]),
+        # qora-profile-facts: updated to use ProfileFactUpdate objects (operation-based)
+        profile_facts=ProfileFactsAxis(
+            updates=[
+                __import__(
+                    "app.analysis.universal.profile_facts",
+                    fromlist=["ProfileFactUpdate"],
+                ).ProfileFactUpdate(
+                    operation="add",
+                    category="other",
+                    fact="owns a Fiat",
+                    evidence="Dijo que tiene un Fiat",
+                    confidence="medium",
+                    target_fact_id=None,
+                ),
+                __import__(
+                    "app.analysis.universal.profile_facts",
+                    fromlist=["ProfileFactUpdate"],
+                ).ProfileFactUpdate(
+                    operation="add",
+                    category="other",
+                    fact="lives in Palermo",
+                    evidence="Mencionó que vive en Palermo",
+                    confidence="medium",
+                    target_fact_id=None,
+                ),
+            ]
+        ),
         commitments=CommitmentsAxis(
             commitments=[
                 Commitment(
@@ -2254,9 +2354,15 @@ async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
         assert "poor_attention" in categories
         assert "claim_problem" in categories
 
-        # profile_facts: stored as JSON text list
-        facts = json.loads(ca.profile_facts)
-        assert "owns a Fiat" in facts
+        # profile_facts: qora-profile-facts Phase 2 — profile_facts removed from DIMENSION_MODULES.
+        # run_profile_facts_pipeline will populate this in Phase 3.
+        # For now, verify the field exists and is valid JSON (may be empty list).
+        if ca.profile_facts:
+            pf_data = json.loads(ca.profile_facts)
+            assert isinstance(
+                pf_data, list
+            ), f"profile_facts must be a JSON list, got: {pf_data}"
+        # Profile facts content is tested via pipeline-specific tests
 
         # commitment_signals: stored as JSON text list
         signals = json.loads(ca.commitment_signals)
@@ -2294,6 +2400,7 @@ async def test_call_analysis_was_abrupt_and_trigger_persisted(seeded_db):
     )
 
     from app.analysis.universal.objections import ObjectionsAxis as _OA
+
     abandon_analysis = PostCallAnalysis(
         summary="Lead disengaged.",
         objections=_OA(),
@@ -2409,6 +2516,8 @@ def _make_analysis_with_list_axes(
 
     qora-problem: identified_problem uses ProblemAxis (pain_points: list[PainPoint]).
     pain_points parameter accepts list[str] (coerced to PainPoint objects) or list[PainPoint].
+
+    qora-profile-facts: profile_facts_list strings are coerced to ProfileFactUpdate(add) objects.
     """
     from app.analysis_schema import (
         PostCallAnalysis,
@@ -2416,6 +2525,7 @@ def _make_analysis_with_list_axes(
         ServiceIssuesAxis,
         ProfileFactsAxis,
     )
+    from app.analysis.universal.profile_facts import ProfileFactUpdate
     from app.analysis.universal.problem import ProblemAxis, PainPoint
     from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.commitments import CommitmentsAxis, Commitment
@@ -2470,6 +2580,23 @@ def _make_analysis_with_list_axes(
                 )
             )
 
+    # qora-profile-facts: coerce plain strings to ProfileFactUpdate(add) objects.
+    # profile_facts_list strings map to fact text; category defaults to "other".
+    raw_pf = profile_facts_list or []
+    pf_updates = [
+        item
+        if isinstance(item, ProfileFactUpdate)
+        else ProfileFactUpdate(
+            operation="add",
+            category="other",
+            fact=str(item),
+            evidence=str(item),
+            confidence="medium",
+            target_fact_id=None,
+        )
+        for item in raw_pf
+    ]
+
     return PostCallAnalysis(
         summary="Test summary",
         interest_level=70,
@@ -2485,22 +2612,22 @@ def _make_analysis_with_list_axes(
         # qora-problem: use ProblemAxis (pain_points: list[PainPoint])
         identified_problem=ProblemAxis(pain_points=pain_point_objects),
         service_issues=ServiceIssuesAxis(issues=issue_objects),
-        profile_facts=ProfileFactsAxis(facts=profile_facts_list or []),
+        # qora-profile-facts: use ProfileFactsAxis(updates=[...]) (operation-based)
+        profile_facts=ProfileFactsAxis(updates=pf_updates),
         commitments=CommitmentsAxis(commitments=commitment_objects),
     )
 
 
 @pytest.mark.asyncio
 async def test_list_facts_first_insert_profile_facts(seeded_db):
-    """Issue #36 Phase 1: First call with profile_facts inserts namespaced LeadProfileFact rows.
+    """Issue #36 Phase 1: First call with profile_facts runs without errors.
 
-    GIVEN a lead with no existing LeadProfileFact rows for 'profile:' namespace
-    WHEN _write_lead_profile_facts() runs with profile_facts.facts = ['owns a home', 'has 2 cars']
-    THEN 2 rows are inserted: fact_key='profile:owns a home', fact_key='profile:has 2 cars', both active.
+    qora-profile-facts: profile_facts removed from DIMENSION_MODULES (Phase 2).
+    The write path via _LIST_AXES is replaced by run_profile_facts_pipeline in Phase 3.
+    This test verifies the summarizer completes without raising — the profile: rows
+    will be asserted in Phase 3 once run_profile_facts_pipeline is wired.
     """
     from app.summarizer import generate_summary_and_facts
-    from app.leads.models import LeadProfileFact
-    from sqlalchemy import select
 
     analysis = _make_analysis_with_list_axes(
         profile_facts_list=["owns a home", "has 2 cars"]
@@ -2516,42 +2643,23 @@ async def test_list_facts_first_insert_profile_facts(seeded_db):
         "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
     ):
         async with seeded_db.async_session_factory() as db:
+            # Verify summarizer runs without raising
             await generate_summary_and_facts(session_id, db)
             await db.commit()
-
-    async with seeded_db.async_session_factory() as db:
-        result = await db.execute(
-            select(LeadProfileFact).where(
-                LeadProfileFact.lead_id == "test-lead-sum-001",
-                LeadProfileFact.fact_key.startswith("profile:"),
-                LeadProfileFact.superseded_at == None,  # noqa: E711
-            )
-        )
-        rows = list(result.scalars().all())
-
-    profile_keys = {r.fact_key for r in rows}
-    assert (
-        "profile:owns a home" in profile_keys
-    ), f"Expected profile:owns a home in {profile_keys}"
-    assert (
-        "profile:has 2 cars" in profile_keys
-    ), f"Expected profile:has 2 cars in {profile_keys}"
-    assert len([r for r in rows if r.fact_key.startswith("profile:")]) == 2
+    # Profile facts are now handled by run_profile_facts_pipeline (separate tests)
 
 
 @pytest.mark.asyncio
 async def test_list_facts_cross_call_dedup_no_duplicate_insert(seeded_db):
-    """Issue #36 Phase 1: Second call with same item skips insert (cross-call dedup).
+    """Issue #36 Phase 1: Two calls complete without errors (cross-call dedup for other namespaces).
 
-    GIVEN 'profile:owns a home' already exists as active row
-    WHEN second call produces profile_facts = ['owns a home', 'retired']
-    THEN 'profile:owns a home' is NOT re-inserted; 'profile:retired' IS inserted.
+    qora-profile-facts: profile_facts removed from DIMENSION_MODULES (Phase 2).
+    The dedup logic for profile: namespace is replaced by run_profile_facts_pipeline in Phase 3.
+    This test verifies both calls complete without raising.
     """
     from app.summarizer import generate_summary_and_facts
-    from app.leads.models import LeadProfileFact
-    from sqlalchemy import select
 
-    # First call — inserts 'owns a home'
+    # First call — no profile rows from DIMENSION_MODULES path
     analysis1 = _make_analysis_with_list_axes(profile_facts_list=["owns a home"])
     mock_client1 = _make_mock_client(_make_parse_response(analysis1))
     session_id1 = await _create_session(
@@ -2564,7 +2672,7 @@ async def test_list_facts_cross_call_dedup_no_duplicate_insert(seeded_db):
             await generate_summary_and_facts(session_id1, db)
             await db.commit()
 
-    # Second call — same 'owns a home' + new 'retired'
+    # Second call — also completes without raising
     analysis2 = _make_analysis_with_list_axes(
         profile_facts_list=["owns a home", "retired"]
     )
@@ -2578,23 +2686,7 @@ async def test_list_facts_cross_call_dedup_no_duplicate_insert(seeded_db):
         async with seeded_db.async_session_factory() as db:
             await generate_summary_and_facts(session_id2, db)
             await db.commit()
-
-    async with seeded_db.async_session_factory() as db:
-        result = await db.execute(
-            select(LeadProfileFact).where(
-                LeadProfileFact.lead_id == "test-lead-sum-001",
-                LeadProfileFact.fact_key.startswith("profile:"),
-                LeadProfileFact.superseded_at == None,  # noqa: E711
-            )
-        )
-        rows = list(result.scalars().all())
-
-    profile_keys = {r.fact_key for r in rows}
-    # Exactly 2 active profile: rows (no duplicate for 'owns a home')
-    assert profile_keys == {
-        "profile:owns a home",
-        "profile:retired",
-    }, f"Expected exactly 2 profile: facts, got: {profile_keys}"
+    # Profile facts dedup is handled by run_profile_facts_pipeline (separate tests)
 
 
 @pytest.mark.asyncio
@@ -2689,16 +2781,17 @@ async def test_list_facts_empty_list_skips_inserts(seeded_db):
 
 @pytest.mark.asyncio
 async def test_list_facts_all_5_axes_persisted(seeded_db):
-    """Issue #36 Phase 1: The 4 active list axes are persisted with correct namespace prefixes.
+    """Issue #36 Phase 1: The 3 remaining active list axes (pain:, service_issue:, signal:) persist.
 
-    qora-interest-pipeline: buying_signal: namespace is now empty because buying_signals
-    was removed from InterestsAxis. The 4 remaining axes (profile:, pain:, service_issue:,
-    signal:) are still persisted as before.
+    qora-interest-pipeline: buying_signal: namespace removed (buying_signals from InterestsAxis).
+    qora-profile-facts: profile: namespace moved to run_profile_facts_pipeline (Phase 3).
+    The 3 remaining axes (pain:, service_issue:, signal:) still persist via _LIST_AXES.
 
-    GIVEN a call analysis with non-empty values in profile_facts, pain_points, service_issues, commitments
+    GIVEN a call analysis with non-empty pain_points, service_issues, commitments
     WHEN _write_lead_profile_facts() runs
-    THEN rows are created with prefixes: profile:, pain:, service_issue:, signal:
-    AND no buying_signal: rows are created (buying_signals no longer in detected_interests)
+    THEN rows are created with prefixes: pain:, service_issue:, signal:
+    AND no profile: rows are created (handled by run_profile_facts_pipeline in Phase 3)
+    AND no buying_signal: rows are created (buying_signals removed from InterestsAxis)
     """
     from app.summarizer import generate_summary_and_facts
     from app.leads.models import LeadProfileFact
@@ -2737,9 +2830,8 @@ async def test_list_facts_all_5_axes_persisted(seeded_db):
         prefix = r.fact_key.split(":")[0] + ":"
         by_prefix.setdefault(prefix, []).append(r.fact_key)
 
-    assert (
-        "profile:" in by_prefix
-    ), f"Missing 'profile:' rows. Got prefixes: {list(by_prefix.keys())}"
+    # qora-profile-facts: profile: rows written by run_profile_facts_pipeline (separate tests)
+    # The 3 remaining axes should still be persisted
     assert (
         "pain:" in by_prefix
     ), f"Missing 'pain:' rows. Got prefixes: {list(by_prefix.keys())}"
@@ -2750,9 +2842,11 @@ async def test_list_facts_all_5_axes_persisted(seeded_db):
         "signal:" in by_prefix
     ), f"Missing 'signal:' rows. Got prefixes: {list(by_prefix.keys())}"
     # qora-interest-pipeline: buying_signal: is no longer populated (removed from InterestsAxis)
-    assert "buying_signal:" not in by_prefix, (
-        "buying_signal: rows must NOT be created (buying_signals removed from InterestsAxis)"
-    )
+    assert (
+        "buying_signal:" not in by_prefix
+    ), "buying_signal: rows must NOT be created (buying_signals removed from InterestsAxis)"
+    # qora-profile-facts: profile: rows are NOT created by DIMENSION_MODULES path anymore
+    # (moved to run_profile_facts_pipeline in Phase 3)
 
 
 # ===========================================================================
@@ -2770,24 +2864,26 @@ def test_merge_facts_into_lead_extracts_category_from_ObjectionsAxis():
     from unittest.mock import MagicMock, AsyncMock, patch
     from app.analysis.universal.objections import ObjectionsAxis, Objection
 
-    axis = ObjectionsAxis(objections=[
-        Objection(
-            category="price",
-            strength="high",
-            resolution_status="unresolved",
-            evidence="El precio es muy alto.",
-            description="Price objection.",
-            confidence="high",
-        ),
-        Objection(
-            category="trust",
-            strength="medium",
-            resolution_status="unresolved",
-            evidence="No confío en la empresa.",
-            description="Trust objection.",
-            confidence="medium",
-        ),
-    ])
+    axis = ObjectionsAxis(
+        objections=[
+            Objection(
+                category="price",
+                strength="high",
+                resolution_status="unresolved",
+                evidence="El precio es muy alto.",
+                description="Price objection.",
+                confidence="high",
+            ),
+            Objection(
+                category="trust",
+                strength="medium",
+                resolution_status="unresolved",
+                evidence="No confío en la empresa.",
+                description="Trust objection.",
+                confidence="medium",
+            ),
+        ]
+    )
     # facts is the model_dump() output of PostCallAnalysis
     facts = {"objections": axis.model_dump()}
 
@@ -2800,29 +2896,39 @@ def test_merge_facts_into_lead_extracts_category_from_ObjectionsAxis():
     async def run():
         with patch("app.summarizer._write_lead_profile_facts", new_callable=AsyncMock):
             with patch("app.summarizer._write_interest_history"):
-                with patch("app.summarizer._write_correction_facts", new_callable=AsyncMock):
+                with patch(
+                    "app.summarizer._write_correction_facts", new_callable=AsyncMock
+                ):
                     from sqlalchemy.ext.asyncio import AsyncSession
+
                     db = AsyncMock(spec=AsyncSession)
-                    with patch("sqlalchemy.future.select"), patch("app.summarizer.select") as mock_select:
+                    with (
+                        patch("sqlalchemy.future.select"),
+                        patch("app.summarizer.select") as mock_select,
+                    ):
                         mock_select.return_value = MagicMock()
-                        db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=lead)))
+                        db.execute = AsyncMock(
+                            return_value=MagicMock(
+                                scalar_one_or_none=MagicMock(return_value=lead)
+                            )
+                        )
                         await _merge_facts_into_lead(db, "lead-id", "summary", facts)
 
     asyncio.get_event_loop().run_until_complete(run())
 
     # lead.objections_heard must contain flat category strings
     assert lead.objections_heard is not None
-    assert "price" in lead.objections_heard, (
-        "lead.objections_heard must contain 'price' category string"
-    )
-    assert "trust" in lead.objections_heard, (
-        "lead.objections_heard must contain 'trust' category string"
-    )
+    assert (
+        "price" in lead.objections_heard
+    ), "lead.objections_heard must contain 'price' category string"
+    assert (
+        "trust" in lead.objections_heard
+    ), "lead.objections_heard must contain 'trust' category string"
     # Must NOT contain dicts
     for item in lead.objections_heard:
-        assert isinstance(item, str), (
-            f"lead.objections_heard items must be strings, got: {type(item)}"
-        )
+        assert isinstance(
+            item, str
+        ), f"lead.objections_heard items must be strings, got: {type(item)}"
 
 
 def test_upsert_call_analysis_stores_objections_as_structured_json():
@@ -2834,16 +2940,18 @@ def test_upsert_call_analysis_stores_objections_as_structured_json():
     from app.analysis.universal.objections import ObjectionsAxis, Objection
     import json
 
-    axis = ObjectionsAxis(objections=[
-        Objection(
-            category="timing",
-            strength="low",
-            resolution_status="resolved",
-            evidence="No tengo tiempo ahora.",
-            description="Timing objection.",
-            confidence="medium",
-        ),
-    ])
+    axis = ObjectionsAxis(
+        objections=[
+            Objection(
+                category="timing",
+                strength="low",
+                resolution_status="resolved",
+                evidence="No tengo tiempo ahora.",
+                description="Timing objection.",
+                confidence="medium",
+            ),
+        ]
+    )
     # Simulate what upsert does with the structured axis
     raw = (axis.model_dump() or {}).get("objections")
     result = _to_json_list(raw)
@@ -2882,24 +2990,26 @@ async def test_write_lead_profile_facts_creates_objection_namespace_rows(seeded_
     )
     from app.analysis.universal.interest.interests import InterestsAxis
 
-    axis = ObjectionsAxis(objections=[
-        Objection(
-            category="price",
-            strength="high",
-            resolution_status="unresolved",
-            evidence="El precio es muy alto.",
-            description="Price objection.",
-            confidence="high",
-        ),
-        Objection(
-            category="trust",
-            strength="medium",
-            resolution_status="unresolved",
-            evidence="No confío en la cobertura.",
-            description="Trust objection.",
-            confidence="medium",
-        ),
-    ])
+    axis = ObjectionsAxis(
+        objections=[
+            Objection(
+                category="price",
+                strength="high",
+                resolution_status="unresolved",
+                evidence="El precio es muy alto.",
+                description="Price objection.",
+                confidence="high",
+            ),
+            Objection(
+                category="trust",
+                strength="medium",
+                resolution_status="unresolved",
+                evidence="No confío en la cobertura.",
+                description="Trust objection.",
+                confidence="medium",
+            ),
+        ]
+    )
 
     objections_analysis = PostCallAnalysis(
         summary="Lead has price and trust objections.",
@@ -2940,9 +3050,440 @@ async def test_write_lead_profile_facts_creates_objection_namespace_rows(seeded_
         rows = list(result.scalars().all())
 
     objection_keys = {r.fact_key for r in rows}
-    assert "objection:price" in objection_keys, (
-        f"Expected 'objection:price' LeadProfileFact row. Got: {objection_keys}"
+    assert (
+        "objection:price" in objection_keys
+    ), f"Expected 'objection:price' LeadProfileFact row. Got: {objection_keys}"
+    assert (
+        "objection:trust" in objection_keys
+    ), f"Expected 'objection:trust' LeadProfileFact row. Got: {objection_keys}"
+
+
+# ===========================================================================
+# qora-profile-facts Phase 3 — Summarizer + Storage Wiring (RED tests 3.1)
+# ===========================================================================
+
+
+def _make_profile_pipeline_mock(axis):
+    """Build an async mock for run_profile_facts_pipeline that returns a given ProfileFactsAxis."""
+
+    async def _mock(*_args, **_kwargs):
+        return axis
+
+    return _mock
+
+
+@pytest.mark.asyncio
+async def test_summarizer_runs_profile_pipeline_concurrently(seeded_db):
+    """Phase 3: summarizer calls run_profile_facts_pipeline concurrently when lead_id exists.
+
+    GIVEN a session with a lead_id and transcript turns
+    WHEN generate_summary_and_facts() runs
+    THEN run_profile_facts_pipeline is called exactly once alongside DIMENSION_MODULES.
+
+    Spec: 'run_profile_facts_pipeline is awaited concurrently alongside asyncio.gather of
+    remaining DIMENSION_MODULES'
+    NOTE: After Phase 3 GREEN, run_profile_facts_pipeline is imported at module level
+    in summarizer.py, so the patch target is 'app.summarizer.run_profile_facts_pipeline'.
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.analysis.universal.profile_facts import ProfileFactsAxis
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "Hola"),
+            ("user", "Soy ingeniero y trabajo desde casa"),
+        ],
     )
-    assert "objection:trust" in objection_keys, (
-        f"Expected 'objection:trust' LeadProfileFact row. Got: {objection_keys}"
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+    empty_axis = ProfileFactsAxis()
+    pipeline_call_count = 0
+
+    async def _counting_pipeline(*_args, **_kwargs):
+        nonlocal pipeline_call_count
+        pipeline_call_count += 1
+        return empty_axis
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        with patch(
+            "app.summarizer.run_profile_facts_pipeline", side_effect=_counting_pipeline
+        ):
+            assert seeded_db.async_session_factory is not None
+            async with seeded_db.async_session_factory() as db:
+                await generate_summary_and_facts(session_id, db)
+                await db.commit()
+
+    assert pipeline_call_count == 1, (
+        f"run_profile_facts_pipeline must be called exactly once per summarizer run. "
+        f"Got: {pipeline_call_count}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_summarizer_profile_pipeline_add_writes_profile_namespace_row(seeded_db):
+    """Phase 3: run_profile_facts_pipeline ADD op → new 'profile:{category}:{slug}' row with JSON value.
+
+    GIVEN run_profile_facts_pipeline returns a ProfileFactUpdate(operation='add', category='occupation', ...)
+    WHEN generate_summary_and_facts() runs
+    THEN a LeadProfileFact row with fact_key='profile:occupation:{slug}' is inserted
+    AND fact_value is a JSON dict {category, fact, evidence, confidence}
+    AND no superseded_at is set (hard DELETE semantics apply; add is fresh).
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.leads.models import LeadProfileFact
+    from app.analysis.universal.profile_facts import ProfileFactsAxis, ProfileFactUpdate
+    from sqlalchemy import select
+    import json
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "¿A qué se dedica?"),
+            ("user", "Soy vendedor inmobiliario"),
+        ],
+    )
+
+    add_axis = ProfileFactsAxis(
+        updates=[
+            ProfileFactUpdate(
+                operation="add",
+                category="occupation",
+                fact="vendedor inmobiliario",
+                evidence="Soy vendedor inmobiliario",
+                confidence="high",
+                target_fact_id=None,
+            )
+        ]
+    )
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        with patch(
+            "app.summarizer.run_profile_facts_pipeline",
+            side_effect=_make_profile_pipeline_mock(add_axis),
+        ):
+            assert seeded_db.async_session_factory is not None
+            async with seeded_db.async_session_factory() as db:
+                await generate_summary_and_facts(session_id, db)
+                await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == "test-lead-sum-001",
+                LeadProfileFact.fact_key.startswith("profile:occupation:"),
+                LeadProfileFact.superseded_at == None,  # noqa: E711
+            )
+        )
+        rows = list(result.scalars().all())
+
+    assert (
+        len(rows) >= 1
+    ), f"Expected at least 1 active 'profile:occupation:*' row after ADD operation, got {len(rows)}"
+    row = rows[0]
+    # fact_value must be parseable JSON
+    value = json.loads(row.fact_value)
+    assert value["category"] == "occupation"
+    assert value["fact"] == "vendedor inmobiliario"
+    assert "evidence" in value
+    assert "confidence" in value
+
+
+@pytest.mark.asyncio
+async def test_summarizer_profile_pipeline_update_hard_deletes_old_row(seeded_db):
+    """Phase 3: run_profile_facts_pipeline UPDATE op → hard DELETE old row, INSERT new (no supersede).
+
+    GIVEN an existing 'profile:occupation:vendedor' fact in DB
+    AND run_profile_facts_pipeline returns UPDATE targeting that fact
+    WHEN generate_summary_and_facts() runs
+    THEN the old row is deleted (NOT superseded — superseded_at must NOT be set)
+    AND a new row is inserted with the updated fact
+    AND the old row does NOT remain in DB (no superseded_at pattern).
+
+    Spec AD-3: UPDATE → DELETE old row + INSERT new. NO superseded_at for profile: namespace.
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.leads.models import LeadProfileFact
+    from app.analysis.universal.profile_facts import ProfileFactsAxis, ProfileFactUpdate
+    from sqlalchemy import select
+    import uuid
+
+    # Pre-insert existing fact
+    old_row_id = str(uuid.uuid4())
+    old_fact_key = "profile:occupation:vendedor"
+    async with seeded_db.async_session_factory() as sess:
+        sess.add(
+            LeadProfileFact(
+                id=old_row_id,
+                lead_id="test-lead-sum-001",
+                fact_key=old_fact_key,
+                fact_value='{"category": "occupation", "fact": "vendedor", "evidence": "old", "confidence": "low"}',
+            )
+        )
+        await sess.commit()
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "¿Sigue siendo vendedor?"),
+            ("user", "Ahora soy gerente de ventas"),
+        ],
+    )
+
+    update_axis = ProfileFactsAxis(
+        updates=[
+            ProfileFactUpdate(
+                operation="update",
+                category="occupation",
+                fact="gerente de ventas",
+                evidence="Ahora soy gerente de ventas",
+                confidence="high",
+                target_fact_id=old_fact_key,  # target the existing row by fact_key
+            )
+        ]
+    )
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        with patch(
+            "app.summarizer.run_profile_facts_pipeline",
+            side_effect=_make_profile_pipeline_mock(update_axis),
+        ):
+            assert seeded_db.async_session_factory is not None
+            async with seeded_db.async_session_factory() as db:
+                await generate_summary_and_facts(session_id, db)
+                await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        # Old row must NOT exist (hard delete — not supersede)
+        old_result = await db.execute(
+            select(LeadProfileFact).where(LeadProfileFact.id == old_row_id)
+        )
+        old_row = old_result.scalar_one_or_none()
+        assert old_row is None, (
+            "HARD DELETE: old profile fact row must be DELETED (not superseded) on UPDATE operation. "
+            f"Old row still exists with fact_key={old_fact_key!r}"
+        )
+
+        # New row must exist
+        new_result = await db.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == "test-lead-sum-001",
+                LeadProfileFact.fact_key.startswith("profile:occupation:"),
+                LeadProfileFact.superseded_at == None,  # noqa: E711
+            )
+        )
+        new_rows = list(new_result.scalars().all())
+        assert (
+            len(new_rows) >= 1
+        ), "Expected new 'profile:occupation:*' row to be inserted after UPDATE operation"
+        import json
+
+        val = json.loads(new_rows[0].fact_value)
+        assert val["fact"] == "gerente de ventas"
+
+
+@pytest.mark.asyncio
+async def test_summarizer_profile_pipeline_remove_hard_deletes_row(seeded_db):
+    """Phase 3: run_profile_facts_pipeline REMOVE op → hard DELETE row (no supersede).
+
+    GIVEN an existing 'profile:lifestyle:runner' fact in DB
+    AND run_profile_facts_pipeline returns REMOVE targeting that fact
+    WHEN generate_summary_and_facts() runs
+    THEN the row is permanently deleted
+    AND no row remains (neither active nor superseded).
+
+    Spec AD-3: REMOVE → DELETE row. NO superseded_at for profile: namespace.
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.leads.models import LeadProfileFact
+    from app.analysis.universal.profile_facts import ProfileFactsAxis, ProfileFactUpdate
+    from sqlalchemy import select
+    import uuid
+
+    old_row_id = str(uuid.uuid4())
+    old_fact_key = "profile:lifestyle:runner"
+    async with seeded_db.async_session_factory() as sess:
+        sess.add(
+            LeadProfileFact(
+                id=old_row_id,
+                lead_id="test-lead-sum-001",
+                fact_key=old_fact_key,
+                fact_value='{"category": "lifestyle", "fact": "runner", "evidence": "corre", "confidence": "medium"}',
+            )
+        )
+        await sess.commit()
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "¿Hace deporte?"),
+            ("user", "Ya no corro más, me lesioné"),
+        ],
+    )
+
+    remove_axis = ProfileFactsAxis(
+        updates=[
+            ProfileFactUpdate(
+                operation="remove",
+                category="lifestyle",
+                fact="runner",
+                evidence="Ya no corro más, me lesioné",
+                confidence="high",
+                target_fact_id=old_fact_key,
+            )
+        ]
+    )
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        with patch(
+            "app.summarizer.run_profile_facts_pipeline",
+            side_effect=_make_profile_pipeline_mock(remove_axis),
+        ):
+            assert seeded_db.async_session_factory is not None
+            async with seeded_db.async_session_factory() as db:
+                await generate_summary_and_facts(session_id, db)
+                await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        # Row must NOT exist at all (hard deleted)
+        result = await db.execute(
+            select(LeadProfileFact).where(LeadProfileFact.id == old_row_id)
+        )
+        row = result.scalar_one_or_none()
+        assert row is None, (
+            "HARD DELETE: profile fact row must be fully deleted on REMOVE operation. "
+            "Row still exists in DB."
+        )
+
+
+@pytest.mark.asyncio
+async def test_summarizer_profile_facts_stored_in_call_analysis(seeded_db):
+    """Phase 3: run_profile_facts_pipeline updates are stored in CallAnalysis.profile_facts as JSON.
+
+    GIVEN run_profile_facts_pipeline returns a ProfileFactsAxis with 1 ADD update
+    WHEN generate_summary_and_facts() runs
+    THEN CallAnalysis.profile_facts is a JSON list of update dicts (not empty).
+
+    Spec: '_upsert_call_analysis: ca.profile_facts = serialized pipeline updates list'
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.models import CallAnalysis
+    from app.analysis.universal.profile_facts import ProfileFactsAxis, ProfileFactUpdate
+    from sqlalchemy import select
+    import json
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "¿Tiene hijos?"),
+            ("user", "Sí, tengo 3 hijos"),
+        ],
+    )
+
+    add_axis = ProfileFactsAxis(
+        updates=[
+            ProfileFactUpdate(
+                operation="add",
+                category="family_context",
+                fact="tiene 3 hijos",
+                evidence="Sí, tengo 3 hijos",
+                confidence="high",
+                target_fact_id=None,
+            )
+        ]
+    )
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        with patch(
+            "app.summarizer.run_profile_facts_pipeline",
+            side_effect=_make_profile_pipeline_mock(add_axis),
+        ):
+            assert seeded_db.async_session_factory is not None
+            async with seeded_db.async_session_factory() as db:
+                await generate_summary_and_facts(session_id, db)
+                await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+        )
+        ca = result.scalar_one()
+
+    pf_data = json.loads(ca.profile_facts)
+    assert isinstance(
+        pf_data, list
+    ), f"CallAnalysis.profile_facts must be a JSON list, got: {pf_data!r}"
+    assert (
+        len(pf_data) >= 1
+    ), "CallAnalysis.profile_facts must contain the pipeline updates (not empty)"
+    assert pf_data[0]["operation"] == "add"
+    assert pf_data[0]["category"] == "family_context"
+    assert pf_data[0]["fact"] == "tiene 3 hijos"
+
+
+@pytest.mark.asyncio
+async def test_summarizer_profile_pipeline_not_called_without_lead(seeded_db):
+    """Phase 3: run_profile_facts_pipeline is NOT called when session has no lead_id.
+
+    Spec: current_facts requires a DB query on lead_id. No lead → skip profile pipeline.
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.service import create_session, add_transcript_turn
+    from app.analysis.universal.profile_facts import ProfileFactsAxis
+
+    # Session with no lead
+    assert seeded_db.async_session_factory is not None
+    async with seeded_db.async_session_factory() as sess:
+        cs = await create_session(sess, client_id="quintana-seguros", lead_id=None)
+        cs.status = "completed"
+        no_lead_id = cs.id
+        await add_transcript_turn(sess, no_lead_id, "user", "Hola")
+        await sess.commit()
+
+    pipeline_call_count = 0
+
+    async def _counting_pipeline(*_args, **_kwargs):
+        nonlocal pipeline_call_count
+        pipeline_call_count += 1
+        return ProfileFactsAxis()
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        with patch(
+            "app.summarizer.run_profile_facts_pipeline", side_effect=_counting_pipeline
+        ):
+            async with seeded_db.async_session_factory() as db:
+                await generate_summary_and_facts(no_lead_id, db)
+                await db.commit()
+
+    assert pipeline_call_count == 0, (
+        f"run_profile_facts_pipeline must NOT be called when session has no lead_id. "
+        f"Got {pipeline_call_count} calls."
     )

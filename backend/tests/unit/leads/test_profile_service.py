@@ -348,3 +348,70 @@ async def test_get_facts_by_namespace_excludes_superseded(profile_db):
 
     assert len(rows) == 1, f"Expected 1 active signal: row, got {len(rows)}"
     assert rows[0]["fact_key"] == "signal:will buy"
+
+
+# ---------------------------------------------------------------------------
+# qora-profile-facts Phase 3: get_active_profile_facts returns id field (AD-4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_active_profile_facts_returns_id_field(profile_db):
+    """qora-profile-facts Phase 3: get_active_profile_facts must return 'id' in each dict.
+
+    GIVEN a lead with an active profile: fact
+    WHEN get_active_profile_facts(db, lead_id) is called
+    THEN each returned dict MUST contain an 'id' field (str UUID).
+    The 'id' is used by GPT as target_fact_id for update/remove operations.
+    """
+    from app.leads.service import get_active_profile_facts
+
+    lead_id = "test-lead-profile-svc-001"
+    row_id = await _insert_profile_fact(
+        profile_db,
+        lead_id=lead_id,
+        fact_key="profile:occupation:vendedor",
+        fact_value='{"category": "occupation", "fact": "vendedor inmobiliario", "evidence": "lo dijo", "confidence": "high"}',
+    )
+
+    async with profile_db.async_session_factory() as sess:
+        rows = await get_active_profile_facts(sess, lead_id)
+
+    matching = [r for r in rows if r["fact_key"] == "profile:occupation:vendedor"]
+    assert len(matching) >= 1, "Expected at least one row with the inserted fact_key"
+    row = matching[0]
+    assert "id" in row, (
+        "get_active_profile_facts must return 'id' field in each dict "
+        "(AD-4: GPT uses id as target_fact_id for update/remove)"
+    )
+    assert row["id"] == row_id, f"Expected id={row_id!r}, got id={row.get('id')!r}"
+
+
+@pytest.mark.asyncio
+async def test_get_facts_by_namespace_also_returns_id_field(profile_db):
+    """qora-profile-facts Phase 3: get_facts_by_namespace must also return 'id' field.
+
+    GIVEN a lead with a profile: fact
+    WHEN get_facts_by_namespace(db, lead_id, 'profile:') is called
+    THEN each returned dict MUST contain an 'id' field.
+    """
+    from app.leads.service import get_facts_by_namespace
+
+    lead_id = "test-lead-profile-svc-001"
+    row_id = await _insert_profile_fact(
+        profile_db,
+        lead_id=lead_id,
+        fact_key="profile:lifestyle:runner",
+        fact_value='{"category": "lifestyle", "fact": "runner", "evidence": "sale a correr", "confidence": "medium"}',
+    )
+
+    async with profile_db.async_session_factory() as sess:
+        rows = await get_facts_by_namespace(sess, lead_id, "profile:")
+
+    matching = [r for r in rows if r["fact_key"] == "profile:lifestyle:runner"]
+    assert len(matching) >= 1
+    row = matching[0]
+    assert (
+        "id" in row
+    ), "get_facts_by_namespace must return 'id' field — needed for target_fact_id"
+    assert row["id"] == row_id

@@ -714,7 +714,11 @@ def test_format_confirmed_facts_renders_nested_dict_call_outcome():
     # Must produce some output (not empty)
     assert result.strip() != "", "call_outcome dict must produce output"
     # Must contain recognizable content from the nested dict
-    assert "completed_positive" in result or "Resultado" in result or "call_outcome" in result
+    assert (
+        "completed_positive" in result
+        or "Resultado" in result
+        or "call_outcome" in result
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -733,15 +737,15 @@ def test_format_axis_call_outcome_renders_classification_reason_confidence():
     }
     result = _format_axis("call_outcome", axis_dict)
 
-    assert "completed_positive" in result, (
-        "_format_axis must include classification in output"
-    )
-    assert "Lead bought the policy" in result, (
-        "_format_axis must include reason in output"
-    )
-    assert "engagement" not in result.lower(), (
-        "_format_axis must NOT mention engagement (qora-outcome spec)"
-    )
+    assert (
+        "completed_positive" in result
+    ), "_format_axis must include classification in output"
+    assert (
+        "Lead bought the policy" in result
+    ), "_format_axis must include reason in output"
+    assert (
+        "engagement" not in result.lower()
+    ), "_format_axis must NOT mention engagement (qora-outcome spec)"
 
 
 def test_format_axis_call_outcome_does_not_read_engagement_quality():
@@ -757,9 +761,9 @@ def test_format_axis_call_outcome_does_not_read_engagement_quality():
     }
     result = _format_axis("call_outcome", axis_dict_with_legacy)
 
-    assert "engagement" not in result.lower(), (
-        "_format_axis must NOT reference engagement even when field is present (qora-outcome spec)"
-    )
+    assert (
+        "engagement" not in result.lower()
+    ), "_format_axis must NOT reference engagement even when field is present (qora-outcome spec)"
     assert "completed_negative" in result
 
 
@@ -1152,9 +1156,9 @@ def test_format_axis_detected_interests_new_items_format():
     }
     result = _format_axis("detected_interests", axis_dict)
 
-    assert "auto_todo_riesgo" in result or "productos" in result, (
-        f"Expected product names in rendering, got: {result!r}"
-    )
+    assert (
+        "auto_todo_riesgo" in result or "productos" in result
+    ), f"Expected product names in rendering, got: {result!r}"
 
 
 def test_format_axis_detected_interests_empty_items():
@@ -1183,9 +1187,9 @@ def test_format_axis_detected_interests_legacy_format_still_works():
     result = _format_axis("detected_interests", axis_dict)
 
     # Should render something (not empty) for non-empty legacy format
-    assert "todo_riesgo" in result or "products" in result, (
-        f"Expected product names in legacy rendering, got: {result!r}"
-    )
+    assert (
+        "todo_riesgo" in result or "products" in result
+    ), f"Expected product names in legacy rendering, got: {result!r}"
 
 
 def test_render_fact_value_interest_level_int():
@@ -1209,3 +1213,182 @@ def test_render_fact_value_interest_level_dict_extracts_general_score():
     # (called when interest_level is somehow a dict in extracted_facts)
     result = _render_fact_value("interest_level", 82)
     assert result == "82/100"
+
+
+# ===========================================================================
+# qora-profile-facts Phase 4 — Memory rendering (RED tests 4.1)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_profile_facts_rendered_grouped_by_category(seeded_db):
+    """Phase 4: profile: rows with JSON fact_value render as '{CategoryLabel}: {fact}'.
+
+    GIVEN two active 'profile:' rows with JSON fact_values:
+      - profile:occupation:vendedor → {category: occupation, fact: 'vendedor inmobiliario', ...}
+      - profile:communication_preference:email → {category: communication_preference, fact: 'email', ...}
+    WHEN build_memory_context(db, lead) is called
+    THEN confirmed_facts contains:
+      - 'Ocupación: vendedor inmobiliario'
+      - 'Preferencia de contacto: email'
+
+    Spec: '_format_accumulated_profile groups profile: rows by category, renders as label: fact'
+    """
+    from app.memory import build_memory_context
+    from app.leads.service import get_lead
+    import json
+
+    lead_id = "test-lead-memory-001"
+
+    await _insert_profile_fact(
+        seeded_db,
+        lead_id=lead_id,
+        fact_key="profile:occupation:vendedor-inmobiliario",
+        fact_value=json.dumps(
+            {
+                "category": "occupation",
+                "fact": "vendedor inmobiliario",
+                "evidence": "Soy vendedor inmobiliario",
+                "confidence": "high",
+            }
+        ),
+    )
+    await _insert_profile_fact(
+        seeded_db,
+        lead_id=lead_id,
+        fact_key="profile:communication_preference:email",
+        fact_value=json.dumps(
+            {
+                "category": "communication_preference",
+                "fact": "prefiere email",
+                "evidence": "Prefiero que me manden todo por email",
+                "confidence": "medium",
+            }
+        ),
+    )
+
+    async with seeded_db.async_session_factory() as sess:
+        lead = await get_lead(sess, lead_id)
+        assert lead is not None
+        ctx = await build_memory_context(sess, lead)
+
+    confirmed = ctx["confirmed_facts"]
+    assert (
+        "Ocupación: vendedor inmobiliario" in confirmed
+    ), f"Expected 'Ocupación: vendedor inmobiliario' in confirmed_facts, got:\n{confirmed!r}"
+    assert (
+        "Preferencia de contacto: prefiere email" in confirmed
+    ), f"Expected 'Preferencia de contacto: prefiere email' in confirmed_facts, got:\n{confirmed!r}"
+
+
+def test_format_accumulated_profile_renders_structured_facts_by_category():
+    """Phase 4 unit: _format_accumulated_profile renders JSON profile: rows by category label.
+
+    Pure function test — doesn't need DB.
+    Tests the _PROFILE_CATEGORY_LABELS mapping and grouped rendering logic.
+    """
+    from app.memory import _PROFILE_CATEGORY_LABELS
+
+    # All 11 categories must have Spanish labels
+    expected_keys = {
+        "occupation",
+        "availability",
+        "communication_preference",
+        "decision_style",
+        "family_context",
+        "lifestyle",
+        "financial_attitude",
+        "product_knowledge",
+        "provider_relationship",
+        "personality_tone",
+        "other",
+    }
+    assert expected_keys.issubset(set(_PROFILE_CATEGORY_LABELS.keys())), (
+        f"_PROFILE_CATEGORY_LABELS must contain all 11 categories. "
+        f"Missing: {expected_keys - set(_PROFILE_CATEGORY_LABELS.keys())}"
+    )
+    # Key labels must be Spanish strings
+    assert _PROFILE_CATEGORY_LABELS["occupation"] == "Ocupación"
+    assert _PROFILE_CATEGORY_LABELS["family_context"] == "Contexto familiar"
+    assert (
+        _PROFILE_CATEGORY_LABELS["communication_preference"]
+        == "Preferencia de contacto"
+    )
+
+
+@pytest.mark.asyncio
+async def test_profile_facts_legacy_plain_string_renders_without_error(seeded_db):
+    """Phase 4: Legacy profile: rows with plain string fact_value render without error.
+
+    GIVEN an active 'profile:' row with fact_value='plain text' (not JSON)
+    WHEN build_memory_context(db, lead) is called
+    THEN the row renders as the raw string value
+    AND no exception is raised.
+
+    Spec: 'The renderer MUST handle legacy rows (where fact_value is a plain string,
+    not JSON) by displaying the raw string value without error.'
+    """
+    from app.memory import build_memory_context
+    from app.leads.service import get_lead
+
+    lead_id = "test-lead-memory-001"
+
+    await _insert_profile_fact(
+        seeded_db,
+        lead_id=lead_id,
+        fact_key="profile:old_format",
+        fact_value="owns a home",  # plain string (legacy format)
+    )
+
+    async with seeded_db.async_session_factory() as sess:
+        lead = await get_lead(sess, lead_id)
+        assert lead is not None
+        # Must not raise any exception
+        ctx = await build_memory_context(sess, lead)
+
+    confirmed = ctx["confirmed_facts"]
+    # The raw string value must appear somewhere in confirmed_facts
+    assert "owns a home" in confirmed, (
+        f"Expected legacy plain-string fact_value 'owns a home' in confirmed_facts, "
+        f"got: {confirmed!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_profile_facts_empty_after_all_removed(seeded_db):
+    """Phase 4: When all profile: rows are removed (no active rows), section is absent.
+
+    GIVEN a lead with no active 'profile:' rows (all superseded/deleted)
+    WHEN build_memory_context(db, lead) is called
+    THEN the accumulated profile section does NOT appear
+    AND no error is raised.
+
+    Spec: 'No active profile facts → accumulated profile section is absent or empty.'
+    Note: This tests the existing superseded_at IS NULL filter; no profile: rows → empty section.
+    """
+    from app.memory import build_memory_context
+    from app.leads.service import get_lead
+    from datetime import datetime, timezone
+
+    lead_id = "test-lead-memory-001"
+
+    # Insert a superseded (effectively "removed") row
+    await _insert_profile_fact(
+        seeded_db,
+        lead_id=lead_id,
+        fact_key="profile:occupation:old",
+        fact_value="old job",
+        superseded_at=datetime.now(timezone.utc),
+    )
+
+    async with seeded_db.async_session_factory() as sess:
+        lead = await get_lead(sess, lead_id)
+        assert lead is not None
+        ctx = await build_memory_context(sess, lead)
+
+    confirmed = ctx["confirmed_facts"]
+    # No active profile: rows → no accumulated section with profile data
+    # (The interest history / other namespaces might still appear, but NOT profile:)
+    assert (
+        "old job" not in confirmed
+    ), "Superseded profile fact must NOT appear in confirmed_facts"
