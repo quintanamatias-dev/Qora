@@ -25,15 +25,15 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 
 PRODUCT_CATALOG: list[str] = [
-    "auto_todo_riesgo",        # Automobile — comprehensive coverage
+    "auto_todo_riesgo",  # Automobile — comprehensive coverage
     "auto_terceros_completo",  # Automobile — third-party + extras
-    "auto_terceros",           # Automobile — basic third-party
-    "moto",                    # Motorcycle
-    "hogar",                   # Home/property
-    "vida",                    # Life insurance
-    "comercio",                # Commercial / business
-    "art",                     # Personal accident (ART)
-    "caucion",                 # Surety bond
+    "auto_terceros",  # Automobile — basic third-party
+    "moto",  # Motorcycle
+    "hogar",  # Home/property
+    "vida",  # Life insurance
+    "comercio",  # Commercial / business
+    "art",  # Personal accident (ART)
+    "caucion",  # Surety bond
 ]
 
 # ---------------------------------------------------------------------------
@@ -43,12 +43,12 @@ PRODUCT_CATALOG: list[str] = [
 # ---------------------------------------------------------------------------
 
 NEED_TAGS: list[str] = [
-    "precio_competitivo",      # Lead wants a competitive price
-    "mayor_cobertura",         # Lead wants broader coverage
-    "menor_franquicia",        # Lead wants a lower deductible
+    "precio_competitivo",  # Lead wants a competitive price
+    "mayor_cobertura",  # Lead wants broader coverage
+    "menor_franquicia",  # Lead wants a lower deductible
     "atencion_personalizada",  # Lead wants personalized service
-    "rapidez",                 # Lead needs fast turnaround
-    "financiacion",            # Lead needs financing / installment options
-    "comparar_con_actual",     # Lead wants to compare with their current policy
-    "renovacion_proxima",      # Lead's policy is expiring soon
+    "rapidez",  # Lead needs fast turnaround
+    "financiacion",  # Lead needs financing / installment options
+    "comparar_con_actual",  # Lead wants to compare with their current policy
+    "renovacion_proxima",  # Lead's policy is expiring soon
 ]

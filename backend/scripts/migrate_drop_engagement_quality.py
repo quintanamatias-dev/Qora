@@ -57,7 +57,9 @@ async def run_migration(database_url: str) -> dict:
             print("  [ok] call_analyses.engagement_quality dropped")
         else:
             result["engagement_quality"] = "skipped"
-            print("  [skip] call_analyses.engagement_quality does not exist — nothing to drop")
+            print(
+                "  [skip] call_analyses.engagement_quality does not exist — nothing to drop"
+            )
 
     await engine.dispose()
 

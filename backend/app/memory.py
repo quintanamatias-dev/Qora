@@ -41,11 +41,11 @@ _TZ_BA = ZoneInfo("America/Argentina/Buenos_Aires")
 
 # Tier 1: Known keys — fixed order, Spanish labels.
 # These always appear first so existing tests continue to pass.
+# qora-misc-notes: misc_notes removed from _KNOWN_FACTS (now rendered as dedicated section).
 _KNOWN_FACTS: list[tuple[str, str]] = [
     ("current_insurance", "Seguro actual"),
     ("interest_level", "Nivel de interés"),
     ("next_action_suggested", "Acción sugerida"),
-    ("misc_notes", "Notas adicionales"),
     ("data_corrections", "Correcciones de datos"),
     ("summary", "Resumen"),
 ]
@@ -54,11 +54,13 @@ _KNOWN_FACTS: list[tuple[str, str]] = [
 _KNOWN_FACTS_KEYS: frozenset[str] = frozenset(k for k, _ in _KNOWN_FACTS)
 _KNOWN_FACTS_LABELS: dict[str, str] = {k: label for k, label in _KNOWN_FACTS}
 
-# Keys to SKIP in _format_confirmed_facts — handled by _format_accumulated_profile
+# Keys to SKIP in _format_confirmed_facts — handled by dedicated rendering functions
 # or relational tables instead of Lead.extracted_facts JSON blob.
 # qora-profile-facts: profile_facts.updates contains pipeline ops which must NOT be
 # rendered from extracted_facts (it would show REMOVE ops as facts).
-_SKIP_IN_CONFIRMED_FACTS: frozenset[str] = frozenset(["profile_facts"])
+# qora-misc-notes: misc_notes rendered as dedicated '--- Notas operativas ---' section
+# by _format_misc_notes() — not as a bullet in confirmed_facts.
+_SKIP_IN_CONFIRMED_FACTS: frozenset[str] = frozenset(["profile_facts", "misc_notes"])
 
 
 # ---------------------------------------------------------------------------
@@ -138,10 +140,19 @@ async def build_memory_context(db: AsyncSession, lead: "Lead") -> MemoryContext:
     sessions = list(sessions_result.scalars().all())
 
     call_history = _format_call_history(sessions, _TZ_BA)
+    extracted = _coerce_extracted_facts(lead.extracted_facts)
     # Legacy scalar facts from extracted_facts JSON
-    confirmed_facts = _format_confirmed_facts(
-        _coerce_extracted_facts(lead.extracted_facts)
-    )
+    confirmed_facts = _format_confirmed_facts(extracted)
+
+    # qora-misc-notes: Render dedicated '--- Notas operativas ---' section
+    # between confirmed_facts and accumulated profile section.
+    misc_notes_section = _format_misc_notes(extracted)
+    if misc_notes_section:
+        if confirmed_facts:
+            confirmed_facts = confirmed_facts + "\n" + misc_notes_section
+        else:
+            confirmed_facts = misc_notes_section
+
     # Issue #36: Append accumulated relational profile facts (token-budgeted)
     accumulated_section = await _format_accumulated_profile(db, lead.id)
     if accumulated_section:
@@ -424,6 +435,69 @@ def _coerce_extracted_facts(raw: object) -> dict | None:
         except (json.JSONDecodeError, ValueError):
             return None
     return None
+
+
+# ---------------------------------------------------------------------------
+# qora-misc-notes: Misc notes rendering
+# ---------------------------------------------------------------------------
+
+
+def _format_misc_notes(extracted_facts: dict | None) -> str:
+    """Render misc_notes from extracted_facts as a dedicated '--- Notas operativas ---' section.
+
+    Handles all formats:
+    - None / missing → "" (section omitted)
+    - {"notes": []} → "" (empty list, section omitted)
+    - {"notes": [{"type": "...", "note": "..."}]} → formatted section
+    - "legacy string" → rendered as '[other] legacy string'
+
+    Args:
+        extracted_facts: Parsed dict from Lead.extracted_facts, or None.
+
+    Returns:
+        Formatted string with the notes section, or "" if no notes.
+    """
+    if not extracted_facts:
+        return ""
+
+    raw = extracted_facts.get("misc_notes")
+    if raw is None:
+        return ""
+
+    # Normalize to list of (type, note) tuples
+    notes: list[tuple[str, str]] = []
+
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if not stripped:
+            return ""
+        notes = [("other", stripped)]
+    elif isinstance(raw, dict):
+        inner = raw.get("notes")
+        if not inner or not isinstance(inner, list):
+            return ""
+        for item in inner:
+            if isinstance(item, dict):
+                note_type = str(item.get("type", "other"))
+                note_text = str(item.get("note", "")).strip()
+                if note_text:
+                    notes.append((note_type, note_text))
+    elif isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                note_type = str(item.get("type", "other"))
+                note_text = str(item.get("note", "")).strip()
+                if note_text:
+                    notes.append((note_type, note_text))
+
+    if not notes:
+        return ""
+
+    lines = ["--- Notas operativas ---"]
+    for note_type, note_text in notes:
+        lines.append(f"- [{note_type}] {note_text}")
+
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

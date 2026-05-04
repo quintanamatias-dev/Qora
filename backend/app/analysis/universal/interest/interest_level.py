@@ -200,9 +200,7 @@ def _build_prompt(interests: InterestsAxis) -> str:
             f"DETECTED PRODUCTS (from prior analysis agent):\n{items_json}\n\n"
         )
     else:
-        products_context = (
-            "DETECTED PRODUCTS: none (no product interest was detected in this call)\n\n"
-        )
+        products_context = "DETECTED PRODUCTS: none (no product interest was detected in this call)\n\n"
     return products_context + _BASE_PROMPT
 
 

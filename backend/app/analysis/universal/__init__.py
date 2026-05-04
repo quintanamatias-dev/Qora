@@ -16,6 +16,10 @@ Abandonment signal absorbed into ``CallOutcome`` as ``was_abrupt`` + ``abandonme
 qora-profile-facts: ``profile_facts`` schema rewritten to operation-based model
 (ProfileFactUpdate / ProfileFactsAxis with max 5 updates). ``run_profile_facts_pipeline``
 is exported for use by the summarizer (Phase 2 removes profile_facts from DIMENSION_MODULES).
+
+qora-misc-notes: ``misc_notes`` extracted from DIMENSION_MODULES (9 → 8).
+Now a standalone stateful pipeline via ``run_misc_notes_pipeline``.
+Schema changed from ``str`` to ``MiscNotesAxis(notes: list[MiscNote])``.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ from types import ModuleType
 from app.analysis.universal import (
     commitments,
     data_corrections,
-    misc_notes,
+    misc_notes,  # noqa: F401 — qora-misc-notes: no longer in DIMENSION_MODULES but kept for direct access in tests
     next_action,
     objections,
     outcome,
@@ -35,6 +39,8 @@ from app.analysis.universal import (
     service_issues,
     summary,
 )
+
+# qora-misc-notes: MiscNote and run_misc_notes_pipeline exported for summarizer use
 from app.analysis.universal.commitments import CommitmentsAxis
 from app.analysis.universal.data_corrections import DataCorrectionsAxis
 
@@ -46,7 +52,11 @@ from app.analysis.universal.interest import (
     InterestsAxis,
     run_interest_pipeline,
 )
-from app.analysis.universal.misc_notes import MiscNotesAxis
+from app.analysis.universal.misc_notes import (
+    MiscNote,
+    MiscNotesAxis,
+    run_misc_notes_pipeline,
+)
 from app.analysis.universal.next_action import NextActionAxis
 from app.analysis.universal.objections import Objection, ObjectionsAxis
 from app.analysis.universal.outcome import AbandonmentTrigger, CallOutcome
@@ -73,13 +83,14 @@ DIMENSION_MODULES: list[ModuleType] = [
     summary,
     objections,
     next_action,
-    misc_notes,
     data_corrections,
     outcome,
     problem,
     service_issues,
     # qora-profile-facts: profile_facts removed from DIMENSION_MODULES (10 → 9).
     # Replaced by standalone run_profile_facts_pipeline() for stateful execution.
+    # qora-misc-notes: misc_notes removed from DIMENSION_MODULES (9 → 8).
+    # Replaced by standalone run_misc_notes_pipeline() for stateful execution.
     commitments,
 ]
 
@@ -90,7 +101,9 @@ __all__ = [
     "Objection",
     "ObjectionsAxis",
     "NextActionAxis",
+    "MiscNote",
     "MiscNotesAxis",
+    "run_misc_notes_pipeline",
     "DataCorrectionsAxis",
     "CallOutcome",
     "AbandonmentTrigger",

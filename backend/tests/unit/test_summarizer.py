@@ -132,7 +132,9 @@ def _axis_for_dimension(analysis_obj, target_field: str, schema_cls):
     if schema_cls is NextActionAxis:
         return NextActionAxis(action=str(analysis_obj.next_action_suggested))
     if schema_cls is MiscNotesAxis:
-        return MiscNotesAxis(notes=str(analysis_obj.misc_notes or ""))
+        # qora-misc-notes: misc_notes is no longer in DIMENSION_MODULES
+        # This branch should never be reached — kept for backward compat safety
+        return analysis_obj.misc_notes
     if schema_cls is DataCorrectionsAxis:
         return DataCorrectionsAxis(
             corrections=str(getattr(analysis_obj, "data_corrections", "") or "")
@@ -369,7 +371,7 @@ def _make_full_analysis_payload():
         interest_level=85,
         current_insurance="La Caja",
         next_action_suggested="send_quote",
-        misc_notes="Car make: Toyota",
+        # qora-misc-notes: misc_notes is now MiscNotesAxis (managed by standalone pipeline)
         call_outcome=CallOutcome(
             classification="completed_positive",
             reason="Lead explicitly requested a quote.",
@@ -647,7 +649,7 @@ async def test_summarizer_sets_do_not_call_flag(seeded_db):
         interest_level=0,
         current_insurance=None,
         next_action_suggested="do_not_call",
-        misc_notes="",
+        # qora-misc-notes: misc_notes managed by standalone pipeline
         call_outcome=CallOutcome(
             classification="hostile",
             reason="Lead explicitly asked not to be called again.",
@@ -709,7 +711,7 @@ async def test_summarizer_do_not_contact_classification_sets_do_not_call(seeded_
         interest_level=0,
         current_insurance=None,
         next_action_suggested="wait",  # NOT "do_not_call" — testing the classification path
-        misc_notes="",
+        # qora-misc-notes: misc_notes managed by standalone pipeline
         call_outcome=CallOutcome(
             classification="do_not_contact",
             reason="Lead explicitly said do not contact.",
@@ -767,7 +769,7 @@ async def test_summarizer_other_classification_does_not_set_do_not_call(seeded_d
         interest_level=80,
         current_insurance=None,
         next_action_suggested="call_again",
-        misc_notes="",
+        # qora-misc-notes: misc_notes managed by standalone pipeline
         call_outcome=CallOutcome(
             classification="callback_requested",
             reason="Lead asked to be called tomorrow.",
@@ -825,7 +827,7 @@ async def test_upsert_call_analysis_does_not_write_engagement_quality(seeded_db)
         interest_level=75,
         current_insurance=None,
         next_action_suggested="send_quote",
-        misc_notes="",
+        # qora-misc-notes: misc_notes managed by standalone pipeline
         call_outcome=CallOutcome(
             classification="completed_positive",
             reason="Lead requested quote.",
@@ -887,7 +889,7 @@ async def test_summarizer_does_not_set_do_not_call_for_other_actions(seeded_db):
         interest_level=70,
         current_insurance=None,
         next_action_suggested="call_again",
-        misc_notes="",
+        # qora-misc-notes: misc_notes managed by standalone pipeline
         call_outcome=CallOutcome(
             classification="callback_requested",
             reason="Lead asked to be called back next week.",
@@ -1117,19 +1119,21 @@ async def test_summarizer_uses_parse_not_create(seeded_db):
         async with seeded_db.async_session_factory() as db:
             await generate_summary_and_facts(session_id, db)
 
-        # Must use parse() (9 dim calls + 2 interest pipeline calls + 1 profile pipeline = 12),
-        # NOT create().
+        # Must use parse() (8 dim calls + 2 interest pipeline calls + 1 profile pipeline
+        # + 1 misc notes pipeline = 12 total), NOT create().
         # qora-abandonment: 11 → 10 DIMENSION_MODULES (abandonment removed)
         # qora-profile-facts Phase 3: profile_facts removed from DIMENSION_MODULES (10→9).
         #   run_profile_facts_pipeline adds 1 more parse() call.
+        # qora-misc-notes: misc_notes removed from DIMENSION_MODULES (9→8).
+        #   run_misc_notes_pipeline adds 1 more parse() call.
         from app.analysis.universal import DIMENSION_MODULES
 
-        # 9 independent dims + 2 interest pipeline calls (InterestsAxis + InterestLevelResult)
-        # + 1 profile facts pipeline call (ProfileFactsAxis) = 12 total
-        expected_parse_calls = len(DIMENSION_MODULES) + 2 + 1
+        # 8 independent dims + 2 interest pipeline calls (InterestsAxis + InterestLevelResult)
+        # + 1 profile facts pipeline call + 1 misc notes pipeline call = 12 total
+        expected_parse_calls = len(DIMENSION_MODULES) + 2 + 1 + 1
         assert mock_client.chat.completions.parse.call_count == expected_parse_calls, (
             f"Expected {expected_parse_calls} parse() calls "
-            f"(9 dims + 2 interest pipeline + 1 profile pipeline), "
+            f"(8 dims + 2 interest pipeline + 1 profile pipeline + 1 misc notes pipeline), "
             f"got {mock_client.chat.completions.parse.call_count}"
         )
         mock_client.chat.completions.create.assert_not_called()
@@ -1330,7 +1334,7 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
         interest_level=40,
         current_insurance=None,
         next_action_suggested="call_again",
-        misc_notes="",
+        # qora-misc-notes: misc_notes managed by standalone pipeline
         call_outcome=CallOutcome(
             classification="callback_requested",
             reason="Lead asked to call back.",
@@ -1386,7 +1390,7 @@ async def test_summarizer_rerun_overwrites_old_analysis(seeded_db):
         interest_level=85,
         current_insurance="La Caja",
         next_action_suggested="send_quote",
-        misc_notes="Car: Toyota",
+        # qora-misc-notes: misc_notes managed by standalone pipeline
         call_outcome=CallOutcome(
             classification="completed_positive",
             reason="Lead explicitly requested a quote on the second call.",
@@ -1482,7 +1486,7 @@ async def test_summarizer_unknown_extra_fields_ignored(seeded_db):
         "interest_level": 70,
         "current_insurance": None,
         "next_action_suggested": "call_again",
-        "misc_notes": "",
+        "misc_notes": {"notes": []},  # qora-misc-notes: MiscNotesAxis dict format
         "call_outcome": {
             "classification": "completed_positive",
             "reason": "Lead showed interest.",
@@ -1871,7 +1875,12 @@ async def test_summarizer_dual_write_gpt_failure_writes_call_analysis_failed(see
         # dimension and the summarizer raises a synthetic RuntimeError when
         # ALL fail. The original error message is in the dimension logs.
         assert ca.analysis_error is not None
-        assert "API timeout" in ca.analysis_error or "all 1" in ca.analysis_error
+        # The error may be direct (API timeout) or synthetic (all N failed)
+        assert (
+            "API timeout" in ca.analysis_error
+            or "dimension analyses failed" in ca.analysis_error
+            or "all 1" in ca.analysis_error
+        )
 
 
 async def test_summarizer_dual_write_do_not_call_creates_fact_row(seeded_db):
@@ -1902,7 +1911,7 @@ async def test_summarizer_dual_write_do_not_call_creates_fact_row(seeded_db):
         interest_level=0,
         current_insurance=None,
         next_action_suggested="do_not_call",
-        misc_notes="",
+        # qora-misc-notes: misc_notes managed by standalone pipeline
         call_outcome=CallOutcome(
             classification="hostile",
             reason="Lead asked not to be called.",
@@ -2092,7 +2101,7 @@ async def test_summarizer_critical2_data_corrections_create_lead_profile_facts(
         interest_level=70,
         current_insurance=None,
         next_action_suggested="send_quote",
-        misc_notes="",
+        # qora-misc-notes: misc_notes managed by standalone pipeline
         data_corrections="car_model: Polo\ncar_year: 2022",
         call_outcome=CallOutcome(
             classification="completed_neutral",
@@ -2250,7 +2259,7 @@ async def test_call_analysis_new_axes_persisted_from_summarizer(seeded_db):
         interest_level=60,
         current_insurance="La Caja",
         next_action_suggested="send_quote",
-        misc_notes="",
+        # qora-misc-notes: misc_notes managed by standalone pipeline
         call_outcome=CallOutcome(
             classification="completed_neutral",
             reason="Lead wants to switch provider.",
@@ -2407,7 +2416,7 @@ async def test_call_analysis_was_abrupt_and_trigger_persisted(seeded_db):
         interest_level=10,
         current_insurance=None,
         next_action_suggested="wait",
-        misc_notes="",
+        # qora-misc-notes: misc_notes managed by standalone pipeline
         call_outcome=CallOutcome(
             classification="do_not_contact",
             reason="Lead found a cheaper competitor.",
@@ -3017,7 +3026,7 @@ async def test_write_lead_profile_facts_creates_objection_namespace_rows(seeded_
         interest_level=40,
         current_insurance=None,
         next_action_suggested="call_again",
-        misc_notes="",
+        # qora-misc-notes: misc_notes managed by standalone pipeline
         call_outcome=CallOutcome(
             classification="completed_neutral",
             reason="Lead not ready yet.",
@@ -3487,3 +3496,249 @@ async def test_summarizer_profile_pipeline_not_called_without_lead(seeded_db):
         f"run_profile_facts_pipeline must NOT be called when session has no lead_id. "
         f"Got {pipeline_call_count} calls."
     )
+
+
+# ===========================================================================
+# qora-misc-notes Phase 3 — Summarizer integration tests
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_summarizer_runs_misc_notes_pipeline_concurrently(seeded_db):
+    """run_misc_notes_pipeline is called exactly once during summarizer execution (with lead).
+
+    Verifies that misc_notes no longer flows through DIMENSION_MODULES but is
+    handled by the dedicated standalone pipeline in the concurrent gather.
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.analysis.universal.misc_notes import MiscNotesAxis, MiscNote
+    from app.analysis.universal.profile_facts import ProfileFactsAxis
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("user", "Quiero saber sobre seguros"),
+            ("agent", "Claro, le cuento..."),
+        ],
+    )
+
+    pipeline_call_count = 0
+    returned_axis = MiscNotesAxis(
+        notes=[MiscNote(type="pending_topic", note="Preguntó por descuento")]
+    )
+
+    async def _counting_misc_pipeline(*_args, **_kwargs):
+        nonlocal pipeline_call_count
+        pipeline_call_count += 1
+        return returned_axis
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(analysis)
+
+    with (
+        patch(
+            "app.summarizer._get_openai_client",
+            return_value=(mock_client, "gpt-4o-mini"),
+        ),
+        patch(
+            "app.summarizer.run_interest_pipeline",
+            side_effect=_mock_run_interest_pipeline(analysis),
+        ),
+        patch(
+            "app.summarizer.run_misc_notes_pipeline",
+            side_effect=_counting_misc_pipeline,
+        ),
+        patch(
+            "app.summarizer.run_profile_facts_pipeline", return_value=ProfileFactsAxis()
+        ),
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    assert (
+        pipeline_call_count == 1
+    ), f"run_misc_notes_pipeline must be called exactly once. Got {pipeline_call_count}."
+
+
+@pytest.mark.asyncio
+async def test_summarizer_misc_notes_pipeline_not_called_without_lead(seeded_db):
+    """run_misc_notes_pipeline is NOT called when session has no lead_id."""
+    from app.calls.service import create_session, add_transcript_turn
+    from app.summarizer import generate_summary_and_facts
+
+    assert seeded_db.async_session_factory is not None
+    async with seeded_db.async_session_factory() as sess:
+        cs = await create_session(sess, client_id="quintana-seguros", lead_id=None)
+        cs.status = "completed"
+        no_lead_id = cs.id
+        await add_transcript_turn(sess, no_lead_id, "user", "Hola")
+        await sess.commit()
+
+    pipeline_call_count = 0
+
+    async def _counting_misc_pipeline(*_args, **_kwargs):
+        nonlocal pipeline_call_count
+        pipeline_call_count += 1
+        from app.analysis.universal.misc_notes import MiscNotesAxis
+
+        return MiscNotesAxis()
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        with patch(
+            "app.summarizer.run_misc_notes_pipeline",
+            side_effect=_counting_misc_pipeline,
+        ):
+            async with seeded_db.async_session_factory() as db:
+                await generate_summary_and_facts(no_lead_id, db)
+                await db.commit()
+
+    assert pipeline_call_count == 0, (
+        f"run_misc_notes_pipeline must NOT be called when session has no lead_id. "
+        f"Got {pipeline_call_count} calls."
+    )
+
+
+@pytest.mark.asyncio
+async def test_summarizer_misc_notes_stored_as_json_in_call_analysis(seeded_db):
+    """CallAnalysis.misc_notes stores JSON string of MiscNotesAxis notes list.
+
+    After qora-misc-notes: misc_notes is serialized as JSON (same pattern as profile_facts).
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.models import CallAnalysis
+    from app.analysis.universal.misc_notes import MiscNotesAxis, MiscNote
+    from app.analysis.universal.profile_facts import ProfileFactsAxis
+    from sqlalchemy import select
+    import json
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("user", "Hola"),
+            ("agent", "Hola!"),
+        ],
+    )
+
+    returned_axis = MiscNotesAxis(
+        notes=[MiscNote(type="pending_topic", note="Quiere callback el viernes")]
+    )
+
+    async def _misc_pipeline(*_args, **_kwargs):
+        return returned_axis
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(analysis)
+
+    with (
+        patch(
+            "app.summarizer._get_openai_client",
+            return_value=(mock_client, "gpt-4o-mini"),
+        ),
+        patch(
+            "app.summarizer.run_interest_pipeline",
+            side_effect=_mock_run_interest_pipeline(analysis),
+        ),
+        patch("app.summarizer.run_misc_notes_pipeline", side_effect=_misc_pipeline),
+        patch(
+            "app.summarizer.run_profile_facts_pipeline", return_value=ProfileFactsAxis()
+        ),
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    assert seeded_db.async_session_factory is not None
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+        )
+        ca = result.scalar_one_or_none()
+        assert ca is not None
+        # misc_notes should be a JSON string (not a plain str or dict)
+        assert isinstance(
+            ca.misc_notes, str
+        ), f"CallAnalysis.misc_notes must be a JSON string, got {type(ca.misc_notes)}"
+        parsed = json.loads(ca.misc_notes)
+        # After qora-misc-notes: stored as JSON of notes list
+        assert "notes" in parsed or isinstance(
+            parsed, list
+        ), f"CallAnalysis.misc_notes JSON must contain notes structure, got {parsed}"
+
+
+@pytest.mark.asyncio
+async def test_summarizer_misc_notes_coerces_legacy_string_from_extracted_facts(
+    seeded_db,
+):
+    """Summarizer loads misc_notes from Lead.extracted_facts and coerces legacy str format.
+
+    When extracted_facts["misc_notes"] is a plain string (old format), it must be
+    coerced to [MiscNote(type='other', note=legacy_str)] before passing to pipeline.
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.analysis.universal.misc_notes import MiscNotesAxis
+    from app.analysis.universal.profile_facts import ProfileFactsAxis
+    from app.leads.models import Lead
+    from sqlalchemy import update
+
+    # Set legacy misc_notes in extracted_facts
+    assert seeded_db.async_session_factory is not None
+    async with seeded_db.async_session_factory() as db:
+        await db.execute(
+            update(Lead)
+            .where(Lead.id == "test-lead-sum-001")
+            .values(
+                extracted_facts={"misc_notes": "Cliente interesado en plan enterprise"}
+            )
+        )
+        await db.commit()
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[("user", "Hola"), ("agent", "Hi!")],
+    )
+
+    received_notes = []
+
+    async def _capturing_pipeline(transcript, client, *, current_notes=None):
+        if current_notes is not None:
+            received_notes.extend(current_notes)
+        return MiscNotesAxis()
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(analysis)
+
+    with (
+        patch(
+            "app.summarizer._get_openai_client",
+            return_value=(mock_client, "gpt-4o-mini"),
+        ),
+        patch(
+            "app.summarizer.run_interest_pipeline",
+            side_effect=_mock_run_interest_pipeline(analysis),
+        ),
+        patch(
+            "app.summarizer.run_misc_notes_pipeline", side_effect=_capturing_pipeline
+        ),
+        patch(
+            "app.summarizer.run_profile_facts_pipeline", return_value=ProfileFactsAxis()
+        ),
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    # The legacy string should have been coerced to a MiscNote(type='other')
+    assert (
+        len(received_notes) == 1
+    ), f"Expected 1 coerced note from legacy str, got {received_notes}"
+    assert received_notes[0].type == "other"
+    assert received_notes[0].note == "Cliente interesado en plan enterprise"

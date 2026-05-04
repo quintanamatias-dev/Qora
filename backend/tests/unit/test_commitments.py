@@ -211,7 +211,11 @@ def test_dimension_prompt_contains_key_criteria():
     # Must mention max 5
     assert "5" in prompt
     # Must have negatives / what NOT to classify
-    assert "not" in prompt.lower() or "don't" in prompt.lower() or "never" in prompt.lower()
+    assert (
+        "not" in prompt.lower()
+        or "don't" in prompt.lower()
+        or "never" in prompt.lower()
+    )
 
 
 def test_dimension_prompt_lists_allowed_commitment_types():
@@ -222,7 +226,9 @@ def test_dimension_prompt_lists_allowed_commitment_types():
     # At minimum, some type names should appear in the prompt for GPT guidance
     type_hints = ["send_document", "callback", "review_proposal"]
     found = any(t in prompt for t in type_hints)
-    assert found, f"Prompt should mention at least one commitment type value. Got: {prompt[:200]}"
+    assert (
+        found
+    ), f"Prompt should mention at least one commitment type value. Got: {prompt[:200]}"
 
 
 @pytest.mark.asyncio

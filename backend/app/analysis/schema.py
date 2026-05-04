@@ -20,6 +20,7 @@ from app.analysis.universal import (
     CallOutcome,
     CommitmentsAxis,
     InterestsAxis,
+    MiscNotesAxis,
     ObjectionsAxis,
     ProblemAxis,
     ProfileFactsAxis,
@@ -58,9 +59,10 @@ class PostCallAnalysis(BaseModel):
         default="wait",
         description="One of: call_again, send_quote, wait, do_not_call",
     )
-    misc_notes: str = Field(
-        default="",
-        description="Any other relevant facts or observations not covered by the structured fields above, as a brief text note",
+    # qora-misc-notes: changed from str to MiscNotesAxis (structured list of notes)
+    misc_notes: MiscNotesAxis = Field(
+        default_factory=MiscNotesAxis,
+        description="Sliding-window operational notes for the agent (max 5, prefer 3)",
     )
 
     # str (NOT dict) so the schema stays compatible with OpenAI Structured Outputs.

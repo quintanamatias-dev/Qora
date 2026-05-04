@@ -9,9 +9,7 @@ from pydantic import BaseModel, Field
 class NextActionAxis(BaseModel):
     """Recommended next action after the call."""
 
-    action: str = Field(
-        description="One of: call_again, send_quote, wait, do_not_call"
-    )
+    action: str = Field(description="One of: call_again, send_quote, wait, do_not_call")
 
 
 DIMENSION = {

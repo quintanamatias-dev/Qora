@@ -591,42 +591,55 @@ async def test_is_returning_caller_true_when_session_has_empty_string_summary(
 
 
 def test_format_confirmed_facts_renders_all_keys_dynamically():
-    """_format_confirmed_facts renders ALL keys in extracted_facts, not just 3 hardcoded."""
+    """_format_confirmed_facts renders ALL keys in extracted_facts, not just 3 hardcoded.
+
+    qora-misc-notes: misc_notes is now SKIPPED in _format_confirmed_facts
+    (rendered as dedicated '--- Notas operativas ---' section by _format_misc_notes).
+    """
     from app.memory import _format_confirmed_facts
 
     facts = {
         "current_insurance": "La Caja",
         "interest_level": 75,
         "next_action_suggested": "call_again",
-        "misc_notes": "Lead mentioned Toyota Hilux",
+        "misc_notes": "Lead mentioned Toyota Hilux",  # skipped — handled by _format_misc_notes
         "custom_field": "some_value",
     }
     result = _format_confirmed_facts(facts)
 
-    # All 5 keys must appear in the output
     assert "La Caja" in result, "current_insurance must appear"
     assert "75" in result, "interest_level must appear"
     assert "call_again" in result, "next_action_suggested must appear"
-    assert "Toyota Hilux" in result, "misc_notes must appear"
     assert "some_value" in result, "custom_field (unknown key) must appear"
+    # misc_notes is skipped — handled by _format_misc_notes dedicated section
+    assert (
+        "Toyota Hilux" not in result
+    ), "misc_notes must NOT appear in _format_confirmed_facts (qora-misc-notes spec)"
 
 
 def test_format_confirmed_facts_known_keys_use_spanish_labels():
-    """Known keys use their Spanish labels (Seguro actual, Nivel de interés, etc.)."""
+    """Known keys use their Spanish labels (Seguro actual, Nivel de interés, etc.).
+
+    qora-misc-notes: misc_notes removed from _KNOWN_FACTS — no longer renders as
+    '- Notas adicionales:' bullet in confirmed_facts.
+    """
     from app.memory import _format_confirmed_facts
 
     facts = {
         "current_insurance": "Sancor",
         "interest_level": 80,
         "next_action_suggested": "send_quote",
-        "misc_notes": "Nota adicional",
+        "misc_notes": "Nota adicional",  # skipped — handled by _format_misc_notes
     }
     result = _format_confirmed_facts(facts)
 
     assert "Seguro actual" in result
     assert "Nivel de interés" in result
     assert "Acción sugerida" in result
-    assert "Notas adicionales" in result
+    # qora-misc-notes: misc_notes no longer renders as '- Notas adicionales:'
+    assert (
+        "Notas adicionales" not in result
+    ), "misc_notes must NOT render as 'Notas adicionales' after qora-misc-notes"
 
 
 def test_format_confirmed_facts_unknown_key_uses_raw_key_as_label():
@@ -1392,3 +1405,228 @@ async def test_profile_facts_empty_after_all_removed(seeded_db):
     assert (
         "old job" not in confirmed
     ), "Superseded profile fact must NOT appear in confirmed_facts"
+
+
+# ===========================================================================
+# qora-misc-notes Phase 4 — Memory rendering tests
+# ===========================================================================
+
+
+async def _set_lead_extracted_facts(db_module, lead_id: str, facts: dict) -> None:
+    """Helper: set extracted_facts on a lead."""
+    from app.leads.models import Lead
+    from sqlalchemy import update
+
+    assert db_module.async_session_factory is not None
+    async with db_module.async_session_factory() as sess:
+        await sess.execute(
+            update(Lead).where(Lead.id == lead_id).values(extracted_facts=facts)
+        )
+        await sess.commit()
+
+
+@pytest.mark.asyncio
+async def test_memory_misc_notes_renders_dedicated_section_when_present(seeded_db):
+    """build_memory_context renders --- Notas operativas --- when misc_notes are present.
+
+    GIVEN lead.extracted_facts["misc_notes"] = {"notes": [{"type": "pending_topic", "note": "..."}]}
+    WHEN build_memory_context(db, lead) is called
+    THEN confirmed_facts includes '--- Notas operativas ---' section
+    AND contains '[pending_topic] Quiere callback el viernes'
+    AND does NOT contain '- Notas adicionales:' inside confirmed_facts
+    """
+    from app.memory import build_memory_context
+    from app.leads.service import get_lead
+
+    lead_id = "test-lead-memory-001"
+
+    await _set_lead_extracted_facts(
+        seeded_db,
+        lead_id,
+        {
+            "misc_notes": {
+                "notes": [
+                    {"type": "pending_topic", "note": "Quiere callback el viernes"},
+                ]
+            }
+        },
+    )
+
+    assert seeded_db.async_session_factory is not None
+    async with seeded_db.async_session_factory() as sess:
+        lead = await get_lead(sess, lead_id)
+        assert lead is not None
+        ctx = await build_memory_context(sess, lead)
+
+    confirmed = ctx["confirmed_facts"]
+    assert (
+        "--- Notas operativas ---" in confirmed
+    ), f"Expected '--- Notas operativas ---' section in confirmed_facts, got:\n{confirmed}"
+    assert (
+        "[pending_topic] Quiere callback el viernes" in confirmed
+    ), f"Expected note text in confirmed_facts, got:\n{confirmed}"
+    # Must NOT appear as a legacy bullet in the facts section
+    assert (
+        "- Notas adicionales:" not in confirmed
+    ), "misc_notes must NOT render as '- Notas adicionales:' (qora-misc-notes spec)"
+
+
+@pytest.mark.asyncio
+async def test_memory_misc_notes_section_omitted_when_empty(seeded_db):
+    """build_memory_context omits --- Notas operativas --- when notes list is empty.
+
+    GIVEN lead.extracted_facts["misc_notes"] = {"notes": []} or missing
+    WHEN build_memory_context(db, lead) is called
+    THEN confirmed_facts does NOT include '--- Notas operativas ---'
+    AND no empty section or placeholder is rendered
+    """
+    from app.memory import build_memory_context
+    from app.leads.service import get_lead
+
+    lead_id = "test-lead-memory-001"
+
+    await _set_lead_extracted_facts(
+        seeded_db,
+        lead_id,
+        {"misc_notes": {"notes": []}},
+    )
+
+    assert seeded_db.async_session_factory is not None
+    async with seeded_db.async_session_factory() as sess:
+        lead = await get_lead(sess, lead_id)
+        assert lead is not None
+        ctx = await build_memory_context(sess, lead)
+
+    confirmed = ctx["confirmed_facts"]
+    assert (
+        "--- Notas operativas ---" not in confirmed
+    ), "Empty misc_notes list must NOT render the Notas operativas section"
+
+
+@pytest.mark.asyncio
+async def test_memory_misc_notes_section_omitted_when_key_missing(seeded_db):
+    """build_memory_context omits section when misc_notes key is absent from extracted_facts."""
+    from app.memory import build_memory_context
+    from app.leads.service import get_lead
+
+    lead_id = "test-lead-memory-001"
+
+    await _set_lead_extracted_facts(
+        seeded_db,
+        lead_id,
+        {"interest_level": 75},  # no misc_notes key
+    )
+
+    assert seeded_db.async_session_factory is not None
+    async with seeded_db.async_session_factory() as sess:
+        lead = await get_lead(sess, lead_id)
+        assert lead is not None
+        ctx = await build_memory_context(sess, lead)
+
+    confirmed = ctx["confirmed_facts"]
+    assert "--- Notas operativas ---" not in confirmed
+
+
+@pytest.mark.asyncio
+async def test_memory_misc_notes_multiple_notes_all_rendered(seeded_db):
+    """build_memory_context renders all notes in the dedicated section with [type] prefix."""
+    from app.memory import build_memory_context
+    from app.leads.service import get_lead
+
+    lead_id = "test-lead-memory-001"
+
+    await _set_lead_extracted_facts(
+        seeded_db,
+        lead_id,
+        {
+            "misc_notes": {
+                "notes": [
+                    {"type": "continuity", "note": "Tiene un Corolla 2019"},
+                    {"type": "caution", "note": "Molesto por esperas anteriores"},
+                    {"type": "pending_topic", "note": "Quiere cotización hogar"},
+                ]
+            }
+        },
+    )
+
+    assert seeded_db.async_session_factory is not None
+    async with seeded_db.async_session_factory() as sess:
+        lead = await get_lead(sess, lead_id)
+        assert lead is not None
+        ctx = await build_memory_context(sess, lead)
+
+    confirmed = ctx["confirmed_facts"]
+    assert "--- Notas operativas ---" in confirmed
+    assert "[continuity] Tiene un Corolla 2019" in confirmed
+    assert "[caution] Molesto por esperas anteriores" in confirmed
+    assert "[pending_topic] Quiere cotización hogar" in confirmed
+
+
+@pytest.mark.asyncio
+async def test_memory_misc_notes_legacy_string_rendered_gracefully(seeded_db):
+    """Legacy str misc_notes renders as [other] in dedicated section without crashing.
+
+    GIVEN lead.extracted_facts["misc_notes"] = "Prefiere contacto por WhatsApp" (legacy str)
+    WHEN build_memory_context(db, lead) is called
+    THEN confirmed_facts includes '--- Notas operativas ---'
+    AND renders the string as '[other] Prefiere contacto por WhatsApp'
+    AND does NOT raise an error
+    """
+    from app.memory import build_memory_context
+    from app.leads.service import get_lead
+
+    lead_id = "test-lead-memory-001"
+
+    await _set_lead_extracted_facts(
+        seeded_db,
+        lead_id,
+        {"misc_notes": "Prefiere contacto por WhatsApp"},  # legacy str format
+    )
+
+    assert seeded_db.async_session_factory is not None
+    async with seeded_db.async_session_factory() as sess:
+        lead = await get_lead(sess, lead_id)
+        assert lead is not None
+        ctx = await build_memory_context(sess, lead)
+
+    confirmed = ctx["confirmed_facts"]
+    assert (
+        "--- Notas operativas ---" in confirmed
+    ), "Legacy str misc_notes must render dedicated section"
+    assert (
+        "[other] Prefiere contacto por WhatsApp" in confirmed
+    ), f"Legacy str must render as '[other] text'. Got:\n{confirmed}"
+
+
+@pytest.mark.asyncio
+async def test_memory_misc_notes_not_rendered_in_confirmed_facts_bullet(seeded_db):
+    """misc_notes must NOT appear as '- Notas adicionales:' bullet in confirmed_facts.
+
+    After qora-misc-notes: misc_notes is skipped in _format_confirmed_facts
+    and rendered only in the dedicated Notas operativas section.
+    """
+    from app.memory import build_memory_context
+    from app.leads.service import get_lead
+
+    lead_id = "test-lead-memory-001"
+
+    await _set_lead_extracted_facts(
+        seeded_db,
+        lead_id,
+        {
+            "misc_notes": {"notes": [{"type": "other", "note": "some note"}]},
+            "interest_level": 70,
+        },
+    )
+
+    assert seeded_db.async_session_factory is not None
+    async with seeded_db.async_session_factory() as sess:
+        lead = await get_lead(sess, lead_id)
+        assert lead is not None
+        ctx = await build_memory_context(sess, lead)
+
+    confirmed = ctx["confirmed_facts"]
+    # Must NOT appear as the old Tier 1 bullet
+    assert (
+        "- Notas adicionales:" not in confirmed
+    ), "misc_notes must NOT render as '- Notas adicionales:' bullet (qora-misc-notes)"

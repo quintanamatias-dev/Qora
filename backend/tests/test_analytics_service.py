@@ -158,9 +158,9 @@ async def test_overview_empty_period(analytics_service_db):
     assert result["conversion_rate"] is None
     assert result["outcome_distribution"] == {}
     # engagement_distribution must NOT exist (qora-outcome spec)
-    assert "engagement_distribution" not in result, (
-        "engagement_distribution must be removed from analytics response (qora-outcome spec)"
-    )
+    assert (
+        "engagement_distribution" not in result
+    ), "engagement_distribution must be removed from analytics response (qora-outcome spec)"
 
 
 async def test_overview_counts_calls_in_period(analytics_service_db):
@@ -634,9 +634,9 @@ async def test_agent_stats_null_agent_bucketed(analytics_service_db):
     assert unassigned["agent_id"] == "unassigned"
     assert unassigned["total_calls"] == 1
     # avg_engagement_quality must NOT be present (qora-outcome spec)
-    assert "avg_engagement_quality" not in unassigned, (
-        "avg_engagement_quality must be removed from agent stats (qora-outcome spec)"
-    )
+    assert (
+        "avg_engagement_quality" not in unassigned
+    ), "avg_engagement_quality must be removed from agent stats (qora-outcome spec)"
 
 
 async def test_agent_stats_multi_agent(analytics_service_db):
@@ -743,7 +743,9 @@ async def test_agent_stats_cross_client_isolation(analytics_service_db):
     assert result["agents"] == []
 
 
-async def test_agent_stats_conversion_rate_uses_completed_positive(analytics_service_db):
+async def test_agent_stats_conversion_rate_uses_completed_positive(
+    analytics_service_db,
+):
     """qora-outcome spec: agent stats conversion_rate counts completed_positive (not 'interested')."""
     from app.analytics.service import get_agent_stats
     from app.tenants.models import Agent
@@ -792,9 +794,9 @@ async def test_agent_stats_conversion_rate_uses_completed_positive(analytics_ser
     agents = result["agents"]
     agent_entry = next(a for a in agents if a["agent_id"] == "agent-conv-001")
     assert agent_entry["total_calls"] == 2
-    assert agent_entry["conversion_rate"] == pytest.approx(0.5), (
-        "conversion_rate must count completed_positive only (qora-outcome spec)"
-    )
+    assert agent_entry["conversion_rate"] == pytest.approx(
+        0.5
+    ), "conversion_rate must count completed_positive only (qora-outcome spec)"
     # avg_engagement_quality must NOT exist
     assert "avg_engagement_quality" not in agent_entry
 

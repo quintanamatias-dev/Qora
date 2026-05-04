@@ -271,9 +271,9 @@ def test_dimension_prompt_contains_max_5_and_empty_array():
     prompt = DIMENSION["prompt"]
     assert "5" in prompt, "Prompt should mention max 5 issues"
     # Must reference what to return when no issues found (empty array / empty list)
-    assert "empty" in prompt.lower() or "[]" in prompt, (
-        "Prompt should reference empty array for no-issue case"
-    )
+    assert (
+        "empty" in prompt.lower() or "[]" in prompt
+    ), "Prompt should reference empty array for no-issue case"
 
 
 def test_dimension_prompt_contains_exclusion_guidance():
@@ -294,7 +294,11 @@ def test_dimension_prompt_contains_source_types():
 
     prompt = DIMENSION["prompt"]
     # Should reference at least provider sources
-    assert "current_provider" in prompt or "previous_provider" in prompt or "provider" in prompt.lower()
+    assert (
+        "current_provider" in prompt
+        or "previous_provider" in prompt
+        or "provider" in prompt.lower()
+    )
 
 
 def test_dimension_prompt_contains_severity_and_confidence():
@@ -338,7 +342,11 @@ async def test_analyze_returns_service_issues_axis():
 async def test_analyze_propagates_structured_issues():
     """analyze() returns ServiceIssuesAxis with ServiceIssue data from mocked client."""
     from unittest.mock import AsyncMock, MagicMock
-    from app.analysis.universal.service_issues import analyze, ServiceIssuesAxis, ServiceIssue
+    from app.analysis.universal.service_issues import (
+        analyze,
+        ServiceIssuesAxis,
+        ServiceIssue,
+    )
 
     issue = ServiceIssue(
         category="billing_issue",
