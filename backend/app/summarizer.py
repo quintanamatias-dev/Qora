@@ -33,6 +33,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.schema import PostCallAnalysis
 from app.analysis.universal import DIMENSION_MODULES
+from app.analysis.universal.profile_facts import (
+    ProfileFactsAxis,
+    run_profile_facts_pipeline,
+)
 from app.calls.models import CallAnalysis, CallSession, TranscriptTurn
 from app.leads.models import Lead, LeadInterestHistory, LeadProfileFact
 
@@ -117,10 +121,19 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
         )
         previous_interest_level = prev_result.scalar_one_or_none()
 
+    # qora-profile-facts Phase 3: Load current profile facts for stateful pipeline
+    current_profile_facts: list[dict] = []
+    if cs.lead_id:
+        from app.leads.service import get_facts_by_namespace
+
+        current_profile_facts = await get_facts_by_namespace(db, cs.lead_id, "profile:")
+
     try:
         summary, facts = await _call_gpt_summarize(
             transcript_text,
             previous_interest_level=previous_interest_level,
+            current_profile_facts=current_profile_facts,
+            has_lead=bool(cs.lead_id),
         )
     except Exception as gpt_exc:
         error_msg = str(gpt_exc)
@@ -212,38 +225,68 @@ async def _call_gpt_summarize(
     transcript_text: str,
     *,
     previous_interest_level: int | None = None,
+    current_profile_facts: list[dict] | None = None,
+    has_lead: bool = True,
 ) -> tuple[str, dict[str, Any]]:
-    """Run 11 universal dimensions in parallel and the 2-phase interest pipeline.
+    """Run 9 universal dimensions, the 2-phase interest pipeline, and profile facts pipeline.
 
     qora-interest-pipeline: The old monolithic 13-parallel gather is replaced by:
-    - Phase 1: 11 independent dimensions in parallel via asyncio.gather
+    - Phase 1: 9 independent dimensions in parallel via asyncio.gather
     - Phase 2: Interest pipeline (interests → interest_level sequential) via run_interest_pipeline
+    - Phase 3: Profile facts pipeline (stateful) via run_profile_facts_pipeline
 
-    Both run concurrently at the top level. Results are merged into PostCallAnalysis.
+    All run concurrently at the top level. Results are merged into PostCallAnalysis.
+
+    Args:
+        transcript_text: Formatted transcript string.
+        previous_interest_level: Lead's prior interest score for 70/30 formula.
+        current_profile_facts: Active profile facts from DB for stateful pipeline.
 
     Returns:
         Tuple of (summary_text, extracted_facts_dict).
 
     Raises:
-        RuntimeError: When ALL 11 independent dimensions AND the interest pipeline fail.
+        RuntimeError: When ALL 9 independent dimensions AND both pipelines fail.
     """
     from app.analysis.universal.interest import run_interest_pipeline
 
     client, _model = _get_openai_client()
+    facts_list = current_profile_facts or []
 
-    # Run 11 independent dimensions + interest pipeline concurrently
-    independent_results_raw, pipeline_raw = await asyncio.gather(
-        asyncio.gather(
-            *[mod.analyze(transcript_text, client) for mod in DIMENSION_MODULES],
+    if has_lead:
+        # Run 9 independent dimensions + interest pipeline + profile pipeline concurrently
+        independent_results_raw, pipeline_raw, profile_raw = await asyncio.gather(
+            asyncio.gather(
+                *[mod.analyze(transcript_text, client) for mod in DIMENSION_MODULES],
+                return_exceptions=True,
+            ),
+            run_interest_pipeline(
+                transcript_text,
+                client,
+                previous_score=previous_interest_level,
+            ),
+            run_profile_facts_pipeline(
+                transcript_text,
+                client,
+                current_facts=facts_list,
+            ),
             return_exceptions=True,
-        ),
-        run_interest_pipeline(
-            transcript_text,
-            client,
-            previous_score=previous_interest_level,
-        ),
-        return_exceptions=True,
-    )
+        )
+    else:
+        # No lead_id: skip profile pipeline (requires stateful context)
+        profile_raw = ProfileFactsAxis()
+        independent_results_raw, pipeline_raw = await asyncio.gather(
+            asyncio.gather(
+                *[mod.analyze(transcript_text, client) for mod in DIMENSION_MODULES],
+                return_exceptions=True,
+            ),
+            run_interest_pipeline(
+                transcript_text,
+                client,
+                previous_score=previous_interest_level,
+            ),
+            return_exceptions=True,
+        )
 
     fields: dict[str, Any] = {}
     failures = 0
@@ -289,7 +332,9 @@ async def _call_gpt_summarize(
         interests_result, level_result = pipeline_raw
 
         # Check if Agent 1 (interests) returned an error dict
-        interests_is_error = isinstance(interests_result, dict) and "error" in interests_result
+        interests_is_error = (
+            isinstance(interests_result, dict) and "error" in interests_result
+        )
         level_is_error = isinstance(level_result, dict) and "error" in level_result
 
         if interests_is_error:
@@ -323,17 +368,40 @@ async def _call_gpt_summarize(
                 # interest_level stays at schema default (0)
             else:
                 # Both agents succeeded — extract int score for interest_level field
-                from app.analysis.universal.interest.interest_level import InterestLevelResult
+                from app.analysis.universal.interest.interest_level import (
+                    InterestLevelResult,
+                )
 
                 if isinstance(level_result, InterestLevelResult):
                     fields["interest_level"] = level_result.general_score
                     # Store rich detail in extra_axes_data for monitoring/analytics
                     fields.setdefault("extra_axes_data", {})
-                    fields["extra_axes_data"]["interest_pipeline"] = level_result.model_dump()
+                    fields["extra_axes_data"]["interest_pipeline"] = (
+                        level_result.model_dump()
+                    )
                 else:
                     fields["interest_level"] = 0
 
-    if failures >= len(DIMENSION_MODULES) + 1:  # 11 + interest pipeline (counts as 1)
+    # -------------------------------------------------------------------
+    # Process profile facts pipeline result
+    # -------------------------------------------------------------------
+    if isinstance(profile_raw, Exception):
+        # Profile facts pipeline raised unexpectedly — non-critical, log and use empty axis
+        logger.error(
+            "profile_facts_pipeline_exception",
+            error=str(profile_raw),
+            error_type=type(profile_raw).__name__,
+        )
+        fields["profile_facts"] = ProfileFactsAxis()
+    else:
+        # Profile pipeline always returns ProfileFactsAxis (never raises — catches internally)
+        fields["profile_facts"] = (
+            profile_raw
+            if isinstance(profile_raw, ProfileFactsAxis)
+            else ProfileFactsAxis()
+        )
+
+    if failures >= len(DIMENSION_MODULES) + 1:  # 9 + interest pipeline (counts as 1)
         raise RuntimeError(
             f"all {failures} dimension analyses failed — see dimension_analysis_failed logs"
         )
@@ -404,7 +472,11 @@ async def _merge_facts_into_lead(
             existing_objections = list(lead.objections_heard)
 
     raw_objections = (facts.get("objections") or {}).get("objections") or []
-    new_objections = [o["category"] for o in raw_objections if isinstance(o, dict) and o.get("category")]
+    new_objections = [
+        o["category"]
+        for o in raw_objections
+        if isinstance(o, dict) and o.get("category")
+    ]
     merged_objections = list(set(existing_objections + new_objections))
     lead.objections_heard = merged_objections
 
@@ -447,6 +519,10 @@ async def _merge_facts_into_lead(
     # ★ NEW: Dual-write to relational tables (analysis v2)
     await _write_lead_profile_facts(db, lead_id, session_id, facts)
     _write_interest_history(db, lead_id, session_id, facts)
+
+    # qora-profile-facts Phase 3: Write profile: facts with hard DELETE semantics
+    # (separate from _LIST_AXES which uses supersede pattern for other namespaces)
+    await _write_profile_facts_from_pipeline(db, lead_id, session_id, facts)
 
     # ★ NEW: Write LeadProfileFact rows for each data_correction (Issue #34 CRITICAL 2)
     if corrections_str:
@@ -594,7 +670,11 @@ async def _upsert_call_analysis(
     # qora-interest-pipeline: detected_interests now uses InterestsAxis (items: list[InterestItem])
     # Extract product IDs from items for the products column (backward compat)
     items = detected_interests.get("items") or []
-    products_list = [item["product"] for item in items if isinstance(item, dict) and item.get("product")]
+    products_list = [
+        item["product"]
+        for item in items
+        if isinstance(item, dict) and item.get("product")
+    ]
     ca.products = _to_json_list(products_list)
     # specific_needs: flatten all needs from all items
     specific_needs_flat = []
@@ -607,9 +687,16 @@ async def _upsert_call_analysis(
     ca.pain_points = _to_json_list(identified_problem.get("pain_points"))
     # Issue #35 — 4 new universal axes
     ca.service_issues = _to_json_list((facts.get("service_issues") or {}).get("issues"))
-    ca.profile_facts = _to_json_list((facts.get("profile_facts") or {}).get("facts"))
+    # qora-profile-facts Phase 3: serialize pipeline updates to JSON.
+    # facts["profile_facts"] = {"updates": [list of ProfileFactUpdate dicts]}
+    # (set from run_profile_facts_pipeline result via fields["profile_facts"]).
+    _pf_data = facts.get("profile_facts") or {}
+    ca.profile_facts = _to_json_list(_pf_data.get("updates") or [])
     ca.commitment_signals = _to_json_list(
-        [c.get("description", "") for c in (facts.get("commitments") or {}).get("commitments") or []]
+        [
+            c.get("description", "")
+            for c in (facts.get("commitments") or {}).get("commitments") or []
+        ]
     )
     # qora-abandonment: abandonment_reason is DEPRECATED (AD-4), set NULL for new records.
     # was_abrupt + abandonment_trigger are read from call_outcome dict.
@@ -819,18 +906,18 @@ async def _write_lead_profile_facts(
         )
 
     # ★ NEW (Issue #36): Append-only list-type facts with namespace prefixes
-    # Axes: profile_facts.facts, pain_points, service_issues.issues,
-    #       commitments.commitments (descriptions), detected_interests.buying_signals
+    # Axes: pain_points, service_issues.issues, commitments.commitments (descriptions),
+    #       detected_interests.buying_signals, objections
     # Dedup: normalized (strip().lower()) fact_key match against active rows
+    # qora-profile-facts Phase 3: profile: namespace is REMOVED from _LIST_AXES.
+    # It is now handled exclusively by _write_profile_facts_from_pipeline()
+    # which uses hard DELETE semantics (no superseded_at).
     _commitment_descriptions = [
         c.get("description", "")
         for c in (facts.get("commitments") or {}).get("commitments") or []
         if c.get("description")
     ]
-    # qora-interest-pipeline: detected_interests no longer has buying_signals.
-    # The buying_signal: namespace is kept for backward compat but uses an empty list.
     _LIST_AXES: list[tuple[str, list[Any]]] = [
-        ("profile:", (facts.get("profile_facts") or {}).get("facts") or []),
         ("pain:", (facts.get("identified_problem") or {}).get("pain_points") or []),
         ("service_issue:", (facts.get("service_issues") or {}).get("issues") or []),
         ("objection:", (facts.get("objections") or {}).get("objections") or []),
@@ -880,6 +967,136 @@ async def _write_lead_profile_facts(
                     source_call_id=session_id,
                 )
             )
+
+
+def _slugify(text: str, max_len: int = 60) -> str:
+    """Convert fact text to a stable slug for use in fact_key.
+
+    Lowercase, strips non-alphanumeric chars (keeps hyphens), max 60 chars.
+    """
+    import re
+
+    slug = text.lower().strip()
+    slug = re.sub(r"[^a-z0-9\-áéíóúüñàèìòùâêîôûäëïöü]", "-", slug)
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    return slug[:max_len]
+
+
+async def _find_active_profile_fact_by_key(
+    db: AsyncSession,
+    lead_id: str,
+    fact_key: str,
+) -> "LeadProfileFact | None":
+    """Find an active LeadProfileFact row by exact fact_key for a given lead.
+
+    Returns the row or None if not found / already superseded.
+    """
+    result = await db.execute(
+        select(LeadProfileFact).where(
+            LeadProfileFact.lead_id == lead_id,
+            LeadProfileFact.fact_key == fact_key,
+            LeadProfileFact.superseded_at == None,  # noqa: E711
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _write_profile_facts_from_pipeline(
+    db: AsyncSession,
+    lead_id: str,
+    session_id: str | None,
+    facts: dict[str, Any],
+) -> None:
+    """Write LeadProfileFact rows for profile_facts pipeline results.
+
+    Uses HARD DELETE semantics (no superseded_at) — per qora-profile-facts AD-3:
+    - ADD: INSERT new row with fact_key='profile:{category}:{slug}', fact_value=JSON
+    - UPDATE: DELETE old row (hard delete) + INSERT new row
+    - REMOVE: DELETE old row (hard delete), no new insert
+
+    Invalid target_fact_id for UPDATE → demote to ADD (GPT hallucinated ID).
+    Invalid target_fact_id for REMOVE → silently discard.
+
+    Args:
+        db: Active async DB session.
+        lead_id: UUID of the lead.
+        session_id: UUID of the source call session (for FK + provenance).
+        facts: model_dump()'d PostCallAnalysis facts dict.
+    """
+    pf_raw = facts.get("profile_facts") or {}
+    updates_raw = pf_raw.get("updates") or []
+
+    if not updates_raw:
+        return
+
+    for upd in updates_raw:
+        if not isinstance(upd, dict):
+            continue
+        operation = upd.get("operation")
+        category = upd.get("category")
+        fact_text = upd.get("fact") or ""
+        evidence = upd.get("evidence") or ""
+        confidence = upd.get("confidence") or "medium"
+        target_fact_id = upd.get("target_fact_id")
+
+        if not operation or not category or not fact_text:
+            continue
+
+        # Handle enum values from Python-mode model_dump() (ProfileFactCategory is str enum)
+        category_str = category.value if hasattr(category, "value") else str(category)
+        slug = _slugify(fact_text)
+        new_key = f"profile:{category_str}:{slug}"
+        new_value = json.dumps(
+            {
+                "category": category_str,
+                "fact": fact_text,
+                "evidence": evidence,
+                "confidence": confidence,
+            },
+            ensure_ascii=False,
+        )
+
+        if operation == "add":
+            db.add(
+                LeadProfileFact(
+                    id=_new_uuid(),
+                    lead_id=lead_id,
+                    fact_key=new_key,
+                    fact_value=new_value,
+                    source_call_id=session_id,
+                )
+            )
+
+        elif operation == "update":
+            if target_fact_id:
+                existing = await _find_active_profile_fact_by_key(
+                    db, lead_id, target_fact_id
+                )
+                if existing:
+                    # Hard DELETE the old row — no superseded_at
+                    await db.delete(existing)
+                    await db.flush()
+                # INSERT new row (both when found and as fallback for hallucinated ID)
+            db.add(
+                LeadProfileFact(
+                    id=_new_uuid(),
+                    lead_id=lead_id,
+                    fact_key=new_key,
+                    fact_value=new_value,
+                    source_call_id=session_id,
+                )
+            )
+
+        elif operation == "remove":
+            if target_fact_id:
+                existing = await _find_active_profile_fact_by_key(
+                    db, lead_id, target_fact_id
+                )
+                if existing:
+                    # Hard DELETE — no new insert
+                    await db.delete(existing)
+                    await db.flush()
+                # else: invalid target_fact_id → silently discard
 
 
 async def _write_correction_facts(

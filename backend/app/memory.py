@@ -54,6 +54,12 @@ _KNOWN_FACTS: list[tuple[str, str]] = [
 _KNOWN_FACTS_KEYS: frozenset[str] = frozenset(k for k, _ in _KNOWN_FACTS)
 _KNOWN_FACTS_LABELS: dict[str, str] = {k: label for k, label in _KNOWN_FACTS}
 
+# Keys to SKIP in _format_confirmed_facts — handled by _format_accumulated_profile
+# or relational tables instead of Lead.extracted_facts JSON blob.
+# qora-profile-facts: profile_facts.updates contains pipeline ops which must NOT be
+# rendered from extracted_facts (it would show REMOVE ops as facts).
+_SKIP_IN_CONFIRMED_FACTS: frozenset[str] = frozenset(["profile_facts"])
+
 
 # ---------------------------------------------------------------------------
 # Public types
@@ -230,6 +236,8 @@ def _format_confirmed_facts(extracted_facts: dict | None) -> str:
 
     # Tier 1: Known keys — fixed order, Spanish labels
     for key, label in _KNOWN_FACTS:
+        if key in _SKIP_IN_CONFIRMED_FACTS:
+            continue
         value = extracted_facts.get(key)
         if value is None or value == "" or value == [] or value == {}:
             continue
@@ -238,7 +246,11 @@ def _format_confirmed_facts(extracted_facts: dict | None) -> str:
             lines.append(f"- {label}: {rendered}")
 
     # Tier 2: Unknown keys — alphabetical, raw key as label
-    unknown_keys = sorted(k for k in extracted_facts if k not in _KNOWN_FACTS_KEYS)
+    unknown_keys = sorted(
+        k
+        for k in extracted_facts
+        if k not in _KNOWN_FACTS_KEYS and k not in _SKIP_IN_CONFIRMED_FACTS
+    )
     for key in unknown_keys:
         value = extracted_facts[key]
         if value is None or value == "" or value == [] or value == {}:
@@ -309,9 +321,7 @@ def _format_axis(key: str, axis_dict: dict) -> str:
             if not items:
                 return ""
             product_names = [
-                i.get("product", "?")
-                for i in items
-                if isinstance(i, dict)
+                i.get("product", "?") for i in items if isinstance(i, dict)
             ]
             parts = []
             if product_names:
@@ -355,7 +365,11 @@ def _format_axis(key: str, axis_dict: dict) -> str:
                 return ""
             description = primary_pain.get("description", "")
             urgency = primary_pain.get("urgency", "")
-            core = f"{description} ({urgency})" if (description and urgency) else description or urgency
+            core = (
+                f"{description} ({urgency})"
+                if (description and urgency)
+                else description or urgency
+            )
             # Append non-primary pain categories as bullets
             others = [
                 p.get("category", "")
@@ -369,7 +383,11 @@ def _format_axis(key: str, axis_dict: dict) -> str:
             # Legacy format: list of plain strings
             primary = axis_dict.get("primary_need", "")
             urgency = axis_dict.get("urgency", "")
-            core = f"{primary} ({urgency})" if (primary and urgency) else primary or urgency
+            core = (
+                f"{primary} ({urgency})"
+                if (primary and urgency)
+                else primary or urgency
+            )
             if pain_points:
                 core += f" — {', '.join(str(p) for p in pain_points)}"
             return core
@@ -427,6 +445,23 @@ _NAMESPACE_LABELS: list[tuple[str, str]] = [
     ("buying_signal:", "Señales de compra"),
 ]
 
+# qora-profile-facts Phase 4: Spanish labels for each profile fact category.
+# Used in _format_accumulated_profile to render structured profile: rows as
+# '{CategoryLabel}: {fact}' grouped by category.
+_PROFILE_CATEGORY_LABELS: dict[str, str] = {
+    "occupation": "Ocupación",
+    "availability": "Disponibilidad",
+    "communication_preference": "Preferencia de contacto",
+    "decision_style": "Estilo de decisión",
+    "family_context": "Contexto familiar",
+    "lifestyle": "Estilo de vida",
+    "financial_attitude": "Actitud financiera",
+    "product_knowledge": "Conocimiento del producto",
+    "provider_relationship": "Relación con proveedor",
+    "personality_tone": "Tono de personalidad",
+    "other": "Otros",
+}
+
 
 async def _format_accumulated_profile(db: AsyncSession, lead_id: str) -> str:
     """Build a structured string of accumulated LeadProfileFact rows and interest
@@ -473,20 +508,64 @@ async def _format_accumulated_profile(db: AsyncSession, lead_id: str) -> str:
         return ""
 
     # Group profile fact rows by namespace prefix
+    # qora-profile-facts Phase 4: profile: rows with JSON fact_value are rendered
+    # as '{CategoryLabel}: {fact}' grouped by category. Legacy plain-string rows
+    # are rendered as raw string values (backward compatible).
     by_namespace: dict[str, list[str]] = {}
+    # For profile: namespace, group by category for structured rendering
+    profile_by_category: dict[str, list[str]] = {}
+
     for row in all_rows:
-        for prefix, _label in _NAMESPACE_LABELS:
-            if row.fact_key.startswith(prefix):
-                value = row.fact_value or row.fact_key[len(prefix) :]
-                by_namespace.setdefault(prefix, []).append(value)
-                break
+        if row.fact_key.startswith("profile:"):
+            # Try to parse as structured JSON (new format)
+            fact_value = row.fact_value or ""
+            try:
+                parsed = json.loads(fact_value)
+                if isinstance(parsed, dict) and "fact" in parsed:
+                    category = str(parsed.get("category") or "other")
+                    fact_text = str(parsed["fact"])
+                    profile_by_category.setdefault(category, []).append(fact_text)
+                else:
+                    # JSON but not our structure — fall back to raw string
+                    by_namespace.setdefault("profile:", []).append(fact_value)
+            except (json.JSONDecodeError, ValueError):
+                # Legacy plain-string format — render as raw value
+                display = fact_value or row.fact_key[len("profile:") :]
+                by_namespace.setdefault("profile:", []).append(display)
+        else:
+            for prefix, _label in _NAMESPACE_LABELS[
+                1:
+            ]:  # skip profile: (handled above)
+                if row.fact_key.startswith(prefix):
+                    value = row.fact_value or row.fact_key[len(prefix) :]
+                    by_namespace.setdefault(prefix, []).append(value)
+                    break
 
     # Build section lines
     lines: list[str] = []
 
-    if by_namespace:
+    has_profile_data = profile_by_category or by_namespace.get("profile:")
+    has_other_data = any(v for k, v in by_namespace.items() if k != "profile:")
+
+    if has_profile_data or has_other_data:
         lines.append("--- Perfil acumulado ---")
-        for prefix, label in _NAMESPACE_LABELS:
+
+        # Render structured profile: facts by category (new format)
+        for category, facts_list in profile_by_category.items():
+            label = _PROFILE_CATEGORY_LABELS.get(
+                category, category.replace("_", " ").title()
+            )
+            capped = facts_list[:_MAX_FACTS_PER_NAMESPACE]
+            lines.append(f"- {label}: {', '.join(capped)}")
+
+        # Render legacy plain-string profile: facts (old format)
+        legacy_profile = by_namespace.get("profile:", [])
+        if legacy_profile:
+            capped = legacy_profile[:_MAX_FACTS_PER_NAMESPACE]
+            lines.append(f"- Datos personales: {', '.join(capped)}")
+
+        # Render other namespaces
+        for prefix, label in _NAMESPACE_LABELS[1:]:  # skip profile: (handled above)
             items = by_namespace.get(prefix)
             if not items:
                 continue

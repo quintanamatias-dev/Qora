@@ -102,4 +102,3 @@ class PostCallAnalysis(BaseModel):
         default_factory=CommitmentsAxis,
         description="Concrete commitments and next-step actions identified in the call",
     )
-

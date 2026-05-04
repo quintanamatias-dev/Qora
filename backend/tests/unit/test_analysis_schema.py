@@ -39,12 +39,12 @@ def test_analysis_schema_importable_standalone():
         "(qora-interest-pipeline spec — use InterestsAxis instead)"
     )
     # OutcomeClassification and EngagementQuality MUST NOT be exported post-outcome
-    assert not hasattr(mod, "OutcomeClassification"), (
-        "OutcomeClassification must be removed from analysis_schema exports (qora-outcome spec)"
-    )
-    assert not hasattr(mod, "EngagementQuality"), (
-        "EngagementQuality must be removed from analysis_schema exports (qora-outcome spec)"
-    )
+    assert not hasattr(
+        mod, "OutcomeClassification"
+    ), "OutcomeClassification must be removed from analysis_schema exports (qora-outcome spec)"
+    assert not hasattr(
+        mod, "EngagementQuality"
+    ), "EngagementQuality must be removed from analysis_schema exports (qora-outcome spec)"
     assert hasattr(mod, "Urgency")
 
 
@@ -59,9 +59,7 @@ def test_analysis_schema_no_app_imports():
     import ast
     import pathlib
 
-    package_root = (
-        pathlib.Path(__file__).parent.parent.parent / "app" / "analysis"
-    )
+    package_root = pathlib.Path(__file__).parent.parent.parent / "app" / "analysis"
     forbidden_prefixes = ("fastapi", "sqlalchemy", "structlog")
     allowed_app_prefix = "app.analysis"
 
@@ -122,9 +120,9 @@ def test_call_outcome_accepts_all_11_classifications(classification):
     assert outcome.classification == classification
     assert outcome.confidence == "medium"
     # engagement_quality must NOT exist
-    assert not hasattr(outcome, "engagement_quality"), (
-        "engagement_quality must be removed from CallOutcome (qora-outcome spec)"
-    )
+    assert not hasattr(
+        outcome, "engagement_quality"
+    ), "engagement_quality must be removed from CallOutcome (qora-outcome spec)"
 
 
 @pytest.mark.parametrize("confidence", ["low", "medium", "high"])
@@ -201,9 +199,9 @@ def test_call_outcome_no_engagement_quality_field():
         reason="No answer.",
         confidence="low",
     )
-    assert not hasattr(outcome, "engagement_quality"), (
-        "engagement_quality must NOT exist on CallOutcome (qora-outcome spec)"
-    )
+    assert not hasattr(
+        outcome, "engagement_quality"
+    ), "engagement_quality must NOT exist on CallOutcome (qora-outcome spec)"
     # Also verify model fields don't include engagement_quality
     assert "engagement_quality" not in CallOutcome.model_fields
 
@@ -231,36 +229,36 @@ def test_outcome_classification_enum_removed_from_enums():
     """OutcomeClassification class must NOT exist in enums.py (qora-outcome spec)."""
     import app.analysis.enums as enums_mod
 
-    assert not hasattr(enums_mod, "OutcomeClassification"), (
-        "OutcomeClassification must be deleted from enums.py (qora-outcome spec)"
-    )
+    assert not hasattr(
+        enums_mod, "OutcomeClassification"
+    ), "OutcomeClassification must be deleted from enums.py (qora-outcome spec)"
 
 
 def test_engagement_quality_enum_removed_from_enums():
     """EngagementQuality class must NOT exist in enums.py (qora-outcome spec)."""
     import app.analysis.enums as enums_mod
 
-    assert not hasattr(enums_mod, "EngagementQuality"), (
-        "EngagementQuality must be deleted from enums.py (qora-outcome spec)"
-    )
+    assert not hasattr(
+        enums_mod, "EngagementQuality"
+    ), "EngagementQuality must be deleted from enums.py (qora-outcome spec)"
 
 
 def test_outcome_classification_not_importable_from_analysis():
     """OutcomeClassification must NOT be importable from app.analysis (qora-outcome spec)."""
     import app.analysis as analysis_pkg
 
-    assert not hasattr(analysis_pkg, "OutcomeClassification"), (
-        "OutcomeClassification must be removed from app.analysis exports"
-    )
+    assert not hasattr(
+        analysis_pkg, "OutcomeClassification"
+    ), "OutcomeClassification must be removed from app.analysis exports"
 
 
 def test_engagement_quality_not_importable_from_analysis():
     """EngagementQuality must NOT be importable from app.analysis (qora-outcome spec)."""
     import app.analysis as analysis_pkg
 
-    assert not hasattr(analysis_pkg, "EngagementQuality"), (
-        "EngagementQuality must be removed from app.analysis exports"
-    )
+    assert not hasattr(
+        analysis_pkg, "EngagementQuality"
+    ), "EngagementQuality must be removed from app.analysis exports"
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +273,10 @@ def test_outcome_py_does_not_import_from_enums():
 
     outcome_path = (
         pathlib.Path(__file__).parent.parent.parent
-        / "app" / "analysis" / "universal" / "outcome.py"
+        / "app"
+        / "analysis"
+        / "universal"
+        / "outcome.py"
     )
     source = outcome_path.read_text()
     tree = ast.parse(source)
@@ -284,12 +285,12 @@ def test_outcome_py_does_not_import_from_enums():
         if isinstance(node, ast.ImportFrom) and node.module:
             if "enums" in node.module:
                 imported_names = [alias.name for alias in node.names]
-                assert "OutcomeClassification" not in imported_names, (
-                    "outcome.py must NOT import OutcomeClassification from enums"
-                )
-                assert "EngagementQuality" not in imported_names, (
-                    "outcome.py must NOT import EngagementQuality from enums"
-                )
+                assert (
+                    "OutcomeClassification" not in imported_names
+                ), "outcome.py must NOT import OutcomeClassification from enums"
+                assert (
+                    "EngagementQuality" not in imported_names
+                ), "outcome.py must NOT import EngagementQuality from enums"
 
 
 # ---------------------------------------------------------------------------
@@ -327,9 +328,9 @@ def test_outcome_dimension_prompt_includes_all_11_classifications():
 
     prompt = outcome_mod.DIMENSION["prompt"]
     for classification in _VALID_11_CLASSIFICATIONS:
-        assert classification in prompt, (
-            f"outcome.py DIMENSION prompt missing classification: {classification}"
-        )
+        assert (
+            classification in prompt
+        ), f"outcome.py DIMENSION prompt missing classification: {classification}"
 
 
 def test_outcome_dimension_prompt_no_engagement_quality():
@@ -337,9 +338,9 @@ def test_outcome_dimension_prompt_no_engagement_quality():
     from app.analysis.universal import outcome as outcome_mod
 
     prompt = outcome_mod.DIMENSION["prompt"]
-    assert "engagement_quality" not in prompt, (
-        "outcome.py DIMENSION prompt must not reference engagement_quality (qora-outcome spec)"
-    )
+    assert (
+        "engagement_quality" not in prompt
+    ), "outcome.py DIMENSION prompt must not reference engagement_quality (qora-outcome spec)"
 
 
 # ---------------------------------------------------------------------------
@@ -422,13 +423,15 @@ def test_identified_problem_rejects_invalid_category():
 
     with pytest.raises(ValidationError):
         ProblemAxis(
-            pain_points=[{
-                "category": "INVALID_CATEGORY",
-                "description": "something",
-                "evidence": "some quote",
-                "urgency": "medium",
-                "confidence": "high",
-            }]
+            pain_points=[
+                {
+                    "category": "INVALID_CATEGORY",
+                    "description": "something",
+                    "evidence": "some quote",
+                    "urgency": "medium",
+                    "confidence": "high",
+                }
+            ]
         )
 
 
@@ -583,9 +586,9 @@ def test_post_call_analysis_objections_field_is_ObjectionsAxis():
     from app.analysis.universal.objections import ObjectionsAxis
 
     analysis = PostCallAnalysis()
-    assert isinstance(analysis.objections, ObjectionsAxis), (
-        "PostCallAnalysis.objections must be ObjectionsAxis (qora-objections spec)"
-    )
+    assert isinstance(
+        analysis.objections, ObjectionsAxis
+    ), "PostCallAnalysis.objections must be ObjectionsAxis (qora-objections spec)"
 
 
 def test_post_call_analysis_objections_default_is_empty_axis():
@@ -632,9 +635,9 @@ def test_post_call_analysis_objections_model_dump_is_dict():
     )
     analysis = PostCallAnalysis(objections=ObjectionsAxis(objections=[obj]))
     dumped = analysis.model_dump()
-    assert isinstance(dumped["objections"], dict), (
-        "model_dump()['objections'] must be a dict (ObjectionsAxis)"
-    )
+    assert isinstance(
+        dumped["objections"], dict
+    ), "model_dump()['objections'] must be a dict (ObjectionsAxis)"
     assert "objections" in dumped["objections"]
     assert isinstance(dumped["objections"]["objections"], list)
     assert dumped["objections"]["objections"][0]["category"] == "trust"
@@ -849,27 +852,210 @@ def test_service_issues_axis_accepts_list_of_service_issues():
 
 
 # ---------------------------------------------------------------------------
-# ProfileFactsAxis
+# ProfileFactsAxis — qora-profile-facts spec
+# New contract: operation-based (add/update/remove) with 11 categories
 # ---------------------------------------------------------------------------
 
+_VALID_PROFILE_FACT_CATEGORIES = [
+    "occupation",
+    "availability",
+    "communication_preference",
+    "decision_style",
+    "family_context",
+    "lifestyle",
+    "financial_attitude",
+    "product_knowledge",
+    "provider_relationship",
+    "personality_tone",
+    "other",
+]
 
-def test_profile_facts_axis_defaults_to_empty_list():
-    """ProfileFactsAxis.facts defaults to empty list when not provided."""
-    from app.analysis_schema import ProfileFactsAxis
+
+def test_profile_facts_axis_defaults_to_empty_updates():
+    """ProfileFactsAxis.updates defaults to empty list — qora-profile-facts spec."""
+    from app.analysis.universal.profile_facts import ProfileFactsAxis
 
     axis = ProfileFactsAxis()
-    assert axis.facts == []
+    assert axis.updates == []
 
 
-def test_profile_facts_axis_accepts_populated_list():
-    """ProfileFactsAxis.facts accepts a list of personal/professional facts."""
-    from app.analysis_schema import ProfileFactsAxis
+def test_profile_facts_axis_no_longer_has_facts_field():
+    """ProfileFactsAxis MUST NOT have a 'facts' field — replaced by 'updates' (qora-profile-facts)."""
+    from app.analysis.universal.profile_facts import ProfileFactsAxis
 
-    axis = ProfileFactsAxis(
-        facts=["works in tech", "has 2 kids", "lives in Buenos Aires"]
+    axis = ProfileFactsAxis()
+    assert not hasattr(
+        axis, "facts"
+    ), "ProfileFactsAxis must not have 'facts' field (qora-profile-facts spec — use 'updates')"
+    assert "facts" not in ProfileFactsAxis.model_fields
+
+
+def test_profile_fact_update_add_without_target_fact_id_is_valid():
+    """ProfileFactUpdate with operation=add and target_fact_id=None is valid."""
+    from app.analysis.universal.profile_facts import ProfileFactUpdate
+
+    update = ProfileFactUpdate(
+        operation="add",
+        category="occupation",
+        fact="vendedor inmobiliario",
+        evidence="Dijo que trabaja vendiendo propiedades",
+        confidence="high",
+        target_fact_id=None,
     )
-    assert len(axis.facts) == 3
-    assert "works in tech" in axis.facts
+    assert update.operation == "add"
+    assert update.target_fact_id is None
+
+
+def test_profile_fact_update_update_without_target_fact_id_raises():
+    """ProfileFactUpdate with operation=update and target_fact_id=None raises ValidationError."""
+    from pydantic import ValidationError
+    from app.analysis.universal.profile_facts import ProfileFactUpdate
+
+    with pytest.raises(ValidationError):
+        ProfileFactUpdate(
+            operation="update",
+            category="occupation",
+            fact="nueva ocupacion",
+            evidence="Corrigió que ahora es gerente",
+            confidence="medium",
+            target_fact_id=None,
+        )
+
+
+def test_profile_fact_update_remove_without_target_fact_id_raises():
+    """ProfileFactUpdate with operation=remove and target_fact_id=None raises ValidationError."""
+    from pydantic import ValidationError
+    from app.analysis.universal.profile_facts import ProfileFactUpdate
+
+    with pytest.raises(ValidationError):
+        ProfileFactUpdate(
+            operation="remove",
+            category="lifestyle",
+            fact="already removed fact",
+            evidence="Lead said this is no longer true",
+            confidence="high",
+            target_fact_id=None,
+        )
+
+
+def test_profile_facts_axis_rejects_more_than_5_updates():
+    """ProfileFactsAxis raises ValidationError when more than 5 updates are provided."""
+    from pydantic import ValidationError
+    from app.analysis.universal.profile_facts import ProfileFactsAxis, ProfileFactUpdate
+
+    updates = [
+        ProfileFactUpdate(
+            operation="add",
+            category="occupation",
+            fact=f"fact {i}",
+            evidence=f"evidence {i}",
+            confidence="low",
+            target_fact_id=None,
+        )
+        for i in range(6)
+    ]
+    with pytest.raises(ValidationError):
+        ProfileFactsAxis(updates=updates)
+
+
+def test_profile_facts_axis_accepts_exactly_5_updates():
+    """ProfileFactsAxis accepts exactly 5 updates — max boundary is inclusive."""
+    from app.analysis.universal.profile_facts import ProfileFactsAxis, ProfileFactUpdate
+
+    updates = [
+        ProfileFactUpdate(
+            operation="add",
+            category="occupation",
+            fact=f"fact {i}",
+            evidence=f"evidence {i}",
+            confidence="medium",
+            target_fact_id=None,
+        )
+        for i in range(5)
+    ]
+    axis = ProfileFactsAxis(updates=updates)
+    assert len(axis.updates) == 5
+
+
+@pytest.mark.parametrize("category", _VALID_PROFILE_FACT_CATEGORIES)
+def test_profile_fact_update_accepts_all_11_categories(category):
+    """ProfileFactUpdate accepts each of the 11 valid category values."""
+    from app.analysis.universal.profile_facts import ProfileFactUpdate
+
+    update = ProfileFactUpdate(
+        operation="add",
+        category=category,
+        fact="some fact",
+        evidence="some evidence",
+        confidence="medium",
+        target_fact_id=None,
+    )
+    assert update.category == category
+
+
+def test_profile_fact_update_rejects_invalid_category():
+    """ProfileFactUpdate raises ValidationError for an unknown category."""
+    from pydantic import ValidationError
+    from app.analysis.universal.profile_facts import ProfileFactUpdate
+
+    with pytest.raises(ValidationError):
+        ProfileFactUpdate(
+            operation="add",
+            category="invalid_category",
+            fact="some fact",
+            evidence="some evidence",
+            confidence="medium",
+            target_fact_id=None,
+        )
+
+
+def test_profile_facts_axis_updates_importable_from_post_call_analysis():
+    """PostCallAnalysis.profile_facts has an 'updates' attribute (not 'facts')."""
+    from app.analysis.schema import PostCallAnalysis
+
+    analysis = PostCallAnalysis()
+    pf = analysis.profile_facts
+    assert hasattr(
+        pf, "updates"
+    ), "PostCallAnalysis.profile_facts must have 'updates' field (qora-profile-facts)"
+    assert pf.updates == []
+
+
+def test_profile_fact_update_with_target_fact_id_for_update_is_valid():
+    """ProfileFactUpdate with operation=update and a valid target_fact_id passes."""
+    from app.analysis.universal.profile_facts import ProfileFactUpdate
+
+    update = ProfileFactUpdate(
+        operation="update",
+        category="occupation",
+        fact="gerente comercial",
+        evidence="Dijo que fue promovido",
+        confidence="high",
+        target_fact_id="profile:occupation:vendedor-inmobiliario",
+    )
+    assert update.operation == "update"
+    assert update.target_fact_id == "profile:occupation:vendedor-inmobiliario"
+
+
+def test_profile_fact_category_enum_has_11_values():
+    """ProfileFactCategory enum has exactly 11 values."""
+    from app.analysis.universal.profile_facts import ProfileFactCategory
+
+    assert len(list(ProfileFactCategory)) == 11
+
+
+def test_profile_facts_axis_is_importable_from_universal():
+    """ProfileFactsAxis must still be importable from app.analysis.universal."""
+    from app.analysis.universal import ProfileFactsAxis  # noqa: F401
+
+    assert ProfileFactsAxis is not None
+
+
+def test_profile_fact_update_importable_from_profile_facts_module():
+    """ProfileFactUpdate must be importable from app.analysis.universal.profile_facts."""
+    from app.analysis.universal.profile_facts import ProfileFactUpdate  # noqa: F401
+
+    assert ProfileFactUpdate is not None
 
 
 # ---------------------------------------------------------------------------
@@ -918,9 +1104,9 @@ def test_abandonment_module_deleted_and_not_importable():
     import importlib.util
 
     spec = importlib.util.find_spec("app.analysis.universal.abandonment")
-    assert spec is None, (
-        "app.analysis.universal.abandonment must be deleted (qora-abandonment spec)"
-    )
+    assert (
+        spec is None
+    ), "app.analysis.universal.abandonment must be deleted (qora-abandonment spec)"
 
 
 def test_call_outcome_replaces_abandonment_reason_axis():
@@ -959,9 +1145,7 @@ def test_post_call_analysis_has_three_new_axes_without_abandonment():
 
     assert "service_issues" in props, "PostCallAnalysis must have service_issues axis"
     assert "profile_facts" in props, "PostCallAnalysis must have profile_facts axis"
-    assert (
-        "commitments" in props
-    ), "PostCallAnalysis must have commitments axis"
+    assert "commitments" in props, "PostCallAnalysis must have commitments axis"
     assert (
         "abandonment_reason" not in props
     ), "PostCallAnalysis must NOT have abandonment_reason axis (qora-abandonment)"
@@ -998,7 +1182,9 @@ def test_post_call_analysis_new_axes_have_correct_defaults():
     )
 
     assert analysis.service_issues.issues == []
-    assert analysis.profile_facts.facts == []
+    assert (
+        analysis.profile_facts.updates == []
+    )  # qora-profile-facts: 'updates' replaces 'facts'
     assert analysis.commitments.commitments == []
     # qora-abandonment: abandonment_reason no longer on PostCallAnalysis
     assert not hasattr(analysis, "abandonment_reason")
@@ -1012,6 +1198,7 @@ def test_post_call_analysis_new_axes_accept_data():
 
     qora-abandonment: abandonment_reason field REMOVED. was_abrupt + abandonment_trigger
     now live on call_outcome and are tested separately.
+    qora-profile-facts: ProfileFactsAxis.facts replaced by .updates (operation-based).
     """
     from app.analysis_schema import (
         PostCallAnalysis,
@@ -1019,6 +1206,7 @@ def test_post_call_analysis_new_axes_accept_data():
         ServiceIssuesAxis,
         ProfileFactsAxis,
     )
+    from app.analysis.universal.profile_facts import ProfileFactUpdate
     from app.analysis.universal.problem import ProblemAxis, PainPoint
     from app.analysis.universal.interest.interests import InterestsAxis
     from app.analysis.universal.commitments import CommitmentsAxis, Commitment
@@ -1049,7 +1237,16 @@ def test_post_call_analysis_new_axes_accept_data():
         confidence="high",
         is_primary=True,
     )
+    pf_update = ProfileFactUpdate(
+        operation="add",
+        category="occupation",
+        fact="manager at startup",
+        evidence="Said he works at a startup",
+        confidence="high",
+        target_fact_id=None,
+    )
     from app.analysis.universal.objections import ObjectionsAxis as _OA
+
     analysis = PostCallAnalysis(
         summary="Full analysis.",
         objections=_OA(),
@@ -1065,13 +1262,15 @@ def test_post_call_analysis_new_axes_accept_data():
         detected_interests=InterestsAxis(),
         identified_problem=ProblemAxis(pain_points=[pp]),
         service_issues=ServiceIssuesAxis(issues=[issue]),
-        profile_facts=ProfileFactsAxis(facts=["manager at startup"]),
+        profile_facts=ProfileFactsAxis(updates=[pf_update]),
         commitments=CommitmentsAxis(commitments=[c]),
     )
 
     assert len(analysis.service_issues.issues) == 1
     assert analysis.service_issues.issues[0].category == "billing_issue"
-    assert analysis.profile_facts.facts == ["manager at startup"]
+    # qora-profile-facts: .updates replaces .facts
+    assert len(analysis.profile_facts.updates) == 1
+    assert analysis.profile_facts.updates[0].fact == "manager at startup"
     assert len(analysis.commitments.commitments) == 1
     assert analysis.commitments.commitments[0].type == "callback"
     # qora-abandonment: abandonment_reason no longer on PostCallAnalysis
@@ -1094,9 +1293,9 @@ def test_post_call_analysis_new_axes_accept_data():
         __import__("app.analysis.universal.outcome", fromlist=["x"]),
         __import__("app.analysis.universal.problem", fromlist=["x"]),
         __import__("app.analysis.universal.service_issues", fromlist=["x"]),
-        __import__("app.analysis.universal.profile_facts", fromlist=["x"]),
-        __import__("app.analysis.universal.commitments", fromlist=["x"]),
+        # qora-profile-facts: profile_facts removed from DIMENSION_MODULES (10 → 9)
         # qora-abandonment: abandonment module REMOVED from DIMENSION_MODULES
+        __import__("app.analysis.universal.commitments", fromlist=["x"]),
     ],
     ids=lambda m: m.DIMENSION["name"],
 )
@@ -1106,6 +1305,8 @@ def test_dimension_module_contract(mod):
     NOTE: interest_level and interests are no longer in DIMENSION_MODULES —
     they are orchestrated by the 2-phase interest pipeline in summarizer.py.
     NOTE: abandonment is no longer in DIMENSION_MODULES (qora-abandonment spec).
+    NOTE: profile_facts is no longer in DIMENSION_MODULES (qora-profile-facts spec —
+    handled by standalone run_profile_facts_pipeline()).
     """
     import inspect
     from app.analysis import PostCallAnalysis
@@ -1126,22 +1327,23 @@ def test_dimension_module_contract(mod):
 
 def test_dimension_modules_cover_all_post_call_analysis_fields():
     """Every PostCallAnalysis field is owned by exactly one dimension module OR
-    handled by the interest pipeline.
+    handled by a standalone pipeline.
 
     qora-interest-pipeline: interest_level and detected_interests are now
-    orchestrated by the 2-phase pipeline, NOT by DIMENSION_MODULES. The
-    remaining 11 modules must cover all other PostCallAnalysis fields.
+    orchestrated by the 2-phase pipeline, NOT by DIMENSION_MODULES.
+    qora-profile-facts: profile_facts is now handled by run_profile_facts_pipeline(),
+    also NOT in DIMENSION_MODULES (10 → 9).
     """
     from app.analysis import PostCallAnalysis
     from app.analysis.universal import DIMENSION_MODULES
 
-    # Fields managed by the interest pipeline (not in DIMENSION_MODULES)
-    _PIPELINE_FIELDS = {"interest_level", "detected_interests"}
+    # Fields managed by standalone pipelines (not in DIMENSION_MODULES)
+    _PIPELINE_FIELDS = {"interest_level", "detected_interests", "profile_facts"}
 
     target_fields = [mod.DIMENSION["target_field"] for mod in DIMENSION_MODULES]
-    assert len(target_fields) == len(set(target_fields)), (
-        f"Duplicate target_field across dimensions: {target_fields}"
-    )
+    assert len(target_fields) == len(
+        set(target_fields)
+    ), f"Duplicate target_field across dimensions: {target_fields}"
     expected = set(PostCallAnalysis.model_fields.keys()) - _PIPELINE_FIELDS
     assert set(target_fields) == expected, (
         f"Mismatch — extra: {set(target_fields) - expected}, "
@@ -1183,9 +1385,9 @@ async def test_dimension_analyze_returns_unwrapped_value_for_simple_axes():
         response.choices[0].message.parsed = parsed
         client.beta.chat.completions.parse = AsyncMock(return_value=response)
         result = await mod.analyze("transcript", client)
-        assert isinstance(result, expected_type), (
-            f"{mod.__name__}.analyze returned {type(result)}, expected {expected_type}"
-        )
+        assert isinstance(
+            result, expected_type
+        ), f"{mod.__name__}.analyze returned {type(result)}, expected {expected_type}"
         assert result == expected_value
 
 
@@ -1197,6 +1399,8 @@ async def test_dimension_analyze_returns_axis_for_complex_axes():
     NOTE: interests is no longer in DIMENSION_MODULES (qora-interest-pipeline spec
     — it's orchestrated by the 2-phase pipeline via run_interest_pipeline()).
     NOTE: abandonment is no longer in DIMENSION_MODULES (qora-abandonment spec).
+    NOTE: profile_facts is no longer in DIMENSION_MODULES (qora-profile-facts spec
+    — orchestrated by run_profile_facts_pipeline()).
     """
     from unittest.mock import AsyncMock, MagicMock
     from app.analysis.universal import (
@@ -1204,13 +1408,11 @@ async def test_dimension_analyze_returns_axis_for_complex_axes():
         ObjectionsAxis,
         ProblemAxis,
         ServiceIssuesAxis,
-        ProfileFactsAxis,
         CommitmentsAxis,
         outcome as outcome_mod,
         objections as objections_mod,
         problem as problem_mod,
         service_issues as service_issues_mod,
-        profile_facts as profile_facts_mod,
         commitments as commitments_mod,
     )
 
@@ -1222,7 +1424,6 @@ async def test_dimension_analyze_returns_axis_for_complex_axes():
         (objections_mod, ObjectionsAxis()),
         (problem_mod, ProblemAxis()),
         (service_issues_mod, ServiceIssuesAxis()),
-        (profile_facts_mod, ProfileFactsAxis()),
         (commitments_mod, CommitmentsAxis()),
     ]
     for mod, parsed in cases:
@@ -1242,6 +1443,8 @@ def test_dimension_modules_iteration_order_is_stable():
     DIMENSION_MODULES (11 entries, down from 13). They are now orchestrated
     by the 2-phase interest pipeline.
     qora-abandonment: abandonment_reason removed (10 entries, down from 11).
+    qora-profile-facts: profile_facts removed (9 entries, down from 10).
+    Handled by standalone run_profile_facts_pipeline().
     """
     from app.analysis.universal import DIMENSION_MODULES
 
@@ -1255,7 +1458,6 @@ def test_dimension_modules_iteration_order_is_stable():
         "outcome",
         "problem",
         "service_issues",
-        "profile_facts",
         "commitments",
     ]
 
@@ -1328,7 +1530,9 @@ def test_service_issues_target_field_mapping_unchanged():
 
     # Find service_issues module in DIMENSION_MODULES
     si_dim = next(
-        m.DIMENSION for m in DIMENSION_MODULES if m.DIMENSION["name"] == "service_issues"
+        m.DIMENSION
+        for m in DIMENSION_MODULES
+        if m.DIMENSION["name"] == "service_issues"
     )
     assert si_dim["target_field"] == "service_issues"
     assert si_dim["schema"] is si_mod.ServiceIssuesAxis
@@ -1347,24 +1551,24 @@ def test_objections_target_field_mapping_is_correct():
 
 
 def test_dimension_modules_cover_all_post_call_analysis_fields_still_correct():
-    """All 10 non-pipeline PostCallAnalysis fields are covered by exactly one dimension.
+    """All 9 non-pipeline PostCallAnalysis fields are covered by exactly one dimension.
 
     qora-interest-pipeline: interest_level and detected_interests are now
-    pipeline fields — not in DIMENSION_MODULES. The 10 remaining dimensions
-    cover all other PostCallAnalysis fields.
+    pipeline fields — not in DIMENSION_MODULES.
     qora-abandonment: abandonment_reason removed from PostCallAnalysis.
+    qora-profile-facts: profile_facts moved to standalone run_profile_facts_pipeline().
     """
     from app.analysis import PostCallAnalysis
     from app.analysis.universal import DIMENSION_MODULES
 
-    # Fields managed by the interest pipeline (not in DIMENSION_MODULES)
-    _PIPELINE_FIELDS = {"interest_level", "detected_interests"}
+    # Fields managed by standalone pipelines (not in DIMENSION_MODULES)
+    _PIPELINE_FIELDS = {"interest_level", "detected_interests", "profile_facts"}
 
     target_fields = [mod.DIMENSION["target_field"] for mod in DIMENSION_MODULES]
     # No duplicates
-    assert len(target_fields) == len(set(target_fields)), (
-        f"Duplicate target_field: {target_fields}"
-    )
+    assert len(target_fields) == len(
+        set(target_fields)
+    ), f"Duplicate target_field: {target_fields}"
     # Every non-pipeline field is covered
     expected = set(PostCallAnalysis.model_fields.keys()) - _PIPELINE_FIELDS
     assert set(target_fields) == expected, (
@@ -1378,16 +1582,18 @@ def test_dimension_modules_cover_all_post_call_analysis_fields_still_correct():
 # ===========================================================================
 
 
-def test_dimension_modules_count_is_10_after_interest_pipeline_and_abandonment():
-    """DIMENSION_MODULES has exactly 10 entries after qora-interest-pipeline and qora-abandonment.
+def test_dimension_modules_count_is_9_after_interest_pipeline_abandonment_and_profile_facts():
+    """DIMENSION_MODULES has exactly 9 entries after qora-interest-pipeline, qora-abandonment,
+    and qora-profile-facts.
 
     interest_level and interests removed (run_interest_pipeline).
     abandonment_reason removed (absorbed into CallOutcome fields).
+    profile_facts removed (run_profile_facts_pipeline standalone).
     """
     from app.analysis.universal import DIMENSION_MODULES
 
-    assert len(DIMENSION_MODULES) == 10, (
-        f"Expected 10 DIMENSION_MODULES (interest pipeline + abandonment extracted), "
+    assert len(DIMENSION_MODULES) == 9, (
+        f"Expected 9 DIMENSION_MODULES (interest pipeline + abandonment + profile_facts extracted), "
         f"got {len(DIMENSION_MODULES)}: {[m.DIMENSION['name'] for m in DIMENSION_MODULES]}"
     )
 
@@ -1420,9 +1626,9 @@ def test_interest_level_stays_int_in_schema():
     field_info = PostCallAnalysis.model_fields["interest_level"]
     # Field annotation must be int (not a Pydantic model)
     annotation = field_info.annotation
-    assert annotation is int, (
-        f"interest_level must remain int in PostCallAnalysis (AD-4), got {annotation}"
-    )
+    assert (
+        annotation is int
+    ), f"interest_level must remain int in PostCallAnalysis (AD-4), got {annotation}"
 
 
 def test_detected_interests_in_schema_uses_new_model():
@@ -1432,9 +1638,9 @@ def test_detected_interests_in_schema_uses_new_model():
 
     field_info = PostCallAnalysis.model_fields["detected_interests"]
     annotation = field_info.annotation
-    assert annotation is InterestsAxis, (
-        f"detected_interests must use InterestsAxis from interest/ package, got {annotation}"
-    )
+    assert (
+        annotation is InterestsAxis
+    ), f"detected_interests must use InterestsAxis from interest/ package, got {annotation}"
 
 
 def test_interests_axis_default_has_empty_items():
@@ -1484,6 +1690,7 @@ def test_old_interests_module_no_longer_in_dimension_modules():
 
     # Also verify DIMENSION_MODULES doesn't have an interests dimension
     from app.analysis.universal import DIMENSION_MODULES
+
     dim_names = [mod.DIMENSION["name"] for mod in DIMENSION_MODULES]
     assert "interests" not in dim_names, (
         "interests must be removed from DIMENSION_MODULES "
@@ -1507,6 +1714,7 @@ def test_old_interest_level_module_no_longer_in_dimension_modules():
 
     # Also verify DIMENSION_MODULES doesn't have an interest_level dimension
     from app.analysis.universal import DIMENSION_MODULES
+
     dim_names = [mod.DIMENSION["name"] for mod in DIMENSION_MODULES]
     assert "interest_level" not in dim_names, (
         "interest_level must be removed from DIMENSION_MODULES "
@@ -1612,16 +1820,18 @@ def test_call_outcome_validator_nullifies_fields_for_completed_outcomes(classifi
         abandonment_trigger="price_shock",
     )
     # Validator must override the supplied values
-    assert outcome.was_abrupt is None, (
-        f"was_abrupt must be None for classification={classification!r}"
-    )
-    assert outcome.abandonment_trigger is None, (
-        f"abandonment_trigger must be None for classification={classification!r}"
-    )
+    assert (
+        outcome.was_abrupt is None
+    ), f"was_abrupt must be None for classification={classification!r}"
+    assert (
+        outcome.abandonment_trigger is None
+    ), f"abandonment_trigger must be None for classification={classification!r}"
 
 
 @pytest.mark.parametrize("classification", _NON_COMPLETED_CLASSIFICATIONS)
-def test_call_outcome_validator_preserves_fields_for_non_completed_outcomes(classification):
+def test_call_outcome_validator_preserves_fields_for_non_completed_outcomes(
+    classification,
+):
     """model_validator: non-completed classifications keep was_abrupt + abandonment_trigger as set."""
     from app.analysis.universal.outcome import CallOutcome
 
@@ -1710,9 +1920,9 @@ def test_post_call_analysis_has_no_abandonment_reason_field():
     """PostCallAnalysis MUST NOT have an abandonment_reason field after qora-abandonment."""
     from app.analysis.schema import PostCallAnalysis
 
-    assert "abandonment_reason" not in PostCallAnalysis.model_fields, (
-        "PostCallAnalysis.abandonment_reason must be REMOVED (qora-abandonment spec)"
-    )
+    assert (
+        "abandonment_reason" not in PostCallAnalysis.model_fields
+    ), "PostCallAnalysis.abandonment_reason must be REMOVED (qora-abandonment spec)"
 
 
 def test_abandonment_reason_axis_not_imported_in_schema():
@@ -1729,18 +1939,22 @@ def test_abandonment_reason_axis_not_imported_in_schema():
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             imported_names = [alias.name for alias in node.names]
-            assert "AbandonmentReasonAxis" not in imported_names, (
-                "schema.py must NOT import AbandonmentReasonAxis (qora-abandonment spec)"
-            )
+            assert (
+                "AbandonmentReasonAxis" not in imported_names
+            ), "schema.py must NOT import AbandonmentReasonAxis (qora-abandonment spec)"
 
 
-def test_dimension_modules_count_is_10_after_abandonment():
-    """DIMENSION_MODULES has exactly 10 entries after qora-abandonment removes abandonment."""
+def test_dimension_modules_count_is_9_after_abandonment_and_profile_facts():
+    """DIMENSION_MODULES has exactly 9 entries after qora-abandonment and qora-profile-facts.
+
+    qora-abandonment removed abandonment_reason (11 → 10).
+    qora-profile-facts removed profile_facts (10 → 9).
+    """
     from app.analysis.universal import DIMENSION_MODULES
 
     names = [mod.DIMENSION["name"] for mod in DIMENSION_MODULES]
-    assert len(DIMENSION_MODULES) == 10, (
-        f"Expected 10 DIMENSION_MODULES after qora-abandonment, "
+    assert len(DIMENSION_MODULES) == 9, (
+        f"Expected 9 DIMENSION_MODULES after qora-abandonment and qora-profile-facts, "
         f"got {len(DIMENSION_MODULES)}: {names}"
     )
 
@@ -1750,9 +1964,9 @@ def test_abandonment_not_in_dimension_modules():
     from app.analysis.universal import DIMENSION_MODULES
 
     names = [mod.DIMENSION["name"] for mod in DIMENSION_MODULES]
-    assert "abandonment_reason" not in names, (
-        f"abandonment_reason must be removed from DIMENSION_MODULES: {names}"
-    )
+    assert (
+        "abandonment_reason" not in names
+    ), f"abandonment_reason must be removed from DIMENSION_MODULES: {names}"
 
 
 def test_abandonment_module_not_exported_from_universal_init():
@@ -1764,16 +1978,16 @@ def test_abandonment_module_not_exported_from_universal_init():
     """
     import app.analysis.universal as univ
 
-    assert "AbandonmentReasonAxis" not in univ.__all__, (
-        "AbandonmentReasonAxis must be removed from app.analysis.universal __all__"
-    )
-    assert "abandonment" not in univ.__all__, (
-        "abandonment must be removed from app.analysis.universal __all__"
-    )
+    assert (
+        "AbandonmentReasonAxis" not in univ.__all__
+    ), "AbandonmentReasonAxis must be removed from app.analysis.universal __all__"
+    assert (
+        "abandonment" not in univ.__all__
+    ), "abandonment must be removed from app.analysis.universal __all__"
 
 
-def test_dimension_modules_order_is_correct_after_abandonment():
-    """DIMENSION_MODULES order is stable with 10 entries (abandonment removed)."""
+def test_dimension_modules_order_is_correct_after_abandonment_and_profile_facts():
+    """DIMENSION_MODULES order is stable with 9 entries (abandonment + profile_facts removed)."""
     from app.analysis.universal import DIMENSION_MODULES
 
     names = [mod.DIMENSION["name"] for mod in DIMENSION_MODULES]
@@ -1786,7 +2000,6 @@ def test_dimension_modules_order_is_correct_after_abandonment():
         "outcome",
         "problem",
         "service_issues",
-        "profile_facts",
         "commitments",
     ], f"Unexpected DIMENSION_MODULES order: {names}"
 
@@ -1802,9 +2015,9 @@ def test_outcome_prompt_contains_abandonment_was_abrupt_instruction():
     from app.analysis.universal import outcome as outcome_mod
 
     prompt = outcome_mod.DIMENSION["prompt"]
-    assert "was_abrupt" in prompt, (
-        "outcome.py DIMENSION prompt must contain was_abrupt instruction"
-    )
+    assert (
+        "was_abrupt" in prompt
+    ), "outcome.py DIMENSION prompt must contain was_abrupt instruction"
 
 
 def test_outcome_prompt_contains_abandonment_trigger_instruction():
@@ -1812,9 +2025,9 @@ def test_outcome_prompt_contains_abandonment_trigger_instruction():
     from app.analysis.universal import outcome as outcome_mod
 
     prompt = outcome_mod.DIMENSION["prompt"]
-    assert "abandonment_trigger" in prompt, (
-        "outcome.py DIMENSION prompt must contain abandonment_trigger instruction"
-    )
+    assert (
+        "abandonment_trigger" in prompt
+    ), "outcome.py DIMENSION prompt must contain abandonment_trigger instruction"
 
 
 def test_outcome_prompt_contains_do_not_block_for_completed():
@@ -1822,15 +2035,11 @@ def test_outcome_prompt_contains_do_not_block_for_completed():
     from app.analysis.universal import outcome as outcome_mod
 
     prompt = outcome_mod.DIMENSION["prompt"]
-    assert "DO NOT" in prompt, (
-        "outcome.py DIMENSION prompt must contain DO NOT block (canonical pattern)"
-    )
-    assert "completed_positive" in prompt, (
-        "DO NOT block must name completed_positive"
-    )
-    assert "callback_requested" in prompt, (
-        "DO NOT block must name callback_requested"
-    )
+    assert (
+        "DO NOT" in prompt
+    ), "outcome.py DIMENSION prompt must contain DO NOT block (canonical pattern)"
+    assert "completed_positive" in prompt, "DO NOT block must name completed_positive"
+    assert "callback_requested" in prompt, "DO NOT block must name callback_requested"
 
 
 def test_outcome_prompt_lists_all_8_abandonment_trigger_values():
@@ -1839,13 +2048,18 @@ def test_outcome_prompt_lists_all_8_abandonment_trigger_values():
 
     prompt = outcome_mod.DIMENSION["prompt"]
     for trigger in [
-        "price_shock", "lost_patience", "external_interruption",
-        "objection_escalation", "no_interest", "technical_failure",
-        "time_constraint", "other",
+        "price_shock",
+        "lost_patience",
+        "external_interruption",
+        "objection_escalation",
+        "no_interest",
+        "technical_failure",
+        "time_constraint",
+        "other",
     ]:
-        assert trigger in prompt, (
-            f"outcome.py DIMENSION prompt missing abandonment trigger: {trigger}"
-        )
+        assert (
+            trigger in prompt
+        ), f"outcome.py DIMENSION prompt missing abandonment trigger: {trigger}"
 
 
 # ===========================================================================
@@ -1859,21 +2073,21 @@ def test_abandonment_module_is_deleted():
     import importlib.util
 
     spec = importlib.util.find_spec("app.analysis.universal.abandonment")
-    assert spec is None, (
-        "app.analysis.universal.abandonment module must be DELETED (qora-abandonment spec)"
-    )
+    assert (
+        spec is None
+    ), "app.analysis.universal.abandonment module must be DELETED (qora-abandonment spec)"
 
 
 def test_abandonment_reason_axis_not_importable_from_analysis():
     """AbandonmentReasonAxis must NOT be importable from app.analysis (qora-abandonment spec)."""
     import app.analysis as analysis_pkg
 
-    assert not hasattr(analysis_pkg, "AbandonmentReasonAxis"), (
-        "AbandonmentReasonAxis must be removed from app.analysis (qora-abandonment)"
-    )
-    assert "AbandonmentReasonAxis" not in analysis_pkg.__all__, (
-        "AbandonmentReasonAxis must be removed from app.analysis.__all__"
-    )
+    assert not hasattr(
+        analysis_pkg, "AbandonmentReasonAxis"
+    ), "AbandonmentReasonAxis must be removed from app.analysis (qora-abandonment)"
+    assert (
+        "AbandonmentReasonAxis" not in analysis_pkg.__all__
+    ), "AbandonmentReasonAxis must be removed from app.analysis.__all__"
 
 
 def test_abandonment_trigger_importable_from_universal():
@@ -1895,9 +2109,7 @@ def test_analysis_schema_no_forbidden_imports_after_objections():
     import ast
     import pathlib
 
-    package_root = (
-        pathlib.Path(__file__).parent.parent.parent / "app" / "analysis"
-    )
+    package_root = pathlib.Path(__file__).parent.parent.parent / "app" / "analysis"
     forbidden_prefixes = ("fastapi", "sqlalchemy", "structlog")
     allowed_app_prefix = "app.analysis"
 
@@ -1913,9 +2125,9 @@ def test_analysis_schema_no_forbidden_imports_after_objections():
                     for alias in node.names:
                         module_name = alias.name
                 for prefix in forbidden_prefixes:
-                    assert not module_name.startswith(prefix), (
-                        f"{py_file} must not import '{module_name}'"
-                    )
+                    assert not module_name.startswith(
+                        prefix
+                    ), f"{py_file} must not import '{module_name}'"
                 if module_name.startswith("app.") and not module_name.startswith(
                     allowed_app_prefix
                 ):

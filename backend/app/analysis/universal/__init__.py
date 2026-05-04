@@ -4,7 +4,7 @@ Each module in this package owns a Pydantic schema, a focused system prompt,
 and an ``analyze(transcript, client)`` coroutine that runs ONE OpenAI call
 and returns the unwrapped value that drops directly into PostCallAnalysis.
 
-qora-interest-pipeline: The summarizer now runs 11 independent dimensions in
+qora-interest-pipeline: The summarizer now runs independent dimensions in
 parallel (``DIMENSION_MODULES``) PLUS a sequential 2-phase interest pipeline
 via ``run_interest_pipeline``. The old ``interests`` and ``interest_level``
 modules are no longer in ``DIMENSION_MODULES`` — they are orchestrated by
@@ -12,6 +12,10 @@ the pipeline.
 
 qora-abandonment: ``abandonment`` dimension removed (11 → 10 DIMENSION_MODULES).
 Abandonment signal absorbed into ``CallOutcome`` as ``was_abrupt`` + ``abandonment_trigger``.
+
+qora-profile-facts: ``profile_facts`` schema rewritten to operation-based model
+(ProfileFactUpdate / ProfileFactsAxis with max 5 updates). ``run_profile_facts_pipeline``
+is exported for use by the summarizer (Phase 2 removes profile_facts from DIMENSION_MODULES).
 """
 
 from __future__ import annotations
@@ -26,7 +30,8 @@ from app.analysis.universal import (
     objections,
     outcome,
     problem,
-    profile_facts,
+    # qora-profile-facts: profile_facts module no longer in DIMENSION_MODULES.
+    # Kept imported only if used directly; its symbols come from the explicit import below.
     service_issues,
     summary,
 )
@@ -46,7 +51,12 @@ from app.analysis.universal.next_action import NextActionAxis
 from app.analysis.universal.objections import Objection, ObjectionsAxis
 from app.analysis.universal.outcome import AbandonmentTrigger, CallOutcome
 from app.analysis.universal.problem import IdentifiedProblem, PainPoint, ProblemAxis
-from app.analysis.universal.profile_facts import ProfileFactsAxis
+from app.analysis.universal.profile_facts import (
+    ProfileFactCategory,
+    ProfileFactUpdate,
+    ProfileFactsAxis,
+    run_profile_facts_pipeline,
+)
 from app.analysis.universal.service_issues import ServiceIssue, ServiceIssuesAxis
 from app.analysis.universal.summary import SummaryAxis
 
@@ -68,7 +78,8 @@ DIMENSION_MODULES: list[ModuleType] = [
     outcome,
     problem,
     service_issues,
-    profile_facts,
+    # qora-profile-facts: profile_facts removed from DIMENSION_MODULES (10 → 9).
+    # Replaced by standalone run_profile_facts_pipeline() for stateful execution.
     commitments,
 ]
 
@@ -88,7 +99,10 @@ __all__ = [
     "ProblemAxis",
     "ServiceIssue",
     "ServiceIssuesAxis",
+    "ProfileFactCategory",
+    "ProfileFactUpdate",
     "ProfileFactsAxis",
+    "run_profile_facts_pipeline",
     "CommitmentsAxis",
     # qora-interest-pipeline: new exports from interest/ package
     "InterestItem",
