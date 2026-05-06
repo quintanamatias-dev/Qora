@@ -102,6 +102,9 @@ class Lead(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
     )
+    # qora-data-corrections: new correctable fields
+    email: Mapped[str | None] = mapped_column(String, nullable=True)
+    age: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Phase 2 additions (CAP-5)
     summary_last_call: Mapped[str | None] = mapped_column(Text, nullable=True)
     objections_heard: Mapped[list | None] = mapped_column(JSON, nullable=True)

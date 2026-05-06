@@ -202,12 +202,17 @@ def _make_mock_client(parse_return_value):
 
         # qora-interest-pipeline: also handle InterestsAxis and InterestLevelResult
         # so that run_interest_pipeline (called with mock_client) returns correct values.
+        # qora-data-corrections: also handle DataCorrectionsAxis for the corrections pipeline.
         from app.analysis.universal.interest.interests import InterestsAxis
         from app.analysis.universal.interest.interest_level import InterestLevelResult
+        from app.analysis.universal.data_corrections import DataCorrectionsAxis as _DCA
 
         async def _dispatch(*_args, response_format=None, **_kwargs):
             # Handle pipeline schemas directly
-            if response_format is InterestsAxis:
+            if response_format is _DCA:
+                # Return empty corrections axis by default (no corrections in most tests)
+                axis_value = _DCA(corrections=[])
+            elif response_format is InterestsAxis:
                 # Return the detected_interests from analysis_obj as InterestsAxis
                 axis_value = analysis_obj.detected_interests
             elif response_format is InterestLevelResult:
@@ -1119,21 +1124,24 @@ async def test_summarizer_uses_parse_not_create(seeded_db):
         async with seeded_db.async_session_factory() as db:
             await generate_summary_and_facts(session_id, db)
 
-        # Must use parse() (8 dim calls + 2 interest pipeline calls + 1 profile pipeline
-        # + 1 misc notes pipeline = 12 total), NOT create().
+        # Must use parse() NOT create().
         # qora-abandonment: 11 → 10 DIMENSION_MODULES (abandonment removed)
         # qora-profile-facts Phase 3: profile_facts removed from DIMENSION_MODULES (10→9).
         #   run_profile_facts_pipeline adds 1 more parse() call.
         # qora-misc-notes: misc_notes removed from DIMENSION_MODULES (9→8).
         #   run_misc_notes_pipeline adds 1 more parse() call.
+        # qora-data-corrections: data_corrections removed from DIMENSION_MODULES (8→7).
+        #   run_data_corrections_pipeline adds 1 more parse() call.
         from app.analysis.universal import DIMENSION_MODULES
 
-        # 8 independent dims + 2 interest pipeline calls (InterestsAxis + InterestLevelResult)
-        # + 1 profile facts pipeline call + 1 misc notes pipeline call = 12 total
-        expected_parse_calls = len(DIMENSION_MODULES) + 2 + 1 + 1
+        # 7 independent dims + 2 interest pipeline calls (InterestsAxis + InterestLevelResult)
+        # + 1 profile facts pipeline call + 1 misc notes pipeline call
+        # + 1 data corrections pipeline call = 12 total
+        expected_parse_calls = len(DIMENSION_MODULES) + 2 + 1 + 1 + 1
         assert mock_client.chat.completions.parse.call_count == expected_parse_calls, (
             f"Expected {expected_parse_calls} parse() calls "
-            f"(8 dims + 2 interest pipeline + 1 profile pipeline + 1 misc notes pipeline), "
+            f"(7 dims + 2 interest pipeline + 1 profile pipeline + 1 misc notes pipeline"
+            f" + 1 data corrections pipeline), "
             f"got {mock_client.chat.completions.parse.call_count}"
         )
         mock_client.chat.completions.create.assert_not_called()
@@ -2070,10 +2078,12 @@ async def test_summarizer_critical1_upsert_failure_rolls_back_legacy_writes(seed
 async def test_summarizer_critical2_data_corrections_create_lead_profile_facts(
     seeded_db,
 ):
-    """CRITICAL 2: data_corrections 'car_model: Polo' → LeadProfileFact row with fact_key='car_model'.
+    """CRITICAL 2: structured data_corrections → Lead columns updated + LeadProfileFact rows.
 
-    After _apply_data_corrections() updates Lead columns, the dual-write path must
-    also write LeadProfileFact rows for each correction (fact_key=field, confidence='high').
+    qora-data-corrections: corrections now come from run_data_corrections_pipeline
+    (structured pipeline), not the old string-based dimension. The mock patches the
+    pipeline to return car_model and car_year corrections. Both the Lead columns and
+    LeadProfileFact rows (audit trail) must be written.
     """
     from app.summarizer import generate_summary_and_facts
     from app.leads.models import LeadProfileFact, Lead
@@ -2083,6 +2093,10 @@ async def test_summarizer_critical2_data_corrections_create_lead_profile_facts(
         IdentifiedProblem,
     )
     from app.analysis.universal.interest.interests import InterestsAxis
+    from app.analysis.universal.data_corrections import (
+        DataCorrectionsAxis as _DCA,
+        DataCorrection as _DC,
+    )
     from sqlalchemy import select
 
     session_id = await _create_session(
@@ -2101,8 +2115,7 @@ async def test_summarizer_critical2_data_corrections_create_lead_profile_facts(
         interest_level=70,
         current_insurance=None,
         next_action_suggested="send_quote",
-        # qora-misc-notes: misc_notes managed by standalone pipeline
-        data_corrections="car_model: Polo\ncar_year: 2022",
+        # qora-data-corrections: data_corrections field is now [] (pipeline result stored separately)
         call_outcome=CallOutcome(
             classification="completed_neutral",
             reason="Lead provided car details.",
@@ -2115,9 +2128,41 @@ async def test_summarizer_critical2_data_corrections_create_lead_profile_facts(
         ),
     )
 
+    # Build the structured corrections the pipeline should return
+    mock_corrections = _DCA(
+        corrections=[
+            _DC(
+                field="car_model",
+                current_value=None,
+                corrected_value="Polo",
+                confidence=0.95,
+                evidence="Tengo un Polo",
+                applied=True,
+            ),
+            _DC(
+                field="car_year",
+                current_value=None,
+                corrected_value="2022",
+                confidence=0.95,
+                evidence="modelo 2022",
+                applied=True,
+            ),
+        ]
+    )
+
+    async def _mock_corrections_pipeline(*_args, **_kwargs):
+        return mock_corrections
+
     mock_client = _make_mock_client(_make_parse_response(corrections_analysis))
-    with patch(
-        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    with (
+        patch(
+            "app.summarizer._get_openai_client",
+            return_value=(mock_client, "gpt-4o-mini"),
+        ),
+        patch(
+            "app.summarizer.run_data_corrections_pipeline",
+            side_effect=_mock_corrections_pipeline,
+        ),
     ):
         assert seeded_db.async_session_factory is not None
         async with seeded_db.async_session_factory() as db:
@@ -2125,13 +2170,17 @@ async def test_summarizer_critical2_data_corrections_create_lead_profile_facts(
             await db.commit()
 
     async with seeded_db.async_session_factory() as db:
-        # Legacy path: Lead columns must be updated
+        # Structured path: Lead columns must be updated by _apply_structured_corrections
         result = await db.execute(select(Lead).where(Lead.id == "test-lead-sum-001"))
         lead = result.scalar_one()
-        assert lead.car_model == "Polo", "Legacy car_model column must be updated"
-        assert lead.car_year == 2022, "Legacy car_year column must be updated"
+        assert (
+            lead.car_model == "Polo"
+        ), "Structured car_model correction must update Lead column"
+        assert (
+            lead.car_year == 2022
+        ), "Structured car_year correction must update Lead column"
 
-        # New path: LeadProfileFact rows must exist for corrections
+        # Audit trail: LeadProfileFact rows must exist for corrections
         result2 = await db.execute(
             select(LeadProfileFact).where(
                 LeadProfileFact.lead_id == "test-lead-sum-001",
