@@ -587,18 +587,19 @@ def test_profile_facts_not_in_dimension_modules():
 
 
 def test_dimension_modules_count_is_8_after_profile_facts_and_misc_notes_removal():
-    """DIMENSION_MODULES has exactly 7 entries after profile_facts, misc_notes, and data_corrections removal.
+    """DIMENSION_MODULES has exactly 6 entries after all pipeline extractions.
 
     qora-profile-facts: profile_facts dimension removed (10 → 9).
     qora-misc-notes: misc_notes dimension removed (9 → 8).
     qora-data-corrections: data_corrections dimension removed (8 → 7).
+    qora-next-action: next_action dimension removed (7 → 6).
     """
     from app.analysis.universal import DIMENSION_MODULES
 
     names = [mod.DIMENSION["name"] for mod in DIMENSION_MODULES]
-    assert len(DIMENSION_MODULES) == 7, (
-        f"Expected 7 DIMENSION_MODULES after qora-profile-facts, qora-misc-notes,"
-        f" and qora-data-corrections, "
+    assert len(DIMENSION_MODULES) == 6, (
+        f"Expected 6 DIMENSION_MODULES after qora-profile-facts, qora-misc-notes,"
+        f" qora-data-corrections, and qora-next-action, "
         f"got {len(DIMENSION_MODULES)}: {names}"
     )
 

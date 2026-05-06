@@ -104,3 +104,11 @@ class PostCallAnalysis(BaseModel):
         default_factory=CommitmentsAxis,
         description="Concrete commitments and next-step actions identified in the call",
     )
+
+    # qora-next-action: rich decision engine result (stored as dict for JSON serialization)
+    # next_action_suggested keeps the action string for backward compat;
+    # next_action_result carries the full NextActionResult with reason, confidence, timing.
+    next_action_result: dict | None = Field(
+        default=None,
+        description="Full NextActionResult from the post-analysis decision engine (serialized as dict)",
+    )

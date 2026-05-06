@@ -24,6 +24,9 @@ Schema changed from ``str`` to ``MiscNotesAxis(notes: list[MiscNote])``.
 qora-data-corrections: ``data_corrections`` extracted from DIMENSION_MODULES (8 → 7).
 Now a standalone stateful pipeline via ``run_data_corrections_pipeline``.
 Requires current lead snapshot as input (like profile_facts, stateful).
+
+qora-next-action: ``next_action`` removed from DIMENSION_MODULES (7 → 6).
+Promoted to post-analysis pipeline via ``run_next_action_pipeline``.
 """
 
 from __future__ import annotations
@@ -34,7 +37,8 @@ from app.analysis.universal import (
     commitments,
     data_corrections,  # noqa: F401 — kept for direct access; not in DIMENSION_MODULES
     misc_notes,  # noqa: F401 — qora-misc-notes: no longer in DIMENSION_MODULES but kept for direct access in tests
-    next_action,
+    # qora-next-action: next_action removed from DIMENSION_MODULES; module kept for pipeline use
+    next_action,  # noqa: F401 — kept for run_next_action_pipeline direct access
     objections,
     outcome,
     problem,
@@ -65,7 +69,10 @@ from app.analysis.universal.misc_notes import (
     MiscNotesAxis,
     run_misc_notes_pipeline,
 )
-from app.analysis.universal.next_action import NextActionAxis
+from app.analysis.universal.next_action import (
+    NextActionResult,
+    run_next_action_pipeline,
+)
 from app.analysis.universal.objections import Objection, ObjectionsAxis
 from app.analysis.universal.outcome import AbandonmentTrigger, CallOutcome
 from app.analysis.universal.problem import IdentifiedProblem, PainPoint, ProblemAxis
@@ -89,10 +96,11 @@ from app.analysis.universal.summary import SummaryAxis
 # qora-data-corrections: data_corrections removed from DIMENSION_MODULES (8 → 7).
 #   Replaced by standalone run_data_corrections_pipeline() for stateful execution
 #   (requires current lead snapshot — dimensions are stateless).
+# qora-next-action: next_action removed from DIMENSION_MODULES (7 → 6).
+#   Promoted to post-analysis pipeline via run_next_action_pipeline().
 DIMENSION_MODULES: list[ModuleType] = [
     summary,
     objections,
-    next_action,
     outcome,
     problem,
     service_issues,
@@ -105,7 +113,9 @@ __all__ = [
     "SummaryAxis",
     "Objection",
     "ObjectionsAxis",
-    "NextActionAxis",
+    # qora-next-action: NextActionAxis removed; new engine symbols exported
+    "NextActionResult",
+    "run_next_action_pipeline",
     "MiscNote",
     "MiscNotesAxis",
     "run_misc_notes_pipeline",

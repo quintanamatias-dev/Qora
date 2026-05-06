@@ -324,12 +324,15 @@ async def auto_schedule(
 
     Evaluates rules in order:
     1. client.scheduler_enabled must be True
-    2. next_action_suggested must be in client.scheduler_retry_on_outcomes
+    2. next_action_result.action (primary) or next_action_suggested (fallback) must be
+       in client.scheduler_retry_on_outcomes
     3. lead.do_not_call must be False
     4. No existing pending/in_progress ScheduledCall for this lead (duplicate guard)
     5. Attempt count must be < max_attempts
 
     If all pass, creates a ScheduledCall(trigger_reason='auto_retry').
+    The scheduled_at is taken from next_action_result.next_action_at when non-None,
+    otherwise calculated via calculate_scheduled_at().
 
     Args:
         db: Active async DB session.
@@ -356,8 +359,18 @@ async def auto_schedule(
         logger.info("auto_schedule_skipped_disabled", client_id=client_id)
         return None
 
-    # Rule 2: next_action_suggested in retry_outcomes
-    next_action = facts.get("next_action_suggested") or ""
+    # Rule 2: next_action_result.action (primary) or next_action_suggested (fallback)
+    # qora-next-action: read from rich NextActionResult first; legacy string is fallback
+    next_action_result_raw = facts.get("next_action_result")
+    if isinstance(next_action_result_raw, dict):
+        next_action = next_action_result_raw.get("action") or ""
+    else:
+        next_action = ""
+
+    # Fallback to legacy next_action_suggested if rich result has no action
+    if not next_action:
+        next_action = facts.get("next_action_suggested") or ""
+
     try:
         retry_outcomes: list[str] = json.loads(client.scheduler_retry_on_outcomes)
     except (json.JSONDecodeError, TypeError):
@@ -431,15 +444,35 @@ async def auto_schedule(
         if default_agent is not None:
             resolved_agent_id = default_agent.id
 
-    # Calculate scheduled_at
+    # Calculate scheduled_at — check for next_action_at override from NextActionResult
+    # qora-next-action: if next_action_result.next_action_at is set, use it directly
     now_utc = datetime.now(timezone.utc)
-    scheduled_at = calculate_scheduled_at(
-        now_utc=now_utc,
-        cooldown_minutes=client.scheduler_cooldown_minutes,
-        start_hour=client.scheduler_allowed_hours_start,
-        end_hour=client.scheduler_allowed_hours_end,
-        tz_str=client.scheduler_timezone,
-    )
+    scheduled_at: datetime | None = None
+
+    next_action_result = facts.get("next_action_result") or {}
+    if isinstance(next_action_result, dict):
+        nat = next_action_result.get("next_action_at")
+        if nat is not None:
+            if isinstance(nat, str):
+                try:
+                    parsed_nat = datetime.fromisoformat(nat)
+                    if parsed_nat.tzinfo is None:
+                        parsed_nat = parsed_nat.replace(tzinfo=timezone.utc)
+                    scheduled_at = parsed_nat
+                except ValueError:
+                    pass
+            elif isinstance(nat, datetime):
+                scheduled_at = nat
+
+    # Fallback: use calculate_scheduled_at if no override
+    if scheduled_at is None:
+        scheduled_at = calculate_scheduled_at(
+            now_utc=now_utc,
+            cooldown_minutes=client.scheduler_cooldown_minutes,
+            start_hour=client.scheduler_allowed_hours_start,
+            end_hour=client.scheduler_allowed_hours_end,
+            tz_str=client.scheduler_timezone,
+        )
 
     sc = await create_scheduled_call(
         db,

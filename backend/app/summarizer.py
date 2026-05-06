@@ -141,8 +141,11 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
 
     # qora-misc-notes: Load previous misc_notes from Lead.extracted_facts for stateful pipeline
     # qora-data-corrections: also build current_lead_data snapshot for corrections pipeline
+    # qora-next-action: also build LeadSnapshot + ClientRules for post-analysis pipeline
     current_misc_notes = []
     current_lead_data: dict = {}
+    lead_snapshot: "Any | None" = None
+    client_rules: "Any | None" = None
     if cs.lead_id:
         lead_result = await db.execute(select(Lead).where(Lead.id == cs.lead_id))
         lead_for_notes = lead_result.scalar_one_or_none()
@@ -172,6 +175,35 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
                 "current_insurance": lead_for_notes.current_insurance,
             }
 
+            # qora-next-action: build LeadSnapshot for post-analysis pipeline
+            from app.analysis.universal.next_action import LeadSnapshot
+
+            lead_snapshot = LeadSnapshot(
+                call_count=lead_for_notes.call_count or 0,
+                do_not_call=bool(lead_for_notes.do_not_call),
+                last_called_at=lead_for_notes.last_called_at,
+            )
+
+    # qora-next-action: build ClientRules from Client config
+    if cs.client_id:
+        from app.tenants.models import Client as _Client
+
+        client_row = await db.get(_Client, cs.client_id)
+        if client_row is not None:
+            from app.analysis.universal.next_action import ClientRules
+
+            client_rules = ClientRules(
+                max_attempts=client_row.next_action_max_attempts,
+                min_interest_for_followup=client_row.next_action_min_interest_for_followup,
+                close_on_hard_rejection=bool(
+                    client_row.next_action_close_on_hard_rejection
+                ),
+                scheduler_cooldown_minutes=client_row.scheduler_cooldown_minutes,
+                scheduler_allowed_hours_start=client_row.scheduler_allowed_hours_start,
+                scheduler_allowed_hours_end=client_row.scheduler_allowed_hours_end,
+                scheduler_timezone=client_row.scheduler_timezone,
+            )
+
     try:
         summary, facts = await _call_gpt_summarize(
             transcript_text,
@@ -180,6 +212,8 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
             current_misc_notes=current_misc_notes,
             current_lead_data=current_lead_data,
             has_lead=bool(cs.lead_id),
+            lead_snapshot=lead_snapshot,
+            client_rules=client_rules,
         )
     except Exception as gpt_exc:
         error_msg = str(gpt_exc)
@@ -290,18 +324,23 @@ async def _call_gpt_summarize(
     current_misc_notes: list | None = None,
     current_lead_data: dict | None = None,
     has_lead: bool = True,
+    lead_snapshot: "Any | None" = None,
+    client_rules: "Any | None" = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Run 7 universal dimensions, the 2-phase interest pipeline, profile facts pipeline,
-    misc notes pipeline, and data corrections pipeline.
+    """Run 6 universal dimensions, the 2-phase interest pipeline, profile facts pipeline,
+    misc notes pipeline, data corrections pipeline, and post-analysis next_action pipeline.
 
     qora-interest-pipeline: The old monolithic 13-parallel gather is replaced by:
-    - Phase 1: 7 independent dimensions in parallel via asyncio.gather
+    - Phase 1: 6 independent dimensions in parallel via asyncio.gather
     - Phase 2: Interest pipeline (interests → interest_level sequential) via run_interest_pipeline
     - Phase 3: Profile facts pipeline (stateful) via run_profile_facts_pipeline
     - Phase 4: Misc notes pipeline (stateful) via run_misc_notes_pipeline
     - Phase 5: Data corrections pipeline (stateful) via run_data_corrections_pipeline
 
-    All run concurrently at the top level. Results are merged into PostCallAnalysis.
+    qora-next-action: Post-analysis phase added after all parallel dimensions complete:
+    - Phase 6: Next action pipeline (sequential) via run_next_action_pipeline
+
+    All parallel phases run concurrently at the top level. Results are merged into PostCallAnalysis.
 
     Args:
         transcript_text: Formatted transcript string.
@@ -309,12 +348,14 @@ async def _call_gpt_summarize(
         current_profile_facts: Active profile facts from DB for stateful pipeline.
         current_misc_notes: Previous misc notes from Lead.extracted_facts for stateful pipeline.
         current_lead_data: Current lead field snapshot for data corrections pipeline.
+        lead_snapshot: LeadSnapshot for next_action pipeline (call_count, do_not_call, etc.).
+        client_rules: ClientRules for next_action pipeline (thresholds, scheduler config).
 
     Returns:
         Tuple of (summary_text, extracted_facts_dict).
 
     Raises:
-        RuntimeError: When ALL 7 independent dimensions AND pipelines fail.
+        RuntimeError: When ALL 6 independent dimensions AND pipelines fail.
     """
     client, _model = _get_openai_client()
     facts_list = current_profile_facts or []
@@ -524,10 +565,72 @@ async def _call_gpt_summarize(
             else DataCorrectionsAxis()
         )
 
-    if failures >= len(DIMENSION_MODULES) + 1:  # 7 + interest pipeline (counts as 1)
+    if failures >= len(DIMENSION_MODULES) + 1:  # 6 + interest pipeline (counts as 1)
         raise RuntimeError(
             f"all {failures} dimension analyses failed — see dimension_analysis_failed logs"
         )
+
+    # -------------------------------------------------------------------
+    # Post-analysis Phase 6: next_action pipeline (qora-next-action)
+    # Runs sequentially AFTER all parallel dimensions complete.
+    # Receives structured dimension outputs + lead state + client rules.
+    # Only runs when lead_snapshot and client_rules are available.
+    # -------------------------------------------------------------------
+    if lead_snapshot is not None and client_rules is not None:
+        try:
+            from app.analysis.universal.next_action import (
+                NextActionContext,
+                run_next_action_pipeline,
+            )
+            from app.analysis.universal.commitments import CommitmentsAxis as _CA
+            from app.analysis.universal.objections import ObjectionsAxis as _OA
+            from app.analysis.universal.outcome import CallOutcome as _CO
+            from app.analysis.universal.problem import ProblemAxis as _PA
+
+            # Extract dimension outputs (use defaults if dimensions failed)
+            raw_outcome = fields.get("call_outcome")
+            ctx_outcome = (
+                raw_outcome
+                if isinstance(raw_outcome, _CO)
+                else _CO(
+                    classification="no_answer",
+                    reason="dimension failed",
+                    confidence="low",
+                )
+            )
+            ctx_interest = int(fields.get("interest_level") or 0)
+            raw_commitments = fields.get("commitments")
+            ctx_commitments = (
+                raw_commitments if isinstance(raw_commitments, _CA) else _CA()
+            )
+            raw_objections = fields.get("objections")
+            ctx_objections = (
+                raw_objections if isinstance(raw_objections, _OA) else _OA()
+            )
+            raw_problem = fields.get("identified_problem")
+            ctx_problem = (
+                raw_problem if isinstance(raw_problem, _PA) else _PA(pain_points=[])
+            )
+
+            na_ctx = NextActionContext(
+                outcome=ctx_outcome,
+                interest_level=ctx_interest,
+                commitments=ctx_commitments,
+                objections=ctx_objections,
+                problem=ctx_problem,
+                lead=lead_snapshot,
+                client=client_rules,
+            )
+            na_result = await run_next_action_pipeline(na_ctx, client)
+            fields["next_action_suggested"] = na_result.action
+            fields["next_action_result"] = na_result.model_dump()
+        except Exception as na_exc:
+            logger.error(
+                "next_action_pipeline_exception",
+                error=str(na_exc),
+                error_type=type(na_exc).__name__,
+            )
+            # Non-critical — fall through with default "wait" from PostCallAnalysis schema
 
     analysis = PostCallAnalysis(**fields)
 
@@ -536,6 +639,12 @@ async def _call_gpt_summarize(
 
     # Pop summary out — it's stored separately on CallSession.
     summary = str(facts.pop("summary", ""))
+
+    # qora-next-action: re-inject next_action_result into facts dict
+    # (PostCallAnalysis.model_dump() will include it if it was set in fields,
+    # but we also need it accessible as "next_action_result" key for scheduler reads)
+    if fields.get("next_action_result") is not None:
+        facts["next_action_result"] = fields["next_action_result"]
 
     # qora-data-corrections: inject structured corrections into facts dict
     # (not in PostCallAnalysis model — passed as a side-channel key)
@@ -635,12 +744,32 @@ async def _merge_facts_into_lead(
     new_facts_clean = {k: v for k, v in facts.items() if v is not None}
     lead.extracted_facts = {**existing_facts, **new_facts_clean}
 
-    # do_not_call ← True if suggested via next_action OR via do_not_contact classification
-    if facts.get("next_action_suggested") == "do_not_call":
+    # do_not_call ← True if suggested via close_lead action OR via do_not_contact classification
+    # qora-next-action: old "do_not_call" action replaced by "close_lead" from NextActionResult
+    if facts.get("next_action_suggested") in ("close_lead", "do_not_call"):
         lead.do_not_call = True
     call_outcome = facts.get("call_outcome") or {}
     if call_outcome.get("classification") == "do_not_contact":
         lead.do_not_call = True
+
+    # qora-next-action: set Lead.next_action_at from NextActionResult.next_action_at
+    next_action_result = facts.get("next_action_result") or {}
+    if isinstance(next_action_result, dict):
+        nat = next_action_result.get("next_action_at")
+        if nat is not None:
+            from datetime import datetime as _dt, timezone as _tz
+
+            if isinstance(nat, str):
+                try:
+                    # Parse ISO format string
+                    parsed_nat = _dt.fromisoformat(nat)
+                    if parsed_nat.tzinfo is None:
+                        parsed_nat = parsed_nat.replace(tzinfo=_tz.utc)
+                    lead.next_action_at = parsed_nat
+                except ValueError:
+                    pass
+            elif isinstance(nat, _dt):
+                lead.next_action_at = nat
 
     # next_action ← latest suggested action
     if facts.get("next_action_suggested"):
