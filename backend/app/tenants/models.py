@@ -126,10 +126,24 @@ class Client(Base):
     scheduler_retry_on_outcomes: Mapped[str] = mapped_column(
         Text,
         nullable=False,
-        default='["call_again","follow_up"]',
+        default='["follow_up","retry_call","schedule_call"]',
     )
     scheduler_timezone: Mapped[str] = mapped_column(
         String, nullable=False, default="America/Argentina/Buenos_Aires"
+    )
+
+    # ---------------------------------------------------------------------------
+    # Next Action Engine configuration (qora-next-action, Issue #47)
+    # ---------------------------------------------------------------------------
+
+    next_action_max_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=5
+    )
+    next_action_min_interest_for_followup: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=40
+    )
+    next_action_close_on_hard_rejection: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
     )
 
     # Issue #35 — Per-client extraction configuration (JSON stored as Text, nullable)

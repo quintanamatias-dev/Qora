@@ -577,15 +577,15 @@ async def test_list_queue_returns_scheduled_calls(sched_db):
 
 # ---------------------------------------------------------------------------
 # Round 2 fix — Issue 4: auto-schedule default outcome mismatch
-# Default scheduler_retry_on_outcomes must include "call_again"
+# Default scheduler_retry_on_outcomes uses new 5-action vocabulary (qora-next-action)
 # ---------------------------------------------------------------------------
 
 
-def test_client_default_retry_outcomes_includes_call_again():
-    """Client model default scheduler_retry_on_outcomes must include 'call_again'.
+def test_client_default_retry_outcomes_uses_new_vocabulary():
+    """Client model default scheduler_retry_on_outcomes uses new 5-action vocabulary.
 
-    The summarizer schema emits 'call_again' as next_action_suggested.
-    The default must match so auto-scheduling triggers without manual config.
+    qora-next-action: vocabulary updated from {call_again, follow_up}
+    to {follow_up, retry_call, schedule_call} to match NextActionResult actions.
     """
     import json
     from app.tenants.models import Client
@@ -593,16 +593,23 @@ def test_client_default_retry_outcomes_includes_call_again():
     # The default value is set at the column level
     default_val = Client.__table__.c["scheduler_retry_on_outcomes"].default.arg
     outcomes = json.loads(default_val)
+    assert "follow_up" in outcomes, f"Default must include 'follow_up', got: {outcomes}"
     assert (
-        "call_again" in outcomes
-    ), f"Default scheduler_retry_on_outcomes must include 'call_again', got: {outcomes}"
+        "retry_call" in outcomes
+    ), f"Default must include 'retry_call', got: {outcomes}"
+    assert (
+        "schedule_call" in outcomes
+    ), f"Default must include 'schedule_call', got: {outcomes}"
+    assert (
+        "call_again" not in outcomes
+    ), f"Old 'call_again' must NOT be in default, got: {outcomes}"
 
 
-async def test_auto_schedule_triggers_with_call_again_on_fresh_client(tmp_path):
-    """auto_schedule with 'call_again' must trigger on a client with default config.
+async def test_auto_schedule_triggers_with_follow_up_on_fresh_client(tmp_path):
+    """auto_schedule with 'follow_up' must trigger on a client with default config.
 
-    This verifies the default outcomes align with the summarizer's output values.
-    A freshly created client should auto-schedule when next_action='call_again'.
+    qora-next-action: verifies default outcomes align with new NextActionResult vocabulary.
+    A freshly created client should auto-schedule when next_action='follow_up'.
     """
     from pydantic import SecretStr
     from app.core.config import Settings
@@ -646,13 +653,13 @@ async def test_auto_schedule_triggers_with_call_again_on_fresh_client(tmp_path):
             session_id="sess-default-001",
             lead_id="default-retry-lead-001",
             client_id="quintana-seguros",
-            facts={"next_action_suggested": "call_again"},
+            facts={"next_action_suggested": "follow_up"},
         )
         await sess.commit()
 
     await db_module.close_db()
 
     assert result is not None, (
-        "auto_schedule should create a ScheduledCall when next_action='call_again' "
-        "and default scheduler_retry_on_outcomes includes 'call_again'"
+        "auto_schedule should create a ScheduledCall when next_action='follow_up' "
+        "and default scheduler_retry_on_outcomes includes 'follow_up'"
     )

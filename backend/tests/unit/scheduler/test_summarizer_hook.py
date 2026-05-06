@@ -109,7 +109,7 @@ def _make_dispatching_client(analysis):
         DIMENSION_MODULES,
         SummaryAxis,
         ObjectionsAxis,
-        NextActionAxis,
+        # qora-next-action: NextActionAxis removed from universal exports
         MiscNotesAxis,
         DataCorrectionsAxis,
         ServiceIssuesAxis,  # noqa: F401 — used via DIMENSION_MODULES dynamic dispatch
@@ -168,8 +168,7 @@ def _make_dispatching_client(analysis):
         if schema_cls is ObjectionsAxis:
             # Fallback (should not reach here — objections is in complex_targets)
             return analysis.objections
-        if schema_cls is NextActionAxis:
-            return NextActionAxis(action=str(analysis.next_action_suggested))
+        # qora-next-action: NextActionAxis branch removed — next_action no longer in DIMENSION_MODULES
         # qora-misc-notes: misc_notes is no longer in DIMENSION_MODULES
         # This branch should never be reached
         if schema_cls is MiscNotesAxis:
@@ -216,17 +215,29 @@ async def _create_session_with_turns(db_module, lead_id: str) -> str:
 
 
 async def test_auto_schedule_fires_after_eligible_call(seeded_db):
-    """Summarizer calls auto_schedule after merge when client is enabled and outcome eligible."""
+    """Summarizer calls auto_schedule after merge when client is enabled and outcome eligible.
+
+    qora-next-action: next_action is no longer a DIMENSION. next_action_suggested is now
+    set by run_next_action_pipeline() in Phase 4. For this test, we patch _call_gpt_summarize
+    to inject next_action_suggested="follow_up" directly into the facts dict.
+    """
     from app.summarizer import generate_summary_and_facts
     from app.scheduler.models import ScheduledCall
     from sqlalchemy import select
 
     session_id = await _create_session_with_turns(seeded_db, "hook-lead-001")
 
-    mock_client = _make_dispatching_client(_make_analysis_with_action("call_again"))
+    analysis = _make_analysis_with_action("follow_up")
+
+    # Patch _call_gpt_summarize to return facts with follow_up directly
+    # This simulates what Phase 4 will do via run_next_action_pipeline
+    facts = analysis.model_dump()
+    facts["next_action_suggested"] = "follow_up"
+    facts.pop("summary", None)
 
     with patch(
-        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+        "app.summarizer._call_gpt_summarize",
+        return_value=("Test summary.", facts),
     ):
         async with seeded_db.async_session_factory() as db:
             await generate_summary_and_facts(session_id, db)
