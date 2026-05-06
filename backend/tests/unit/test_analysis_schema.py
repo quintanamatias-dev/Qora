@@ -1352,6 +1352,8 @@ def test_dimension_modules_cover_all_post_call_analysis_fields():
     also NOT in DIMENSION_MODULES (10 → 9).
     qora-misc-notes: misc_notes is now handled by run_misc_notes_pipeline(),
     also NOT in DIMENSION_MODULES (9 → 8).
+    qora-data-corrections: data_corrections is now handled by run_data_corrections_pipeline(),
+    also NOT in DIMENSION_MODULES (8 → 7).
     """
     from app.analysis import PostCallAnalysis
     from app.analysis.universal import DIMENSION_MODULES
@@ -1362,6 +1364,7 @@ def test_dimension_modules_cover_all_post_call_analysis_fields():
         "detected_interests",
         "profile_facts",
         "misc_notes",
+        "data_corrections",  # qora-data-corrections: now a standalone pipeline
     }
 
     target_fields = [mod.DIMENSION["target_field"] for mod in DIMENSION_MODULES]
@@ -1385,21 +1388,20 @@ async def test_dimension_analyze_returns_unwrapped_value_for_simple_axes():
     spec — it's orchestrated by the 2-phase pipeline, not parallel gather).
     NOTE: misc_notes is no longer in DIMENSION_MODULES (qora-misc-notes spec —
     it's orchestrated by run_misc_notes_pipeline(), not parallel gather).
+    NOTE: data_corrections is no longer in DIMENSION_MODULES (qora-data-corrections spec —
+    it's orchestrated by run_data_corrections_pipeline(), not parallel gather).
     """
     from unittest.mock import AsyncMock, MagicMock
     from app.analysis.universal import (
         SummaryAxis,
         NextActionAxis,
-        DataCorrectionsAxis,
         summary as summary_mod,
         next_action as next_action_mod,
-        data_corrections as data_corrections_mod,
     )
 
     cases = [
         (summary_mod, SummaryAxis(text="hi"), str, "hi"),
         (next_action_mod, NextActionAxis(action="wait"), str, "wait"),
-        (data_corrections_mod, DataCorrectionsAxis(corrections=""), str, ""),
     ]
     for mod, parsed, expected_type, expected_value in cases:
         client = AsyncMock()
@@ -1470,6 +1472,8 @@ def test_dimension_modules_iteration_order_is_stable():
     Handled by standalone run_profile_facts_pipeline().
     qora-misc-notes: misc_notes removed (8 entries, down from 9).
     Handled by standalone run_misc_notes_pipeline().
+    qora-data-corrections: data_corrections removed (7 entries, down from 8).
+    Handled by standalone run_data_corrections_pipeline().
     """
     from app.analysis.universal import DIMENSION_MODULES
 
@@ -1478,8 +1482,7 @@ def test_dimension_modules_iteration_order_is_stable():
         "summary",
         "objections",
         "next_action",
-        # qora-misc-notes: misc_notes removed
-        "data_corrections",
+        # qora-data-corrections: data_corrections removed
         "outcome",
         "problem",
         "service_issues",
@@ -1576,13 +1579,14 @@ def test_objections_target_field_mapping_is_correct():
 
 
 def test_dimension_modules_cover_all_post_call_analysis_fields_still_correct():
-    """All 8 non-pipeline PostCallAnalysis fields are covered by exactly one dimension.
+    """All 7 non-pipeline PostCallAnalysis fields are covered by exactly one dimension.
 
     qora-interest-pipeline: interest_level and detected_interests are now
     pipeline fields — not in DIMENSION_MODULES.
     qora-abandonment: abandonment_reason removed from PostCallAnalysis.
     qora-profile-facts: profile_facts moved to standalone run_profile_facts_pipeline().
     qora-misc-notes: misc_notes moved to standalone run_misc_notes_pipeline().
+    qora-data-corrections: data_corrections moved to standalone run_data_corrections_pipeline().
     """
     from app.analysis import PostCallAnalysis
     from app.analysis.universal import DIMENSION_MODULES
@@ -1593,6 +1597,7 @@ def test_dimension_modules_cover_all_post_call_analysis_fields_still_correct():
         "detected_interests",
         "profile_facts",
         "misc_notes",
+        "data_corrections",  # qora-data-corrections: now a standalone pipeline
     }
 
     target_fields = [mod.DIMENSION["target_field"] for mod in DIMENSION_MODULES]
@@ -1614,18 +1619,20 @@ def test_dimension_modules_cover_all_post_call_analysis_fields_still_correct():
 
 
 def test_dimension_modules_count_is_8_after_interest_pipeline_abandonment_profile_facts_misc_notes():
-    """DIMENSION_MODULES has exactly 8 entries after qora-interest-pipeline, qora-abandonment,
-    qora-profile-facts, and qora-misc-notes.
+    """DIMENSION_MODULES has exactly 7 entries after qora-interest-pipeline, qora-abandonment,
+    qora-profile-facts, qora-misc-notes, and qora-data-corrections.
 
     interest_level and interests removed (run_interest_pipeline).
     abandonment_reason removed (absorbed into CallOutcome fields).
     profile_facts removed (run_profile_facts_pipeline standalone).
     misc_notes removed (run_misc_notes_pipeline standalone).
+    data_corrections removed (run_data_corrections_pipeline standalone).
     """
     from app.analysis.universal import DIMENSION_MODULES
 
-    assert len(DIMENSION_MODULES) == 8, (
-        f"Expected 8 DIMENSION_MODULES (interest pipeline + abandonment + profile_facts + misc_notes extracted), "
+    assert len(DIMENSION_MODULES) == 7, (
+        f"Expected 7 DIMENSION_MODULES (interest pipeline + abandonment + profile_facts"
+        f" + misc_notes + data_corrections extracted), "
         f"got {len(DIMENSION_MODULES)}: {[m.DIMENSION['name'] for m in DIMENSION_MODULES]}"
     )
 
@@ -1977,18 +1984,20 @@ def test_abandonment_reason_axis_not_imported_in_schema():
 
 
 def test_dimension_modules_count_is_8_after_abandonment_profile_facts_misc_notes():
-    """DIMENSION_MODULES has exactly 8 entries after qora-abandonment, qora-profile-facts,
-    and qora-misc-notes.
+    """DIMENSION_MODULES has exactly 7 entries after qora-abandonment, qora-profile-facts,
+    qora-misc-notes, and qora-data-corrections.
 
     qora-abandonment removed abandonment_reason (11 → 10).
     qora-profile-facts removed profile_facts (10 → 9).
     qora-misc-notes removed misc_notes (9 → 8).
+    qora-data-corrections removed data_corrections (8 → 7).
     """
     from app.analysis.universal import DIMENSION_MODULES
 
     names = [mod.DIMENSION["name"] for mod in DIMENSION_MODULES]
-    assert len(DIMENSION_MODULES) == 8, (
-        f"Expected 8 DIMENSION_MODULES after qora-abandonment, qora-profile-facts, and qora-misc-notes, "
+    assert len(DIMENSION_MODULES) == 7, (
+        f"Expected 7 DIMENSION_MODULES after qora-abandonment, qora-profile-facts,"
+        f" qora-misc-notes, and qora-data-corrections, "
         f"got {len(DIMENSION_MODULES)}: {names}"
     )
 
@@ -2021,7 +2030,7 @@ def test_abandonment_module_not_exported_from_universal_init():
 
 
 def test_dimension_modules_order_is_correct_after_abandonment_profile_facts_misc_notes():
-    """DIMENSION_MODULES order is stable with 8 entries (abandonment + profile_facts + misc_notes removed)."""
+    """DIMENSION_MODULES order is stable with 7 entries (abandonment + profile_facts + misc_notes + data_corrections removed)."""
     from app.analysis.universal import DIMENSION_MODULES
 
     names = [mod.DIMENSION["name"] for mod in DIMENSION_MODULES]
@@ -2029,8 +2038,7 @@ def test_dimension_modules_order_is_correct_after_abandonment_profile_facts_misc
         "summary",
         "objections",
         "next_action",
-        # qora-misc-notes: misc_notes removed (9 → 8)
-        "data_corrections",
+        # qora-data-corrections: data_corrections removed (8 → 7)
         "outcome",
         "problem",
         "service_issues",
@@ -2251,11 +2259,15 @@ def test_misc_notes_not_in_dimension_modules():
 
 
 def test_dimension_modules_count_is_8_after_misc_notes_extraction():
-    """DIMENSION_MODULES has exactly 8 entries after misc_notes extraction."""
+    """DIMENSION_MODULES has exactly 7 entries after misc_notes and data_corrections extraction.
+
+    qora-misc-notes removed misc_notes (9 → 8).
+    qora-data-corrections removed data_corrections (8 → 7).
+    """
     from app.analysis.universal import DIMENSION_MODULES
 
-    assert len(DIMENSION_MODULES) == 8, (
-        f"Expected 8 DIMENSION_MODULES after misc_notes extraction, "
+    assert len(DIMENSION_MODULES) == 7, (
+        f"Expected 7 DIMENSION_MODULES after misc_notes and data_corrections extraction, "
         f"got {len(DIMENSION_MODULES)}: {[m.DIMENSION['name'] for m in DIMENSION_MODULES]}"
     )
 

@@ -20,6 +20,10 @@ is exported for use by the summarizer (Phase 2 removes profile_facts from DIMENS
 qora-misc-notes: ``misc_notes`` extracted from DIMENSION_MODULES (9 → 8).
 Now a standalone stateful pipeline via ``run_misc_notes_pipeline``.
 Schema changed from ``str`` to ``MiscNotesAxis(notes: list[MiscNote])``.
+
+qora-data-corrections: ``data_corrections`` extracted from DIMENSION_MODULES (8 → 7).
+Now a standalone stateful pipeline via ``run_data_corrections_pipeline``.
+Requires current lead snapshot as input (like profile_facts, stateful).
 """
 
 from __future__ import annotations
@@ -28,7 +32,7 @@ from types import ModuleType
 
 from app.analysis.universal import (
     commitments,
-    data_corrections,
+    data_corrections,  # noqa: F401 — kept for direct access; not in DIMENSION_MODULES
     misc_notes,  # noqa: F401 — qora-misc-notes: no longer in DIMENSION_MODULES but kept for direct access in tests
     next_action,
     objections,
@@ -42,7 +46,11 @@ from app.analysis.universal import (
 
 # qora-misc-notes: MiscNote and run_misc_notes_pipeline exported for summarizer use
 from app.analysis.universal.commitments import CommitmentsAxis
-from app.analysis.universal.data_corrections import DataCorrectionsAxis
+from app.analysis.universal.data_corrections import (
+    DataCorrection,
+    DataCorrectionsAxis,
+    run_data_corrections_pipeline,
+)
 
 # qora-interest-pipeline: InterestItem, InterestsAxis, InterestLevelResult,
 # and run_interest_pipeline are imported from the new interest/ package.
@@ -76,21 +84,18 @@ from app.analysis.universal.summary import SummaryAxis
 #
 # qora-interest-pipeline: DIMENSION_MODULES had 11 entries (down from 13).
 # qora-abandonment: DIMENSION_MODULES now has 10 entries (abandonment removed).
-# ``interests`` and ``interest_level`` are handled by the 2-phase pipeline:
-#   Phase 1: interests.analyze() — runs in parallel with the 10 here
-#   Phase 2: interest_level.analyze() — runs after Phase 1 completes
+# qora-profile-facts: profile_facts removed from DIMENSION_MODULES (10 → 9).
+# qora-misc-notes: misc_notes removed from DIMENSION_MODULES (9 → 8).
+# qora-data-corrections: data_corrections removed from DIMENSION_MODULES (8 → 7).
+#   Replaced by standalone run_data_corrections_pipeline() for stateful execution
+#   (requires current lead snapshot — dimensions are stateless).
 DIMENSION_MODULES: list[ModuleType] = [
     summary,
     objections,
     next_action,
-    data_corrections,
     outcome,
     problem,
     service_issues,
-    # qora-profile-facts: profile_facts removed from DIMENSION_MODULES (10 → 9).
-    # Replaced by standalone run_profile_facts_pipeline() for stateful execution.
-    # qora-misc-notes: misc_notes removed from DIMENSION_MODULES (9 → 8).
-    # Replaced by standalone run_misc_notes_pipeline() for stateful execution.
     commitments,
 ]
 
@@ -104,7 +109,9 @@ __all__ = [
     "MiscNote",
     "MiscNotesAxis",
     "run_misc_notes_pipeline",
+    "DataCorrection",
     "DataCorrectionsAxis",
+    "run_data_corrections_pipeline",
     "CallOutcome",
     "AbandonmentTrigger",
     "IdentifiedProblem",

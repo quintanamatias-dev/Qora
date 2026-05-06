@@ -33,6 +33,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.schema import PostCallAnalysis
 from app.analysis.universal import DIMENSION_MODULES
+from app.analysis.universal.data_corrections import (
+    DataCorrection,
+    DataCorrectionsAxis,
+    run_data_corrections_pipeline,
+)
 from app.analysis.universal.interest import run_interest_pipeline
 from app.analysis.universal.misc_notes import (
     MiscNotesAxis,
@@ -135,7 +140,9 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
         current_profile_facts = await get_facts_by_namespace(db, cs.lead_id, "profile:")
 
     # qora-misc-notes: Load previous misc_notes from Lead.extracted_facts for stateful pipeline
+    # qora-data-corrections: also build current_lead_data snapshot for corrections pipeline
     current_misc_notes = []
+    current_lead_data: dict = {}
     if cs.lead_id:
         lead_result = await db.execute(select(Lead).where(Lead.id == cs.lead_id))
         lead_for_notes = lead_result.scalar_one_or_none()
@@ -153,12 +160,25 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
             )
             current_misc_notes = _coerce_current_notes(raw_misc)
 
+            # Build snapshot of correctable fields for the data corrections pipeline
+            current_lead_data = {
+                "name": lead_for_notes.name,
+                "phone": lead_for_notes.phone,
+                "email": lead_for_notes.email,
+                "age": lead_for_notes.age,
+                "car_make": lead_for_notes.car_make,
+                "car_model": lead_for_notes.car_model,
+                "car_year": lead_for_notes.car_year,
+                "current_insurance": lead_for_notes.current_insurance,
+            }
+
     try:
         summary, facts = await _call_gpt_summarize(
             transcript_text,
             previous_interest_level=previous_interest_level,
             current_profile_facts=current_profile_facts,
             current_misc_notes=current_misc_notes,
+            current_lead_data=current_lead_data,
             has_lead=bool(cs.lead_id),
         )
     except Exception as gpt_exc:
@@ -184,21 +204,36 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
     # ★ Wrap ALL persistence in a single savepoint — guarantees atomicity.
     # If _upsert_call_analysis or any other write raises, the savepoint rolls back
     # and legacy fields (summary, extracted_facts) are NOT committed.
+    #
+    # qora-data-corrections: pop data_corrections_structured BEFORE persisting extracted_facts.
+    # DataCorrectionsAxis is a Pydantic model — not JSON-serializable by SQLAlchemy's JSON type.
+    # It's consumed by _merge_facts_into_lead (which also sets facts["data_corrections"] to the
+    # serializable list-of-dicts result), then discarded from the persisted dict.
+    _corrections_axis = facts.pop("data_corrections_structured", None)
+
     async with db.begin_nested():
         # Persist to CallSession (legacy path)
         cs.summary = summary
-        cs.extracted_facts = facts
         cs.total_user_turns = user_turns
         cs.total_agent_turns = agent_turns
 
-        # ★ NEW: Dual-write to CallAnalysis (analysis v2 — same savepoint, atomic)
-        await _upsert_call_analysis(db, cs.id, cs.lead_id, cs.client_id, summary, facts)
-
-        # Merge into Lead
+        # Merge into Lead FIRST — _merge_facts_into_lead updates facts["data_corrections"]
+        # to the serializable list-of-dicts audit result before we persist extracted_facts.
         if cs.lead_id:
             await _merge_facts_into_lead(
-                db, cs.lead_id, summary, facts, session_id=cs.id
+                db,
+                cs.lead_id,
+                summary,
+                facts,
+                session_id=cs.id,
+                corrections_axis=_corrections_axis,
             )
+
+        # Set extracted_facts AFTER merge so data_corrections is the updated list-of-dicts
+        cs.extracted_facts = facts
+
+        # ★ NEW: Dual-write to CallAnalysis (analysis v2 — same savepoint, atomic)
+        await _upsert_call_analysis(db, cs.id, cs.lead_id, cs.client_id, summary, facts)
 
         # Auto-schedule follow-up call if eligible (Phase 6)
         if cs.lead_id and cs.client_id:
@@ -253,16 +288,18 @@ async def _call_gpt_summarize(
     previous_interest_level: int | None = None,
     current_profile_facts: list[dict] | None = None,
     current_misc_notes: list | None = None,
+    current_lead_data: dict | None = None,
     has_lead: bool = True,
 ) -> tuple[str, dict[str, Any]]:
-    """Run 8 universal dimensions, the 2-phase interest pipeline, profile facts pipeline,
-    and misc notes pipeline.
+    """Run 7 universal dimensions, the 2-phase interest pipeline, profile facts pipeline,
+    misc notes pipeline, and data corrections pipeline.
 
     qora-interest-pipeline: The old monolithic 13-parallel gather is replaced by:
-    - Phase 1: 8 independent dimensions in parallel via asyncio.gather
+    - Phase 1: 7 independent dimensions in parallel via asyncio.gather
     - Phase 2: Interest pipeline (interests → interest_level sequential) via run_interest_pipeline
     - Phase 3: Profile facts pipeline (stateful) via run_profile_facts_pipeline
     - Phase 4: Misc notes pipeline (stateful) via run_misc_notes_pipeline
+    - Phase 5: Data corrections pipeline (stateful) via run_data_corrections_pipeline
 
     All run concurrently at the top level. Results are merged into PostCallAnalysis.
 
@@ -271,24 +308,28 @@ async def _call_gpt_summarize(
         previous_interest_level: Lead's prior interest score for 70/30 formula.
         current_profile_facts: Active profile facts from DB for stateful pipeline.
         current_misc_notes: Previous misc notes from Lead.extracted_facts for stateful pipeline.
+        current_lead_data: Current lead field snapshot for data corrections pipeline.
 
     Returns:
         Tuple of (summary_text, extracted_facts_dict).
 
     Raises:
-        RuntimeError: When ALL 8 independent dimensions AND pipelines fail.
+        RuntimeError: When ALL 7 independent dimensions AND pipelines fail.
     """
     client, _model = _get_openai_client()
     facts_list = current_profile_facts or []
     notes_list = current_misc_notes or []
+    lead_data = current_lead_data or {}
 
     if has_lead:
-        # Run 8 independent dimensions + interest pipeline + profile pipeline + misc notes concurrently
+        # Run 7 independent dimensions + interest pipeline + profile pipeline
+        # + misc notes pipeline + data corrections pipeline concurrently
         (
             independent_results_raw,
             pipeline_raw,
             profile_raw,
             misc_raw,
+            corrections_raw,
         ) = await asyncio.gather(
             asyncio.gather(
                 *[mod.analyze(transcript_text, client) for mod in DIMENSION_MODULES],
@@ -309,12 +350,18 @@ async def _call_gpt_summarize(
                 client,
                 current_notes=notes_list,
             ),
+            run_data_corrections_pipeline(
+                transcript_text,
+                client,
+                current_lead_data=lead_data,
+            ),
             return_exceptions=True,
         )
     else:
         # No lead_id: skip stateful pipelines (require context)
         profile_raw = ProfileFactsAxis()
         misc_raw = MiscNotesAxis()
+        corrections_raw = DataCorrectionsAxis()
         independent_results_raw, pipeline_raw = await asyncio.gather(
             asyncio.gather(
                 *[mod.analyze(transcript_text, client) for mod in DIMENSION_MODULES],
@@ -458,7 +505,26 @@ async def _call_gpt_summarize(
             misc_raw if isinstance(misc_raw, MiscNotesAxis) else MiscNotesAxis()
         )
 
-    if failures >= len(DIMENSION_MODULES) + 1:  # 8 + interest pipeline (counts as 1)
+    # -------------------------------------------------------------------
+    # Process data corrections pipeline result (qora-data-corrections)
+    # -------------------------------------------------------------------
+    if isinstance(corrections_raw, Exception):
+        # Data corrections pipeline raised unexpectedly — non-critical, use empty axis
+        logger.error(
+            "data_corrections_pipeline_exception",
+            error=str(corrections_raw),
+            error_type=type(corrections_raw).__name__,
+        )
+        fields["data_corrections_structured"] = DataCorrectionsAxis()
+    else:
+        # run_data_corrections_pipeline never raises (catches internally) — always DataCorrectionsAxis
+        fields["data_corrections_structured"] = (
+            corrections_raw
+            if isinstance(corrections_raw, DataCorrectionsAxis)
+            else DataCorrectionsAxis()
+        )
+
+    if failures >= len(DIMENSION_MODULES) + 1:  # 7 + interest pipeline (counts as 1)
         raise RuntimeError(
             f"all {failures} dimension analyses failed — see dimension_analysis_failed logs"
         )
@@ -470,6 +536,12 @@ async def _call_gpt_summarize(
 
     # Pop summary out — it's stored separately on CallSession.
     summary = str(facts.pop("summary", ""))
+
+    # qora-data-corrections: inject structured corrections into facts dict
+    # (not in PostCallAnalysis model — passed as a side-channel key)
+    _dc_structured = fields.get("data_corrections_structured")
+    if _dc_structured is not None:
+        facts["data_corrections_structured"] = _dc_structured
 
     return summary, facts
 
@@ -486,6 +558,7 @@ async def _merge_facts_into_lead(
     facts: dict[str, Any],
     *,
     session_id: str | None = None,
+    corrections_axis: "DataCorrectionsAxis | None" = None,
 ) -> None:
     """Merge extracted facts into the Lead record and dual-write to new relational tables.
 
@@ -501,12 +574,17 @@ async def _merge_facts_into_lead(
     - LeadProfileFact rows for key scalar facts (upsert semantics via superseded_at)
     - LeadInterestHistory row for interest_level (append-only)
 
+    ★ NEW (qora-data-corrections):
+    - Structured corrections applied via _apply_structured_corrections
+    - Corrections stored in facts["data_corrections"] as list-of-dicts for audit
+
     Args:
         db: Active async DB session.
         lead_id: UUID of the lead to update.
         summary: Call summary text.
         facts: Extracted facts dict from GPT (already model_dump()'d).
         session_id: Optional UUID of the source call session (for FK reference).
+        corrections_axis: Optional DataCorrectionsAxis from run_data_corrections_pipeline.
     """
     lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
     lead = lead_result.scalar_one_or_none()
@@ -568,10 +646,25 @@ async def _merge_facts_into_lead(
     if facts.get("next_action_suggested"):
         lead.next_action = facts["next_action_suggested"]
 
-    # data_corrections ← propagate car_make/car_model/car_year to Lead columns (Issue #21)
-    corrections_str = facts.get("data_corrections") or ""
-    if corrections_str:
-        _apply_data_corrections(lead, corrections_str)
+    # qora-data-corrections: apply structured corrections from pipeline
+    # corrections_axis is DataCorrectionsAxis from run_data_corrections_pipeline;
+    # _apply_structured_corrections uses CORRECTABLE_FIELDS registry to set lead attrs.
+    if corrections_axis is not None and isinstance(
+        corrections_axis, DataCorrectionsAxis
+    ):
+        all_corrections = _apply_structured_corrections(
+            lead, corrections_axis.corrections
+        )
+        # Store ALL corrections in facts (applied + rejected) for full audit trail
+        facts["data_corrections"] = [c.model_dump() for c in all_corrections]
+        # Write LeadProfileFact rows for APPLIED corrections only (not rejected)
+        actually_applied = [c for c in all_corrections if c.applied]
+        if actually_applied:
+            await _write_structured_correction_facts(
+                db, lead_id, session_id, actually_applied
+            )
+    else:
+        facts["data_corrections"] = []
 
     # ★ NEW: Dual-write to relational tables (analysis v2)
     await _write_lead_profile_facts(db, lead_id, session_id, facts)
@@ -580,10 +673,6 @@ async def _merge_facts_into_lead(
     # qora-profile-facts Phase 3: Write profile: facts with hard DELETE semantics
     # (separate from _LIST_AXES which uses supersede pattern for other namespaces)
     await _write_profile_facts_from_pipeline(db, lead_id, session_id, facts)
-
-    # ★ NEW: Write LeadProfileFact rows for each data_correction (Issue #34 CRITICAL 2)
-    if corrections_str:
-        await _write_correction_facts(db, lead_id, session_id, corrections_str)
 
 
 # ---------------------------------------------------------------------------
@@ -665,6 +754,132 @@ def _apply_data_corrections(lead: "Lead", corrections_str: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Structured corrections application (qora-data-corrections)
+# ---------------------------------------------------------------------------
+
+
+def _apply_structured_corrections(
+    lead: "Lead",
+    corrections: list["DataCorrection"],
+) -> list["DataCorrection"]:
+    """Apply structured corrections from run_data_corrections_pipeline to a Lead.
+
+    Uses CORRECTABLE_FIELDS registry to coerce values and setattr atomically.
+    Only corrections with applied=True are written to the Lead.
+    Idempotency: skips if corrected_value equals current value (already handled
+    by the pipeline, but double-checked here as a safety gate).
+
+    Args:
+        lead: Lead ORM instance to update in-place.
+        corrections: List of DataCorrection items from the pipeline.
+
+    Returns:
+        ALL DataCorrection items (applied=True and applied=False) for the audit
+        trail stored in facts["data_corrections"]. Only applied=True items are
+        written to the Lead. Rejected items are preserved with their rejection_reason.
+    """
+    from app.analysis.universal.data_corrections import CORRECTABLE_FIELDS, coerce_value
+
+    all_corrections: list[DataCorrection] = []
+    for correction in corrections:
+        if not correction.applied:
+            # Rejected (validation failure, confidence gate, etc.) — include in audit
+            all_corrections.append(correction)
+            continue
+        field = correction.field
+        if field not in CORRECTABLE_FIELDS:
+            continue  # Safety: unknown field should have been dropped by pipeline
+        entry = CORRECTABLE_FIELDS[field]
+        try:
+            coerced = coerce_value(correction.corrected_value, entry.type)
+            setattr(lead, entry.lead_attr, coerced)
+            all_corrections.append(correction)
+            logger.info(
+                "data_correction_applied",
+                field=field,
+                lead_attr=entry.lead_attr,
+                corrected_value=correction.corrected_value,
+                confidence=correction.confidence,
+            )
+        except (ValueError, TypeError) as exc:
+            logger.warning(
+                "data_correction_coerce_failed",
+                field=field,
+                corrected_value=correction.corrected_value,
+                error=str(exc),
+            )
+            # Coercion failed — include in audit as rejected
+            from app.analysis.universal.data_corrections import DataCorrection as _DC
+
+            all_corrections.append(
+                _DC(
+                    field=correction.field,
+                    current_value=correction.current_value,
+                    corrected_value=correction.corrected_value,
+                    confidence=correction.confidence,
+                    evidence=correction.evidence,
+                    applied=False,
+                    rejection_reason=f"coercion failed: {exc}",
+                )
+            )
+    return all_corrections
+
+
+async def _write_structured_correction_facts(
+    db: AsyncSession,
+    lead_id: str,
+    session_id: str | None,
+    corrections: list["DataCorrection"],
+) -> None:
+    """Write LeadProfileFact rows for each applied structured correction.
+
+    Upsert semantics: supersedes any existing active row for the same fact_key
+    when the value changes. Confidence is preserved from the DataCorrection item.
+
+    Args:
+        db: Active async DB session.
+        lead_id: UUID of the lead.
+        session_id: UUID of the source call session (FK + provenance).
+        corrections: Applied DataCorrection items (applied=True only).
+    """
+    from datetime import datetime, timezone
+
+    if not corrections:
+        return
+
+    now = datetime.now(timezone.utc)
+
+    for correction in corrections:
+        fact_key = correction.field
+        fact_value = str(correction.corrected_value)
+
+        # Supersede existing active row if value differs
+        existing_result = await db.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == lead_id,
+                LeadProfileFact.fact_key == fact_key,
+                LeadProfileFact.superseded_at == None,  # noqa: E711
+            )
+        )
+        existing = existing_result.scalar_one_or_none()
+
+        if existing is not None:
+            if existing.fact_value == fact_value:
+                continue  # Same value — skip
+            existing.superseded_at = now
+
+        db.add(
+            LeadProfileFact(
+                id=_new_uuid(),
+                lead_id=lead_id,
+                fact_key=fact_key,
+                fact_value=fact_value,
+                source_call_id=session_id,
+            )
+        )
+
+
+# ---------------------------------------------------------------------------
 # Analysis v2 helpers — dual-write to relational tables
 # ---------------------------------------------------------------------------
 
@@ -721,7 +936,13 @@ async def _upsert_call_analysis(
     ca.primary_need = _primary_pain.get("description") if _primary_pain else None
     ca.next_action_suggested = facts.get("next_action_suggested")
     ca.current_insurance = facts.get("current_insurance")
-    ca.data_corrections = facts.get("data_corrections") or ""
+    # qora-data-corrections: structured corrections are now a list of dicts — serialize to JSON
+    _dc_data = facts.get("data_corrections")
+    if isinstance(_dc_data, list):
+        ca.data_corrections = json.dumps(_dc_data) if _dc_data else "[]"
+    else:
+        # Legacy fallback: string-based corrections (pre-migration data or empty)
+        ca.data_corrections = str(_dc_data) if _dc_data else "[]"
     # qora-misc-notes: misc_notes is now MiscNotesAxis — serialize as JSON (same as profile_facts)
     _mn_data = facts.get("misc_notes") or {}
     ca.misc_notes = json.dumps(_mn_data) if _mn_data else json.dumps({"notes": []})
