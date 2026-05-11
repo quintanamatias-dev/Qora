@@ -3,6 +3,9 @@
 Each pain point tracks: category, description, evidence (direct quote),
 urgency, confidence, and whether it is the primary pain point. At most
 5 pain points per call.
+
+Locale-aware: description and evidence are written in the client's configured
+analysis_language. category, urgency, and confidence remain canonical codes.
 """
 
 from __future__ import annotations
@@ -11,6 +14,8 @@ from typing import Literal
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+
+DEFAULT_LANGUAGE = "Spanish"
 
 # ---------------------------------------------------------------------------
 # Literal type aliases — consistent with objections.py / service_issues.py
@@ -74,7 +79,7 @@ class ProblemAxis(BaseModel):
 # DIMENSION configuration
 # ---------------------------------------------------------------------------
 
-_PROMPT = (
+_PROMPT_BODY = (
     "You are an expert at detecting underlying pain points and unmet needs from sales call transcripts.\n\n"
     "A pain point exists when the lead reveals a problem, dissatisfaction, fear, unmet need, or urgency "
     "that motivates their interest. Examples: cost concerns, missing coverage or capability, upcoming renewal "
@@ -99,21 +104,36 @@ _PROMPT = (
     "- Polite expressions without substance\n"
     "- Information requests that do not reveal a problem\n\n"
     "BOUNDARY RULES — avoid cross-dimension overlap:\n"
-    "- bad_experience: a PAST bad experience motivating their search IS a pain point. "
-    "An active pushback against THIS provider during negotiation is an OBJECTION — do NOT duplicate.\n"
-    "- cost: background cost concern = cost pain point. "
-    "Current negotiation price resistance = price objection, NOT a pain point.\n"
-    "- coverage: missing coverage or capability the lead NEEDS = pain point. "
-    "Objection to coverage or feature OFFERED = objection.\n\n"
+    "- bad_experience: a PAST bad experience that MOTIVATES the lead to search for alternatives IS a pain point "
+    "(e.g. 'I had a terrible experience with insurance companies years ago'). "
+    "However, a SPECIFIC complaint about a provider's service quality (slow claims, no response, "
+    "billing errors, poor attention) belongs to service_issues, NOT here — even if it motivates the search. "
+    "The test: if the complaint describes a concrete service failure, it is a service issue. "
+    "If it describes a general pattern or emotional motivation, it is a pain point.\n"
+    "- cost: a background cost concern that DRIVES the lead to explore options = cost pain point "
+    "(e.g. 'prices keep going up every year'). "
+    "Active resistance to a specific price during negotiation = price objection, NOT a pain point.\n"
+    "- coverage: a gap in coverage the lead NEEDS filled = pain point. "
+    "Pushback against specific coverage OFFERED by the agent = objection.\n\n"
     "Return JSON with: pain_points (array of pain point objects)."
 )
+
+
+def _build_prompt(language: str) -> str:
+    """Build the dimension prompt with the given output language."""
+    lang_note = (
+        f"LANGUAGE NOTE: Write description and evidence fields in {language}. "
+        f"Keep category, urgency, and confidence as the exact English codes listed above.\n\n"
+    )
+    return lang_note + _PROMPT_BODY
+
 
 DIMENSION = {
     "name": "problem",
     "display_name": "Identified Problem",
     "schema": ProblemAxis,
     "target_field": "identified_problem",
-    "prompt": _PROMPT,
+    "prompt": _build_prompt(DEFAULT_LANGUAGE),
     "model": "gpt-4o-mini",
 }
 
@@ -132,12 +152,25 @@ IdentifiedProblem = ProblemAxis  # type: ignore[assignment]
 # ---------------------------------------------------------------------------
 
 
-async def analyze(transcript: str, client: AsyncOpenAI) -> ProblemAxis:
-    """Run this dimension's GPT call and return the parsed ProblemAxis."""
+async def analyze(
+    transcript: str,
+    client: AsyncOpenAI,
+    *,
+    language: str = DEFAULT_LANGUAGE,
+) -> ProblemAxis:
+    """Run this dimension's GPT call and return the parsed ProblemAxis.
+
+    Args:
+        transcript: Formatted transcript text.
+        client: AsyncOpenAI client instance.
+        language: Output language for description and evidence fields.
+            category, urgency, and confidence stay canonical English codes.
+    """
+    prompt = _build_prompt(language)
     response = await client.beta.chat.completions.parse(
         model=DIMENSION["model"],
         messages=[
-            {"role": "system", "content": DIMENSION["prompt"]},
+            {"role": "system", "content": prompt},
             {"role": "user", "content": transcript},
         ],
         response_format=DIMENSION["schema"],

@@ -1,0 +1,434 @@
+{
+  "scenario_1_positive": {
+    "objections": {
+      "objections": [
+        {
+          "category": "price",
+          "strength": "high",
+          "resolution_status": "partially_resolved",
+          "evidence": "mi cuñado me dijo que los seguros todo riesgo están carísimos este año.",
+          "description": "The lead is concerned about the cost of comprehensive insurance, mentioning that they have heard it is very expensive this year.",
+          "confidence": "high",
+          "agent_response_summary": "The agent acknowledged the concern and mentioned that they would provide a competitive price in the quote.",
+          "is_primary": true
+        },
+        {
+          "category": "current_provider",
+          "strength": "medium",
+          "resolution_status": "unresolved",
+          "evidence": "cuando tuve un siniestro el año pasado tardaron tres meses en resolver el reclamo. Tres meses sin respuesta. Llamaba y nadie me atendía. Un desastre.",
+          "description": "The lead has expressed dissatisfaction with their current provider, La Caja, due to slow claims resolution and lack of communication during a past incident.",
+          "confidence": "high",
+          "agent_response_summary": "The agent sympathized with the situation and highlighted their commitment to resolving claims quickly.",
+          "is_primary": false
+        },
+        {
+          "category": "timing",
+          "strength": "medium",
+          "resolution_status": "resolved",
+          "evidence": "¿Me la podés mandar mañana? Porque hoy estoy medio complicado, trabajo en la municipalidad y tengo reuniones hasta las seis.",
+          "description": "The lead indicated that they are busy today and requested the quote to be sent the following day.",
+          "confidence": "high",
+          "agent_response_summary": "The agent agreed to send the quote the next day as requested by the lead.",
+          "is_primary": false
+        },
+        {
+          "category": "need",
+          "strength": "medium",
+          "resolution_status": "resolved",
+          "evidence": "mi esposa me viene diciendo hace meses que tenemos que asegurar los contenidos.",
+          "description": "The lead mentioned a need for home insurance, indicating that their spouse has been suggesting it for months.",
+          "confidence": "medium",
+          "agent_response_summary": "The agent responded positively by including home insurance in the quote proposal.",
+          "is_primary": false
+        },
+        {
+          "category": "coverage_or_product_fit",
+          "strength": "medium",
+          "resolution_status": "resolved",
+          "evidence": "Con La Caja pagaba mucho por poca cobertura.",
+          "description": "The lead expressed a concern about receiving poor coverage for a high price with their current provider.",
+          "confidence": "medium",
+          "agent_response_summary": "The agent addressed this by assuring the lead that they would provide a better coverage option.",
+          "is_primary": false
+        }
+      ]
+    },
+    "interest_level": 80,
+    "next_action_suggested": "follow_up",
+    "misc_notes": {
+      "notes": [
+        {
+          "type": "temporary_context",
+          "note": "Lead's current auto insurance expires next month."
+        },
+        {
+          "type": "pending_topic",
+          "note": "Lead requested a quote for auto and home insurance to be sent tomorrow."
+        },
+        {
+          "type": "continuity",
+          "note": "Lead prefers competitive pricing with good coverage and low deductible."
+        }
+      ]
+    },
+    "data_corrections": "",
+    "call_outcome": {
+      "classification": "completed_positive",
+      "reason": "The lead expressed a clear interest in obtaining insurance quotes for both a car and home policy, and requested the information be sent to him, indicating a positive engagement.",
+      "confidence": "high",
+      "was_abrupt": null,
+      "abandonment_trigger": null
+    },
+    "detected_interests": {
+      "items": [
+        {
+          "product": "auto_todo_riesgo",
+          "needs": [
+            "precio_competitivo",
+            "menor_franquicia",
+            "mayor_cobertura"
+          ],
+          "evidence": "la verdad que me interesa todo riesgo para el auto",
+          "confidence": "high"
+        },
+        {
+          "product": "hogar",
+          "needs": [
+            "precio_competitivo",
+            "mayor_cobertura"
+          ],
+          "evidence": "también quería consultar por un seguro de hogar. Tenemos un departamento y no tenemos nada.",
+          "confidence": "high"
+        }
+      ]
+    },
+    "identified_problem": {
+      "pain_points": [
+        {
+          "category": "renewal",
+          "description": "The lead is facing an upcoming renewal for his auto insurance, which is due next month, prompting his search for a new policy.",
+          "evidence": "...estoy necesitando porque se me vence el seguro el mes que viene...",
+          "urgency": "high",
+          "confidence": "high",
+          "is_primary": true
+        },
+        {
+          "category": "cost",
+          "description": "The lead expressed concern over a significant increase of 40% in his current insurance premium, indicating a dissatisfaction with current costs.",
+          "evidence": "...me aumentaron un cuarenta por ciento. Es una locura lo que me están cobrando.",
+          "urgency": "medium",
+          "confidence": "high",
+          "is_primary": false
+        },
+        {
+          "category": "bad_experience",
+          "description": "The lead recounted a negative past experience with his current insurance provider, where it took three months to resolve a claim, leading to dissatisfaction.",
+          "evidence": "...cuando tuve un siniestro el año pasado tardaron tres meses en resolver el reclamo... Un desastre.",
+          "urgency": "medium",
+          "confidence": "high",
+          "is_primary": false
+        },
+        {
+          "category": "new_need",
+          "description": "The lead identified a new need for home insurance, as he mentioned that his wife has been urging him for months to insure their apartment's contents.",
+          "evidence": "...también quería consultar por un seguro de hogar. Tenemos un departamento y no tenemos nada.",
+          "urgency": "medium",
+          "confidence": "high",
+          "is_primary": false
+        },
+        {
+          "category": "coverage",
+          "description": "The lead expressed dissatisfaction with his current policy, highlighting that he paid a lot for minimal coverage, indicating a need for better options.",
+          "evidence": "...con La Caja pagaba mucho por poca cobertura.",
+          "urgency": "medium",
+          "confidence": "high",
+          "is_primary": false
+        }
+      ]
+    },
+    "service_issues": {
+      "issues": [
+        {
+          "category": "delay",
+          "description": "The lead experienced a significant delay in resolving a claim with their current provider, taking three months without response.",
+          "source": "current_provider",
+          "severity": "high",
+          "evidence": "cuando tuve un siniestro el año pasado tardaron tres meses en resolver el reclamo.",
+          "confidence": "high"
+        },
+        {
+          "category": "communication_problem",
+          "description": "The lead encountered issues with communication as they were unable to reach someone for help during the claim process.",
+          "source": "current_provider",
+          "severity": "medium",
+          "evidence": "Llamaba y nadie me atendía.",
+          "confidence": "high"
+        }
+      ]
+    },
+    "profile_facts": {
+      "updates": [
+        {
+          "operation": "add",
+          "category": "provider_relationship",
+          "fact": "Has had a negative experience with La Caja due to slow claim resolution.",
+          "evidence": "cuando tuve un siniestro el año pasado tardaron tres meses en resolver el reclamo",
+          "confidence": "high",
+          "target_fact_id": null
+        },
+        {
+          "operation": "add",
+          "category": "decision_style",
+          "fact": "Consults with his wife before making decisions.",
+          "evidence": "yo soy de consultar las cosas con mi señora antes de decidir",
+          "confidence": "high",
+          "target_fact_id": null
+        },
+        {
+          "operation": "add",
+          "category": "occupation",
+          "fact": "Works at the municipality.",
+          "evidence": "trabajo en la municipalidad",
+          "confidence": "medium",
+          "target_fact_id": null
+        },
+        {
+          "operation": "add",
+          "category": "lifestyle",
+          "fact": "Is interested in ensuring contents of their apartment.",
+          "evidence": "no tenemos nada. Mi esposa me viene diciendo hace meses que tenemos que asegurar los contenidos",
+          "confidence": "medium",
+          "target_fact_id": null
+        },
+        {
+          "operation": "add",
+          "category": "financial_attitude",
+          "fact": "Seeks competitive pricing with good coverage for insurance.",
+          "evidence": "Principalmente precio competitivo pero con buena cobertura",
+          "confidence": "high",
+          "target_fact_id": null
+        }
+      ]
+    },
+    "commitments": {
+      "commitments": [
+        {
+          "type": "receive_quote",
+          "owner": "agent",
+          "description": "Jaumpablo will prepare a quote for both the auto insurance and home insurance and send it to Martín.",
+          "due": "tomorrow",
+          "strength": "strong",
+          "evidence": "\"Mañana a primera hora te la mando por WhatsApp.\"",
+          "confidence": "high"
+        },
+        {
+          "type": "send_document",
+          "owner": "agent",
+          "description": "Jaumpablo will send a detailed document to Martín via email about the insurance quotes.",
+          "due": "tomorrow",
+          "strength": "strong",
+          "evidence": "\"Te mando todo detallado mañana.\"",
+          "confidence": "high"
+        },
+        {
+          "type": "consult_third_party",
+          "owner": "lead",
+          "description": "Martín plans to consult with his wife before making a decision on the insurance quotes.",
+          "due": "unknown",
+          "strength": "medium",
+          "evidence": "\"Yo soy de consultar las cosas con mi señora antes de decidir.\"",
+          "confidence": "high"
+        }
+      ]
+    },
+    "next_action_result": {
+      "action": "follow_up",
+      "reason": "Lead committed to receiving a quote (strength=strong)",
+      "confidence": "high",
+      "decided_by": "rules",
+      "next_action_at": null,
+      "priority": "normal"
+    },
+    "data_corrections_structured": "corrections=[DataCorrection(field='car_year', current_value=None, corrected_value='2023', confidence=1.0, evidence='Ah no, perdón, en realidad es un 2023.', applied=True, rejection_reason=None), DataCorrection(field='car_model', current_value='Corolla', corrected_value='Corolla Cross', confidence=1.0, evidence='el modelo es un Corolla Cross, no Corolla a secas.', applied=True, rejection_reason=None), DataCorrection(field='email', current_value=None, corrected_value='martinrodriguez@gmail.com', confidence=1.0, evidence='mi mail es martinrodriguez@gmail.com por si necesitás mandarme algo por escrito.', applied=True, rejection_reason=None)]",
+    "summary": "Durante la llamada, el agente de Quintana Seguros contactó a Martín Rodríguez para ofrecerle una cotización de un seguro de auto y de hogar, tras quejarse Rodríguez de su actual compañía."
+  },
+  "scenario_2_negative": {
+    "objections": {
+      "objections": [
+        {
+          "category": "current_provider",
+          "strength": "high",
+          "resolution_status": "unresolved",
+          "evidence": "Ya tengo seguro y no quiero cambiar. Estoy bien con el que tengo.",
+          "description": "The lead is satisfied with their current insurance provider and explicitly states they do not want to change.",
+          "confidence": "high",
+          "agent_response_summary": "The agent attempted to ask about the current provider to potentially offer a better deal but did not convince the lead.",
+          "is_primary": true
+        },
+        {
+          "category": "price",
+          "strength": "high",
+          "resolution_status": "unresolved",
+          "evidence": "Aparte los seguros están todos caros, es un robo lo que cobran. No me interesa pagar más de lo que ya pago.",
+          "description": "The lead expresses strong dissatisfaction with the prices of insurance, describing them as a 'robbery' and shows no interest in paying more.",
+          "confidence": "high",
+          "agent_response_summary": "The agent acknowledged the concern about pricing but did not successfully address it.",
+          "is_primary": false
+        },
+        {
+          "category": "hard_rejection",
+          "strength": "high",
+          "resolution_status": "unresolved",
+          "evidence": "Mirá hermano, te lo digo bien: no me llamen más. No me interesa, no quiero que me llamen nunca más.",
+          "description": "The lead outright rejects any further contact or offers, showing strong resistance to further engagement.",
+          "confidence": "high",
+          "agent_response_summary": "The agent acknowledged the lead's request and assured they would be removed from the call list.",
+          "is_primary": false
+        }
+      ]
+    },
+    "interest_level": 0,
+    "next_action_suggested": "close_lead",
+    "misc_notes": {
+      "notes": [
+        {
+          "type": "caution",
+          "note": "Lead is highly irritable and does not want to receive further calls."
+        },
+        {
+          "type": "tone_context",
+          "note": "Lead expressed annoyance and frustration with constant calls."
+        },
+        {
+          "type": "temporary_context",
+          "note": "Lead currently has insurance with Federación Patronal and is satisfied."
+        }
+      ]
+    },
+    "data_corrections": "",
+    "call_outcome": {
+      "classification": "do_not_contact",
+      "reason": "The lead explicitly requested to not be contacted again and expressed strong displeasure with the calls.",
+      "confidence": "high",
+      "was_abrupt": null,
+      "abandonment_trigger": null
+    },
+    "detected_interests": {
+      "items": []
+    },
+    "identified_problem": {
+      "pain_points": [
+        {
+          "category": "cost",
+          "description": "The lead expresses strong dissatisfaction with current insurance prices, indicating that he finds them excessively high and feels it's a 'robbery'.",
+          "evidence": "Aparte los seguros están todos caros, es un robo lo que cobran.",
+          "urgency": "medium",
+          "confidence": "high",
+          "is_primary": true
+        },
+        {
+          "category": "dissatisfaction",
+          "description": "The lead is frustrated with unwanted sales calls and expresses a desire to no longer be contacted, indicating a general dissatisfaction with the intrusion of sales efforts.",
+          "evidence": "Me están llamando todo el día de distintas empresas, me tienen harto.",
+          "urgency": "high",
+          "confidence": "high",
+          "is_primary": false
+        },
+        {
+          "category": "comparison",
+          "description": "The lead believes he is already well-covered with his current provider and is not looking to compare options, showing a lack of interest in evaluating alternatives.",
+          "evidence": "Ya tengo seguro y no quiero cambiar. Estoy bien con el que tengo.",
+          "urgency": "low",
+          "confidence": "medium",
+          "is_primary": false
+        }
+      ]
+    },
+    "service_issues": {
+      "issues": [
+        {
+          "category": "communication_problem",
+          "description": "The lead is frustrated with constant unwanted calls from various companies, indicating a communication issue with telemarketing practices.",
+          "source": "unknown",
+          "severity": "high",
+          "evidence": "Me están llamando todo el día de distintas empresas, me tienen harto.",
+          "confidence": "high"
+        },
+        {
+          "category": "bad_experience",
+          "description": "The lead expresses significant annoyance towards repeated unsolicited marketing calls, indicating a bad experience with telemarketers.",
+          "source": "unknown",
+          "severity": "high",
+          "evidence": "Mirá hermano, te lo digo bien: no me llamen más. No me interesa, no quiero que me llamen nunca más.",
+          "confidence": "high"
+        },
+        {
+          "category": "poor_attention",
+          "description": "The agent did not acknowledge that the lead did not initiate the contact, reflecting a lack of attention to the customer's situation.",
+          "source": "our_company",
+          "severity": "medium",
+          "evidence": "Disculpá Ricardo, tenemos tu contacto de una consulta web.",
+          "confidence": "medium"
+        },
+        {
+          "category": "claim_problem",
+          "description": "The lead is unwilling to consider new offers due to belief that current insurance prices are excessively high, hinting at a concern with value and claims.",
+          "source": "current_provider",
+          "severity": "medium",
+          "evidence": "Aparte los seguros están todos caros, es un robo lo que cobran.",
+          "confidence": "medium"
+        }
+      ]
+    },
+    "profile_facts": {
+      "updates": [
+        {
+          "operation": "add",
+          "category": "provider_relationship",
+          "fact": "Currently has insurance with Federación Patronal and is satisfied with it.",
+          "evidence": "\"Estoy con Federación Patronal y estoy perfecto. No necesito nada.\"",
+          "confidence": "high",
+          "target_fact_id": null
+        },
+        {
+          "operation": "add",
+          "category": "financial_attitude",
+          "fact": "Feels that insurance prices are too high and considers them a scam.",
+          "evidence": "\"aparte los seguros están todos caros, es un robo lo que cobran.\"",
+          "confidence": "high",
+          "target_fact_id": null
+        },
+        {
+          "operation": "add",
+          "category": "decision_style",
+          "fact": "Prefers not to change insurance and is decisive in his choice to remain with his current provider.",
+          "evidence": "\"No me interesa. Ya tengo seguro y no quiero cambiar. Estoy bien con el que tengo.\"",
+          "confidence": "high",
+          "target_fact_id": null
+        },
+        {
+          "operation": "add",
+          "category": "communication_preference",
+          "fact": "Does not want to be contacted again for insurance offers.",
+          "evidence": "\"Mirá hermano, te lo digo bien: no me llamen más.\"",
+          "confidence": "high",
+          "target_fact_id": null
+        }
+      ]
+    },
+    "commitments": {
+      "commitments": []
+    },
+    "next_action_result": {
+      "action": "close_lead",
+      "reason": "Hard stop: outcome classification is 'do_not_contact'",
+      "confidence": "high",
+      "decided_by": "rules",
+      "next_action_at": null,
+      "priority": "normal"
+    },
+    "data_corrections_structured": "corrections=[]",
+    "summary": "El agente de seguros llamó a Ricardo Gómez, quien se mostró muy molesto por las constantes llamadas y rechazó cualquier oferta, pidiendo que no lo contacten más."
+  }
+}

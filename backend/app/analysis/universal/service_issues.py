@@ -2,6 +2,9 @@
 
 Each issue tracks: category, description, source (which provider), severity,
 a direct transcript evidence quote, and confidence. At most 5 issues per call.
+
+Locale-aware: description and evidence are written in the client's configured
+analysis_language. category, source, severity, and confidence remain canonical codes.
 """
 
 from __future__ import annotations
@@ -10,6 +13,8 @@ from typing import Literal
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+
+DEFAULT_LANGUAGE = "Spanish"
 
 # ---------------------------------------------------------------------------
 # Literal type aliases — consistent with commitments.py convention
@@ -73,7 +78,7 @@ class ServiceIssuesAxis(BaseModel):
 # DIMENSION configuration
 # ---------------------------------------------------------------------------
 
-_PROMPT = (
+_PROMPT_BODY = (
     "You are an expert at detecting service complaints and problems from sales call transcripts.\n\n"
     "A service issue exists when the lead explicitly mentions a problem, complaint, or negative "
     "experience with a service provider (current_provider, previous_provider, or our_company).\n\n"
@@ -94,16 +99,34 @@ _PROMPT = (
     "- General price inquiries or quote requests without complaints\n"
     "- Hypothetical scenarios ('what if my claim is rejected?')\n"
     "- Vague dissatisfaction without specific details ('it's okay' / 'not great')\n"
-    "- Politeness phrases ('thanks', 'goodbye', 'gracias')\n\n"
+    "- Politeness phrases ('thanks', 'goodbye', 'gracias')\n"
+    "- Lead rejecting the call or asking not to be contacted — that is a sales rejection, "
+    "NOT a service failure (even if the lead is angry or frustrated)\n"
+    "- General frustration with receiving marketing/telemarketing calls — that is not "
+    "a service problem with any specific provider\n"
+    "- General price complaints ('insurance is a robbery', 'everything is too expensive') "
+    "without describing a concrete billing error, overcharge, or pricing discrepancy\n"
+    "- The agent's sales approach or pitch style — unless the lead explicitly complains "
+    "about a service interaction (not the sales call itself)\n\n"
     "Return JSON with: issues (array of service issue objects)."
 )
+
+
+def _build_prompt(language: str) -> str:
+    """Build the dimension prompt with the given output language."""
+    lang_note = (
+        f"LANGUAGE NOTE: Write description and evidence fields in {language}. "
+        f"Keep category, source, severity, and confidence as the exact English codes listed above.\n\n"
+    )
+    return lang_note + _PROMPT_BODY
+
 
 DIMENSION = {
     "name": "service_issues",
     "display_name": "Service Issues",
     "schema": ServiceIssuesAxis,
     "target_field": "service_issues",
-    "prompt": _PROMPT,
+    "prompt": _build_prompt(DEFAULT_LANGUAGE),
     "model": "gpt-4o-mini",
 }
 
@@ -113,12 +136,25 @@ DIMENSION = {
 # ---------------------------------------------------------------------------
 
 
-async def analyze(transcript: str, client: AsyncOpenAI) -> ServiceIssuesAxis:
-    """Run this dimension's GPT call and return the parsed ServiceIssuesAxis."""
+async def analyze(
+    transcript: str,
+    client: AsyncOpenAI,
+    *,
+    language: str = DEFAULT_LANGUAGE,
+) -> ServiceIssuesAxis:
+    """Run this dimension's GPT call and return the parsed ServiceIssuesAxis.
+
+    Args:
+        transcript: Formatted transcript text.
+        client: AsyncOpenAI client instance.
+        language: Output language for description and evidence fields.
+            category, source, severity, and confidence stay canonical English codes.
+    """
+    prompt = _build_prompt(language)
     response = await client.beta.chat.completions.parse(
         model=DIMENSION["model"],
         messages=[
-            {"role": "system", "content": DIMENSION["prompt"]},
+            {"role": "system", "content": prompt},
             {"role": "user", "content": transcript},
         ],
         response_format=DIMENSION["schema"],

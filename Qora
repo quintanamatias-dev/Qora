@@ -60,9 +60,14 @@ stop_port_if_busy() {
   local label="$2"
   local pids
 
-  pids="$(lsof -ti ":$port" 2>/dev/null || true)"
-  if [[ -z "$pids" ]]; then
+  if ! port_is_busy "$port"; then
     return 0
+  fi
+
+  pids="$(qora_pids_for_port "$port")"
+
+  if [[ -z "$pids" ]]; then
+    fail "Port $port is already in use by $label, but QORA could not identify a matching local process to stop. Free the port manually and retry."
   fi
 
   warn "Port $port is already in use by $label. Stopping previous process(es): ${pids//$'\n'/, }"
@@ -71,8 +76,8 @@ stop_port_if_busy() {
   done
   sleep 2
 
-  pids="$(lsof -ti ":$port" 2>/dev/null || true)"
-  if [[ -n "$pids" ]]; then
+  if port_is_busy "$port"; then
+    pids="$(qora_pids_for_port "$port")"
     warn "Port $port is still busy. Forcing process(es): ${pids//$'\n'/, }"
     for pid in $pids; do
       kill_process_tree "$pid" KILL
@@ -80,9 +85,43 @@ stop_port_if_busy() {
     sleep 1
   fi
 
-  if [[ -n "$(lsof -ti ":$port" 2>/dev/null || true)" ]]; then
+  if port_is_busy "$port"; then
     fail "Port $port is still busy after cleanup. Stop that process manually and retry."
   fi
+}
+
+port_is_busy() {
+  local port="$1"
+
+  "$PYTHON_BIN" - "$port" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.settimeout(0.2)
+    sys.exit(0 if sock.connect_ex(("127.0.0.1", port)) == 0 else 1)
+PY
+}
+
+qora_pids_for_port() {
+  local port="$1"
+
+  case "$port" in
+    8000)
+      pgrep -f "uvicorn app\.main:app.*--port 8000|uvicorn.*--port 8000.*app\.main:app" 2>/dev/null || true
+      ;;
+    5173)
+      pgrep -f "npm run dev -- --host 0\.0\.0\.0 --strictPort|vite.*--host 0\.0\.0\.0.*--strictPort" 2>/dev/null || true
+      ;;
+    4040)
+      pgrep -f "ngrok http 8000" 2>/dev/null || true
+      ;;
+    *)
+      return 0
+      ;;
+  esac
 }
 
 wait_for_http() {
@@ -259,6 +298,11 @@ PY
   "$PYTHON_BIN" "scripts/migrate_extraction_v2.py"
   "$PYTHON_BIN" "scripts/migrate_add_agents.py"
   "$PYTHON_BIN" "scripts/migrate_add_agent_id_fks.py"
+  "$PYTHON_BIN" "scripts/migrate_data_corrections.py"
+  "$PYTHON_BIN" "scripts/migrate_drop_engagement_quality.py"
+  "$PYTHON_BIN" "scripts/migrate_abandonment_to_outcome.py"
+  "$PYTHON_BIN" "scripts/migrate_next_action_engine.py"
+  "$PYTHON_BIN" "scripts/migrate_analysis_language.py"
 )
 
 info "Starting backend on http://localhost:8000"

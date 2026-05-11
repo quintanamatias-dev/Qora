@@ -71,11 +71,20 @@ async def run_interest_pipeline(
     client: AsyncOpenAI,
     *,
     previous_score: int | None = None,
+    language: str = "Spanish",
 ) -> tuple[InterestsAxis | dict, InterestLevelResult | dict]:
     """Run the 2-phase interest pipeline.
 
     Phase 1: Agent 1 (interests.analyze) — detect product interests
     Phase 2: Agent 2 (interest_level.analyze) — score detected interests
+
+    Args:
+        transcript: Formatted transcript text.
+        client: AsyncOpenAI client instance.
+        previous_score: Lead's prior interest score for 70/30 formula.
+        language: Output language for human-readable text fields (evidence,
+            reason, signals). Canonical codes (product IDs, level, confidence)
+            stay in English.
 
     Returns:
         ``(interests_result, level_result)`` where either element can be
@@ -86,7 +95,7 @@ async def run_interest_pipeline(
     # ------------------------------------------------------------------
     try:
         interests_result: InterestsAxis | dict = await interests_analyze(
-            transcript, client
+            transcript, client, language=language
         )
     except Exception as exc:  # noqa: BLE001
         logger.error("interest_pipeline_agent1_failed: %s", exc, exc_info=True)
@@ -101,6 +110,7 @@ async def run_interest_pipeline(
             client,
             interests=interests_result,
             previous_score=previous_score,
+            language=language,
         )
     except Exception as exc:  # noqa: BLE001
         logger.error("interest_pipeline_agent2_failed: %s", exc, exc_info=True)

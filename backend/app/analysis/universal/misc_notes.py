@@ -4,6 +4,9 @@ qora-misc-notes: Replaced flat str notes with structured MiscNote/MiscNotesAxis
 and a standalone run_misc_notes_pipeline() for stateful execution.
 Previous misc_notes from extracted_facts are loaded and passed to GPT for
 smart retention decisions (drop stale, keep relevant, output full rewrite).
+
+Locale-aware: `note` text is written in the client's configured analysis_language.
+`type` remains a canonical English code.
 """
 
 from __future__ import annotations
@@ -92,8 +95,12 @@ _NOTE_TYPE_DESCRIPTIONS = {
     "other": "Any relevant operational note that doesn't fit above categories",
 }
 
+DEFAULT_LANGUAGE = "Spanish"
+
 _PIPELINE_SYSTEM_PROMPT = """\
 You are an expert at maintaining a concise set of operational notes across sales calls.
+
+LANGUAGE NOTE: Write each `note` in {language}. Keep `type` as one of the exact English codes listed below.
 
 BOUNDARY RULES:
 - misc_notes = TEMPORAL / OPERATIONAL context (appointments, pending topics, tone, one-call context).
@@ -118,7 +125,10 @@ Now analyze the new transcript and output the updated notes list.
 """
 
 
-def _build_pipeline_prompt(current_notes: list[MiscNote]) -> str:
+def _build_pipeline_prompt(
+    current_notes: list[MiscNote],
+    language: str = DEFAULT_LANGUAGE,
+) -> str:
     """Build the system prompt with current notes serialized."""
     type_block = "\n".join(f"  {k}: {v}" for k, v in _NOTE_TYPE_DESCRIPTIONS.items())
     if current_notes:
@@ -131,6 +141,7 @@ def _build_pipeline_prompt(current_notes: list[MiscNote]) -> str:
         notes_json = "[] (first call — generate fresh notes from transcript)"
 
     return _PIPELINE_SYSTEM_PROMPT.format(
+        language=language,
         type_descriptions=type_block,
         current_notes_json=notes_json,
     )
@@ -146,6 +157,7 @@ async def run_misc_notes_pipeline(
     client: AsyncOpenAI,
     *,
     current_notes: list[MiscNote] | None = None,
+    language: str = DEFAULT_LANGUAGE,
 ) -> MiscNotesAxis:
     """Standalone async misc notes pipeline.
 
@@ -154,6 +166,8 @@ async def run_misc_notes_pipeline(
         client: AsyncOpenAI client instance.
         current_notes: Previous notes from Lead.extracted_facts["misc_notes"].
             Pass [] or None for the first call.
+        language: Output language for `note` text.
+            `type` stays as canonical English code.
 
     Returns:
         MiscNotesAxis with updated notes. Never raises — returns empty axis on failure.
@@ -161,7 +175,7 @@ async def run_misc_notes_pipeline(
     notes = current_notes or []
 
     try:
-        system_prompt = _build_pipeline_prompt(notes)
+        system_prompt = _build_pipeline_prompt(notes, language=language)
         response = await client.beta.chat.completions.parse(
             model="gpt-4o-mini",
             messages=[

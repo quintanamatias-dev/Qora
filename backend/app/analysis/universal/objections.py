@@ -3,6 +3,10 @@
 Each objection tracks: category, strength, resolution_status, evidence (direct
 quote), description, confidence, an optional agent response summary, and
 whether it is the primary objection. At most 5 objections per call.
+
+Locale-aware: description, evidence, and agent_response_summary are written in
+the client's configured analysis_language. Category, strength, resolution_status,
+and confidence remain canonical English codes.
 """
 
 from __future__ import annotations
@@ -11,6 +15,8 @@ from typing import Literal
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+
+DEFAULT_LANGUAGE = "Spanish"
 
 # ---------------------------------------------------------------------------
 # Literal type aliases — consistent with service_issues.py / commitments.py
@@ -90,7 +96,12 @@ class ObjectionsAxis(BaseModel):
 # DIMENSION configuration
 # ---------------------------------------------------------------------------
 
-_PROMPT = (
+_CANONICAL_NOTE = (
+    "LANGUAGE NOTE: Write description, evidence, and agent_response_summary in {language}. "
+    "Keep category, strength, resolution_status, and confidence as the exact English codes listed above.\n\n"
+)
+
+_PROMPT_BODY = (
     "You are an expert at detecting objections and pushback from sales call transcripts.\n\n"
     "An objection exists when the lead explicitly expresses a concern, hesitation, or resistance "
     "to purchasing or moving forward. Examples: price complaints, distrust, bad past experiences, "
@@ -116,16 +127,30 @@ _PROMPT = (
     "- Genuine questions without pushback ('¿Cuáles son las coberturas disponibles?')\n"
     "- Politeness phrases ('muchas gracias', 'hasta luego', 'bye')\n"
     "- Vague expressions of interest ('ya veo', 'me parece interesante')\n"
-    "- Information requests that are not resistant to purchasing\n\n"
+    "- Information requests that are not resistant to purchasing\n"
+    "- Scheduling preferences or logistics ('I'm busy today, send it tomorrow', "
+    "'call me in the afternoon') — unless the lead uses scheduling to AVOID engagement entirely\n"
+    "- Expressed needs or interest in a product ('I need home insurance', "
+    "'my wife says we should get coverage') — these are buying signals, not objections\n"
+    "- Dissatisfaction with a PREVIOUS or CURRENT provider's service that motivates "
+    "the lead to SEEK alternatives — that is a pain point or service issue, not resistance "
+    "to YOUR offering. Only count current_provider if the lead uses their satisfaction with "
+    "the current provider as a reason to REJECT your offer.\n\n"
     "Return JSON with: objections (array of objection objects)."
 )
+
+
+def _build_prompt(language: str) -> str:
+    """Build the dimension prompt with the given output language."""
+    return _CANONICAL_NOTE.format(language=language) + _PROMPT_BODY
+
 
 DIMENSION = {
     "name": "objections",
     "display_name": "Objections",
     "schema": ObjectionsAxis,
     "target_field": "objections",
-    "prompt": _PROMPT,
+    "prompt": _build_prompt(DEFAULT_LANGUAGE),
     "model": "gpt-4o-mini",
 }
 
@@ -135,12 +160,25 @@ DIMENSION = {
 # ---------------------------------------------------------------------------
 
 
-async def analyze(transcript: str, client: AsyncOpenAI) -> ObjectionsAxis:
-    """Run this dimension's GPT call and return the parsed ObjectionsAxis."""
+async def analyze(
+    transcript: str,
+    client: AsyncOpenAI,
+    *,
+    language: str = DEFAULT_LANGUAGE,
+) -> ObjectionsAxis:
+    """Run this dimension's GPT call and return the parsed ObjectionsAxis.
+
+    Args:
+        transcript: Formatted transcript text.
+        client: AsyncOpenAI client instance.
+        language: Output language for customer-facing text fields (description,
+            evidence, agent_response_summary). Canonical code fields stay in English.
+    """
+    prompt = _build_prompt(language)
     response = await client.beta.chat.completions.parse(
         model=DIMENSION["model"],
         messages=[
-            {"role": "system", "content": DIMENSION["prompt"]},
+            {"role": "system", "content": prompt},
             {"role": "user", "content": transcript},
         ],
         response_format=DIMENSION["schema"],

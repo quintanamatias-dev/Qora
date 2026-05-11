@@ -1173,8 +1173,8 @@ class TestGptFallback:
             assert result.decided_by == "gpt"
 
     @pytest.mark.asyncio
-    async def test_pipeline_skips_gpt_when_rule_matches(self):
-        """run_next_action_pipeline does NOT call GPT when a rule fires."""
+    async def test_pipeline_validates_rules_with_gpt(self):
+        """run_next_action_pipeline calls GPT validation when a rule fires."""
         from unittest.mock import AsyncMock, MagicMock, patch
         from app.analysis.universal.next_action import run_next_action_pipeline
         from app.analysis.universal.outcome import CallOutcome
@@ -1182,6 +1182,7 @@ class TestGptFallback:
             NextActionContext,
             LeadSnapshot,
             ClientRules,
+            NextActionResult,
         )
         from app.analysis.universal.commitments import CommitmentsAxis
         from app.analysis.universal.objections import ObjectionsAxis
@@ -1209,14 +1210,70 @@ class TestGptFallback:
         )
         mock_client = MagicMock()
 
+        # GPT validation agrees with rules decision
+        validated_result = NextActionResult(
+            action="close_lead",
+            reason="Hard stop: outcome classification is 'do_not_contact' [GPT validated: agreed]",
+            confidence="high",
+            decided_by="rules",
+        )
+
         with patch(
-            "app.analysis.universal.next_action._gpt_fallback",
-            AsyncMock(),
-        ) as mock_gpt:
+            "app.analysis.universal.next_action._gpt_validate_rules_decision",
+            AsyncMock(return_value=validated_result),
+        ) as mock_validate:
             result = await run_next_action_pipeline(ctx, mock_client)
-            mock_gpt.assert_not_called()
+            mock_validate.assert_called_once()
             assert result.action == "close_lead"
             assert result.decided_by == "rules"
+
+    @pytest.mark.asyncio
+    async def test_pipeline_falls_back_gracefully_when_validation_fails(self):
+        """If GPT validation fails, rules decision is trusted as-is."""
+        from unittest.mock import AsyncMock, MagicMock
+        from app.analysis.universal.next_action import (
+            run_next_action_pipeline,
+            NextActionContext,
+            LeadSnapshot,
+            ClientRules,
+        )
+        from app.analysis.universal.outcome import CallOutcome
+        from app.analysis.universal.commitments import CommitmentsAxis
+        from app.analysis.universal.objections import ObjectionsAxis
+        from app.analysis.universal.problem import ProblemAxis
+
+        ctx = NextActionContext(
+            outcome=CallOutcome(
+                classification="do_not_contact", reason="test", confidence="high"
+            ),
+            interest_level=0,
+            commitments=CommitmentsAxis(),
+            objections=ObjectionsAxis(),
+            problem=ProblemAxis(pain_points=[]),
+            lead=LeadSnapshot(call_count=1, do_not_call=False, last_called_at=None),
+            client=ClientRules(
+                max_attempts=5,
+                min_interest_for_followup=40,
+                close_on_hard_rejection=True,
+                scheduler_cooldown_minutes=60,
+                scheduler_allowed_hours_start=9,
+                scheduler_allowed_hours_end=20,
+                scheduler_timezone="America/Argentina/Buenos_Aires",
+            ),
+        )
+
+        # Simulate GPT validation raising an exception — should fall back gracefully
+        mock_client = MagicMock()
+        mock_client.chat = MagicMock()
+        mock_client.chat.completions = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(
+            side_effect=Exception("OpenAI timeout")
+        )
+
+        result = await run_next_action_pipeline(ctx, mock_client)
+        # Should still return the rules decision despite GPT failure
+        assert result.action == "close_lead"
+        assert result.decided_by == "rules"
 
 
 class TestDimensionModulesExports:

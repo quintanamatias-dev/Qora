@@ -21,6 +21,8 @@ from pydantic import BaseModel, Field
 
 from app.analysis.universal.interest.catalog import NEED_TAGS, PRODUCT_CATALOG
 
+DEFAULT_LANGUAGE = "Spanish"
+
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
@@ -73,7 +75,7 @@ class InterestsAxis(BaseModel):
 _PRODUCTS_BLOCK = "\n".join(f"  - {p}" for p in PRODUCT_CATALOG)
 _NEEDS_BLOCK = "\n".join(f"  - {n}" for n in NEED_TAGS)
 
-_PROMPT = (
+_PROMPT_BODY = (
     "You are an expert at detecting insurance product interests from sales call transcripts.\n\n"
     "A product interest exists when the lead explicitly mentions, asks about, "
     "or clearly implies interest in a specific insurance product.\n\n"
@@ -104,6 +106,16 @@ _PROMPT = (
     "Return JSON with: items (array of product interest objects)."
 )
 
+
+def _build_prompt(language: str) -> str:
+    """Build the dimension prompt with the given output language."""
+    lang_note = (
+        f"LANGUAGE NOTE: Write the `evidence` field in {language}. "
+        f"Keep product IDs and need tags as the exact canonical values listed above.\n\n"
+    )
+    return lang_note + _PROMPT_BODY
+
+
 # ---------------------------------------------------------------------------
 # DIMENSION configuration — aligns with sibling dimension modules
 # ---------------------------------------------------------------------------
@@ -113,7 +125,7 @@ DIMENSION = {
     "display_name": "Detected Interests",
     "schema": InterestsAxis,
     "target_field": "detected_interests",
-    "prompt": _PROMPT,
+    "prompt": _build_prompt(DEFAULT_LANGUAGE),
     "model": "gpt-4o-mini",
 }
 
@@ -123,7 +135,12 @@ DIMENSION = {
 # ---------------------------------------------------------------------------
 
 
-async def analyze(transcript: str, client: AsyncOpenAI) -> InterestsAxis:
+async def analyze(
+    transcript: str,
+    client: AsyncOpenAI,
+    *,
+    language: str = DEFAULT_LANGUAGE,
+) -> InterestsAxis:
     """Run Agent 1 and return the parsed InterestsAxis.
 
     The returned axis is validated by Pydantic (``InterestItem.product``
@@ -132,11 +149,18 @@ async def analyze(transcript: str, client: AsyncOpenAI) -> InterestsAxis:
     here — the prompt constrains the model; post-processing / filtering
     against the catalog happens in the pipeline orchestrator (``__init__.py``)
     if strict enforcement is required.
+
+    Args:
+        transcript: Formatted transcript text.
+        client: AsyncOpenAI client instance.
+        language: Output language for the `evidence` field.
+            product IDs and need tags stay canonical.
     """
+    prompt = _build_prompt(language)
     response = await client.beta.chat.completions.parse(
         model=DIMENSION["model"],
         messages=[
-            {"role": "system", "content": DIMENSION["prompt"]},
+            {"role": "system", "content": prompt},
             {"role": "user", "content": transcript},
         ],
         response_format=DIMENSION["schema"],

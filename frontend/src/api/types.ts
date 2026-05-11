@@ -222,6 +222,19 @@ export interface Agent {
   is_active: boolean
   is_default: boolean
   created_at: string
+  // ElevenLabs binding + readiness (PR 2 — qora-agent-studio-demo)
+  elevenlabs_agent_id: string | null
+  knowledge_base: string | null
+  temperature: number
+  max_tokens: number
+  /** Computed server-side: /api/v1/voice/{client_id}/custom-llm/chat/completions */
+  custom_llm_url: string
+  /** true when system_prompt is non-empty */
+  has_prompt: boolean
+  /** true when elevenlabs_agent_id is non-null */
+  has_elevenlabs_agent_id: boolean
+  /** true when has_prompt AND has_elevenlabs_agent_id */
+  is_conversation_ready: boolean
 }
 
 export interface CreateAgentPayload {
@@ -231,6 +244,10 @@ export interface CreateAgentPayload {
   model: string
   system_prompt?: string | null
   tools_enabled: string[]
+  elevenlabs_agent_id?: string | null
+  knowledge_base?: string | null
+  temperature?: number
+  max_tokens?: number
 }
 
 export interface UpdateAgentPayload {
@@ -238,6 +255,16 @@ export interface UpdateAgentPayload {
   voice_id?: string
   system_prompt?: string | null
   tools_enabled?: string[]
+  elevenlabs_agent_id?: string | null
+  knowledge_base?: string | null
+  temperature?: number
+  max_tokens?: number
+}
+
+/** A single item in the agent readiness checklist */
+export interface ReadinessCheck {
+  label: string
+  ready: boolean
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

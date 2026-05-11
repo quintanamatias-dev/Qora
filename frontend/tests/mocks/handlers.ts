@@ -183,6 +183,15 @@ const agentsFixture: Agent[] = [
     is_active: true,
     is_default: true,
     created_at: '2026-01-01T00:00:00Z',
+    // ElevenLabs binding + readiness
+    elevenlabs_agent_id: 'el_demo_abc123',
+    knowledge_base: null,
+    temperature: 0.7,
+    max_tokens: 512,
+    custom_llm_url: '/api/v1/voice/demo-client/custom-llm/chat/completions',
+    has_prompt: true,
+    has_elevenlabs_agent_id: true,
+    is_conversation_ready: true,
   },
   {
     agent_id: 'agent-002',
@@ -196,6 +205,15 @@ const agentsFixture: Agent[] = [
     is_active: true,
     is_default: false,
     created_at: '2026-01-10T00:00:00Z',
+    // Not yet configured
+    elevenlabs_agent_id: null,
+    knowledge_base: null,
+    temperature: 0.7,
+    max_tokens: 512,
+    custom_llm_url: '/api/v1/voice/demo-client/custom-llm/chat/completions',
+    has_prompt: false,
+    has_elevenlabs_agent_id: false,
+    is_conversation_ready: false,
   },
 ]
 

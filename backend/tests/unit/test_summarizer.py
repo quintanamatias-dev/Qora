@@ -1144,6 +1144,7 @@ async def test_summarizer_uses_parse_not_create(seeded_db):
         # + 1 data corrections pipeline call = 11 total
         # qora-next-action: next_action removed from DIMENSION_MODULES (7 → 6),
         #   run_next_action_pipeline uses create() not parse() (JSON mode, not structured output)
+        #   GPT double-check: rules decisions are validated via create() (1 extra call)
         expected_parse_calls = len(DIMENSION_MODULES) + 2 + 1 + 1 + 1
         assert mock_client.chat.completions.parse.call_count == expected_parse_calls, (
             f"Expected {expected_parse_calls} parse() calls "
@@ -1151,7 +1152,14 @@ async def test_summarizer_uses_parse_not_create(seeded_db):
             f" + 1 data corrections pipeline), "
             f"got {mock_client.chat.completions.parse.call_count}"
         )
-        mock_client.chat.completions.create.assert_not_called()
+        # next_action pipeline uses create() for GPT fallback or GPT validation (double-check).
+        # When a rule fires, GPT validation calls create() once. If validation fails
+        # gracefully, the rules decision is still trusted. Either way, create() may be called.
+        # We only verify that all dimension analyzers use parse() (not create()).
+        assert mock_client.chat.completions.create.call_count <= 1, (
+            f"Expected at most 1 create() call (next_action GPT validation), "
+            f"got {mock_client.chat.completions.create.call_count}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -3760,7 +3768,9 @@ async def test_summarizer_misc_notes_coerces_legacy_string_from_extracted_facts(
 
     received_notes = []
 
-    async def _capturing_pipeline(transcript, client, *, current_notes=None):
+    async def _capturing_pipeline(
+        transcript, client, *, current_notes=None, language="Spanish"
+    ):
         if current_notes is not None:
             received_notes.extend(current_notes)
         return MiscNotesAxis()

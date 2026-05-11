@@ -3,6 +3,9 @@
 Each commitment tracks: type, owner (lead/agent/both), description, due date,
 strength (weak/medium/strong), a direct transcript evidence quote, and
 confidence. At most 5 commitments are returned per call.
+
+Locale-aware: description and evidence are written in the client's configured
+analysis_language. type, owner, due, strength, and confidence remain canonical codes.
 """
 
 from __future__ import annotations
@@ -11,6 +14,8 @@ from typing import Literal
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+
+DEFAULT_LANGUAGE = "Spanish"
 
 # ---------------------------------------------------------------------------
 # Literal type aliases — follow service_issues.py convention (not Enum)
@@ -70,7 +75,7 @@ class CommitmentsAxis(BaseModel):
 # DIMENSION configuration
 # ---------------------------------------------------------------------------
 
-_PROMPT = (
+_PROMPT_BODY = (
     "You are an expert at detecting concrete commitments and next-step actions from sales call transcripts.\n\n"
     "A commitment exists when the lead or agent explicitly assumed, accepted, or requested a concrete next step. "
     "Examples: agreeing to send a document, scheduling a callback, committing to review a proposal.\n\n"
@@ -96,12 +101,22 @@ _PROMPT = (
     "Return JSON with: commitments (array of commitment objects)."
 )
 
+
+def _build_prompt(language: str) -> str:
+    """Build the dimension prompt with the given output language."""
+    lang_note = (
+        f"LANGUAGE NOTE: Write description and evidence fields in {language}. "
+        f"Keep type, owner, due, strength, and confidence as the exact English codes listed above.\n\n"
+    )
+    return lang_note + _PROMPT_BODY
+
+
 DIMENSION = {
     "name": "commitments",
     "display_name": "Commitments",
     "schema": CommitmentsAxis,
     "target_field": "commitments",
-    "prompt": _PROMPT,
+    "prompt": _build_prompt(DEFAULT_LANGUAGE),
     "model": "gpt-4o-mini",
 }
 
@@ -111,12 +126,25 @@ DIMENSION = {
 # ---------------------------------------------------------------------------
 
 
-async def analyze(transcript: str, client: AsyncOpenAI) -> CommitmentsAxis:
-    """Run this dimension's GPT call and return the parsed CommitmentsAxis."""
+async def analyze(
+    transcript: str,
+    client: AsyncOpenAI,
+    *,
+    language: str = DEFAULT_LANGUAGE,
+) -> CommitmentsAxis:
+    """Run this dimension's GPT call and return the parsed CommitmentsAxis.
+
+    Args:
+        transcript: Formatted transcript text.
+        client: AsyncOpenAI client instance.
+        language: Output language for description and evidence fields.
+            type, owner, due, strength, and confidence stay canonical English codes.
+    """
+    prompt = _build_prompt(language)
     response = await client.beta.chat.completions.parse(
         model=DIMENSION["model"],
         messages=[
-            {"role": "system", "content": DIMENSION["prompt"]},
+            {"role": "system", "content": prompt},
             {"role": "user", "content": transcript},
         ],
         response_format=DIMENSION["schema"],

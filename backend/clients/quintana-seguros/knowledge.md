@@ -1,3 +1,5 @@
+<!-- MIGRATED TO DB — see seed_quintana() in backend/app/tenants/service.py (_QUINTANA_KNOWLEDGE_BASE). This file is kept as read-only reference only. Runtime no longer reads it. -->
+
 # Quintana Seguros — Información de la Empresa
 
 ## Coberturas disponibles

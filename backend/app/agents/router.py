@@ -69,6 +69,9 @@ def _deserialize_tools(tools_enabled: str | list | None) -> list[str]:
 
 def _agent_to_response(agent: Agent) -> AgentResponse:
     """Map an Agent ORM object to an AgentResponse schema."""
+    has_prompt = bool(agent.system_prompt and agent.system_prompt.strip())
+    has_el_id = bool(getattr(agent, "elevenlabs_agent_id", None))
+    custom_llm_url = f"/api/v1/voice/{agent.client_id}/custom-llm/chat/completions"
     return AgentResponse(
         agent_id=agent.id,
         client_id=agent.client_id,
@@ -84,6 +87,11 @@ def _agent_to_response(agent: Agent) -> AgentResponse:
         is_active=agent.is_active,
         is_default=agent.is_default,
         created_at=agent.created_at,
+        elevenlabs_agent_id=getattr(agent, "elevenlabs_agent_id", None),
+        custom_llm_url=custom_llm_url,
+        has_prompt=has_prompt,
+        has_elevenlabs_agent_id=has_el_id,
+        is_conversation_ready=has_prompt and has_el_id,
     )
 
 
@@ -154,6 +162,7 @@ async def create_agent(
             tools_enabled=json.dumps(payload.tools_enabled),
             is_active=True,
             is_default=payload.is_default,
+            elevenlabs_agent_id=payload.elevenlabs_agent_id,
         )
     except ValueError as exc:
         msg = str(exc)

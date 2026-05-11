@@ -12,6 +12,8 @@ Uses existing `tenants` SQLAlchemy models — no new DB models created.
 
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -41,8 +43,22 @@ async def get_db_session() -> AsyncSession:
 
 
 # ---------------------------------------------------------------------------
-# Helper
+# Helpers
 # ---------------------------------------------------------------------------
+
+
+def _slugify_client_id(name: str) -> str:
+    """Convert a display name to an ASCII URL slug.
+
+    Examples:
+        'Qora Demo' → 'qora-demo'
+        'Acme Corp!' → 'acme-corp'
+        '  Spaces  ' → 'spaces'
+    """
+    slug = name.lower().strip()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    slug = slug.strip("-")
+    return slug or "client"
 
 
 def _client_to_response(client: Client, agent_count: int = 0) -> ClientResponse:
@@ -81,24 +97,44 @@ async def create_client(
     default Agent for the new client (regression fix — router MUST NOT
     construct Client() directly).
 
+    When `client_id` is omitted, a URL-safe slug is auto-generated from
+    `broker_name`. Collisions are resolved by appending `-2`, `-3`, etc.
+
     Returns:
         201: ClientResponse with the created client.
-        409: If client_id already exists.
+        409: If explicit client_id already exists.
         422: If slug validation fails (handled by Pydantic).
     """
-    # Check for duplicate
-    existing = await session.get(Client, payload.client_id)
-    if existing is not None:
-        raise HTTPException(
-            status_code=409,
-            detail={"error": "client already exists", "client_id": payload.client_id},
-        )
+    # Resolve client_id: use explicit value or auto-generate from broker_name
+    if payload.client_id is not None:
+        resolved_id = payload.client_id
+        # Check for duplicate on explicit id
+        existing = await session.get(Client, resolved_id)
+        if existing is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "client already exists", "client_id": resolved_id},
+            )
+    else:
+        # Auto-generate slug with collision dedup
+        base_slug = _slugify_client_id(payload.broker_name)
+        resolved_id = base_slug
+        suffix = 2
+        while await session.get(Client, resolved_id) is not None:
+            resolved_id = f"{base_slug}-{suffix}"
+            suffix += 1
+
+    # When client_id was auto-generated, use the resolved slug as `name` to satisfy
+    # the unique constraint on clients.name. Explicit client_id keeps broker_name as name.
+    resolved_name = (
+        payload.broker_name if payload.client_id is not None else resolved_id
+    )
 
     try:
         client = await tenant_service.create_client(
             session,
-            id=payload.client_id,
-            name=payload.broker_name,
+            id=resolved_id,
+            name=resolved_name,
             broker_name=payload.broker_name,
             agent_name=payload.agent_name,
             voice_id=payload.voice_id,

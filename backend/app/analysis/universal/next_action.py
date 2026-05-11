@@ -423,7 +423,7 @@ def _evaluate_rules(ctx: NextActionContext) -> NextActionResult | None:
 # GPT fallback (P6) — invoked only when no rule matched
 # ---------------------------------------------------------------------------
 
-_GPT_SYSTEM_PROMPT = """You are a sales call analysis engine. Given a structured JSON context of a call analysis, 
+_GPT_SYSTEM_PROMPT = """You are a sales call analysis engine. Given a structured JSON context of a call analysis, \
 determine the best next action for this lead.
 
 You MUST return ONLY valid JSON with exactly these fields:
@@ -443,24 +443,29 @@ Valid actions:
 ONLY use human_review for genuinely ambiguous cases where you cannot determine the right action.
 Return ONLY the JSON object, no other text."""
 
+_GPT_VALIDATION_PROMPT = """You are a sales call analysis engine acting as a second opinion.
 
-async def _gpt_fallback(
-    ctx: NextActionContext, openai_client: AsyncOpenAI
-) -> NextActionResult:
-    """P6 — GPT fallback for ambiguous cases.
+A rules engine already analyzed this call and proposed an action. Your job is to INDEPENDENTLY \
+evaluate the same context and decide whether you AGREE or DISAGREE with the proposed action.
 
-    Sends NextActionContext as structured JSON (NOT the transcript).
-    Constrained to return exactly one of the 5 valid actions.
+You MUST return ONLY valid JSON with exactly these fields:
+{
+  "agrees": true or false,
+  "action": "<your independent recommendation — one of: follow_up, retry_call, schedule_call, close_lead, human_review>",
+  "reason": "<one sentence explaining your independent assessment>",
+  "confidence": "<one of: high, medium, low>"
+}
 
-    Args:
-        ctx: NextActionContext with all dimension outputs and lead/client data.
-        openai_client: AsyncOpenAI client for GPT call.
+Think independently. Do NOT blindly agree with the proposed action — evaluate the full context \
+on its own merits and give your honest assessment. If the proposed action is correct, agree. \
+If you see a better action given the context, disagree and state your recommendation.
 
-    Returns:
-        NextActionResult with decided_by="gpt".
-    """
-    # Serialize context as JSON for GPT (structured data, not transcript)
-    ctx_dict = {
+Return ONLY the JSON object, no other text."""
+
+
+def _build_context_dict(ctx: NextActionContext) -> dict:
+    """Serialize NextActionContext to a plain dict for GPT consumption."""
+    return {
         "outcome": {
             "classification": ctx.outcome.classification,
             "reason": ctx.outcome.reason,
@@ -497,6 +502,23 @@ async def _gpt_fallback(
         },
     }
 
+
+async def _gpt_fallback(
+    ctx: NextActionContext, openai_client: AsyncOpenAI
+) -> NextActionResult:
+    """P6 — GPT fallback for ambiguous cases.
+
+    Sends NextActionContext as structured JSON (NOT the transcript).
+    Constrained to return exactly one of the 5 valid actions.
+
+    Args:
+        ctx: NextActionContext with all dimension outputs and lead/client data.
+        openai_client: AsyncOpenAI client for GPT call.
+
+    Returns:
+        NextActionResult with decided_by="gpt".
+    """
+    ctx_dict = _build_context_dict(ctx)
     payload = json.dumps(ctx_dict, default=str)
 
     response = await openai_client.chat.completions.create(
@@ -561,6 +583,124 @@ async def _gpt_fallback(
 
 
 # ---------------------------------------------------------------------------
+# GPT validation (double-check) — runs AFTER rules to validate their decision
+# ---------------------------------------------------------------------------
+
+
+async def _gpt_validate_rules_decision(
+    ctx: NextActionContext,
+    rules_result: NextActionResult,
+    openai_client: AsyncOpenAI,
+) -> NextActionResult:
+    """Validate a rules engine decision by asking GPT for an independent assessment.
+
+    If GPT agrees with the rules decision → keep it (confidence stays or improves).
+    If GPT disagrees → escalate to human_review with both perspectives logged.
+
+    Args:
+        ctx: NextActionContext with all dimension outputs.
+        rules_result: The decision made by the rules engine.
+        openai_client: AsyncOpenAI client for the validation call.
+
+    Returns:
+        NextActionResult — either the original rules result (validated) or human_review.
+    """
+    ctx_dict = _build_context_dict(ctx)
+    ctx_dict["rules_proposed_action"] = {
+        "action": rules_result.action,
+        "reason": rules_result.reason,
+        "confidence": rules_result.confidence,
+    }
+
+    payload = json.dumps(ctx_dict, default=str)
+
+    try:
+        response = await openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": _GPT_VALIDATION_PROMPT},
+                {
+                    "role": "user",
+                    "content": f"Rules engine proposed: {rules_result.action}. "
+                    f"Validate this decision against the full context:\n{payload}",
+                },
+            ],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+
+        raw_content = response.choices[0].message.content or "{}"
+        parsed = json.loads(raw_content)
+
+        gpt_agrees = parsed.get("agrees", True)
+        gpt_action = parsed.get("action", rules_result.action)
+        gpt_reason = parsed.get("reason", "")
+        gpt_confidence = parsed.get("confidence", "medium")
+
+        # Validate vocabularies
+        valid_actions = {
+            "follow_up",
+            "retry_call",
+            "schedule_call",
+            "close_lead",
+            "human_review",
+        }
+        if gpt_action not in valid_actions:
+            gpt_action = rules_result.action
+            gpt_agrees = True  # Can't disagree with an invalid suggestion
+
+        valid_confidence = {"high", "medium", "low"}
+        if gpt_confidence not in valid_confidence:
+            gpt_confidence = "medium"
+
+        if gpt_agrees:
+            logger.info(
+                "next_action_gpt_validates_rules rules_action=%s gpt_action=%s gpt_reason=%s",
+                rules_result.action,
+                gpt_action,
+                gpt_reason,
+            )
+            # Keep original rules result but note GPT validated it
+            return NextActionResult(
+                action=rules_result.action,
+                reason=f"{rules_result.reason} [GPT validated: {gpt_reason}]",
+                confidence=rules_result.confidence,
+                decided_by="rules",
+                next_action_at=rules_result.next_action_at,
+                priority=rules_result.priority,
+            )
+        else:
+            logger.warning(
+                "next_action_gpt_disagrees_with_rules rules_action=%s gpt_action=%s gpt_reason=%s",
+                rules_result.action,
+                gpt_action,
+                gpt_reason,
+            )
+            # GPT disagrees — escalate to human_review
+            return NextActionResult(
+                action="human_review",
+                reason=(
+                    f"Rules decided '{rules_result.action}' ({rules_result.reason}), "
+                    f"but GPT recommends '{gpt_action}' ({gpt_reason}). "
+                    f"Escalated for human review."
+                ),
+                confidence="low",
+                decided_by="rules",
+                next_action_at=rules_result.next_action_at,
+                priority=rules_result.priority,
+            )
+
+    except Exception as exc:
+        # Validation failed — trust the rules decision (graceful degradation)
+        logger.warning(
+            "next_action_gpt_validation_failed error=%s rules_action=%s",
+            str(exc),
+            rules_result.action,
+        )
+        return rules_result
+
+
+# ---------------------------------------------------------------------------
 # Pipeline entry point
 # ---------------------------------------------------------------------------
 
@@ -569,11 +709,21 @@ async def run_next_action_pipeline(
     ctx: NextActionContext,
     openai_client: AsyncOpenAI,
 ) -> NextActionResult:
-    """Evaluate rules in priority order; GPT fallback if no rule matches.
+    """Evaluate rules in priority order; GPT always validates.
+
+    Flow:
+    1. Run rules engine (P1-P5) in priority order.
+    2. If a rule matches → GPT validates the decision (double-check).
+       - GPT agrees → keep the rules decision.
+       - GPT disagrees → escalate to human_review.
+    3. If no rule matches → GPT decides independently (fallback).
+
+    GPT validation failures are non-fatal: if the validation call fails,
+    the rules decision is trusted as-is (graceful degradation).
 
     Args:
         ctx: NextActionContext assembled from all dimension outputs + lead + client.
-        openai_client: AsyncOpenAI client (used only for GPT fallback path).
+        openai_client: AsyncOpenAI client (used for validation and fallback).
 
     Returns:
         NextActionResult with action, reason, confidence, decided_by, next_action_at.
@@ -587,8 +737,9 @@ async def run_next_action_pipeline(
             decided_by=result.decided_by,
             confidence=result.confidence,
         )
-        return result
+        # Always validate rules decisions with GPT
+        return await _gpt_validate_rules_decision(ctx, result, openai_client)
 
-    # No rule matched — escalate to GPT
+    # No rule matched — GPT decides independently
     logger.info("next_action_gpt_fallback_triggered")
     return await _gpt_fallback(ctx, openai_client)

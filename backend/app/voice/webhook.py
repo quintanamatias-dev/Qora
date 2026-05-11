@@ -640,10 +640,18 @@ async def _process_custom_llm_request(
     # the template is NOT rendered, so {{lead_name}}, etc. are never substituted.
     # Append [CONTEXTO DEL LEAD] to give the LLM access to lead context.
     #
-    # AGENT PATH: agent.system_prompt behaves like override — append lead context
-    # if agent has a DB prompt set.
-    _has_static_prompt = (agent is not None and agent.system_prompt) or (
-        agent is None and client.system_prompt_override is not None
+    # AGENT PATH: render_for_agent() now renders DB-backed templates with variable
+    # substitution. Only append [CONTEXTO DEL LEAD] if the raw agent.system_prompt
+    # does NOT contain {{variable}} placeholders — meaning it's a static override
+    # that was not designed as a template and won't have lead data substituted.
+    _agent_has_template_vars = (
+        agent is not None and agent.system_prompt and "{{" in agent.system_prompt
+    )
+    _has_static_prompt = (
+        # Legacy client.system_prompt_override (no Agent)
+        (agent is None and client.system_prompt_override is not None)
+        # Agent with static system_prompt (no {{variable}} placeholders)
+        or (agent is not None and agent.system_prompt and not _agent_has_template_vars)
     )
     if _has_static_prompt and lead is not None:
         lead_context = (

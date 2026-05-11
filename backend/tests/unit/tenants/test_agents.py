@@ -325,16 +325,155 @@ async def test_seed_quintana_agent_is_idempotent(session: AsyncSession):
     assert len(agents) == 1
 
 
-async def test_seed_demo_inmobiliaria_creates_default_agent(session: AsyncSession):
-    """seed_demo_inmobiliaria() creates a default Agent for demo-inmobiliaria."""
-    from app.tenants.service import seed_demo_inmobiliaria, get_default_agent
+# ---------------------------------------------------------------------------
+# Tasks 1.1–1.3 (RED) — Quintana DB-backed prompt/knowledge seed
+# ---------------------------------------------------------------------------
 
-    await seed_demo_inmobiliaria(session)
 
-    agent = await get_default_agent(session, "demo-inmobiliaria")
+async def test_seed_quintana_sets_system_prompt_and_knowledge(session: AsyncSession):
+    """seed_quintana() creates a default agent with non-empty system_prompt and knowledge_base.
+
+    Spec scenario: Quintana default agent has no prompt or knowledge.
+    After seed_quintana() runs, both fields must be non-empty strings (DB source of truth).
+    """
+    from app.tenants.service import seed_quintana, get_default_agent
+
+    await seed_quintana(session)
+
+    agent = await get_default_agent(session, "quintana-seguros")
     assert agent is not None
-    assert agent.is_default is True
-    assert agent.name == "Valentina"
+    assert agent.system_prompt is not None
+    assert len(agent.system_prompt) > 0, "system_prompt must be non-empty after seed"
+    assert agent.knowledge_base is not None
+    assert len(agent.knowledge_base) > 0, "knowledge_base must be non-empty after seed"
+
+
+async def test_seed_quintana_does_not_overwrite_existing_prompt(session: AsyncSession):
+    """seed_quintana() called a second time does NOT overwrite existing non-empty values.
+
+    Spec scenario: Quintana default agent already has non-empty DB config.
+    The existing system_prompt and knowledge_base must remain unchanged after re-seed.
+    """
+    from app.tenants.service import seed_quintana, get_default_agent
+
+    # First seed — populates the fields
+    await seed_quintana(session)
+    agent = await get_default_agent(session, "quintana-seguros")
+    assert agent is not None
+
+    # Simulate an admin UI edit: overwrite with custom values
+    custom_prompt = "CUSTOM PROMPT — must not be overwritten"
+    custom_knowledge = "CUSTOM KNOWLEDGE — must not be overwritten"
+    agent.system_prompt = custom_prompt
+    agent.knowledge_base = custom_knowledge
+    await session.flush()
+
+    # Second seed — must NOT overwrite the custom values
+    await seed_quintana(session)
+    agent_after = await get_default_agent(session, "quintana-seguros")
+    assert agent_after is not None
+    assert (
+        agent_after.system_prompt == custom_prompt
+    ), "seed_quintana() must not overwrite non-empty system_prompt"
+    assert (
+        agent_after.knowledge_base == custom_knowledge
+    ), "seed_quintana() must not overwrite non-empty knowledge_base"
+
+
+async def test_seed_quintana_populates_partial_missing_knowledge(session: AsyncSession):
+    """seed_quintana() fills empty knowledge_base when system_prompt is already set.
+
+    Spec scenario: Quintana default agent has partial config (only prompt set).
+    system_prompt remains unchanged; empty knowledge_base gets populated.
+    """
+    from app.tenants.service import seed_quintana, get_default_agent
+
+    # First seed — populates both fields
+    await seed_quintana(session)
+    agent = await get_default_agent(session, "quintana-seguros")
+    assert agent is not None
+
+    # Simulate a partial state: keep system_prompt, clear knowledge_base
+    original_prompt = agent.system_prompt
+    agent.knowledge_base = None
+    await session.flush()
+
+    # Second seed — must preserve system_prompt and repopulate knowledge_base
+    await seed_quintana(session)
+    agent_after = await get_default_agent(session, "quintana-seguros")
+    assert agent_after is not None
+    assert (
+        agent_after.system_prompt == original_prompt
+    ), "seed_quintana() must not overwrite non-empty system_prompt"
+    assert agent_after.knowledge_base is not None
+    assert (
+        len(agent_after.knowledge_base) > 0
+    ), "seed_quintana() must repopulate empty knowledge_base"
+
+
+async def test_seed_quintana_treats_empty_string_prompt_as_missing(
+    session: AsyncSession,
+):
+    """seed_quintana() treats system_prompt='' as missing and populates it.
+
+    Spec scenario: Quintana default agent has system_prompt='' and knowledge_base=''.
+    Empty-string fields MUST be treated as missing — both get populated on re-seed.
+    """
+    from app.tenants.service import seed_quintana, get_default_agent
+
+    # First seed — creates the client + agent with populated fields
+    await seed_quintana(session)
+    agent = await get_default_agent(session, "quintana-seguros")
+    assert agent is not None
+
+    # Simulate empty-string state (e.g., admin cleared the fields to "")
+    agent.system_prompt = ""
+    agent.knowledge_base = ""
+    await session.flush()
+
+    # Second seed — empty strings must be treated as missing and populated
+    await seed_quintana(session)
+    agent_after = await get_default_agent(session, "quintana-seguros")
+    assert agent_after is not None
+    assert (
+        len(agent_after.system_prompt) > 0
+    ), "seed_quintana() must populate system_prompt when it is an empty string"
+    assert (
+        len(agent_after.knowledge_base) > 0
+    ), "seed_quintana() must populate knowledge_base when it is an empty string"
+
+
+async def test_seed_quintana_treats_empty_string_knowledge_as_missing(
+    session: AsyncSession,
+):
+    """seed_quintana() treats knowledge_base='' as missing while preserving non-empty prompt.
+
+    Spec scenario: Quintana default agent has a custom system_prompt but knowledge_base=''.
+    The empty knowledge_base MUST be populated; the custom prompt must NOT be overwritten.
+    """
+    from app.tenants.service import seed_quintana, get_default_agent
+
+    # First seed — creates the client + agent with populated fields
+    await seed_quintana(session)
+    agent = await get_default_agent(session, "quintana-seguros")
+    assert agent is not None
+
+    # Simulate partial state: custom non-empty prompt, but knowledge cleared to ""
+    custom_prompt = "CUSTOM PROMPT — must not be overwritten"
+    agent.system_prompt = custom_prompt
+    agent.knowledge_base = ""
+    await session.flush()
+
+    # Second seed — must preserve prompt and repopulate empty-string knowledge
+    await seed_quintana(session)
+    agent_after = await get_default_agent(session, "quintana-seguros")
+    assert agent_after is not None
+    assert (
+        agent_after.system_prompt == custom_prompt
+    ), "seed_quintana() must not overwrite non-empty system_prompt"
+    assert (
+        len(agent_after.knowledge_base) > 0
+    ), "seed_quintana() must populate knowledge_base when it is an empty string"
 
 
 # ---------------------------------------------------------------------------

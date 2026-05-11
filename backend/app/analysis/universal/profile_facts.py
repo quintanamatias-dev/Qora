@@ -3,6 +3,9 @@
 qora-profile-facts: Replaced flat list[str] facts with structured add/update/remove
 operations. ProfileFactsAxis now holds a list of ProfileFactUpdate items (max 5).
 The `run_profile_facts_pipeline()` standalone function is defined here (Phase 2).
+
+Locale-aware: `fact` and `evidence` are written in the client's configured
+analysis_language. `operation`, `category`, and `confidence` remain canonical codes.
 """
 
 from __future__ import annotations
@@ -84,14 +87,23 @@ _CATEGORY_DESCRIPTIONS = {
     "other": "Any stable trait that doesn't fit the other categories",
 }
 
+DEFAULT_LANGUAGE = "Spanish"
+
 _PIPELINE_SYSTEM_PROMPT = """\
 You are an expert at building a persistent personality profile from sales call transcripts.
 
+LANGUAGE NOTE: Write the `fact` and `evidence` fields in {language}. \
+Keep `operation`, `category`, and `confidence` as the exact English codes listed above.
+
 BOUNDARY RULES:
-- profile_facts = STABLE traits (personality, preferences, lifestyle patterns).
+- profile_facts = STABLE traits about the PERSON (personality, preferences, habits, lifestyle patterns).
 - NOT temporal context: appointments, follow-ups, action items → those go to misc_notes.
-  Example: "consulta decisiones con su pareja" = profile_fact (decision_style trait).
-           "llamar el martes" = NOT a profile_fact.
+- NOT product interests or insurance needs: "wants auto insurance", "needs home coverage" → those go to the interests dimension.
+- NOT provider complaints or service issues → those go to service_issues.
+  Example: "consulta decisiones con su pareja" = profile_fact (decision_style — stable trait about HOW the person decides).
+           "llamar el martes" = NOT a profile_fact (temporal → misc_notes).
+           "quiere asegurar el auto" = NOT a profile_fact (product need → interests).
+  The test: would this fact still be true about this person 6 months from now regardless of any insurance transaction? If yes → profile_fact. If no → it belongs elsewhere.
 
 OPERATIONS:
 - add: New fact not covered by current profile. target_fact_id must be null.
@@ -110,14 +122,19 @@ CONSTRAINTS:
 """
 
 
-def _build_pipeline_prompt(current_facts: list[dict]) -> str:
+def _build_pipeline_prompt(
+    current_facts: list[dict],
+    language: str = DEFAULT_LANGUAGE,
+) -> str:
     """Build the system prompt with current facts serialized."""
     import json
 
     categories_block = "\n".join(
         f"  {k}: {v}" for k, v in _CATEGORY_DESCRIPTIONS.items()
     )
-    prompt = _PIPELINE_SYSTEM_PROMPT.format(categories=categories_block)
+    prompt = _PIPELINE_SYSTEM_PROMPT.format(
+        language=language, categories=categories_block
+    )
 
     if current_facts:
         facts_json = json.dumps(
@@ -186,6 +203,7 @@ async def run_profile_facts_pipeline(
     client: AsyncOpenAI,
     *,
     current_facts: list[dict] | None = None,
+    language: str = DEFAULT_LANGUAGE,
 ) -> ProfileFactsAxis:
     """Standalone async profile facts pipeline.
 
@@ -195,6 +213,8 @@ async def run_profile_facts_pipeline(
         current_facts: List of dicts from get_active_profile_facts(db, lead_id).
             Each dict contains fact_key, fact_value, recorded_at, source_call_id.
             Pass [] or None for the first call.
+        language: Output language for the `fact` and `evidence` fields.
+            `operation`, `category`, and `confidence` stay canonical English codes.
 
     Returns:
         ProfileFactsAxis with validated updates. Never raises — returns empty axis on failure.
@@ -202,7 +222,7 @@ async def run_profile_facts_pipeline(
     facts = current_facts or []
 
     try:
-        system_prompt = _build_pipeline_prompt(facts)
+        system_prompt = _build_pipeline_prompt(facts, language=language)
         response = await client.beta.chat.completions.parse(
             model="gpt-4o-mini",
             messages=[
