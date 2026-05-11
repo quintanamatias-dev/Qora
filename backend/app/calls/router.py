@@ -66,7 +66,7 @@ async def get_call_metrics_endpoint(
     async with db_session() as db:
         metrics = await get_call_metrics(
             db,
-            client_id=client_id,
+            client_id=client_id.lower(),
             lead_id=lead_id,
             date_from=date_from,
             date_to=date_to,
@@ -126,7 +126,7 @@ async def list_call_sessions(
     Returns sessions ordered by started_at descending (most recent first).
     """
     async with db_session() as db:
-        sessions = await list_sessions_for_client(db, client_id, lead_id)
+        sessions = await list_sessions_for_client(db, client_id.lower(), lead_id)
 
     # Filter out ghost sessions: "initiated" with no turns and no duration.
     # These are WebSocket connection attempts that never established a real call.

@@ -1,0 +1,443 @@
+"""Unit tests for VoiceSessionContext and build_voice_context() — VSC-1, VSC-2.
+
+TDD RED phase for Tasks 1.2, 1.3, 1.4.
+Covers spec scenarios:
+- VoiceSessionContext: all fields populated (happy path)
+- VoiceSessionContext: missing optional data
+- build_voice_context: full initiation path
+- build_voice_context: no lead provided (anonymous call)
+- build_voice_context: exception propagation from PromptLoader
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def make_agent(
+    client_id: str = "acme",
+    slug: str = "aria",
+    name: str = "Aria",
+    system_prompt: str = "",
+    knowledge_base: str | None = None,
+    model: str = "gpt-4o",
+    temperature: float = 0.7,
+    max_tokens: int = 300,
+    tools_enabled: str | None = None,
+) -> MagicMock:
+    agent = MagicMock()
+    agent.client_id = client_id
+    agent.slug = slug
+    agent.name = name
+    agent.system_prompt = system_prompt
+    agent.knowledge_base = knowledge_base
+    agent.model = model
+    agent.temperature = temperature
+    agent.max_tokens = max_tokens
+    agent.tools_enabled = tools_enabled
+    return agent
+
+
+def make_lead(
+    name: str = "Carlos Méndez",
+    car_make: str = "Toyota",
+    car_model: str = "Corolla",
+    car_year: int = 2021,
+    current_insurance: str | None = "La Caja",
+    status: str = "new",
+    notes: str | None = None,
+    extracted_facts: dict | None = None,
+) -> MagicMock:
+    lead = MagicMock()
+    lead.name = name
+    lead.car_make = car_make
+    lead.car_model = car_model
+    lead.car_year = car_year
+    lead.current_insurance = current_insurance
+    lead.status = status
+    lead.notes = notes
+    lead.extracted_facts = extracted_facts or {}
+    return lead
+
+
+def make_client(
+    id: str = "acme",
+    broker_name: str = "Acme Seguros",
+    agent_name: str = "Aria",
+) -> MagicMock:
+    client = MagicMock()
+    client.id = id
+    client.broker_name = broker_name
+    client.agent_name = agent_name
+    return client
+
+
+# ---------------------------------------------------------------------------
+# Task 1.2 — VSC-1: VoiceSessionContext dataclass
+# ---------------------------------------------------------------------------
+
+
+def test_voice_session_context_is_importable():
+    """VoiceSessionContext is importable from app.voice.context."""
+    from app.voice.context import VoiceSessionContext  # noqa: F401
+
+
+def test_voice_session_context_all_fields_populated():
+    """VSC-1 happy path: all fields can be set and accessed.
+
+    GIVEN a VoiceSessionContext instantiated with all fields
+    WHEN accessing each field
+    THEN each field holds its string value with no None values
+    """
+    from app.voice.context import VoiceSessionContext
+
+    ctx = VoiceSessionContext(
+        system_prompt="You are Aria.",
+        skills_content="# Skill one",
+        misc_notes="Cliente interesado en granizo",
+        lead_profile="Nombre: Carlos\nAuto: Toyota Corolla 2021",
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools=None,
+    )
+
+    assert ctx.system_prompt == "You are Aria."
+    assert ctx.skills_content == "# Skill one"
+    assert ctx.misc_notes == "Cliente interesado en granizo"
+    assert ctx.lead_profile == "Nombre: Carlos\nAuto: Toyota Corolla 2021"
+    assert ctx.model == "gpt-4o"
+    assert ctx.temperature == 0.7
+    assert ctx.max_tokens == 300
+    assert ctx.tools is None
+
+
+def test_voice_session_context_missing_optional_fields():
+    """VSC-1 missing optional data: empty string defaults for missing fields.
+
+    GIVEN a lead with no car data and no misc_notes
+    WHEN VoiceSessionContext is instantiated
+    THEN misc_notes is '' and lead_profile contains only non-empty fields
+    """
+    from app.voice.context import VoiceSessionContext
+
+    ctx = VoiceSessionContext(
+        system_prompt="You are Aria.",
+        skills_content="",
+        misc_notes="",
+        lead_profile="",
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools=None,
+    )
+
+    assert ctx.misc_notes == ""
+    assert ctx.lead_profile == ""
+    assert ctx.skills_content == ""
+
+
+def test_voice_session_context_is_frozen():
+    """VoiceSessionContext must be immutable (frozen dataclass)."""
+    from app.voice.context import VoiceSessionContext
+
+    ctx = VoiceSessionContext(
+        system_prompt="prompt",
+        skills_content="",
+        misc_notes="",
+        lead_profile="",
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools=None,
+    )
+
+    with pytest.raises((AttributeError, TypeError)):
+        ctx.system_prompt = "mutated"  # type: ignore[misc]
+
+
+def test_voice_session_context_with_tools_list():
+    """Triangulation: tools field accepts list[dict] value."""
+    from app.voice.context import VoiceSessionContext
+
+    tools = [{"type": "function", "function": {"name": "get_lead"}}]
+    ctx = VoiceSessionContext(
+        system_prompt="prompt",
+        skills_content="",
+        misc_notes="",
+        lead_profile="",
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools=tools,
+    )
+
+    assert ctx.tools == tools
+    assert len(ctx.tools) == 1  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Task 1.3 — VSC-2: build_voice_context() async factory
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_returns_voice_session_context():
+    """build_voice_context returns a VoiceSessionContext instance."""
+    from app.voice.context import VoiceSessionContext, build_voice_context
+
+    agent = make_agent()
+    lead = make_lead()
+    client = make_client()
+    mock_db = AsyncMock()
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="Rendered system prompt")
+        mock_instance.load_agent_skills = AsyncMock(return_value="# Skill content")
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=lead,
+            db=mock_db,
+            client=client,
+        )
+
+    assert isinstance(result, VoiceSessionContext)
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_system_prompt_from_render_for_agent():
+    """VSC-2 full path: system_prompt equals output of PromptLoader.render_for_agent().
+
+    GIVEN agent, lead, db, client are all provided
+    WHEN build_voice_context() is called
+    THEN VoiceSessionContext.system_prompt equals what render_for_agent returned
+    """
+    from app.voice.context import build_voice_context
+
+    agent = make_agent()
+    lead = make_lead()
+    client = make_client()
+    mock_db = AsyncMock()
+
+    expected_prompt = "You are Aria, agent for Acme Seguros."
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value=expected_prompt)
+        mock_instance.load_agent_skills = AsyncMock(return_value="")
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=lead,
+            db=mock_db,
+            client=client,
+        )
+
+    assert result.system_prompt == expected_prompt
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_skills_content_from_load_agent_skills():
+    """VSC-2: skills_content equals output of PromptLoader.load_agent_skills()."""
+    from app.voice.context import build_voice_context
+
+    agent = make_agent(client_id="acme", slug="aria")
+    lead = make_lead()
+    client = make_client()
+    mock_db = AsyncMock()
+
+    expected_skills = "# Greeting skill\n\n---\n\n# Objections skill"
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="prompt")
+        mock_instance.load_agent_skills = AsyncMock(return_value=expected_skills)
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=lead,
+            db=mock_db,
+            client=client,
+        )
+
+    assert result.skills_content == expected_skills
+    # Verify load_agent_skills was called with correct args
+    mock_instance.load_agent_skills.assert_called_once_with("acme", "aria")
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_misc_notes_from_extracted_facts():
+    """VSC-2: misc_notes comes from lead.extracted_facts['misc_notes']."""
+    from app.voice.context import build_voice_context
+
+    lead = make_lead(extracted_facts={"misc_notes": "Cliente mencionó granizo"})
+    agent = make_agent()
+    client = make_client()
+    mock_db = AsyncMock()
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="prompt")
+        mock_instance.load_agent_skills = AsyncMock(return_value="")
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=lead,
+            db=mock_db,
+            client=client,
+        )
+
+    assert result.misc_notes == "Cliente mencionó granizo"
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_lead_profile_contains_lead_name():
+    """VSC-2: lead_profile contains lead name when lead is provided."""
+    from app.voice.context import build_voice_context
+
+    lead = make_lead(name="María López", car_make="Honda", car_model="Civic", car_year=2020)
+    agent = make_agent()
+    client = make_client()
+    mock_db = AsyncMock()
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="prompt")
+        mock_instance.load_agent_skills = AsyncMock(return_value="")
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=lead,
+            db=mock_db,
+            client=client,
+        )
+
+    assert "María López" in result.lead_profile
+    assert "Honda" in result.lead_profile
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_no_lead_returns_empty_misc_and_profile():
+    """VSC-2 anonymous call: lead=None → misc_notes='' and lead_profile=''.
+
+    GIVEN lead=None
+    WHEN build_voice_context() is called
+    THEN misc_notes is '' and lead_profile is ''
+    AND system_prompt is still rendered
+    """
+    from app.voice.context import build_voice_context
+
+    agent = make_agent()
+    client = make_client()
+    mock_db = AsyncMock()
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="prompt without lead")
+        mock_instance.load_agent_skills = AsyncMock(return_value="")
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=None,
+            db=mock_db,
+            client=client,
+        )
+
+    assert result.misc_notes == ""
+    assert result.lead_profile == ""
+    assert result.system_prompt == "prompt without lead"
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_model_temperature_max_tokens_from_agent():
+    """VSC-2: model, temperature, max_tokens come from agent config."""
+    from app.voice.context import build_voice_context
+
+    agent = make_agent(model="gpt-4o-mini", temperature=0.5, max_tokens=500)
+    client = make_client()
+    mock_db = AsyncMock()
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="prompt")
+        mock_instance.load_agent_skills = AsyncMock(return_value="")
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=None,
+            db=mock_db,
+            client=client,
+        )
+
+    assert result.model == "gpt-4o-mini"
+    assert result.temperature == 0.5
+    assert result.max_tokens == 500
+
+
+# ---------------------------------------------------------------------------
+# Task 1.4 — Exception propagation from PromptLoader
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_propagates_render_for_agent_exception():
+    """VSC-2 exception propagation: errors from render_for_agent bubble up.
+
+    GIVEN PromptLoader.render_for_agent() raises an exception
+    WHEN build_voice_context() is called
+    THEN the exception propagates — no silent swallowing
+    """
+    from app.voice.context import build_voice_context
+
+    agent = make_agent()
+    client = make_client()
+    mock_db = AsyncMock()
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(
+            side_effect=RuntimeError("DB connection failed")
+        )
+        mock_instance.load_agent_skills = AsyncMock(return_value="")
+
+        with pytest.raises(RuntimeError, match="DB connection failed"):
+            await build_voice_context(
+                agent=agent,
+                lead=None,
+                db=mock_db,
+                client=client,
+            )
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_no_silent_exception_swallowing():
+    """Triangulation: ValueError from render_for_agent also propagates."""
+    from app.voice.context import build_voice_context
+
+    agent = make_agent()
+    client = make_client()
+    mock_db = AsyncMock()
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(
+            side_effect=ValueError("Agent not found")
+        )
+        mock_instance.load_agent_skills = AsyncMock(return_value="")
+
+        with pytest.raises(ValueError, match="Agent not found"):
+            await build_voice_context(
+                agent=agent,
+                lead=None,
+                db=mock_db,
+                client=client,
+            )

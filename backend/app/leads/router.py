@@ -206,7 +206,7 @@ async def list_leads(
     Raises:
         422: If client_id query parameter is missing.
     """
-    leads = await list_leads_for_client(session, client_id)
+    leads = await list_leads_for_client(session, client_id.lower())
     if not leads:
         return []
     lead_ids = [lead.id for lead in leads]

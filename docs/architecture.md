@@ -89,16 +89,16 @@ The core of QORA. Receives OpenAI-compatible POST requests from ElevenLabs and:
 1. Validates `client_id` from `elevenlabs_extra_body` (required — 422 if missing)
 2. Looks up the `Client` (tenant) in the database
 3. Optionally loads a `Lead` record for context
-4. Renders the system prompt using `render_system_prompt(client, lead)` from `app/prompts/insurance_agent.py`
+4. Renders the system prompt using `PromptLoader().render_for_agent(agent, lead, db, client)` from `app/prompts/loader.py`
 5. Streams GPT-4o responses as SSE, intercepting tool calls
 7. Persists each agent turn to the `call_turns` table
 
-### System Prompt Renderer (`app/prompts/insurance_agent.py`)
+### System Prompt Renderer (`app/prompts/loader.py`)
 
-`render_system_prompt(client, lead)` renders the full Jaumpablo prompt with:
-- Client-specific variables: `broker_name`, `agent_name`
-- Lead-specific variables: `lead_name`, `car_make`, `car_model`, `car_year`, `current_insurance`
-- Returning-caller context (if `call_count > 1`)
+`PromptLoader().render_for_agent(agent, lead, db, client)` renders the system prompt with:
+- Filesystem-first resolution: `backend/clients/{client_id}/agents/{agent_slug}/system-prompt.md` → DB `agent.system_prompt` → legacy client prompt → hardcoded template
+- Template variable substitution: `broker_name`, `agent_name`, `lead_name`, `car_make`, `car_model`, `car_year`, `current_insurance`, `call_history`, `confirmed_facts`
+- Returning-caller context injected via `build_memory_context(db, lead)`
 
 ### Tool Dispatcher (`app/tools/dispatcher.py`)
 
@@ -130,7 +130,7 @@ Dispatches GPT-4o tool calls to implementations:
 4. QORA:
    a. Validates client_id → loads Client from DB
    b. Loads Lead from DB (optional)
-   c. Renders system prompt (render_system_prompt)
+   c. Renders system prompt (PromptLoader.render_for_agent)
    d. Streams GPT-4o → SSE tokens
    e. If tool call detected: executes tool → second GPT-4o call → more SSE tokens
    f. Emits SSE [DONE]

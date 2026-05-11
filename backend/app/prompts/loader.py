@@ -132,6 +132,42 @@ class PromptLoader:
             return await asyncio.to_thread(prompt_path.read_text, encoding="utf-8")
         return JAUMPABLO_PROMPT_TEMPLATE
 
+    async def load_agent_skills(self, client_id: str, agent_slug: str) -> str:
+        """Load and concatenate all *.agent-skill.md files from agent's skills dir.
+
+        Scans ``clients/{client_id}/agents/{agent_slug}/skills/`` for files
+        matching ``*.agent-skill.md``. Files are read and concatenated in
+        alphabetical order, separated by ``"\\n\\n---\\n\\n"``.
+
+        Args:
+            client_id: Client slug (e.g. ``"quintana-seguros"``).
+            agent_slug: Agent slug (e.g. ``"aria"``).
+
+        Returns:
+            Concatenated skill content (empty string if dir missing or no files).
+        """
+        skills_dir = self.clients_dir / client_id / "agents" / agent_slug / "skills"
+
+        dir_exists = await asyncio.to_thread(skills_dir.is_dir)
+        if not dir_exists:
+            return ""
+
+        skill_files = sorted(
+            await asyncio.to_thread(
+                lambda: list(skills_dir.glob("*.agent-skill.md"))
+            )
+        )
+
+        if not skill_files:
+            return ""
+
+        contents = []
+        for skill_file in skill_files:
+            content = await asyncio.to_thread(skill_file.read_text, encoding="utf-8")
+            contents.append(content)
+
+        return "\n\n---\n\n".join(contents)
+
     async def load_agent_system_prompt(
         self, client_id: str, agent_slug: str
     ) -> str | None:

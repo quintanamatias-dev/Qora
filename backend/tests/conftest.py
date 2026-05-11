@@ -18,6 +18,28 @@ from pydantic import SecretStr
 
 
 # ---------------------------------------------------------------------------
+# Session store isolation — VSC-8 Fix A
+# ---------------------------------------------------------------------------
+# The module-level session_store singleton is shared across all tests in a process.
+# Without cleanup between tests, find_by_client_lead() can find leftover sessions
+# from earlier tests and skip creating new DB sessions — breaking tests that expect
+# a new CallSession to be created on every request.
+#
+# This autouse fixture clears the singleton before every test automatically.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clear_session_store_between_tests():
+    """Clear the global session_store before each test to prevent state leakage."""
+    from app.voice.session import session_store
+
+    session_store._sessions.clear()
+    yield
+    session_store._sessions.clear()
+
+
+# ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
 

@@ -65,7 +65,7 @@ def _validate_period(
 
 async def _validate_client_exists(db, client_id: str) -> None:
     """Raise HTTPException 404 if the client does not exist."""
-    result = await db.execute(select(Client).where(Client.id == client_id))
+    result = await db.execute(select(Client).where(Client.id == client_id.lower()))
     client = result.scalar_one_or_none()
     if client is None:
         raise HTTPException(
@@ -98,6 +98,7 @@ async def get_analytics_overview(
     _validate_period(period, start_date, end_date)
 
     date_from, date_to = resolve_window(period, start_date, end_date)
+    client_id = client_id.lower()
 
     async with db_session() as db:
         await _validate_client_exists(db, client_id)
@@ -144,6 +145,7 @@ async def get_analytics_service_issues(
     _validate_period(period, start_date, end_date)
 
     date_from, date_to = resolve_window(period, start_date, end_date)
+    client_id = client_id.lower()
 
     async with db_session() as db:
         await _validate_client_exists(db, client_id)
@@ -188,6 +190,7 @@ async def get_analytics_interests(
     _validate_period(period, start_date, end_date)
 
     date_from, date_to = resolve_window(period, start_date, end_date)
+    client_id = client_id.lower()
 
     async with db_session() as db:
         await _validate_client_exists(db, client_id)
@@ -232,6 +235,7 @@ async def get_analytics_agent_stats(
     _validate_period(period, start_date, end_date)
 
     date_from, date_to = resolve_window(period, start_date, end_date)
+    client_id = client_id.lower()
 
     async with db_session() as db:
         await _validate_client_exists(db, client_id)
