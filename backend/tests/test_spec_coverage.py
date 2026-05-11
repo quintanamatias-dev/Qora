@@ -325,81 +325,25 @@ async def test_cap4_schedule_followup_persists_date(db_session):
 
 
 # ============================================================================
-# CAP-5: Dynamic Filler System
+# CAP-5: Dynamic Filler System — REMOVED (Issue #70)
+# Filler behavior removed from the SSE pipeline. CAP-5 is deprecated.
+# SessionStore (session tracking without filler) is tested in test_filler.py.
 # ============================================================================
 
 
-def test_cap5_filler_repetition_prevention():
-    """CAP-5: select_filler never returns the same filler as last_filler."""
-    from app.voice.filler import ConversationState, select_filler, _ALL_FILLERS
-
-    for filler in _ALL_FILLERS:
-        state = ConversationState(
-            conversation_id="cap5-test",
-            client_id="quintana-seguros",
-            lead_id="lead-001",
-            session_id="sess-001",
-            last_filler=filler,
-        )
-        result = select_filler(state)
-        assert result != filler, f"Filler repeated: {filler}"
-
-
-def test_cap5_fast_llm_no_fallback_needed():
-    """CAP-5: fast_llm scenario — first token arrives before 500ms (simulated)."""
-    from app.voice.filler import FALLBACK_FILLER, _ALL_FILLERS
-
-    # Simulate: GPT-4o responds fast (within 300ms)
-    # The filler comes from GPT-4o's prompt instruction — NOT a fallback injection
-    # Verify the FALLBACK_FILLER is defined and is a valid filler
-    assert FALLBACK_FILLER in _ALL_FILLERS
-    assert isinstance(FALLBACK_FILLER, str)
-    assert len(FALLBACK_FILLER) > 0
-
-
-def test_cap5_fallback_filler_is_context_neutral():
-    """CAP-5: FALLBACK_FILLER is safe and context-neutral."""
-    from app.voice.filler import FALLBACK_FILLER
-
-    # Should be a "thinking/searching" filler — neutral and safe
-    assert FALLBACK_FILLER in [
-        "Mmm, dejame ver...",
-        "A ver...",
-        "Un segundo...",
-        "Estoy chequeando...",
-    ]
-
-
-def test_cap5_filler_pools_cover_all_contexts():
-    """CAP-5: All three context categories are present in filler pools."""
-    from app.voice.filler import FILLER_POOLS
-
-    assert (
-        len(FILLER_POOLS) >= 3
-    ), "Need at least 3 context groups (thinking, processing, transitioning)"
-
-    # Flat list of all fillers
-    all_fillers = [f for pool in FILLER_POOLS for f in pool]
-    assert len(all_fillers) >= 9, "Need at least 9 fillers total"
-
-
-def test_cap5_filler_dedup_across_five_turns():
-    """CAP-5: Simulated 5-turn conversation — no consecutive filler repeats."""
-    from app.voice.filler import SessionStore
+def test_cap5_session_store_tracks_turns():
+    """CAP-5 (legacy): SessionStore still tracks turn counts without filler logic."""
+    from app.voice.session import SessionStore
 
     store = SessionStore()
     store.create("conv-cap5", "quintana-seguros", "lead-001", "sess-001")
 
-    last_filler = None
-    for turn in range(5):
-        state = store.get(("quintana-seguros", "conv-cap5"))
-        from app.voice.filler import select_filler
-
-        filler = select_filler(state)
-        assert filler != last_filler, f"Repeated filler at turn {turn}: '{filler}'"
-        store.update_filler("quintana-seguros", "conv-cap5", filler)
+    for _ in range(5):
         store.increment_turn("quintana-seguros", "conv-cap5")
-        last_filler = filler
+
+    state = store.get(("quintana-seguros", "conv-cap5"))
+    assert state is not None
+    assert state.turn_count == 5
 
 
 # ============================================================================

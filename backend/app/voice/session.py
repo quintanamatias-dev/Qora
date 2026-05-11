@@ -1,50 +1,12 @@
-"""QORA Voice — In-memory conversation state and filler dedup logic.
+"""QORA Voice — In-memory conversation state and session management.
 
-Implements AD-3: In-Memory Session Store for filler tracking.
-Covers: CAP-5 filler repetition prevention and 500ms fallback.
+Implements AD-3: In-Memory Session Store for conversation tracking.
 """
 
 from __future__ import annotations
 
-import random
 import time
 from dataclasses import dataclass, field
-
-
-# ---------------------------------------------------------------------------
-# Filler pools (CAP-5: contextual + varied)
-# ---------------------------------------------------------------------------
-
-# Grouped by conversational context
-FILLER_POOLS: list[list[str]] = [
-    # Thinking / searching
-    [
-        "A ver...",
-        "Mmm, dejame ver...",
-        "Estoy chequeando...",
-        "Hmm, un momento...",
-    ],
-    # Processing / computing
-    [
-        "Dale, ya lo estoy mirando...",
-        "Un segundo...",
-        "Dejame revisar eso...",
-        "Voy a verificar...",
-    ],
-    # Transitioning
-    [
-        "Bueno, entonces...",
-        "Perfecto, y ahí...",
-        "Claro, y con respecto a eso...",
-        "Mirá, te cuento...",
-    ],
-]
-
-# Flat list of all fillers for dedup selection
-_ALL_FILLERS: list[str] = [f for pool in FILLER_POOLS for f in pool]
-
-# Fallback filler for the 500ms timer — safe, context-neutral
-FALLBACK_FILLER: str = "Mmm, dejame ver..."
 
 
 # ---------------------------------------------------------------------------
@@ -64,33 +26,8 @@ class ConversationState:
     lead_id: str | None = None
     session_id: str = ""  # call_sessions.id in SQLite
 
-    last_filler: str | None = None  # for dedup — never repeat consecutively
     turn_count: int = 0
     started_at: float = field(default_factory=time.monotonic)
-
-
-# ---------------------------------------------------------------------------
-# Filler selection helper
-# ---------------------------------------------------------------------------
-
-
-def select_filler(state: ConversationState) -> str:
-    """Select a filler that is NOT the same as the last one used.
-
-    Avoids consecutive repetition per CAP-5 requirement.
-
-    Args:
-        state: Current conversation state with last_filler recorded.
-
-    Returns:
-        A filler string guaranteed to differ from state.last_filler.
-    """
-    candidates = [f for f in _ALL_FILLERS if f != state.last_filler]
-    if not candidates:
-        # Fallback: use any filler (shouldn't happen with multiple fillers)
-        candidates = _ALL_FILLERS
-
-    return random.choice(candidates)
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +42,7 @@ class SessionStore:
     state leakage when two tenants share the same conversation_id value.
 
     Thread-safety: single-threaded async context (FastAPI); no locks needed.
-    Crash resilience: filler tracking only; call data persisted to SQLite.
+    Crash resilience: session tracking only; call data persisted to SQLite.
     """
 
     def __init__(self) -> None:
@@ -152,20 +89,6 @@ class SessionStore:
         if not isinstance(key, tuple):
             return None
         return self._sessions.get(key)
-
-    def update_filler(
-        self, client_id: str, conversation_id: str, filler_text: str
-    ) -> None:
-        """Record the last filler used for dedup on next turn.
-
-        Args:
-            client_id: Tenant identifier (part of composite key).
-            conversation_id: ElevenLabs conversation ID.
-            filler_text: The filler phrase just emitted.
-        """
-        state = self._sessions.get((client_id, conversation_id))
-        if state is not None:
-            state.last_filler = filler_text
 
     def increment_turn(self, client_id: str, conversation_id: str) -> None:
         """Increment the turn counter for a conversation.

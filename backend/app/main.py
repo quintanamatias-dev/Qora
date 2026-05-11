@@ -140,7 +140,7 @@ async def _session_store_cleanup_task():
     Runs every 60 seconds, removes sessions older than 5 minutes.
     Prevents memory leaks from abandoned conversations.
     """
-    from app.voice.filler import session_store
+    from app.voice.session import session_store
 
     while True:
         await asyncio.sleep(60)
