@@ -9,7 +9,6 @@ QORA connects ElevenLabs' voice agent directly to a Custom LLM webhook backed by
 - **Multi-tenant routing** — each client (`client_id`) has its own config in the database
 - **Lead context injection** — lead data (name, car, current insurance) is injected into the system prompt at runtime
 - **Tool execution** — GPT-4o can call CRM tools mid-conversation (register interest, mark not interested, schedule follow-up)
-- **Dynamic filler system** — context-aware filler phrases emitted as first tokens to reduce perceived latency
 - **Demo UI** — browser-based WebSocket demo at `/demo/`
 
 ## Architecture Overview
@@ -150,8 +149,7 @@ backend/
 │   │   └── database.py          # SQLAlchemy async engine
 │   ├── voice/
 │   │   ├── webhook.py           # Custom LLM webhook (core of QORA)
-│   │   ├── initiation.py        # Lead injection endpoint
-│   │   └── filler.py            # Dynamic filler system
+│   │   └── initiation.py        # Lead injection endpoint
 │   ├── prompts/
 │   │   └── insurance_agent.py   # Jaumpablo system prompt renderer
 │   ├── tenants/                 # Multi-tenant config (Client model + service)
