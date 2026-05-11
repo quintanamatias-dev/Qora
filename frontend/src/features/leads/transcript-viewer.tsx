@@ -6,7 +6,7 @@
  *   - Accepts sessionId prop, fetches via useTranscript hook
  *   - Agent turns: left-aligned, role label "Agent"
  *   - User turns: right-aligned, role label "User"
- *   - filler_detected: true → data-filler="true" attribute (visual dimming via opacity)
+ *   - filler_detected: preserved in data model for historical data; no visual dimming
  *   - Loading: data-testid="transcript-loading"
  *   - Empty: "No transcript available"
  *   - Error: "Could not load transcript"
@@ -49,20 +49,15 @@ interface TurnItemProps {
 
 function TurnItem({ turn }: TurnItemProps) {
   const isAgent = turn.role === 'agent'
-  const isFiller = Boolean(turn.filler_detected)
 
   return (
     <div
       data-testid="transcript-turn"
       data-role={turn.role}
-      data-filler={String(isFiller)}
       className={[
         'flex flex-col gap-0.5 max-w-[75%]',
         isAgent ? 'self-start items-start' : 'self-end items-end',
-        isFiller ? 'opacity-50' : '',
-      ]
-        .filter(Boolean)
-        .join(' ')}
+      ].join(' ')}
     >
       {/* Role label + timestamp */}
       <div className="flex items-center gap-2 text-xs text-on-surface-variant">

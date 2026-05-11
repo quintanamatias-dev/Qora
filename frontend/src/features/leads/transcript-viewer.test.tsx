@@ -208,29 +208,4 @@ describe('TranscriptViewer — role differentiation', () => {
   })
 })
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Scenario: Filler detected turns show visual indicator
-// ──────────────────────────────────────────────────────────────────────────────
 
-describe('TranscriptViewer — filler detected', () => {
-  it('filler turns have data-filler="true" attribute', async () => {
-    server.use(
-      http.get('/api/v1/calls/:sessionId/transcript', () =>
-        HttpResponse.json({
-          session_id: 'session-filler',
-          turn_count: 2,
-          turns: [
-            { id: 't1', role: 'agent', content: 'Normal turn', timestamp: '2026-01-15T10:00:01Z', filler_detected: false },
-            { id: 't2', role: 'agent', content: 'Hmm, uh, let me think...', timestamp: '2026-01-15T10:00:03Z', filler_detected: true },
-          ],
-        })
-      )
-    )
-
-    renderViewer('session-filler')
-    const turns = await screen.findAllByTestId('transcript-turn')
-    expect(turns).toHaveLength(2)
-    expect(turns[0]).toHaveAttribute('data-filler', 'false')
-    expect(turns[1]).toHaveAttribute('data-filler', 'true')
-  })
-})

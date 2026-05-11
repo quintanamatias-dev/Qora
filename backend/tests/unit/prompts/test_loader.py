@@ -1019,14 +1019,13 @@ async def test_quintana_prompt_memoria_appears_after_datos_del_lead(
 
     pos_datos = result.find("DATOS DEL LEAD")
     pos_memoria = result.find("MEMORIA DE CONVERSACIONES ANTERIORES")
-    pos_fillers = result.find("FILLERS")
 
     assert pos_datos != -1, "DATOS DEL LEAD section must be present"
     assert pos_memoria != -1, "MEMORIA section must be present"
-    assert pos_fillers != -1, "FILLERS section must be present"
+    # FILLERS section has been removed from the prompt (Issue #70)
+    assert result.find("FILLERS") == -1, "FILLERS section must NOT be present (removed in Issue #70)"
 
     assert pos_datos < pos_memoria, "MEMORIA must appear AFTER DATOS DEL LEAD"
-    assert pos_memoria < pos_fillers, "MEMORIA must appear BEFORE FILLERS"
 
 
 @pytest.mark.asyncio

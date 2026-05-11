@@ -594,7 +594,7 @@ async def test_concurrent_tenants_same_conversation_id_no_cross_contamination(
     ), f"test-tenant-b expected 200, got {resp_tenant_b.status_code}: {resp_tenant_b.text}"
 
     # Verify session_store isolation: each tenant's session must have the right client_id
-    from app.voice.filler import session_store
+    from app.voice.session import session_store
 
     # After the fix, composite key (client_id, conversation_id) means both entries coexist
     state_quintana = session_store.get(("quintana-seguros", shared_conv_id))

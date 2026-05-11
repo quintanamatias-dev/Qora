@@ -43,8 +43,7 @@ QORA is a Custom LLM webhook server that powers ElevenLabs Conversational AI age
                            │  │  2. Load Client from DB                  │ │
                            │  │  3. Load Lead from DB (if lead_id given) │ │
                            │  │  4. render_system_prompt(client, lead)   │ │
-                           │  │  5. Select context filler (first token)  │ │
-                           │  │  6. Stream GPT-4o (SSE)                  │ │
+                           │  │  5. Stream GPT-4o (SSE)                  │ │
                            │  │  7. Handle tool calls (mid-stream)       │ │
                            │  │  8. Persist transcript turn to DB        │ │
                            │  └───────────┬──────────────────────────────┘ │
@@ -91,8 +90,7 @@ The core of QORA. Receives OpenAI-compatible POST requests from ElevenLabs and:
 2. Looks up the `Client` (tenant) in the database
 3. Optionally loads a `Lead` record for context
 4. Renders the system prompt using `render_system_prompt(client, lead)` from `app/prompts/insurance_agent.py`
-5. Emits a context-aware filler phrase as the first SSE token
-6. Streams GPT-4o responses as SSE, intercepting tool calls
+5. Streams GPT-4o responses as SSE, intercepting tool calls
 7. Persists each agent turn to the `call_turns` table
 
 ### System Prompt Renderer (`app/prompts/insurance_agent.py`)
@@ -133,12 +131,10 @@ Dispatches GPT-4o tool calls to implementations:
    a. Validates client_id → loads Client from DB
    b. Loads Lead from DB (optional)
    c. Renders system prompt (render_system_prompt)
-   d. Selects filler (select_filler)
-   e. Emits filler as first SSE token → ElevenLabs starts TTS immediately
-   f. Streams GPT-4o → more SSE tokens
-   g. If tool call detected: executes tool → second GPT-4o call → more SSE tokens
-   h. Emits SSE [DONE]
-   i. Persists agent turn to DB
+   d. Streams GPT-4o → SSE tokens
+   e. If tool call detected: executes tool → second GPT-4o call → more SSE tokens
+   f. Emits SSE [DONE]
+   g. Persists agent turn to DB
 5. ElevenLabs TTS converts SSE text tokens → audio
 6. Browser plays audio through speaker
 7. Browser displays transcript (agent_response event)

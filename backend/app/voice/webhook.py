@@ -41,7 +41,7 @@ from app.core.database import get_session as db_session
 from app.leads.service import get_lead
 from app.prompts.loader import PromptLoader
 from app.tenants.service import get_client, get_default_agent
-from app.voice.filler import FALLBACK_FILLER, select_filler, session_store
+from app.voice.session import session_store
 
 router = APIRouter(prefix="/voice", tags=["voice"])
 
@@ -203,26 +203,6 @@ async def _execute_tool(
 
 
 # ---------------------------------------------------------------------------
-# Fire-and-forget filler turn persistence (CAP-3)
-# ---------------------------------------------------------------------------
-
-
-async def _persist_filler_turn(session_id: str, filler_text: str) -> None:
-    """Persist filler text as a separate transcript turn (filler_detected=True)."""
-    try:
-        async with db_session() as db:
-            await add_transcript_turn(
-                db, session_id, "agent", filler_text, filler_detected=True
-            )
-    except Exception as exc:  # noqa: BLE001
-        structlog.get_logger().warning(
-            "filler_turn_persist_failed",
-            error=str(exc),
-            session_id=session_id,
-        )
-
-
-# ---------------------------------------------------------------------------
 # Core streaming generator
 # ---------------------------------------------------------------------------
 
@@ -376,11 +356,9 @@ async def _stream_llm_response(
                 session_id=session_id,
             )
 
-    # Update filler tracking
+    # Update turn tracking
     if conversation_id and client_id:
-        conv_state = session_store.get((client_id, conversation_id))
-        if conv_state:
-            session_store.increment_turn(client_id, conversation_id)
+        session_store.increment_turn(client_id, conversation_id)
 
     yield _sse_stop()
     yield _sse_done()
@@ -744,26 +722,11 @@ async def _process_custom_llm_request(
         session_id = new_session_id
         conv_state = session_store.get((client_id, conversation_id))
 
-    # Select filler AFTER session creation so conv_state is populated
-    filler = select_filler(conv_state) if conv_state else FALLBACK_FILLER
-
-    if conversation_id and conv_state:
-        session_store.update_filler(client_id, conversation_id, filler)
-
     async def generate():
         # Fire-and-forget: persist user turn (CAP-1)
         # Must not block the SSE stream — schedule_user_turn_persist uses asyncio.create_task
         if session_id:
             schedule_user_turn_persist(session_id, body.messages)
-
-        # Emit filler immediately as first SSE chunk (before LLM responds)
-        if filler:
-            yield _sse_chunk(filler + " ")
-            # Persist filler as a separate transcript turn (CAP-3)
-            # await directly — we're in an async generator; this runs between SSE yields
-            # and does NOT block ElevenLabs from receiving the already-yielded filler chunk.
-            if session_id:
-                await _persist_filler_turn(session_id, filler)
 
         # Use agent config when available (Phase 7), else client config (legacy)
         _temperature = agent.temperature if agent is not None else client.temperature
