@@ -359,3 +359,90 @@ async def test_make_default_not_found_returns_404(agents_app: AsyncClient):
         f"{_BASE}/00000000-0000-0000-0000-000000000000/make-default"
     )
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Task 1.2 (NEW) — elevenlabs_agent_id CRUD round-trip
+# ---------------------------------------------------------------------------
+
+
+async def test_create_agent_with_elevenlabs_agent_id(agents_app: AsyncClient):
+    """POST /agents with elevenlabs_agent_id persists and returns the value."""
+    payload = {**_VALID_AGENT, "elevenlabs_agent_id": "el_abc123"}
+    response = await agents_app.post(_BASE, json=payload)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["elevenlabs_agent_id"] == "el_abc123"
+
+
+async def test_create_agent_without_elevenlabs_agent_id_is_null(
+    agents_app: AsyncClient,
+):
+    """POST /agents without elevenlabs_agent_id returns elevenlabs_agent_id=null."""
+    response = await agents_app.post(_BASE, json=_VALID_AGENT)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["elevenlabs_agent_id"] is None
+
+
+async def test_patch_agent_updates_elevenlabs_agent_id(agents_app: AsyncClient):
+    """PATCH /agents/{id} with elevenlabs_agent_id updates the binding."""
+    create_resp = await agents_app.post(_BASE, json=_VALID_AGENT)
+    assert create_resp.status_code == 201
+    agent_id = create_resp.json()["agent_id"]
+    assert create_resp.json()["elevenlabs_agent_id"] is None
+
+    patch_resp = await agents_app.patch(
+        f"{_BASE}/{agent_id}", json={"elevenlabs_agent_id": "el_xyz"}
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["elevenlabs_agent_id"] == "el_xyz"
+
+
+# ---------------------------------------------------------------------------
+# Task 1.2 (NEW) — custom_llm_url computed in response
+# ---------------------------------------------------------------------------
+
+
+async def test_agent_response_includes_custom_llm_url(agents_app: AsyncClient):
+    """GET /agents returns custom_llm_url computed from client_id."""
+    response = await agents_app.post(_BASE, json=_VALID_AGENT)
+    assert response.status_code == 201
+    data = response.json()
+    expected_url = "/api/v1/voice/test-client/custom-llm/chat/completions"
+    assert data["custom_llm_url"] == expected_url
+
+
+# ---------------------------------------------------------------------------
+# Task 1.2 (NEW) — readiness metadata in response
+# ---------------------------------------------------------------------------
+
+
+async def test_agent_response_includes_readiness_flags_false_by_default(
+    agents_app: AsyncClient,
+):
+    """POST /agents without prompt/EL ID returns is_conversation_ready=False."""
+    response = await agents_app.post(_BASE, json=_VALID_AGENT)
+    assert response.status_code == 201
+    data = response.json()
+    # New agent has no system_prompt and no elevenlabs_agent_id — not ready
+    assert data["is_conversation_ready"] is False
+    assert data["has_prompt"] is False
+    assert data["has_elevenlabs_agent_id"] is False
+
+
+async def test_agent_response_readiness_true_when_prompt_and_el_id(
+    agents_app: AsyncClient,
+):
+    """Agent with system_prompt AND elevenlabs_agent_id is conversation-ready."""
+    payload = {
+        **_VALID_AGENT,
+        "system_prompt": "You are Sofia, the Qora assistant.",
+        "elevenlabs_agent_id": "el_ready123",
+    }
+    response = await agents_app.post(_BASE, json=payload)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["is_conversation_ready"] is True
+    assert data["has_prompt"] is True
+    assert data["has_elevenlabs_agent_id"] is True

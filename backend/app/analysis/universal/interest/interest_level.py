@@ -27,6 +27,8 @@ from pydantic import BaseModel, Field
 
 from app.analysis.universal.interest.interests import InterestsAxis
 
+DEFAULT_LANGUAGE = "Spanish"
+
 # ---------------------------------------------------------------------------
 # Literal type aliases
 # ---------------------------------------------------------------------------
@@ -178,6 +180,11 @@ _BASE_PROMPT = (
     "level (placeholder), reason, positive_signals, negative_signals, confidence."
 )
 
+_LANG_NOTE_TEMPLATE = (
+    "LANGUAGE NOTE: Write reason, positive_signals, negative_signals, and per_product[].reason "
+    "in {language}. Keep level, confidence, and product IDs as canonical English codes.\n\n"
+)
+
 DIMENSION = {
     "name": "interest_level",
     "display_name": "Interest Level",
@@ -188,8 +195,11 @@ DIMENSION = {
 }
 
 
-def _build_prompt(interests: InterestsAxis) -> str:
-    """Build the full system prompt with injected Agent 1 context."""
+def _build_prompt(
+    interests: InterestsAxis,
+    language: str = DEFAULT_LANGUAGE,
+) -> str:
+    """Build the full system prompt with injected Agent 1 context and language."""
     if interests.items:
         items_json = json.dumps(
             [item.model_dump() for item in interests.items],
@@ -201,7 +211,8 @@ def _build_prompt(interests: InterestsAxis) -> str:
         )
     else:
         products_context = "DETECTED PRODUCTS: none (no product interest was detected in this call)\n\n"
-    return products_context + _BASE_PROMPT
+    lang_note = _LANG_NOTE_TEMPLATE.format(language=language)
+    return products_context + lang_note + _BASE_PROMPT
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +226,7 @@ async def analyze(
     *,
     interests: InterestsAxis,
     previous_score: int | None = None,
+    language: str = DEFAULT_LANGUAGE,
 ) -> InterestLevelResult:
     """Run Agent 2 and return InterestLevelResult with formula-computed general_score.
 
@@ -225,8 +237,16 @@ async def analyze(
     4. Compute general_score using 70/30 formula (pure function)
     5. Derive level from general_score (pure function)
     6. Return validated InterestLevelResult
+
+    Args:
+        transcript: Formatted transcript text.
+        client: AsyncOpenAI client instance.
+        interests: InterestsAxis from Agent 1.
+        previous_score: Lead's prior interest score for 70/30 formula.
+        language: Output language for reason, signals, and per-product reasons.
+            level, confidence, and product IDs stay canonical.
     """
-    prompt = _build_prompt(interests)
+    prompt = _build_prompt(interests, language=language)
 
     response = await client.beta.chat.completions.parse(
         model=DIMENSION["model"],

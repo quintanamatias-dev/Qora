@@ -81,7 +81,8 @@
     <div class="card-title">Configuración del Agente</div>
     <div class="form-group">
       <label>ElevenLabs Agent ID</label>
-      <input type="text" id="agentId" placeholder="agent_xxxxxxxxxxxxxxxxxx" value="agent_9401kn60tcbhfwhba7p7q3n5cfca" />
+      <input type="text" id="agentId" placeholder="agent_xxxxxxxxxxxxxxxxxx" value="" />
+      <span id="agentIdHint" style="display:none;font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem;"></span>
     </div>
     <div class="form-group">
       <label>Cliente</label>
@@ -106,7 +107,7 @@
     </div>
     <div class="status-bar">
       <div class="dot" id="statusDot"></div>
-      <span id="statusText">Listo — completá el Agent ID y dale a Iniciar</span>
+      <span id="statusText">Listo — seleccioná un cliente y lead, luego dale a Iniciar</span>
     </div>
   </div>
 
@@ -163,8 +164,9 @@
           select.appendChild(opt);
         });
 
-        // Select first by default and trigger lead load
-        select.selectedIndex = 0;
+        // Prefer qora-demo client when available; fall back to first
+        const qoraDemoIdx = Array.from(select.options).findIndex(o => o.value === 'qora-demo');
+        select.selectedIndex = qoraDemoIdx >= 0 ? qoraDemoIdx : 0;
         await onClientChange();
 
       } catch (e) {
@@ -174,6 +176,45 @@
         // Fallback: show a text input
         select.innerHTML = '<option value="quintana-seguros">quintana-seguros (fallback)</option>';
         await onClientChange();
+      }
+    }
+
+    async function loadAgentForClient(clientId) {
+      // Fetch the default agent for this client and populate the EL agent ID input.
+      // Per spec: demo MUST read elevenlabs_agent_id from the API — no hardcoded value.
+      const agentInput = document.getElementById('agentId');
+      const agentHint  = document.getElementById('agentIdHint');
+
+      agentInput.value = '';
+      if (agentHint) { agentHint.style.display = 'none'; agentHint.textContent = ''; }
+
+      if (!clientId) return;
+
+      try {
+        const r = await fetch('/api/v1/clients/' + encodeURIComponent(clientId) + '/agents');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const agents = await r.json();
+
+        // Find the default agent (is_default: true); fall back to first active agent
+        const defaultAgent = agents.find(a => a.is_default) || agents[0] || null;
+
+        if (!defaultAgent) {
+          if (agentHint) {
+            agentHint.textContent = '⚠ Sin agente configurado para este cliente.';
+            agentHint.style.display = 'block';
+          }
+          return;
+        }
+
+        const elId = defaultAgent.elevenlabs_agent_id || '';
+        agentInput.value = elId;
+
+        if (!elId && agentHint) {
+          agentHint.textContent = '⚠ Agente sin ElevenLabs Agent ID. Configuralo en el panel admin.';
+          agentHint.style.display = 'block';
+        }
+      } catch (e) {
+        console.warn('Failed to load agents for client:', e);
       }
     }
 
@@ -188,6 +229,8 @@
         agent_name:  selectedOpt ? selectedOpt.dataset.agentName  || '' : '',
       };
 
+      // Fetch default agent and populate EL agent ID (no hardcoded fallback)
+      await loadAgentForClient(clientId);
       await loadLeadsForClient(clientId);
     }
 
@@ -206,7 +249,13 @@
         const leads = await r.json();
 
         if (!leads || leads.length === 0) {
-          leadSelect.innerHTML = '<option value="" disabled selected>Sin leads para este cliente</option>';
+          // No leads — surface actionable guidance to create a lead in admin
+          leadSelect.innerHTML =
+            '<option value="" disabled selected>Sin leads — crear un lead en /admin</option>';
+          setStatus(
+            '⚠ Sin leads para este cliente. Crear un lead en el panel /admin primero.',
+            'error'
+          );
           return;
         }
 
@@ -223,6 +272,8 @@
 
         // Select first by default
         leadSelect.selectedIndex = 0;
+        // Clear any previous no-leads warning
+        setStatus('Listo — completá el Agent ID y dale a Iniciar', '');
 
       } catch (e) {
         console.error('Failed to load leads:', e);
@@ -256,7 +307,7 @@
       const c = document.getElementById('transcript');
       const d = document.createElement('div');
       d.className = 'message ' + role;
-      d.innerHTML = '<div class="role-label">' + (role === 'user' ? 'VOS' : 'JAUMPABLO') + '</div>' +
+      d.innerHTML = '<div class="role-label">' + (role === 'user' ? 'VOS' : (currentClientData.agent_name || 'Agente')) + '</div>' +
                     '<div class="bubble">' + escapeHtml(text) + '</div>';
       c.appendChild(d);
       c.scrollTop = c.scrollHeight;
@@ -361,7 +412,7 @@
       const leadId = document.getElementById('leadId').value;
       const selectedClientId = document.getElementById('clientId').value;
 
-      if (!agentId) { setStatus('⚠ Ingresá el Agent ID', 'error'); return; }
+      if (!agentId) { setStatus('⚠ Agente sin ElevenLabs Agent ID — configuralo en /admin', 'error'); return; }
       if (!selectedClientId) { setStatus('⚠ Seleccioná un cliente', 'error'); return; }
       if (!leadId) { setStatus('⚠ Seleccioná un lead', 'error'); return; }
 

@@ -625,3 +625,103 @@ async def test_create_client_scheduler_defaults_when_omitted(clients_app: AsyncC
     assert data["scheduler_enabled"] is False
     assert data["scheduler_max_attempts"] == 3
     assert data["scheduler_timezone"] == "America/Argentina/Buenos_Aires"
+
+
+# ---------------------------------------------------------------------------
+# qora-demo-agent-admin-fix — Task 1.1 + 1.2: Optional client_id + collision dedup
+# ---------------------------------------------------------------------------
+
+
+async def test_create_client_without_client_id_auto_generates_slug(
+    clients_app: AsyncClient,
+):
+    """POST /clients without client_id auto-generates slug from broker_name.
+
+    'Qora Demo' → 'qora-demo'
+    """
+    response = await clients_app.post(
+        "/api/v1/clients",
+        json={"broker_name": "Qora Demo"},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["client_id"] == "qora-demo"
+    assert data["broker_name"] == "Qora Demo"
+    assert data["is_active"] is True
+
+
+async def test_create_client_explicit_client_id_backward_compatible(
+    clients_app: AsyncClient,
+):
+    """POST /clients with explicit client_id still uses that value (backward compat)."""
+    response = await clients_app.post(
+        "/api/v1/clients",
+        json={"broker_name": "Acme Corp", "client_id": "my-custom-id"},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["client_id"] == "my-custom-id"
+
+
+async def test_create_client_slug_collision_appends_suffix(
+    clients_app: AsyncClient,
+):
+    """POST /clients with broker_name collision yields slug with -2 suffix.
+
+    First 'Qora Demo' → 'qora-demo'. Second 'Qora Demo' → 'qora-demo-2'.
+    """
+    # First: creates qora-demo
+    r1 = await clients_app.post(
+        "/api/v1/clients",
+        json={"broker_name": "Qora Demo"},
+    )
+    assert r1.status_code == 201
+    assert r1.json()["client_id"] == "qora-demo"
+
+    # Second: qora-demo exists, should get qora-demo-2
+    r2 = await clients_app.post(
+        "/api/v1/clients",
+        json={"broker_name": "Qora Demo"},
+    )
+    assert r2.status_code == 201
+    assert r2.json()["client_id"] == "qora-demo-2"
+
+
+async def test_create_client_multiple_collisions_increment_suffix(
+    clients_app: AsyncClient,
+):
+    """POST /clients with double collision yields -3 suffix.
+
+    qora-demo and qora-demo-2 exist → third request yields qora-demo-3.
+    """
+    for _ in range(2):
+        await clients_app.post(
+            "/api/v1/clients",
+            json={"broker_name": "Qora Demo"},
+        )
+
+    r3 = await clients_app.post(
+        "/api/v1/clients",
+        json={"broker_name": "Qora Demo"},
+    )
+    assert r3.status_code == 201
+    assert r3.json()["client_id"] == "qora-demo-3"
+
+
+async def test_create_client_broker_name_with_special_chars_slugified(
+    clients_app: AsyncClient,
+):
+    """POST /clients with special chars in broker_name generates ASCII-only slug.
+
+    'Acme Corp!' → 'acme-corp'
+    Triangulation: different input → different but valid slug (not empty, no special chars).
+    """
+    response = await clients_app.post(
+        "/api/v1/clients",
+        json={"broker_name": "Acme Corp!"},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["client_id"] == "acme-corp"
+    # broker_name preserved as-is in response
+    assert data["broker_name"] == "Acme Corp!"

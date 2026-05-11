@@ -63,6 +63,7 @@ class AgentCreate(BaseModel):
     max_tokens: int = 300
     tools_enabled: list[str] = _DEFAULT_TOOLS
     is_default: bool = False
+    elevenlabs_agent_id: str | None = None
 
     @field_validator("slug")
     @classmethod
@@ -96,6 +97,7 @@ class AgentUpdate(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     tools_enabled: list[str] = []
+    elevenlabs_agent_id: str | None = None
 
     @field_validator("tools_enabled")
     @classmethod
@@ -121,5 +123,12 @@ class AgentResponse(BaseModel):
     is_active: bool
     is_default: bool
     created_at: datetime
+    # ElevenLabs binding (qora-agent-studio-demo)
+    elevenlabs_agent_id: str | None = None
+    custom_llm_url: str = ""
+    # Readiness metadata (computed by router)
+    is_conversation_ready: bool = False
+    has_prompt: bool = False
+    has_elevenlabs_agent_id: bool = False
 
     model_config = {"from_attributes": True}

@@ -132,6 +132,23 @@ class PromptLoader:
             return await asyncio.to_thread(prompt_path.read_text, encoding="utf-8")
         return JAUMPABLO_PROMPT_TEMPLATE
 
+    async def load_agent_system_prompt(
+        self, client_id: str, agent_slug: str
+    ) -> str | None:
+        """Return the canonical filesystem prompt for one agent, if present.
+
+        Runtime agent prompts live at
+        ``clients/{client_id}/agents/{agent_slug}/system-prompt.md``.
+        This file is the source of truth when it exists; DB prompts are only a
+        legacy fallback for agents not yet migrated to the filesystem layout.
+        """
+        prompt_path = (
+            self.clients_dir / client_id / "agents" / agent_slug / "system-prompt.md"
+        )
+        if await asyncio.to_thread(prompt_path.exists):
+            return await asyncio.to_thread(prompt_path.read_text, encoding="utf-8")
+        return None
+
     async def load_knowledge(self, client_id: str) -> str | None:
         """Return the knowledge base for *client_id*, or ``None``.
 
@@ -160,9 +177,10 @@ class PromptLoader:
         """Render the system prompt using Agent as the primary config source.
 
         Priority order:
-        1. agent.system_prompt (DB) → use directly as the prompt body
-        2. Fallback: filesystem clients/{client_id}/prompt.md or JAUMPABLO_PROMPT_TEMPLATE
-           (same as render() but uses agent.name for {{agent_name}})
+        1. filesystem clients/{client_id}/agents/{agent_slug}/system-prompt.md
+        2. agent.system_prompt (legacy DB fallback)
+        3. filesystem clients/{client_id}/prompt.md or JAUMPABLO_PROMPT_TEMPLATE
+           (legacy client fallback, uses agent.name for {{agent_name}})
 
         Knowledge base:
         - agent.knowledge_base (DB) → used if set (takes precedence over filesystem)
@@ -186,16 +204,37 @@ class PromptLoader:
         )
 
         agent_system_prompt = getattr(agent, "system_prompt", None)
+        client_id = getattr(agent, "client_id", None) or "unknown"
+        agent_slug = getattr(agent, "slug", None)
+        if not isinstance(agent_slug, str) or not agent_slug.strip():
+            agent_slug = str(getattr(agent, "name", "agent")).lower().replace(" ", "-")
+        file_system_prompt = await self.load_agent_system_prompt(client_id, agent_slug)
 
         # ------------------------------------------------------------------
         # Build prompt body
         # ------------------------------------------------------------------
-        if agent_system_prompt:
-            # DB prompt takes precedence — use directly as prompt body
-            prompt_body = agent_system_prompt
+        if file_system_prompt:
+            # Filesystem prompt is the source of truth — render as a {{variable}}
+            # template so call_history, confirmed_facts, lead_name, etc. are
+            # substituted.
+            prompt_body = await self._render_template(
+                file_system_prompt,
+                _AgentClientAdapter(agent, client),
+                lead,
+                call_count,
+                db=db,
+            )
+        elif agent_system_prompt:
+            # Legacy DB fallback for agents not yet migrated to filesystem.
+            prompt_body = await self._render_template(
+                agent_system_prompt,
+                _AgentClientAdapter(agent, client),
+                lead,
+                call_count,
+                db=db,
+            )
         else:
             # Fallback: load from filesystem or JAUMPABLO template
-            client_id = getattr(agent, "client_id", None) or "unknown"
             template = await self.load_prompt(client_id)
 
             if template is JAUMPABLO_PROMPT_TEMPLATE:

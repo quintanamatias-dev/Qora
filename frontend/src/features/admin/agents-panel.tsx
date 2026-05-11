@@ -34,7 +34,7 @@ import {
   useDeactivateAgent,
   useMakeAgentDefault,
 } from '@/api/hooks'
-import type { Agent } from '@/api/types'
+import type { Agent, ReadinessCheck } from '@/api/types'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -46,6 +46,33 @@ const AVAILABLE_TOOLS = [
   'mark_not_interested',
   'schedule_followup',
 ]
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Pure helpers (exported for unit tests)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * computeReadinessChecklist — derives per-item readiness from AgentResponse fields.
+ *
+ * Pure function: no side effects, deterministic from agent data.
+ * Spec: has_prompt, has_elevenlabs_agent_id, custom_llm_url presence.
+ */
+export function computeReadinessChecklist(agent: Agent): ReadinessCheck[] {
+  return [
+    {
+      label: 'System prompt configured',
+      ready: agent.has_prompt,
+    },
+    {
+      label: 'ElevenLabs agent ID bound',
+      ready: agent.has_elevenlabs_agent_id,
+    },
+    {
+      label: 'Custom LLM URL available',
+      ready: Boolean(agent.custom_llm_url),
+    },
+  ]
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Types
@@ -92,6 +119,10 @@ export function AgentsPanel() {
     voice_id: '',
     system_prompt: '',
     tools_enabled: [...AVAILABLE_TOOLS],
+    elevenlabs_agent_id: '',
+    knowledge_base: '',
+    temperature: 0.7,
+    max_tokens: 512,
   })
 
   function showToast(message: string, status: 'success' | 'error') {
@@ -161,6 +192,10 @@ export function AgentsPanel() {
       voice_id: agent.voice_id,
       system_prompt: agent.system_prompt ?? '',
       tools_enabled: [...agent.tools_enabled],
+      elevenlabs_agent_id: agent.elevenlabs_agent_id ?? '',
+      knowledge_base: agent.knowledge_base ?? '',
+      temperature: agent.temperature ?? 0.7,
+      max_tokens: agent.max_tokens ?? 512,
     })
   }
 
@@ -180,6 +215,10 @@ export function AgentsPanel() {
           voice_id: editForm.voice_id || undefined,
           system_prompt: editForm.system_prompt || null,
           tools_enabled: editForm.tools_enabled,
+          elevenlabs_agent_id: editForm.elevenlabs_agent_id || null,
+          knowledge_base: editForm.knowledge_base || null,
+          temperature: editForm.temperature,
+          max_tokens: editForm.max_tokens,
         },
       },
       {
@@ -256,6 +295,65 @@ export function AgentsPanel() {
               <h2 className="font-display text-base font-semibold text-on-surface mb-4">
                 Edit Agent: <code className="text-primary font-mono text-sm">{editingAgent.slug}</code>
               </h2>
+
+              {/* Readiness Checklist */}
+              <div className="mb-6 p-4 rounded-md border border-surface-container-high bg-surface-container/50">
+                <p className="text-xs font-medium uppercase tracking-widest text-on-surface-variant mb-3">
+                  Readiness
+                </p>
+                {/* Overall readiness indicator */}
+                <p
+                  className={`text-sm font-medium mb-3 ${
+                    editingAgent.is_conversation_ready ? 'text-success' : 'text-warning'
+                  }`}
+                >
+                  {editingAgent.is_conversation_ready
+                    ? '✓ Ready for conversation'
+                    : '✗ Not ready for conversation'}
+                </p>
+                <ul className="space-y-1.5">
+                  {computeReadinessChecklist(editingAgent).map((check) => (
+                    <li key={check.label} className="flex items-center gap-2 text-sm">
+                      <span
+                        aria-hidden="true"
+                        className={check.ready ? 'text-success' : 'text-warning'}
+                      >
+                        {check.ready ? '✓' : '✗'}
+                      </span>
+                      <span className={check.ready ? 'text-on-surface' : 'text-on-surface-variant'}>
+                        {check.label}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {/* Custom LLM URL — read-only with copy */}
+              <div className="mb-4">
+                <p className="text-xs font-medium uppercase tracking-widest text-on-surface-variant mb-1.5">
+                  Custom LLM URL
+                </p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 text-xs font-mono text-primary bg-surface-container px-3 py-2 rounded-sm truncate">
+                    {editingAgent.custom_llm_url}
+                  </code>
+                  <Button
+                    type="button"
+                    variant="tertiary"
+                    size="sm"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(editingAgent.custom_llm_url)
+                      showToast('Custom LLM URL copied', 'success')
+                    }}
+                  >
+                    Copy
+                  </Button>
+                </div>
+                <p className="text-xs text-on-surface-variant mt-1">
+                  Paste this URL into the ElevenLabs dashboard as the Custom LLM endpoint.
+                </p>
+              </div>
+
               <form onSubmit={handleEditSubmit} className="space-y-4">
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <Input
@@ -263,12 +361,26 @@ export function AgentsPanel() {
                     value={editForm.name}
                     onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
                   />
-                  <Input
-                    label="Voice ID"
-                    value={editForm.voice_id}
-                    onChange={(e) => setEditForm((f) => ({ ...f, voice_id: e.target.value }))}
-                  />
+                  <div>
+                    <Input
+                      label="Voice ID"
+                      value={editForm.voice_id}
+                      onChange={(e) => setEditForm((f) => ({ ...f, voice_id: e.target.value }))}
+                    />
+                    <p className="text-xs text-on-surface-variant mt-1">
+                      Voice for ElevenLabs conversational agents is configured in the{' '}
+                      <span className="font-medium">ElevenLabs dashboard</span>, not here.
+                    </p>
+                  </div>
                 </div>
+
+                <Input
+                  label="ElevenLabs Agent ID"
+                  value={editForm.elevenlabs_agent_id}
+                  onChange={(e) => setEditForm((f) => ({ ...f, elevenlabs_agent_id: e.target.value }))}
+                  placeholder="el_xxxxxxxxxxxxxx"
+                />
+
                 <Textarea
                   label="System Prompt"
                   value={editForm.system_prompt}
@@ -276,6 +388,40 @@ export function AgentsPanel() {
                   minRows={4}
                   placeholder="System prompt for the agent…"
                 />
+
+                <Textarea
+                  label="Knowledge Base"
+                  value={editForm.knowledge_base}
+                  onChange={(e) => setEditForm((f) => ({ ...f, knowledge_base: e.target.value }))}
+                  minRows={3}
+                  placeholder="Knowledge base content…"
+                />
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <Input
+                    label="Temperature"
+                    type="number"
+                    min={0}
+                    max={2}
+                    step={0.1}
+                    value={String(editForm.temperature)}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, temperature: parseFloat(e.target.value) || 0.7 }))
+                    }
+                  />
+                  <Input
+                    label="Max Tokens"
+                    type="number"
+                    min={1}
+                    max={8192}
+                    step={1}
+                    value={String(editForm.max_tokens)}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, max_tokens: parseInt(e.target.value, 10) || 512 }))
+                    }
+                  />
+                </div>
+
                 <div>
                   <p className="text-xs font-medium uppercase tracking-widest text-on-surface-variant mb-2">
                     Tools Enabled

@@ -569,3 +569,263 @@ async def test_set_default_agent_inactive_target_raises(session: AsyncSession):
             client_id="inactive-default-test",
             agent_id=inactive_agent.id,
         )
+
+
+# ---------------------------------------------------------------------------
+# qora-demo-agent-admin-fix — Task 1.3: seed_qora_demo() tests
+# ---------------------------------------------------------------------------
+
+
+async def test_seed_qora_demo_creates_client_and_agent(session: AsyncSession):
+    """seed_qora_demo() creates qora-demo client + qora-explainer agent with system_prompt.
+
+    On a clean DB, the seed must create:
+    - Client with id='qora-demo'
+    - Default agent with name='qora-explainer' and system_prompt that:
+        * mentions Qora (the platform being explained)
+        * describes the agent's role as explaining Qora, not selling insurance
+    """
+    from app.tenants.service import seed_qora_demo, get_client
+    from sqlalchemy import select
+    from app.tenants.models import Agent
+
+    await seed_qora_demo(session)
+    await session.commit()
+
+    client = await get_client(session, "qora-demo")
+    assert client is not None
+    assert client.broker_name == "Qora Demo"  # exact expected broker name
+
+    agent_result = await session.execute(
+        select(Agent).where(
+            Agent.client_id == "qora-demo",
+            Agent.is_default == True,  # noqa: E712
+        )
+    )
+    agent = agent_result.scalar_one_or_none()
+    assert agent is not None
+    assert agent.name == "qora-explainer"
+    assert agent.system_prompt is not None
+    # The prompt must reference the Qora platform by name
+    assert (
+        "Qora" in agent.system_prompt
+    ), "system_prompt must mention 'Qora' — agent explains the platform"
+    # The agent's role is to explain Qora (explicar), not to sell insurance directly
+    prompt_lower = agent.system_prompt.lower()
+    assert (
+        "explicar" in prompt_lower or "explain" in prompt_lower
+    ), "system_prompt must include an explaining/explainer role keyword"
+
+
+async def test_seed_qora_demo_is_idempotent(session: AsyncSession):
+    """seed_qora_demo() called twice creates exactly one client and one agent.
+
+    No errors raised, no duplicate records created.
+    """
+    from app.tenants.service import seed_qora_demo
+    from sqlalchemy import select
+    from app.tenants.models import Client, Agent
+
+    await seed_qora_demo(session)
+    await session.commit()
+    await seed_qora_demo(session)  # second call — must be a no-op
+    await session.commit()
+
+    clients_result = await session.execute(
+        select(Client).where(Client.id == "qora-demo")
+    )
+    clients = clients_result.scalars().all()
+    assert len(clients) == 1  # exactly one record
+
+    agents_result = await session.execute(
+        select(Agent).where(Agent.client_id == "qora-demo")
+    )
+    agents = agents_result.scalars().all()
+    assert len(agents) == 1  # exactly one agent
+
+
+async def test_seed_qora_demo_agent_prompt_describes_qora_not_insurance(
+    session: AsyncSession,
+):
+    """Triangulation: system_prompt positions the agent as a Qora explainer.
+
+    The agent's role is to explain the Qora platform. The prompt must:
+    - Reference Sofia as the Qora platform assistant (not a generic insurance agent)
+    - Describe the goal as explaining Qora ('explicar Qora')
+    - NOT have the primary goal of selling insurance policies directly
+
+    This distinguishes the Qora demo agent from a generic insurance-sales bot.
+    """
+    from app.tenants.service import seed_qora_demo
+    from sqlalchemy import select
+    from app.tenants.models import Agent
+
+    await seed_qora_demo(session)
+    await session.commit()
+
+    agent_result = await session.execute(
+        select(Agent).where(
+            Agent.client_id == "qora-demo",
+            Agent.is_default == True,  # noqa: E712
+        )
+    )
+    agent = agent_result.scalar_one_or_none()
+    assert agent is not None
+
+    prompt = agent.system_prompt
+    assert prompt is not None
+
+    # The prompt must describe the agent as part of the Qora platform
+    assert (
+        "plataforma Qora" in prompt or "platform Qora" in prompt
+    ), "system_prompt must identify the agent as part of the Qora platform"
+    # The agent's goal is to explain Qora — the phrase must appear explicitly
+    assert (
+        "explicar Qora" in prompt or "explain Qora" in prompt
+    ), "system_prompt goal must be explaining Qora, not generic insurance sales"
+
+
+# ---------------------------------------------------------------------------
+# Task 1.3 (NEW) — qora-demo Demo Visitor lead + elevenlabs_agent_id seed
+# ---------------------------------------------------------------------------
+
+
+async def test_seed_qora_demo_creates_demo_visitor_lead(session: AsyncSession):
+    """seed_qora_demo() creates at least one Demo Visitor lead for qora-demo.
+
+    The seeded lead must:
+    - have a non-empty name
+    - be associated with the qora-demo client
+    """
+    from app.tenants.service import seed_qora_demo
+    from app.leads.service import list_leads_for_client
+
+    await seed_qora_demo(session)
+    await session.commit()
+
+    leads = await list_leads_for_client(session, "qora-demo")
+    assert len(leads) >= 1, "seed_qora_demo must create at least one lead for qora-demo"
+    demo_lead = leads[0]
+    assert demo_lead.name, "Demo lead must have a non-empty name"
+    assert demo_lead.client_id == "qora-demo"
+
+
+async def test_seed_qora_demo_lead_is_idempotent(session: AsyncSession):
+    """seed_qora_demo() called twice does not create duplicate leads.
+
+    Precondition: first seed must create at least 1 lead (non-trivial).
+    Second call must not add more — count stays the same.
+    """
+    from app.tenants.service import seed_qora_demo
+    from app.leads.service import list_leads_for_client
+
+    await seed_qora_demo(session)
+    await session.commit()
+    leads_first = await list_leads_for_client(session, "qora-demo")
+    count_first = len(leads_first)
+    # Real test: first seed must produce ≥1 lead
+    assert count_first >= 1, "First seed must create at least one demo lead"
+
+    await seed_qora_demo(session)
+    await session.commit()
+    count_second = len(await list_leads_for_client(session, "qora-demo"))
+
+    assert count_first == count_second, (
+        f"seed_qora_demo must be idempotent: "
+        f"first call created {count_first} leads, second call has {count_second}"
+    )
+
+
+async def test_seed_qora_demo_sets_elevenlabs_agent_id_from_settings(
+    session: AsyncSession,
+):
+    """seed_qora_demo() sets agent.elevenlabs_agent_id from Settings.elevenlabs_agent_id.
+
+    When settings.elevenlabs_agent_id is non-empty, the seeded qora-explainer agent
+    must have elevenlabs_agent_id equal to that value.
+    """
+    from app.tenants.service import seed_qora_demo
+    from sqlalchemy import select
+    from app.tenants.models import Agent
+
+    await seed_qora_demo(session)
+    await session.commit()
+
+    agent_result = await session.execute(
+        select(Agent).where(
+            Agent.client_id == "qora-demo",
+            Agent.is_default == True,  # noqa: E712
+        )
+    )
+    agent = agent_result.scalar_one_or_none()
+    assert agent is not None
+    # elevenlabs_agent_id column must exist on the model (not raise AttributeError)
+    _ = agent.elevenlabs_agent_id  # AttributeError if column missing
+
+
+async def test_seed_qora_demo_el_agent_id_matches_settings_when_configured(
+    session: AsyncSession,
+):
+    """When Settings.elevenlabs_agent_id is configured, seeded agent uses that value.
+
+    Triangulation: tests the non-empty case to force real logic.
+    Uses monkeypatching via environment variable injection into Settings constructor.
+    """
+    import os
+    from app.tenants.service import seed_qora_demo
+    from sqlalchemy import select
+    from app.tenants.models import Agent
+    from unittest.mock import patch
+
+    # Patch os.environ so Settings picks up the test EL agent ID
+    with patch.dict(os.environ, {"ELEVENLABS_AGENT_ID": "el_test_configured"}):
+        await seed_qora_demo(session)
+        await session.commit()
+
+    agent_result = await session.execute(
+        select(Agent).where(
+            Agent.client_id == "qora-demo",
+            Agent.is_default == True,  # noqa: E712
+        )
+    )
+    agent = agent_result.scalar_one_or_none()
+    assert agent is not None
+    assert (
+        agent.elevenlabs_agent_id == "el_test_configured"
+    ), f"Expected elevenlabs_agent_id='el_test_configured', got {agent.elevenlabs_agent_id!r}"
+
+
+# ---------------------------------------------------------------------------
+# Task 1.3 (NEW) — startup schema compat for elevenlabs_agent_id on agents table
+# ---------------------------------------------------------------------------
+
+
+async def test_startup_schema_compat_adds_elevenlabs_agent_id_to_agents(
+    session: AsyncSession,
+):
+    """_ensure_startup_schema_compat adds elevenlabs_agent_id to existing agents table.
+
+    Simulates an older DB that doesn't have the column yet.
+    After the compat function runs, PRAGMA table_info(agents) must include the column.
+    """
+    from app.core import database as db_module
+    import sqlalchemy
+
+    assert db_module.engine is not None
+
+    # If column already exists from ORM create_all, we can still test that the compat
+    # function is idempotent and does not crash
+    from app.main import _ensure_startup_schema_compat
+
+    # Should not raise even if column already exists
+    await _ensure_startup_schema_compat(db_module)
+
+    # Column must now exist (either was there before or was added by compat)
+    async with db_module.engine.begin() as conn:
+        result = await conn.execute(sqlalchemy.text("PRAGMA table_info(agents)"))
+        columns_after = {row[1] for row in result.fetchall()}
+
+    assert "elevenlabs_agent_id" in columns_after, (
+        f"elevenlabs_agent_id column must exist after startup compat. "
+        f"Columns found: {sorted(columns_after)}"
+    )

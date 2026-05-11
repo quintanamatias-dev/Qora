@@ -185,6 +185,8 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
             )
 
     # qora-next-action: build ClientRules from Client config
+    # qora-analysis-locale: also read analysis_language for locale-aware analysis
+    analysis_language: str = "Spanish"  # safe default for all existing clients
     if cs.client_id:
         from app.tenants.models import Client as _Client
 
@@ -203,6 +205,11 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
                 scheduler_allowed_hours_end=client_row.scheduler_allowed_hours_end,
                 scheduler_timezone=client_row.scheduler_timezone,
             )
+            # Read configured language; fall back to "Spanish" if column missing
+            # (e.g. old DB without migration applied yet — graceful degradation).
+            analysis_language = (
+                getattr(client_row, "analysis_language", "Spanish") or "Spanish"
+            )
 
     try:
         summary, facts = await _call_gpt_summarize(
@@ -214,6 +221,7 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
             has_lead=bool(cs.lead_id),
             lead_snapshot=lead_snapshot,
             client_rules=client_rules,
+            analysis_language=analysis_language,
         )
     except Exception as gpt_exc:
         error_msg = str(gpt_exc)
@@ -326,6 +334,7 @@ async def _call_gpt_summarize(
     has_lead: bool = True,
     lead_snapshot: "Any | None" = None,
     client_rules: "Any | None" = None,
+    analysis_language: str = "Spanish",
 ) -> tuple[str, dict[str, Any]]:
     """Run 6 universal dimensions, the 2-phase interest pipeline, profile facts pipeline,
     misc notes pipeline, data corrections pipeline, and post-analysis next_action pipeline.
@@ -350,6 +359,9 @@ async def _call_gpt_summarize(
         current_lead_data: Current lead field snapshot for data corrections pipeline.
         lead_snapshot: LeadSnapshot for next_action pipeline (call_count, do_not_call, etc.).
         client_rules: ClientRules for next_action pipeline (thresholds, scheduler config).
+        analysis_language: Output language for customer-facing text fields (summaries,
+            descriptions, evidence, reasons, notes). Canonical enum/code fields stay in
+            English regardless of this setting. Defaults to "Spanish" for backward compat.
 
     Returns:
         Tuple of (summary_text, extracted_facts_dict).
@@ -373,23 +385,29 @@ async def _call_gpt_summarize(
             corrections_raw,
         ) = await asyncio.gather(
             asyncio.gather(
-                *[mod.analyze(transcript_text, client) for mod in DIMENSION_MODULES],
+                *[
+                    mod.analyze(transcript_text, client, language=analysis_language)
+                    for mod in DIMENSION_MODULES
+                ],
                 return_exceptions=True,
             ),
             run_interest_pipeline(
                 transcript_text,
                 client,
                 previous_score=previous_interest_level,
+                language=analysis_language,
             ),
             run_profile_facts_pipeline(
                 transcript_text,
                 client,
                 current_facts=facts_list,
+                language=analysis_language,
             ),
             run_misc_notes_pipeline(
                 transcript_text,
                 client,
                 current_notes=notes_list,
+                language=analysis_language,
             ),
             run_data_corrections_pipeline(
                 transcript_text,
@@ -405,13 +423,17 @@ async def _call_gpt_summarize(
         corrections_raw = DataCorrectionsAxis()
         independent_results_raw, pipeline_raw = await asyncio.gather(
             asyncio.gather(
-                *[mod.analyze(transcript_text, client) for mod in DIMENSION_MODULES],
+                *[
+                    mod.analyze(transcript_text, client, language=analysis_language)
+                    for mod in DIMENSION_MODULES
+                ],
                 return_exceptions=True,
             ),
             run_interest_pipeline(
                 transcript_text,
                 client,
                 previous_score=previous_interest_level,
+                language=analysis_language,
             ),
             return_exceptions=True,
         )

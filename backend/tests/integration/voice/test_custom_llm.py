@@ -1390,3 +1390,103 @@ async def test_filler_emitted_but_empty_llm_response_stores_only_filler_turn(
         f"Expected 0 clean agent turns when LLM returns empty content, got {len(clean_turns)} — "
         "CAP-3 spec: 'No empty agent turn stored when LLM response is empty'"
     )
+
+
+# ---------------------------------------------------------------------------
+# Spec: custom-LLM/webhook/demo flow must NOT include voice_id override
+# Voice is always controlled by ElevenLabs agent config (agent_id).
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_custom_llm_sse_response_contains_no_voice_id(app_client: AsyncClient):
+    """Custom-LLM webhook SSE response must never contain a voice_id field.
+
+    Spec: the custom-LLM flow must not include/force a voice_id override;
+    voice must remain controlled by ElevenLabs agent config/agent_id.
+
+    Runtime HTTP test: hits the live endpoint, inspects every SSE chunk's JSON
+    to confirm 'voice_id' never appears in any part of the response body.
+    """
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=Response(
+            200,
+            content=_build_simple_stream("Hola, ¿cómo puedo ayudarte?"),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    response = await app_client.post(
+        "/api/v1/voice/custom-llm",
+        json=_valid_body(
+            client_id="quintana-seguros",
+            lead_id="lead-quintana-001",
+        ),
+    )
+
+    assert response.status_code == 200
+
+    # Assert 'voice_id' never appears anywhere in the raw SSE response body.
+    # This covers: SSE chunk JSON fields, HTTP response headers baked into body,
+    # and any extra metadata the endpoint might inject.
+    assert "voice_id" not in response.text, (
+        "The custom-LLM webhook response must NOT contain 'voice_id'. "
+        "Voice selection must remain controlled by ElevenLabs agent config (agent_id), "
+        "not forced by the custom-LLM webhook. "
+        f"Found 'voice_id' in response body: {response.text[:400]}"
+    )
+
+    # Also verify each parsed SSE chunk has no voice_id key at any level.
+    for line in response.text.splitlines():
+        if line.startswith("data: ") and "[DONE]" not in line:
+            raw = line[len("data: ") :]
+            try:
+                chunk = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            # Recursively check no key named 'voice_id' exists in the chunk
+            chunk_str = json.dumps(chunk)
+            assert (
+                "voice_id" not in chunk_str
+            ), f"SSE chunk contains 'voice_id' — must never appear: {chunk_str[:300]}"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_path_route_sse_response_contains_no_voice_id(app_client: AsyncClient):
+    """Path-based custom-LLM webhook SSE response must never contain a voice_id field.
+
+    Triangulation of test_custom_llm_sse_response_contains_no_voice_id:
+    Different route (/{client_id}/custom-llm/chat/completions) exercises the same
+    spec guarantee via a different code path.
+    """
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=Response(
+            200,
+            content=_build_simple_stream("Entendido, te ayudo con tu consulta."),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    response = await app_client.post(
+        "/api/v1/voice/quintana-seguros/custom-llm/chat/completions",
+        json={
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "Necesito info del seguro."}],
+            "stream": True,
+            "elevenlabs_extra_body": {
+                "lead_id": "lead-quintana-001",
+                "conversation_id": "conv-voice-id-path-001",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+
+    # voice_id must not appear anywhere in the SSE response body
+    assert "voice_id" not in response.text, (
+        "The path-based custom-LLM webhook response must NOT contain 'voice_id'. "
+        "Voice selection must remain controlled by ElevenLabs agent config. "
+        f"Found 'voice_id' in response body: {response.text[:400]}"
+    )

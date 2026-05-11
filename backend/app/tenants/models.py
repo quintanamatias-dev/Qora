@@ -57,6 +57,9 @@ class Agent(Base):
         nullable=False,
         default='["get_lead_details","register_interest","mark_not_interested","schedule_followup"]',
     )
+    elevenlabs_agent_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, default=None
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -144,6 +147,17 @@ class Client(Base):
     )
     next_action_close_on_hard_rejection: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True
+    )
+
+    # ---------------------------------------------------------------------------
+    # Analysis locale configuration (qora-analysis-locale)
+    # ---------------------------------------------------------------------------
+
+    # Language for customer-facing Analysis text fields (summaries, descriptions,
+    # evidence, reasons, notes). Internal enum/code fields stay canonical.
+    # Default "Spanish" preserves backward-compat with all existing clients.
+    analysis_language: Mapped[str] = mapped_column(
+        String, nullable=False, default="Spanish"
     )
 
     # Issue #35 — Per-client extraction configuration (JSON stored as Text, nullable)

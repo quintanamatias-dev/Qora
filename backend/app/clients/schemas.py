@@ -115,7 +115,9 @@ class _SchedulerValidatorMixin(BaseModel):
 class ClientCreate(_SchedulerValidatorMixin):
     """Request body for POST /api/v1/clients."""
 
-    client_id: str
+    client_id: str | None = (
+        None  # Optional: auto-generated from broker_name when omitted
+    )
     broker_name: str
     agent_name: str = "Jaumpablo"
     voice_id: str = (
@@ -133,7 +135,9 @@ class ClientCreate(_SchedulerValidatorMixin):
 
     @field_validator("client_id")
     @classmethod
-    def validate_slug(cls, v: str) -> str:
+    def validate_slug(cls, v: str | None) -> str | None:
+        if v is None:
+            return v  # auto-generated later in router
         if not _SLUG_RE.match(v):
             raise ValueError(
                 "client_id must be a lowercase slug: only letters, digits, and "

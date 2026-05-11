@@ -265,3 +265,211 @@ def test_agent_response_from_dict():
     assert resp.is_active is True
     assert isinstance(resp.tools_enabled, list)
     assert resp.tools_enabled == ["get_lead_details"]
+
+
+# ---------------------------------------------------------------------------
+# Task 1.1 (NEW) — elevenlabs_agent_id in AgentCreate, AgentUpdate, AgentResponse
+# ---------------------------------------------------------------------------
+
+
+def test_agent_create_elevenlabs_agent_id_defaults_to_none():
+    """AgentCreate defaults elevenlabs_agent_id to None when not provided."""
+    from app.agents.schemas import AgentCreate
+
+    agent = AgentCreate(slug="main", name="Main", voice_id="v1")
+    assert agent.elevenlabs_agent_id is None
+
+
+def test_agent_create_accepts_elevenlabs_agent_id():
+    """AgentCreate accepts a non-null elevenlabs_agent_id string."""
+    from app.agents.schemas import AgentCreate
+
+    agent = AgentCreate(
+        slug="main", name="Main", voice_id="v1", elevenlabs_agent_id="el_abc123"
+    )
+    assert agent.elevenlabs_agent_id == "el_abc123"
+
+
+def test_agent_update_elevenlabs_agent_id_defaults_to_none():
+    """AgentUpdate defaults elevenlabs_agent_id to None when not provided."""
+    from app.agents.schemas import AgentUpdate
+
+    update = AgentUpdate()
+    data = update.model_dump(exclude_unset=True)
+    # Not set — should not appear in the unset dump
+    assert "elevenlabs_agent_id" not in data
+
+
+def test_agent_update_accepts_elevenlabs_agent_id():
+    """AgentUpdate accepts elevenlabs_agent_id string."""
+    from app.agents.schemas import AgentUpdate
+
+    update = AgentUpdate(elevenlabs_agent_id="el_xyz")
+    data = update.model_dump(exclude_unset=True)
+    assert data["elevenlabs_agent_id"] == "el_xyz"
+
+
+def test_agent_response_includes_elevenlabs_agent_id_null():
+    """AgentResponse can have elevenlabs_agent_id=None."""
+    from datetime import datetime, timezone
+    from app.agents.schemas import AgentResponse
+
+    now = datetime.now(timezone.utc)
+    resp = AgentResponse(
+        agent_id="uuid-1",
+        client_id="c1",
+        slug="main",
+        name="Main",
+        voice_id="v1",
+        system_prompt=None,
+        knowledge_base=None,
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools_enabled=[],
+        is_active=True,
+        is_default=False,
+        created_at=now,
+        elevenlabs_agent_id=None,
+        custom_llm_url="/api/v1/voice/c1/custom-llm/chat/completions",
+        is_conversation_ready=False,
+        has_prompt=False,
+        has_elevenlabs_agent_id=False,
+    )
+    assert resp.elevenlabs_agent_id is None
+    assert resp.custom_llm_url == "/api/v1/voice/c1/custom-llm/chat/completions"
+    assert resp.is_conversation_ready is False
+    assert resp.has_prompt is False
+    assert resp.has_elevenlabs_agent_id is False
+
+
+def test_agent_response_includes_elevenlabs_agent_id_value():
+    """AgentResponse can have a non-null elevenlabs_agent_id."""
+    from datetime import datetime, timezone
+    from app.agents.schemas import AgentResponse
+
+    now = datetime.now(timezone.utc)
+    resp = AgentResponse(
+        agent_id="uuid-2",
+        client_id="c2",
+        slug="main",
+        name="Main",
+        voice_id="v1",
+        system_prompt="You are Sofia...",
+        knowledge_base=None,
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools_enabled=[],
+        is_active=True,
+        is_default=True,
+        created_at=now,
+        elevenlabs_agent_id="el_abc",
+        custom_llm_url="/api/v1/voice/c2/custom-llm/chat/completions",
+        is_conversation_ready=True,
+        has_prompt=True,
+        has_elevenlabs_agent_id=True,
+    )
+    assert resp.elevenlabs_agent_id == "el_abc"
+    assert resp.is_conversation_ready is True
+    assert resp.has_prompt is True
+    assert resp.has_elevenlabs_agent_id is True
+
+
+# ---------------------------------------------------------------------------
+# Task 1.1 (NEW) — Readiness flags computed logic
+# ---------------------------------------------------------------------------
+
+
+def test_readiness_ready_agent():
+    """is_conversation_ready is True when agent has prompt AND elevenlabs_agent_id."""
+    from datetime import datetime, timezone
+    from app.agents.schemas import AgentResponse
+
+    now = datetime.now(timezone.utc)
+    resp = AgentResponse(
+        agent_id="r1",
+        client_id="c1",
+        slug="main",
+        name="Main",
+        voice_id="v1",
+        system_prompt="You are Sofia.",
+        knowledge_base=None,
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools_enabled=[],
+        is_active=True,
+        is_default=True,
+        created_at=now,
+        elevenlabs_agent_id="el_abc",
+        custom_llm_url="/api/v1/voice/c1/custom-llm/chat/completions",
+        is_conversation_ready=True,
+        has_prompt=True,
+        has_elevenlabs_agent_id=True,
+    )
+    assert resp.is_conversation_ready is True
+    assert resp.has_prompt is True
+    assert resp.has_elevenlabs_agent_id is True
+
+
+def test_readiness_missing_el_id():
+    """is_conversation_ready is False when elevenlabs_agent_id is null."""
+    from datetime import datetime, timezone
+    from app.agents.schemas import AgentResponse
+
+    now = datetime.now(timezone.utc)
+    resp = AgentResponse(
+        agent_id="r2",
+        client_id="c1",
+        slug="main",
+        name="Main",
+        voice_id="v1",
+        system_prompt="You are Sofia.",
+        knowledge_base=None,
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools_enabled=[],
+        is_active=True,
+        is_default=False,
+        created_at=now,
+        elevenlabs_agent_id=None,
+        custom_llm_url="/api/v1/voice/c1/custom-llm/chat/completions",
+        is_conversation_ready=False,
+        has_prompt=True,
+        has_elevenlabs_agent_id=False,
+    )
+    assert resp.is_conversation_ready is False
+    assert resp.has_elevenlabs_agent_id is False
+
+
+def test_readiness_missing_prompt():
+    """is_conversation_ready is False when system_prompt is empty."""
+    from datetime import datetime, timezone
+    from app.agents.schemas import AgentResponse
+
+    now = datetime.now(timezone.utc)
+    resp = AgentResponse(
+        agent_id="r3",
+        client_id="c1",
+        slug="main",
+        name="Main",
+        voice_id="v1",
+        system_prompt="",
+        knowledge_base=None,
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools_enabled=[],
+        is_active=True,
+        is_default=False,
+        created_at=now,
+        elevenlabs_agent_id="el_abc",
+        custom_llm_url="/api/v1/voice/c1/custom-llm/chat/completions",
+        is_conversation_ready=False,
+        has_prompt=False,
+        has_elevenlabs_agent_id=True,
+    )
+    assert resp.is_conversation_ready is False
+    assert resp.has_prompt is False

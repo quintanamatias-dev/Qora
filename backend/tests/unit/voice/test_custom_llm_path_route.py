@@ -472,7 +472,11 @@ async def test_path_route_very_long_tenant_returns_404(
 
 @pytest_asyncio.fixture
 async def two_tenant_app_client(tmp_path: Path):
-    """Create a test app with TWO active tenants for concurrency isolation tests."""
+    """Create a test app with TWO active tenants for concurrency isolation tests.
+
+    AD-3: Uses inline create_client() for the second tenant instead of the removed
+    seed_demo_inmobiliaria(). The test-tenant-b fixture is self-contained and isolated.
+    """
     from app.core.config import Settings
     from app.core import database as db_module
 
@@ -486,11 +490,19 @@ async def two_tenant_app_client(tmp_path: Path):
 
     assert db_module.async_session_factory is not None
     async with db_module.async_session_factory() as sess:
-        from app.tenants.service import seed_quintana, seed_demo_inmobiliaria
+        from app.tenants.service import seed_quintana, create_client
         from app.leads.service import seed_leads
 
         await seed_quintana(sess)
-        await seed_demo_inmobiliaria(sess)
+        # Inline factory — isolated test-only tenant replacing removed demo-inmobiliaria seed
+        await create_client(
+            sess,
+            id="test-tenant-b",
+            name="test-tenant-b",
+            broker_name="Test Broker B",
+            agent_name="TestAgent",
+            voice_id="v-test-b",
+        )
         await seed_leads(sess)
         await sess.commit()
 
@@ -552,9 +564,9 @@ async def test_concurrent_tenants_same_conversation_id_no_cross_contamination(
             "conversation_id": shared_conv_id,
         },
     }
-    body_inmobiliaria = {
+    body_tenant_b = {
         "model": "gpt-4o",
-        "messages": [{"role": "user", "content": "Hola inmobiliaria"}],
+        "messages": [{"role": "user", "content": "Hola tenant b"}],
         "stream": True,
         "elevenlabs_extra_body": {
             "conversation_id": shared_conv_id,
@@ -562,14 +574,14 @@ async def test_concurrent_tenants_same_conversation_id_no_cross_contamination(
     }
 
     # Run both concurrently
-    resp_quintana, resp_inmobiliaria = await asyncio.gather(
+    resp_quintana, resp_tenant_b = await asyncio.gather(
         two_tenant_app_client.post(
             "/api/v1/voice/quintana-seguros/custom-llm/chat/completions",
             json=body_quintana,
         ),
         two_tenant_app_client.post(
-            "/api/v1/voice/demo-inmobiliaria/custom-llm/chat/completions",
-            json=body_inmobiliaria,
+            "/api/v1/voice/test-tenant-b/custom-llm/chat/completions",
+            json=body_tenant_b,
         ),
     )
 
@@ -578,30 +590,30 @@ async def test_concurrent_tenants_same_conversation_id_no_cross_contamination(
         resp_quintana.status_code == 200
     ), f"quintana-seguros expected 200, got {resp_quintana.status_code}: {resp_quintana.text}"
     assert (
-        resp_inmobiliaria.status_code == 200
-    ), f"demo-inmobiliaria expected 200, got {resp_inmobiliaria.status_code}: {resp_inmobiliaria.text}"
+        resp_tenant_b.status_code == 200
+    ), f"test-tenant-b expected 200, got {resp_tenant_b.status_code}: {resp_tenant_b.text}"
 
     # Verify session_store isolation: each tenant's session must have the right client_id
     from app.voice.filler import session_store
 
     # After the fix, composite key (client_id, conversation_id) means both entries coexist
     state_quintana = session_store.get(("quintana-seguros", shared_conv_id))
-    state_inmobiliaria = session_store.get(("demo-inmobiliaria", shared_conv_id))
+    state_tenant_b = session_store.get(("test-tenant-b", shared_conv_id))
 
     assert state_quintana is not None, (
         "session_store has no entry for (quintana-seguros, conv_shared_id_race). "
         "Fix: change session_store key to (client_id, conversation_id) tuple."
     )
-    assert state_inmobiliaria is not None, (
-        "session_store has no entry for (demo-inmobiliaria, conv_shared_id_race). "
+    assert state_tenant_b is not None, (
+        "session_store has no entry for (test-tenant-b, conv_shared_id_race). "
         "Fix: change session_store key to (client_id, conversation_id) tuple."
     )
     assert (
         state_quintana.client_id == "quintana-seguros"
     ), f"session_store contamination: quintana entry has client_id={state_quintana.client_id!r}"
     assert (
-        state_inmobiliaria.client_id == "demo-inmobiliaria"
-    ), f"session_store contamination: inmobiliaria entry has client_id={state_inmobiliaria.client_id!r}"
+        state_tenant_b.client_id == "test-tenant-b"
+    ), f"session_store contamination: tenant-b entry has client_id={state_tenant_b.client_id!r}"
 
 
 # ---------------------------------------------------------------------------

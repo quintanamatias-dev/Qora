@@ -144,6 +144,55 @@ Dispatches GPT-4o tool calls to implementations:
 7. Browser displays transcript (agent_response event)
 ```
 
+## Data Lifecycle
+
+### Source of Truth
+
+- `Client` table: tenant identity, broker metadata, scheduler config.
+- `Agent` table: per-client AI agent config (voice, model, temperature, tools, `system_prompt` as legacy fallback).
+- `Lead` table: lead contact data, status, extracted facts, call count.
+- `CallSession` table: per-call records with summaries and outcome data.
+
+**Agent system prompts**: The filesystem file is the source of truth.
+
+```
+backend/clients/{client_id}/agents/{agent_slug}/system-prompt.md   ← SOURCE OF TRUTH
+```
+
+When this file exists, it overrides `agent.system_prompt` (DB). The DB field is a legacy fallback for agents not yet migrated to the filesystem layout. This makes prompts visible, reviewable in git, and independent of database state.
+
+### Client and Agent Configuration at Startup
+
+Active tenant configuration is seeded via `seed_*()` functions in `backend/app/tenants/service.py`:
+
+- `seed_quintana()` — creates `quintana-seguros` client and default agent.
+  Prompt and knowledge content is embedded as `_QUINTANA_SYSTEM_PROMPT` and `_QUINTANA_KNOWLEDGE_BASE` string constants.
+  Uses a **non-overwrite guard**: fields are only set if currently missing or blank (`None` or empty string), protecting any admin UI edits.
+- `seed_qora_demo()` — creates the Qora demo client + `qora-explainer` agent. The canonical prompt is at `backend/clients/qora-demo/agents/qora-explainer/system-prompt.md`; the DB field is a legacy fallback.
+
+### Soft Delete
+
+Deactivating or removing a client or agent is always a **soft delete**:
+
+- `Client.is_active = False` — client is excluded from active queries (`list_clients()` filters by `is_active=True`).
+- `Agent.is_active = False` — agent is excluded from default-agent resolution (`get_default_agent()` filters by `is_active=True`).
+- **No hard deletes exist** in the current codebase. No DB rows or filesystem paths are physically deleted on deactivation.
+- Inactive tenants receive a `403 Forbidden` from the webhook route (`tenant_not_active` error).
+- Associated `Lead` and `CallSession` records remain in the DB and are NOT cascaded to deletion.
+
+### Prompt Rendering
+
+`PromptLoader.render_for_agent(agent, lead, db=db)` resolves the system prompt in this priority order:
+
+1. **Filesystem** `clients/{client_id}/agents/{agent_slug}/system-prompt.md` → source of truth; overrides DB.
+2. `agent.system_prompt` (DB) → legacy fallback for agents not yet migrated to filesystem.
+3. Filesystem `clients/{client_id}/prompt.md` → legacy client-level fallback.
+4. `JAUMPABLO_PROMPT_TEMPLATE` hardcoded constant → last resort.
+
+All prompt paths support `{{variable}}` template substitution (lead_name, call_history, confirmed_facts, etc.).
+
+`agent.knowledge_base` (DB) is appended under `## INFORMACIÓN DE LA EMPRESA` when non-empty. Filesystem `knowledge.md` is NOT used when `agent.knowledge_base` is set.
+
 ## Phase Roadmap
 
 | Phase | Status | Description |

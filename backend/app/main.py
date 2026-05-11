@@ -38,6 +38,52 @@ logger = get_logger(__name__)
 _APP_START_TIME: float = 0.0
 
 
+async def _ensure_startup_schema_compat(db_module) -> None:
+    """Apply tiny backward-compatible DDL needed before ORM seed queries.
+
+    SQLite ``create_all`` creates missing tables but does not ALTER existing ones.
+    If the SQLAlchemy model has a new column, a normal ORM ``select(Client)`` will
+    include that column and crash before standalone migrations can be run manually.
+
+    Keep this limited to startup-safe, idempotent compatibility columns only; the
+    full migration script remains the authoritative production migration path.
+    """
+    import sqlalchemy
+
+    if db_module.engine is None:
+        return
+
+    async with db_module.engine.begin() as conn:
+        result = await conn.execute(sqlalchemy.text("PRAGMA table_info(clients)"))
+        columns = {row[1] for row in result.fetchall()}
+
+        if "analysis_language" not in columns:
+            await conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE clients "
+                    "ADD COLUMN analysis_language TEXT NOT NULL DEFAULT 'Spanish'"
+                )
+            )
+            logger.info(
+                "startup_schema_compat_added", column="clients.analysis_language"
+            )
+
+        # agents table — elevenlabs_agent_id (qora-agent-studio-demo)
+        result = await conn.execute(sqlalchemy.text("PRAGMA table_info(agents)"))
+        agent_columns = {row[1] for row in result.fetchall()}
+
+        if "elevenlabs_agent_id" not in agent_columns:
+            await conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE agents "
+                    "ADD COLUMN elevenlabs_agent_id TEXT DEFAULT NULL"
+                )
+            )
+            logger.info(
+                "startup_schema_compat_added", column="agents.elevenlabs_agent_id"
+            )
+
+
 # ---------------------------------------------------------------------------
 # Request logging middleware
 # ---------------------------------------------------------------------------
@@ -144,15 +190,17 @@ async def lifespan(app: FastAPI):
     await db_module.init_db(settings)
     logger.info("db_initialized", url=settings.database_url)
 
+    # Existing SQLite DBs need additive columns before ORM seed queries run.
+    await _ensure_startup_schema_compat(db_module)
+
     # 4. Seed data
     async with db_module.async_session_factory() as session:
-        from app.tenants.service import seed_quintana, seed_demo_inmobiliaria
-        from app.leads.service import seed_leads, seed_inmobiliaria_leads
+        from app.tenants.service import seed_quintana, seed_qora_demo
+        from app.leads.service import seed_leads
 
         await seed_quintana(session)
-        await seed_demo_inmobiliaria(session)
+        await seed_qora_demo(session)
         await seed_leads(session)
-        await seed_inmobiliaria_leads(session)
         await session.commit()
 
     logger.info("seed_data_loaded")
@@ -272,3 +320,7 @@ import os  # noqa: E402
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 if os.path.isdir(_STATIC_DIR):
     app.mount("/demo", StaticFiles(directory=_STATIC_DIR, html=True), name="demo")
+
+_ADMIN_DIR = os.path.join(_STATIC_DIR, "admin")
+if os.path.isdir(_ADMIN_DIR):
+    app.mount("/admin", StaticFiles(directory=_ADMIN_DIR, html=True), name="admin")

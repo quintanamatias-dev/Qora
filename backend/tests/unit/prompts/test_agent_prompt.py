@@ -6,6 +6,8 @@ Covers:
 - PromptLoader.render_for_agent() uses agent.knowledge_base from DB (not filesystem)
 - PromptLoader.render_for_agent() uses agent.name for {{agent_name}} template variable
 - PromptLoader.render_for_agent() falls back to JAUMPABLO_PROMPT_TEMPLATE when system_prompt is empty
+- PromptLoader.render_for_agent() uses filesystem system-prompt.md as source of truth, overriding DB
+- PromptLoader.load_agent_system_prompt() returns None when file is absent
 """
 
 from __future__ import annotations
@@ -202,3 +204,147 @@ async def test_render_for_agent_db_knowledge_takes_precedence_over_filesystem(
 
     assert "DB knowledge — should appear." in result
     assert "Filesystem knowledge — should NOT appear." not in result
+
+
+# ---------------------------------------------------------------------------
+# Filesystem system-prompt.md is source of truth (overrides DB prompt)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_render_for_agent_filesystem_overrides_db_system_prompt(
+    tmp_path: Path,
+):
+    """Filesystem system-prompt.md overrides agent.system_prompt (DB).
+
+    Priority: filesystem > DB > legacy client fallback.
+    When clients/{client_id}/agents/{agent_slug}/system-prompt.md exists,
+    it MUST be used even when agent.system_prompt is set in the DB.
+    """
+    from app.prompts.loader import PromptLoader
+
+    # Set up filesystem structure: clients/my-client/agents/valentina/system-prompt.md
+    agent_dir = tmp_path / "my-client" / "agents" / "valentina"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "system-prompt.md").write_text(
+        "FILESYSTEM PROMPT: Soy Valentina desde el filesystem."
+    )
+
+    # Agent with a DB system_prompt that should be overridden
+    agent = make_agent(
+        name="Valentina",
+        system_prompt="DB PROMPT: This should NOT appear — filesystem wins.",
+        client_id="my-client",
+    )
+    # Ensure slug is set so the loader finds the correct directory
+    agent.slug = "valentina"
+    lead = make_lead()
+
+    loader = PromptLoader(clients_dir=tmp_path)
+    result = await loader.render_for_agent(agent, lead)
+
+    assert "FILESYSTEM PROMPT" in result, (
+        "Filesystem system-prompt.md must override DB agent.system_prompt. "
+        f"Got: {result[:300]!r}"
+    )
+    assert "DB PROMPT" not in result, (
+        "DB agent.system_prompt must NOT appear when filesystem system-prompt.md exists."
+    )
+
+
+@pytest.mark.asyncio
+async def test_render_for_agent_falls_back_to_db_when_no_filesystem_prompt(
+    tmp_path: Path,
+):
+    """When filesystem system-prompt.md is absent, DB agent.system_prompt is used.
+
+    This is the legacy fallback: agents not yet migrated to the filesystem layout
+    continue to work via their DB-stored system_prompt.
+    """
+    from app.prompts.loader import PromptLoader
+
+    # No filesystem prompt — agents/valentina/ directory does not exist
+
+    agent = make_agent(
+        name="Valentina",
+        system_prompt="DB PROMPT: Soy Valentina desde la base de datos.",
+        client_id="my-client",
+    )
+    agent.slug = "valentina"
+    lead = make_lead()
+
+    loader = PromptLoader(clients_dir=tmp_path)
+    result = await loader.render_for_agent(agent, lead)
+
+    assert "DB PROMPT" in result, (
+        "When no filesystem system-prompt.md exists, DB agent.system_prompt must be used. "
+        f"Got: {result[:300]!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_load_agent_system_prompt_returns_content_when_file_exists(
+    tmp_path: Path,
+):
+    """load_agent_system_prompt() returns file content when system-prompt.md is present."""
+    from app.prompts.loader import PromptLoader
+
+    agent_dir = tmp_path / "acme-client" / "agents" / "sofia"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "system-prompt.md").write_text(
+        "Sos Sofia, asistente virtual de Acme."
+    )
+
+    loader = PromptLoader(clients_dir=tmp_path)
+    result = await loader.load_agent_system_prompt("acme-client", "sofia")
+
+    assert result is not None
+    assert "Sofia" in result
+    assert "Acme" in result
+
+
+@pytest.mark.asyncio
+async def test_load_agent_system_prompt_returns_none_when_file_absent(
+    tmp_path: Path,
+):
+    """load_agent_system_prompt() returns None when system-prompt.md does not exist."""
+    from app.prompts.loader import PromptLoader
+
+    loader = PromptLoader(clients_dir=tmp_path)
+    result = await loader.load_agent_system_prompt("nonexistent-client", "nonexistent-agent")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_render_for_agent_filesystem_prompt_is_rendered_as_template(
+    tmp_path: Path,
+):
+    """Filesystem system-prompt.md supports {{variable}} template substitution.
+
+    Variables like {{agent_name}}, {{lead_name}}, {{broker_name}} are substituted
+    just like any other template when the filesystem prompt is used.
+    """
+    from app.prompts.loader import PromptLoader
+
+    agent_dir = tmp_path / "my-client" / "agents" / "sofia"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "system-prompt.md").write_text(
+        "Hola {{lead_name}}, soy {{agent_name}} de Qora."
+    )
+
+    agent = make_agent(
+        name="Sofia",
+        system_prompt="DB PROMPT: should not appear",
+        client_id="my-client",
+    )
+    agent.slug = "sofia"
+    lead = make_lead(name="Juan Pérez")
+
+    loader = PromptLoader(clients_dir=tmp_path)
+    result = await loader.render_for_agent(agent, lead)
+
+    assert "Juan Pérez" in result, "{{lead_name}} must be substituted from filesystem prompt"
+    assert "Sofia" in result, "{{agent_name}} must be substituted from filesystem prompt"
+    assert "{{lead_name}}" not in result, "No unresolved placeholders should remain"
+    assert "DB PROMPT" not in result, "DB prompt must be overridden by filesystem"

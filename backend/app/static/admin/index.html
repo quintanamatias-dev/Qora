@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QORA — Admin</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0d0d0f;
+      --surface: #16161a;
+      --surface-2: #1e1e24;
+      --surface-3: #252530;
+      --border: #2a2a35;
+      --accent: #7b5ea7;
+      --text: #e8e8f0;
+      --text-muted: #888899;
+      --green: #4caf82;
+      --red: #e05c5c;
+      --yellow: #d0a040;
+    }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 0.875rem;
+      min-height: 100vh;
+    }
+    /* Layout */
+    .header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0.875rem 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    .header-logo {
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .header-badge {
+      font-size: 0.65rem;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+    .main { padding: 1.5rem; max-width: 960px; margin: 0 auto; }
+    /* Tabs */
+    .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 1.5rem; }
+    .tab {
+      padding: 0.6rem 1.2rem;
+      font-size: 0.82rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    /* Cards */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem;
+      margin-bottom: 1rem;
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1rem;
+    }
+    .card-title {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    /* Forms */
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+    .form-group { display: flex; flex-direction: column; gap: 0.3rem; }
+    label { font-size: 0.78rem; color: var(--text-muted); }
+    input, select, textarea {
+      width: 100%;
+      padding: 0.5rem 0.65rem;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.85rem;
+      outline: none;
+      transition: border-color 0.15s;
+      font-family: inherit;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+    input::placeholder { color: var(--text-muted); opacity: 0.6; }
+    textarea { resize: vertical; min-height: 80px; }
+    /* Buttons */
+    .btn {
+      padding: 0.45rem 1rem;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:not(:disabled):hover { background: #6b4e97; }
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:not(:disabled):hover { color: var(--text); border-color: var(--text-muted); }
+    .btn-danger {
+      background: transparent;
+      color: var(--red);
+      border: 1px solid transparent;
+    }
+    .btn-danger:not(:disabled):hover { background: rgba(224,92,92,0.1); }
+    .btn-sm { padding: 0.3rem 0.7rem; font-size: 0.78rem; }
+    /* Table */
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      text-align: left;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+    td { padding: 0.55rem 0.75rem; border-bottom: 1px solid var(--border); font-size: 0.83rem; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--surface-2); }
+    .monospace { font-family: monospace; font-size: 0.8rem; color: var(--text-muted); }
+    /* Status badges */
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      font-weight: 600;
+    }
+    .badge-active { background: rgba(76,175,130,0.15); color: var(--green); }
+    .badge-inactive { background: rgba(224,92,92,0.12); color: var(--red); }
+    /* Alerts */
+    .alert {
+      padding: 0.65rem 0.9rem;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      margin-bottom: 0.75rem;
+      display: none;
+    }
+    .alert-error { background: rgba(224,92,92,0.12); border: 1px solid rgba(224,92,92,0.3); color: var(--red); }
+    .alert-success { background: rgba(76,175,130,0.12); border: 1px solid rgba(76,175,130,0.3); color: var(--green); }
+    .alert.show { display: block; }
+    /* Empty state */
+    .empty { text-align: center; padding: 2rem; color: var(--text-muted); font-size: 0.85rem; }
+    /* Spinner */
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  </style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-logo">QORA</div>
+  <div class="header-badge">Admin</div>
+</header>
+
+<main class="main">
+  <!-- Tabs -->
+  <nav class="tabs">
+    <div class="tab active" onclick="switchTab('clients')">Clients</div>
+    <div class="tab" onclick="switchTab('agents')">Agents</div>
+  </nav>
+
+  <!-- ── CLIENTS TAB ────────────────────────────────────────────────────────── -->
+  <section id="tab-clients" class="tab-content active">
+
+    <!-- Create client form -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">New Client</div>
+      </div>
+      <div id="clientCreateAlert" class="alert alert-error"></div>
+      <div id="clientCreateSuccess" class="alert alert-success"></div>
+      <form id="createClientForm" onsubmit="createClient(event)">
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="newCompanyName">Company Name</label>
+            <input
+              type="text"
+              id="newCompanyName"
+              placeholder="Acme Corp"
+              required
+            />
+          </div>
+          <div class="form-group">
+            <label for="newAgentName">Agent Name</label>
+            <input
+              type="text"
+              id="newAgentName"
+              placeholder="Sofia"
+              required
+            />
+          </div>
+          <div class="form-group">
+            <label for="newVoiceId">Voice ID</label>
+            <input
+              type="text"
+              id="newVoiceId"
+              placeholder="ByVRQtaK1WDOvTmP1PKO"
+            />
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary" id="createClientBtn">Create Client</button>
+      </form>
+    </div>
+
+    <!-- Clients list -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">All Clients</div>
+        <button class="btn btn-ghost btn-sm" onclick="loadClients()">Refresh</button>
+      </div>
+      <div id="clientsTableWrap">
+        <div class="empty">Loading…</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── AGENTS TAB ─────────────────────────────────────────────────────────── -->
+  <section id="tab-agents" class="tab-content">
+
+    <!-- Select client -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Select Client</div>
+      </div>
+      <div class="form-group" style="max-width:300px;">
+        <label for="agentClientSelect">Client</label>
+        <select id="agentClientSelect" onchange="loadAgents()">
+          <option value="">— choose —</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Create agent form -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">New Agent</div>
+      </div>
+      <div id="agentCreateAlert" class="alert alert-error"></div>
+      <div id="agentCreateSuccess" class="alert alert-success"></div>
+      <form id="createAgentForm" onsubmit="createAgent(event)">
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="newAgentNameField">Agent Name</label>
+            <input type="text" id="newAgentNameField" placeholder="Sofia" required />
+          </div>
+          <div class="form-group">
+            <label for="newAgentVoiceId">Voice ID</label>
+            <input type="text" id="newAgentVoiceId" placeholder="ByVRQtaK1WDOvTmP1PKO" />
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:0.75rem;">
+          <label for="newAgentPrompt">System Prompt</label>
+          <textarea id="newAgentPrompt" placeholder="You are a helpful agent…"></textarea>
+        </div>
+        <button type="submit" class="btn btn-primary" id="createAgentBtn">Create Agent</button>
+      </form>
+    </div>
+
+    <!-- Agents list -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Agents</div>
+        <button class="btn btn-ghost btn-sm" onclick="loadAgents()">Refresh</button>
+      </div>
+      <div id="agentsTableWrap">
+        <div class="empty">Select a client above to view its agents.</div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  let clientsCache = [];
+
+  // ── Tabs ───────────────────────────────────────────────────────────────────
+  function switchTab(name) {
+    document.querySelectorAll('.tab').forEach((t, i) => {
+      const tabs = ['clients', 'agents'];
+      t.classList.toggle('active', tabs[i] === name);
+    });
+    document.querySelectorAll('.tab-content').forEach(s => {
+      s.classList.toggle('active', s.id === 'tab-' + name);
+    });
+    if (name === 'agents') populateAgentClientSelect();
+  }
+
+  // ── Alerts ─────────────────────────────────────────────────────────────────
+  function showAlert(id, msg, type) {
+    const el = document.getElementById(id);
+    el.textContent = msg;
+    el.className = 'alert alert-' + type + ' show';
+    setTimeout(() => { el.classList.remove('show'); }, 4000);
+  }
+
+  // ── Clients ────────────────────────────────────────────────────────────────
+  async function loadClients() {
+    const wrap = document.getElementById('clientsTableWrap');
+    wrap.innerHTML = '<div class="empty"><span class="spinner"></span></div>';
+    try {
+      const r = await fetch('/api/v1/clients');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      clientsCache = await r.json();
+      renderClientsTable(clientsCache);
+    } catch (e) {
+      wrap.innerHTML = '<div class="empty">Failed to load clients: ' + e.message + '</div>';
+    }
+  }
+
+  function renderClientsTable(clients) {
+    const wrap = document.getElementById('clientsTableWrap');
+    if (!clients.length) {
+      wrap.innerHTML = '<div class="empty">No clients yet. Create one above.</div>';
+      return;
+    }
+    const rows = clients.map(c => `
+      <tr>
+        <td class="monospace">${esc(c.client_id)}</td>
+        <td>${esc(c.broker_name || '—')}</td>
+        <td>${esc(c.agent_name || '—')}</td>
+        <td>
+          <span class="badge ${c.is_active ? 'badge-active' : 'badge-inactive'}">
+            ${c.is_active ? 'active' : 'inactive'}
+          </span>
+        </td>
+        <td>
+          <button class="btn btn-danger btn-sm" onclick="deleteClient('${esc(c.client_id)}')">Delete</button>
+        </td>
+      </tr>
+    `).join('');
+    wrap.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Client ID</th>
+            <th>Company Name</th>
+            <th>Agent Name</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  async function createClient(e) {
+    e.preventDefault();
+    const btn = document.getElementById('createClientBtn');
+    btn.disabled = true;
+    const companyName = document.getElementById('newCompanyName').value.trim();
+    const agentName = document.getElementById('newAgentName').value.trim();
+    const voiceId = document.getElementById('newVoiceId').value.trim();
+
+    // POST without client_id — backend auto-generates slug from company name
+    const payload = {
+      broker_name: companyName,
+      agent_name:  agentName,
+    };
+    if (voiceId) payload.voice_id = voiceId;
+
+    try {
+      const r = await fetch('/api/v1/clients', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || 'Unknown error');
+      showAlert('clientCreateSuccess', 'Client created: ' + data.client_id, 'success');
+      document.getElementById('createClientForm').reset();
+      await loadClients();
+    } catch (err) {
+      showAlert('clientCreateAlert', 'Error: ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function deleteClient(clientId) {
+    if (!confirm('Delete client "' + clientId + '"? This is a soft delete.')) return;
+    try {
+      const r = await fetch('/api/v1/clients/' + encodeURIComponent(clientId), { method: 'DELETE' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      await loadClients();
+    } catch (err) {
+      alert('Delete failed: ' + err.message);
+    }
+  }
+
+  // ── Agents ─────────────────────────────────────────────────────────────────
+  function populateAgentClientSelect() {
+    const sel = document.getElementById('agentClientSelect');
+    const current = sel.value;
+    sel.innerHTML = '<option value="">— choose —</option>';
+    clientsCache.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.client_id;
+      opt.textContent = c.broker_name || c.client_id;
+      sel.appendChild(opt);
+    });
+    if (current) sel.value = current;
+  }
+
+  async function loadAgents() {
+    const clientId = document.getElementById('agentClientSelect').value;
+    const wrap = document.getElementById('agentsTableWrap');
+    if (!clientId) {
+      wrap.innerHTML = '<div class="empty">Select a client above to view its agents.</div>';
+      return;
+    }
+    wrap.innerHTML = '<div class="empty"><span class="spinner"></span></div>';
+    try {
+      const r = await fetch('/api/v1/clients/' + encodeURIComponent(clientId) + '/agents');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const agents = await r.json();
+      renderAgentsTable(agents);
+    } catch (e) {
+      wrap.innerHTML = '<div class="empty">Failed to load agents: ' + e.message + '</div>';
+    }
+  }
+
+  function renderAgentsTable(agents) {
+    const wrap = document.getElementById('agentsTableWrap');
+    if (!agents.length) {
+      wrap.innerHTML = '<div class="empty">No agents for this client.</div>';
+      return;
+    }
+    const rows = agents.map(a => `
+      <tr>
+        <td class="monospace">${esc(a.id)}</td>
+        <td>${esc(a.name || '—')}</td>
+        <td class="monospace" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(a.voice_id || '—')}</td>
+        <td>
+          <span class="badge ${a.is_active ? 'badge-active' : 'badge-inactive'}">
+            ${a.is_active ? 'active' : 'inactive'}
+          </span>
+        </td>
+      </tr>
+    `).join('');
+    wrap.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Agent ID</th>
+            <th>Agent Name</th>
+            <th>Voice ID</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  async function createAgent(e) {
+    e.preventDefault();
+    const clientId = document.getElementById('agentClientSelect').value;
+    if (!clientId) { showAlert('agentCreateAlert', 'Select a client first.', 'error'); return; }
+    const btn = document.getElementById('createAgentBtn');
+    btn.disabled = true;
+    const payload = {
+      name: document.getElementById('newAgentNameField').value.trim(),
+      voice_id: document.getElementById('newAgentVoiceId').value.trim() || undefined,
+      system_prompt: document.getElementById('newAgentPrompt').value.trim() || undefined,
+    };
+    try {
+      const r = await fetch('/api/v1/clients/' + encodeURIComponent(clientId) + '/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || 'Unknown error');
+      showAlert('agentCreateSuccess', 'Agent created: ' + data.id, 'success');
+      document.getElementById('createAgentForm').reset();
+      await loadAgents();
+    } catch (err) {
+      showAlert('agentCreateAlert', 'Error: ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // ── Utilities ──────────────────────────────────────────────────────────────
+  function esc(s) {
+    const d = document.createElement('div');
+    d.appendChild(document.createTextNode(String(s)));
+    return d.innerHTML;
+  }
+
+  // ── Init ───────────────────────────────────────────────────────────────────
+  document.addEventListener('DOMContentLoaded', loadClients);
+</script>
+</body>
+</html>
