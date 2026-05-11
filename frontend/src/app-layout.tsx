@@ -8,7 +8,7 @@ import { Sidebar, TopBar, PageContainer } from './design/components'
 
 export function AppLayout() {
   const { clientId } = useParams<{ clientId: string }>()
-  const id = clientId ?? 'demo-client'
+  const id = (clientId ?? 'demo-client').toLowerCase()
 
   return (
     <div className="min-h-screen bg-background">
