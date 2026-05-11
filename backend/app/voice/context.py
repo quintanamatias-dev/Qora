@@ -1,0 +1,220 @@
+"""QORA Voice — Per-session context cache.
+
+Defines VoiceSessionContext (frozen dataclass) and build_voice_context()
+async factory. Context is built once at call initiation and cached on
+ConversationState to eliminate repeated DB queries and filesystem I/O per turn.
+
+Architecture decisions:
+- AD-1: VoiceSessionContext lives here (not in session.py) — single
+  responsibility; session.py stays pure state tracking.
+- AD-2: Cache location is ConversationState.context (in-memory) — no new infra.
+- AD-4: Skills loaded via PromptLoader.load_agent_skills() — filesystem glob.
+- AD-5: misc_notes from lead.extracted_facts["misc_notes"] — reuse existing.
+- AD-6: system_prompt built by existing PromptLoader.render_for_agent().
+
+Covers: VSC-1, VSC-2, VSC-3.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from app.prompts.loader import PromptLoader
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from app.tenants.models import Agent, Client
+    from app.leads.models import Lead
+
+
+# ---------------------------------------------------------------------------
+# VoiceSessionContext — immutable per-session context
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class VoiceSessionContext:
+    """Immutable per-session context, built once at initiation.
+
+    Fields:
+        system_prompt: Fully rendered system prompt, ready to use as system message.
+        skills_content: Concatenated *.agent-skill.md files (empty if none).
+        misc_notes: From extracted_facts["misc_notes"] (empty if absent/no lead).
+        lead_profile: Formatted lead data block (empty if no lead).
+        model: LLM model identifier from agent config.
+        temperature: Sampling temperature from agent config.
+        max_tokens: Max tokens from agent config.
+        tools: Parsed tool definitions (None if empty/disabled).
+        skip_lead_profile_in_assembly: When True, lead_profile is NOT appended to the
+            assembled system message. Set when the agent uses template vars ({{lead_name}},
+            etc.) so render_for_agent() already substituted lead data — appending lead_profile
+            would duplicate it (Issue #21).
+    """
+
+    system_prompt: str
+    skills_content: str
+    misc_notes: str
+    lead_profile: str
+    model: str
+    temperature: float
+    max_tokens: int
+    tools: list[dict] | None
+    skip_lead_profile_in_assembly: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Lead profile block builder
+# ---------------------------------------------------------------------------
+
+
+def _build_lead_profile_block(lead: "Lead") -> str:
+    """Format lead data into a [CONTEXTO DEL LEAD] block.
+
+    Args:
+        lead: Lead ORM instance.
+
+    Returns:
+        Formatted string with lead context data. Empty string if all fields empty.
+    """
+    name = getattr(lead, "name", "") or ""
+    car_make = getattr(lead, "car_make", "") or ""
+    car_model = getattr(lead, "car_model", "") or ""
+    car_year_raw = getattr(lead, "car_year", None)
+    car_year = str(car_year_raw) if car_year_raw else ""
+    current_insurance = getattr(lead, "current_insurance", "") or ""
+    status = getattr(lead, "status", "") or ""
+    notes = getattr(lead, "notes", "") or ""
+
+    # If all key fields are empty, return empty string
+    if not name and not car_make:
+        return ""
+
+    parts = ["[CONTEXTO DEL LEAD]"]
+    if name:
+        parts.append(f"Nombre: {name}")
+    car_parts = " ".join(filter(None, [car_make, car_model, car_year]))
+    if car_parts:
+        parts.append(f"Auto: {car_parts}")
+    if current_insurance:
+        parts.append(f"Seguro actual: {current_insurance}")
+    if status:
+        parts.append(f"Estado: {status}")
+    if notes:
+        parts.append(f"Notas: {notes}")
+
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# build_voice_context() — async context factory
+# ---------------------------------------------------------------------------
+
+
+async def build_voice_context(
+    *,
+    agent: "Agent",
+    lead: "Lead | None",
+    db: "AsyncSession",
+    client: "Client",
+) -> VoiceSessionContext:
+    """Assemble all context components for one voice session.
+
+    Calls PromptLoader.render_for_agent() and load_agent_skills() to build
+    a fully populated VoiceSessionContext. Exceptions from PromptLoader
+    propagate — callers are responsible for handling them.
+
+    Args:
+        agent: Agent ORM instance with system_prompt, model, etc.
+        lead: Optional Lead ORM instance (None for anonymous calls).
+        db: AsyncSession for memory context queries.
+        client: Client ORM instance for broker_name etc.
+
+    Returns:
+        Frozen VoiceSessionContext with all fields populated.
+
+    Raises:
+        Any exception raised by PromptLoader.render_for_agent() propagates.
+    """
+    client_id = getattr(agent, "client_id", None) or "unknown"
+    agent_slug = getattr(agent, "slug", None)
+    if not isinstance(agent_slug, str) or not agent_slug.strip():
+        agent_slug = str(getattr(agent, "name", "agent")).lower().replace(" ", "-")
+
+    loader = PromptLoader()  # uses module-level import (patchable in tests)
+
+    # Render system prompt (may raise — let it propagate per VSC-2)
+    system_prompt = await loader.render_for_agent(agent, lead, db=db, client=client)
+
+    # Load skills (filesystem, no DB) — always succeeds (empty string on missing)
+    skills_content = await loader.load_agent_skills(client_id, agent_slug)
+
+    # Extract misc_notes from lead.extracted_facts
+    # misc_notes in DB can be a dict {"notes": [...]} or a plain string
+    misc_notes = ""
+    if lead is not None:
+        extracted = getattr(lead, "extracted_facts", None)
+        if isinstance(extracted, dict):
+            raw_notes = extracted.get("misc_notes", "")
+            if isinstance(raw_notes, str):
+                misc_notes = raw_notes
+            elif isinstance(raw_notes, dict):
+                # Format structured notes into readable text
+                notes_list = raw_notes.get("notes", [])
+                if isinstance(notes_list, list) and notes_list:
+                    formatted = []
+                    for note in notes_list:
+                        if isinstance(note, dict):
+                            formatted.append(note.get("note", ""))
+                        elif isinstance(note, str):
+                            formatted.append(note)
+                    misc_notes = "\n".join(n for n in formatted if n)
+                else:
+                    misc_notes = ""
+            else:
+                misc_notes = str(raw_notes) if raw_notes else ""
+
+    # Build lead profile block — always computed for metadata/inspection.
+    # Whether it's included in the assembled system message depends on whether
+    # the agent system_prompt has template vars (see _assemble_context_system_content).
+    lead_profile = _build_lead_profile_block(lead) if lead is not None else ""
+
+    # Track whether the agent system_prompt uses template vars — if it does, render_for_agent()
+    # already substituted lead data ({{lead_name}}, {{car_make}}, etc.) into system_prompt,
+    # so the lead_profile block must NOT be appended again (Issue #21: would duplicate data).
+    _agent_system_prompt = getattr(agent, "system_prompt", None) or ""
+    _agent_has_template_vars = "{{" in _agent_system_prompt
+
+    # Model config from agent
+    model = getattr(agent, "model", "gpt-4o") or "gpt-4o"
+    temperature = getattr(agent, "temperature", 0.7)
+    if temperature is None:
+        temperature = 0.7
+    max_tokens = getattr(agent, "max_tokens", 300)
+    if max_tokens is None:
+        max_tokens = 300
+
+    # Parse tools from agent.tools_enabled
+    tools: list[dict] | None = None
+    tools_enabled_str = getattr(agent, "tools_enabled", None)
+    if tools_enabled_str:
+        try:
+            from app.voice.webhook import _build_tool_definitions
+
+            enabled_names = json.loads(tools_enabled_str)
+            tools = _build_tool_definitions(enabled_names)
+        except (json.JSONDecodeError, TypeError, ImportError):
+            tools = None
+
+    return VoiceSessionContext(
+        system_prompt=system_prompt,
+        skills_content=skills_content,
+        misc_notes=misc_notes,
+        lead_profile=lead_profile,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        tools=tools,
+        skip_lead_profile_in_assembly=_agent_has_template_vars,
+    )

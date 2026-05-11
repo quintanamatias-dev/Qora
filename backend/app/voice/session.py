@@ -7,6 +7,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.voice.context import VoiceSessionContext
 
 
 # ---------------------------------------------------------------------------
@@ -28,6 +32,9 @@ class ConversationState:
 
     turn_count: int = 0
     started_at: float = field(default_factory=time.monotonic)
+
+    # VSC-4: Per-session context cache — built once at initiation, zero queries per turn
+    context: "VoiceSessionContext | None" = None
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +61,7 @@ class SessionStore:
         client_id: str,
         lead_id: str | None,
         session_id: str,
+        context: "VoiceSessionContext | None" = None,
     ) -> ConversationState:
         """Create and store a new ConversationState.
 
@@ -62,6 +70,8 @@ class SessionStore:
             client_id: Tenant client id (part of composite key).
             lead_id: Lead being called.
             session_id: call_sessions.id for DB persistence.
+            context: Optional VoiceSessionContext — built at initiation and
+                cached here for zero-query webhook turns (VSC-4).
 
         Returns:
             The newly created ConversationState.
@@ -71,6 +81,7 @@ class SessionStore:
             client_id=client_id,
             lead_id=lead_id,
             session_id=session_id,
+            context=context,
         )
         self._sessions[(client_id, conversation_id)] = state
         return state
@@ -130,6 +141,33 @@ class SessionStore:
         for cid in expired:
             del self._sessions[cid]
         return len(expired)
+
+    def find_by_client_lead(
+        self, client_id: str, lead_id: str
+    ) -> "ConversationState | None":
+        """Find the most recent active session for a (client_id, lead_id) pair.
+
+        Used when ElevenLabs does NOT provide a conversation_id (signed-URL flow).
+        Scans all sessions matching the given tenant + lead and returns the one
+        with the highest turn_count (most recently active). If counts are equal,
+        the most recently started session wins (highest started_at).
+
+        Args:
+            client_id: Tenant identifier — ensures cross-tenant isolation.
+            lead_id: Lead identifier to match.
+
+        Returns:
+            The most recently active ConversationState, or None if not found.
+        """
+        candidates = [
+            state
+            for state in self._sessions.values()
+            if state.client_id == client_id and state.lead_id == lead_id
+        ]
+        if not candidates:
+            return None
+        # Return the session with the highest turn_count; break ties by started_at
+        return max(candidates, key=lambda s: (s.turn_count, s.started_at))
 
     def session_count(self) -> int:
         """Return number of active sessions in the store."""

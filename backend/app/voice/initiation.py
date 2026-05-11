@@ -18,6 +18,8 @@ from app.leads.service import get_lead, transition_lead_status
 from app.leads.service import InvalidTransitionError
 from app.memory import build_memory_context
 from app.tenants.service import get_client, get_default_agent
+from app.voice.context import build_voice_context
+from app.voice.session import session_store
 
 logger = structlog.get_logger()
 
@@ -42,6 +44,7 @@ class InitiationRequest(BaseModel):
     lead_id: str | None = None
     agent_id: str | None = None
     called_number: str | None = None
+    conversation_id: str | None = None  # VSC-5: used to pre-build and cache context
 
 
 class InitiationResponse(BaseModel):
@@ -82,6 +85,9 @@ async def initiation_webhook(
     )
     resolved_lead_id = _lead_id_qp or (
         _body_fallback.lead_id if _body_fallback else None
+    )
+    resolved_conversation_id = (
+        _body_fallback.conversation_id if _body_fallback else None
     )
 
     if not resolved_client_id:
@@ -156,6 +162,40 @@ async def initiation_webhook(
 
         # Phase 7: use agent.name when available, else fall back to client.agent_name
         resolved_agent_name = agent.name if agent is not None else client.agent_name
+
+        # VSC-5: Build and cache voice context when conversation_id is provided.
+        # Done inside the DB session block so build_voice_context can query memory.
+        # On failure: log and continue — context=None triggers lazy fallback in webhook.
+        _vsc_context = None
+        if resolved_conversation_id and agent is not None:
+            try:
+                _lead_for_context = lead if resolved_lead_id and "lead" in dir() else None
+                # 'lead' is only defined if resolved_lead_id was set
+                _lead_for_context = locals().get("lead")
+                _vsc_context = await build_voice_context(
+                    agent=agent,
+                    lead=_lead_for_context,
+                    db=session,
+                    client=client,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "voice_context_build_failed",
+                    client_id=resolved_client_id,
+                    conversation_id=resolved_conversation_id,
+                    error_type=type(exc).__name__,
+                    error_msg=str(exc),
+                )
+
+        # VSC-5: Store session state with context (context=None if build failed or no conv_id)
+        if resolved_conversation_id:
+            session_store.create(
+                conversation_id=resolved_conversation_id,
+                client_id=resolved_client_id,
+                lead_id=resolved_lead_id,
+                session_id="",  # No call_session for initiation-only store
+                context=_vsc_context,
+            )
 
         return InitiationResponse(
             dynamic_variables={

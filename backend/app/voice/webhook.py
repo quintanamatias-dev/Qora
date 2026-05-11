@@ -18,7 +18,10 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import Any, AsyncGenerator
+from typing import TYPE_CHECKING, Any, AsyncGenerator
+
+if TYPE_CHECKING:
+    from app.voice.context import VoiceSessionContext
 
 import httpx as _httpx
 import structlog
@@ -41,6 +44,7 @@ from app.core.database import get_session as db_session
 from app.leads.service import get_lead
 from app.prompts.loader import PromptLoader
 from app.tenants.service import get_client, get_default_agent
+from app.voice.context import build_voice_context
 from app.voice.session import session_store
 
 router = APIRouter(prefix="/voice", tags=["voice"])
@@ -507,6 +511,38 @@ async def custom_llm_path_route(
 
 
 # ---------------------------------------------------------------------------
+# Context assembly helper — pure function
+# ---------------------------------------------------------------------------
+
+
+def _assemble_context_system_content(ctx: "VoiceSessionContext") -> str:
+    """Assemble the full system message content from all 4 VoiceSessionContext components.
+
+    Components are concatenated with a blank-line separator. Empty components are
+    skipped so no trailing whitespace or stray separators are added.
+
+    When ctx.skip_lead_profile_in_assembly is True, the lead_profile block is omitted.
+    This happens when the agent uses template vars ({{lead_name}}, etc.) — render_for_agent()
+    already substituted lead data into system_prompt, so appending lead_profile would
+    duplicate it (Issue #21).
+
+    Args:
+        ctx: The cached VoiceSessionContext for this session.
+
+    Returns:
+        A single string ready to be used as the system message content.
+    """
+    parts = [ctx.system_prompt]
+    if ctx.skills_content:
+        parts.append(ctx.skills_content)
+    if ctx.misc_notes:
+        parts.append(ctx.misc_notes)
+    if ctx.lead_profile and not ctx.skip_lead_profile_in_assembly:
+        parts.append(ctx.lead_profile)
+    return "\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Shared helper — ALL business logic lives here
 # ---------------------------------------------------------------------------
 
@@ -541,8 +577,6 @@ async def _process_custom_llm_request(
     )
     # persisted_conversation_id: what goes in DB (None when absent/empty)
     persisted_conversation_id = raw_conversation_id or None
-    # conversation_id: what goes in session_store key (always non-null for tracking)
-    conversation_id = persisted_conversation_id or f"demo-{uuid.uuid4().hex[:12]}"
 
     # Get OpenAI API key from app state or settings
     try:
@@ -555,59 +589,203 @@ async def _process_custom_llm_request(
         s = Settings()
         api_key = s.openai_api_key.get_secret_value()
 
-    # Load tenant config + resolve Agent (DD-6: single resolution point)
-    agent = None
-    async with db_session() as db:
-        client = await get_client(db, client_id)
-        if client is None:
-            structlog.get_logger().warning(
-                "tenant_lookup_failed",
-                client_id=client_id,
-                reason="not_found",
-            )
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "client not found"},
-            )
-        if not client.is_active:
-            structlog.get_logger().warning(
-                "tenant_lookup_failed",
-                client_id=client_id,
-                reason="inactive",
-            )
-            raise HTTPException(
-                status_code=403,
-                detail={"error": "Tenant disabled"},
-            )
-
-        # Phase 7: resolve default Agent for this client (DD-6)
-        agent = await get_default_agent(db, client_id)
-
-        # Load lead context (optional)
-        lead = None
-        if lead_id:
-            lead = await get_lead(db, lead_id)
-
-        # Build system prompt inside the DB session block so render() can query
-        # memory (call_history, confirmed_facts) via build_memory_context(db, lead).
-        #
-        # Phase 7 prompt resolution priority:
-        # 1. agent.system_prompt (DB) via render_for_agent()
-        # 2. client.system_prompt_override (legacy, kept for backward compat)
-        # 3. Filesystem prompt.md / JAUMPABLO template
-        #
-        # Use explicit None check so empty string override ("") is respected.
-        if agent is not None:
-            system_content = await PromptLoader().render_for_agent(
-                agent, lead, db=db, client=client
-            )
+    # ---------------------------------------------------------------------------
+    # VSC-8: Stable session lookup — Fix A
+    # ---------------------------------------------------------------------------
+    # When ElevenLabs does NOT send conversation_id (signed-URL flow), every turn
+    # previously generated a new random ID → session fragmentation (4 turns = 4 sessions).
+    #
+    # Fix: when conversation_id is absent, use find_by_client_lead to look up an
+    # existing session for this (client_id, lead_id) pair first. If found, reuse its
+    # conversation_id so the existing session (and its cached context) are reused.
+    # If not found, generate one stable ID for the new session (Fix C).
+    if persisted_conversation_id:
+        # ElevenLabs provided a conversation_id — use it directly (existing path)
+        conversation_id = persisted_conversation_id
+        conv_state = session_store.get((client_id, conversation_id))
+    elif lead_id:
+        # No conversation_id from ElevenLabs — try to find an existing session
+        existing = session_store.find_by_client_lead(client_id, lead_id)
+        if existing is not None:
+            # Reuse the existing session — all subsequent turns of this call join it
+            conversation_id = existing.conversation_id
+            conv_state = existing
         else:
-            # No Agent yet (pre-migration path) — fall back to client-based rendering
-            system_content = (
-                client.system_prompt_override
-                if client.system_prompt_override is not None
-                else await PromptLoader().render(client, lead, db=db)
-            )
+            # First turn of a new call — generate ONE stable ID for this session
+            conversation_id = f"demo-{uuid.uuid4().hex[:12]}"
+            conv_state = None
+    else:
+        # No conversation_id and no lead_id — cannot look up; generate stable ID
+        conversation_id = f"demo-{uuid.uuid4().hex[:12]}"
+        conv_state = session_store.get((client_id, conversation_id))
+
+    # Declare variables populated by either the cached or per-turn path
+    agent = None
+    system_content: str = ""
+    tools: list[dict] | None = None
+    _model: str = "gpt-4o"
+    _temperature: float = 0.7
+    _max_tokens: int = 300
+    lead = None
+    client_orm = None
+    # Pre-built context for new sessions (set by the NEW SESSION PATH branch below)
+    _new_session_context: "VoiceSessionContext | None" = None
+    # True when build_voice_context was used (not the per-turn render_for_agent fallback)
+    _used_voice_context = False
+
+    if conv_state is not None and conv_state.context is not None:
+        # -----------------------------------------------------------------------
+        # FAST PATH: Use cached VoiceSessionContext — zero DB queries
+        # -----------------------------------------------------------------------
+        ctx = conv_state.context
+        system_content = _assemble_context_system_content(ctx)
+        tools = ctx.tools
+        _model = ctx.model
+        _temperature = ctx.temperature
+        _max_tokens = ctx.max_tokens
+        _used_voice_context = True
+
+        # Still need a valid api_key — already retrieved above
+        # Validate tenant is accessible (minimal check — context was already built)
+        # We trust the cached context was built from a valid tenant at initiation.
+
+    else:
+        # -----------------------------------------------------------------------
+        # PER-TURN PATH: Load tenant config + resolve Agent from DB (legacy/lazy)
+        # -----------------------------------------------------------------------
+        async with db_session() as db:
+            client_orm = await get_client(db, client_id)
+            if client_orm is None:
+                structlog.get_logger().warning(
+                    "tenant_lookup_failed",
+                    client_id=client_id,
+                    reason="not_found",
+                )
+                raise HTTPException(
+                    status_code=404,
+                    detail={"error": "client not found"},
+                )
+            if not client_orm.is_active:
+                structlog.get_logger().warning(
+                    "tenant_lookup_failed",
+                    client_id=client_id,
+                    reason="inactive",
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail={"error": "Tenant disabled"},
+                )
+
+            # Phase 7: resolve default Agent for this client (DD-6)
+            agent = await get_default_agent(db, client_id)
+
+            # Load lead context (optional)
+            if lead_id:
+                lead = await get_lead(db, lead_id)
+
+            if conv_state is not None and conv_state.context is None:
+                # LAZY BUILD: session exists but context was never built (e.g. initiation failed)
+                # Build context now and cache it on conv_state for subsequent turns.
+                if agent is not None:
+                    try:
+                        lazy_ctx = await build_voice_context(
+                            agent=agent,
+                            lead=lead,
+                            db=db,
+                            client=client_orm,
+                        )
+                        conv_state.context = lazy_ctx
+                        system_content = _assemble_context_system_content(lazy_ctx)
+                        tools = lazy_ctx.tools
+                        _model = lazy_ctx.model
+                        _temperature = lazy_ctx.temperature
+                        _max_tokens = lazy_ctx.max_tokens
+                        _used_voice_context = True
+                    except Exception as exc:
+                        structlog.get_logger().warning(
+                            "voice_context_lazy_build_failed",
+                            client_id=client_id,
+                            conversation_id=conversation_id,
+                            error_type=type(exc).__name__,
+                            error_msg=str(exc),
+                        )
+                        # Fall through to the original per-turn path below
+
+            elif conv_state is None and agent is not None:
+                # NEW SESSION PATH: Build context FIRST so this turn benefits too.
+                # This is the first turn of a new call. By building context here (inside the
+                # same DB session), we set system_content immediately — the fallback
+                # render_for_agent path below is skipped, eliminating the duplicate
+                # build_memory_context() call (VSC-8 Fix B was after messages were already
+                # built, causing 8 redundant DB queries on every first turn).
+                try:
+                    new_ctx = await build_voice_context(
+                        agent=agent,
+                        lead=lead,
+                        db=db,
+                        client=client_orm,
+                    )
+                    system_content = _assemble_context_system_content(new_ctx)
+                    tools = new_ctx.tools
+                    _model = new_ctx.model
+                    _temperature = new_ctx.temperature
+                    _max_tokens = new_ctx.max_tokens
+                    _used_voice_context = True
+                    # Store the built context for use during session creation below
+                    # (will be attached to the new session_store entry)
+                    _new_session_context = new_ctx
+                except Exception as exc:
+                    structlog.get_logger().warning(
+                        "voice_context_new_session_build_failed",
+                        client_id=client_id,
+                        conversation_id=conversation_id,
+                        error_type=type(exc).__name__,
+                        error_msg=str(exc),
+                    )
+                    _new_session_context = None
+                    # Fall through to the render_for_agent fallback below
+
+            # If context is still not set (lazy build failed, no agent, or new session build
+            # failed), use per-turn render_for_agent as fallback
+            if not system_content:
+                # Build system prompt inside the DB session block so render() can query
+                # memory (call_history, confirmed_facts) via build_memory_context(db, lead).
+                #
+                # Phase 7 prompt resolution priority:
+                # 1. agent.system_prompt (DB) via render_for_agent()
+                # 2. client.system_prompt_override (legacy, kept for backward compat)
+                # 3. Filesystem prompt.md / JAUMPABLO template
+                #
+                # Use explicit None check so empty string override ("") is respected.
+                if agent is not None:
+                    system_content = await PromptLoader().render_for_agent(
+                        agent, lead, db=db, client=client_orm
+                    )
+                else:
+                    # No Agent yet (pre-migration path) — fall back to client-based rendering
+                    system_content = (
+                        client_orm.system_prompt_override
+                        if client_orm.system_prompt_override is not None
+                        else await PromptLoader().render(client_orm, lead, db=db)
+                    )
+
+                # Parse tools from agent config (Phase 7) or client config (legacy)
+                _tools_enabled_str = (
+                    agent.tools_enabled if agent is not None else client_orm.tools_enabled
+                )
+                if _tools_enabled_str:
+                    try:
+                        enabled_tool_names = json.loads(_tools_enabled_str)
+                        tools = _build_tool_definitions(enabled_tool_names)
+                    except (json.JSONDecodeError, TypeError):
+                        tools = None
+
+                # Set up model/temp/tokens from agent config
+                _model = agent.model if agent is not None else client_orm.model
+                _temperature = agent.temperature if agent is not None else client_orm.temperature
+                _max_tokens = agent.max_tokens if agent is not None else client_orm.max_tokens
+
+        # client_orm holds the tenant reference; used in per-turn path above
 
     # Build messages with system prompt prepended.
     # Issue #21: Do NOT append [CONTEXTO DEL LEAD] block on the TEMPLATE path —
@@ -622,52 +800,41 @@ async def _process_custom_llm_request(
     # substitution. Only append [CONTEXTO DEL LEAD] if the raw agent.system_prompt
     # does NOT contain {{variable}} placeholders — meaning it's a static override
     # that was not designed as a template and won't have lead data substituted.
-    _agent_has_template_vars = (
-        agent is not None and agent.system_prompt and "{{" in agent.system_prompt
-    )
-    _has_static_prompt = (
-        # Legacy client.system_prompt_override (no Agent)
-        (agent is None and client.system_prompt_override is not None)
-        # Agent with static system_prompt (no {{variable}} placeholders)
-        or (agent is not None and agent.system_prompt and not _agent_has_template_vars)
-    )
-    if _has_static_prompt and lead is not None:
-        lead_context = (
-            f"\n[CONTEXTO DEL LEAD]\n"
-            f"Nombre: {lead.name}\n"
-            f"Auto: {lead.car_make or ''} {lead.car_model or ''} {lead.car_year or ''}\n"
-            f"Seguro actual: {lead.current_insurance or 'No especificado'}\n"
-            f"Estado: {lead.status}\n"
-            f"Notas: {lead.notes or ''}\n"
+    # NOTE: When build_voice_context was used (fast path, lazy path, or new session path),
+    # lead_profile is already assembled inside system_content — no [CONTEXTO DEL LEAD]
+    # appending needed. Only append in the per-turn render_for_agent fallback path.
+    if not _used_voice_context:
+        # Only apply lead context appending in the per-turn render_for_agent fallback path
+        _agent_has_template_vars = (
+            agent is not None and agent.system_prompt and "{{" in agent.system_prompt
         )
-        system_content = system_content + lead_context
+        _has_static_prompt = (
+            # Legacy client.system_prompt_override (no Agent)
+            (agent is None and client_orm is not None and client_orm.system_prompt_override is not None)
+            # Agent with static system_prompt (no {{variable}} placeholders)
+            or (agent is not None and agent.system_prompt and not _agent_has_template_vars)
+        )
+        if _has_static_prompt and lead is not None:
+            lead_context = (
+                f"\n[CONTEXTO DEL LEAD]\n"
+                f"Nombre: {lead.name}\n"
+                f"Auto: {lead.car_make or ''} {lead.car_model or ''} {lead.car_year or ''}\n"
+                f"Seguro actual: {lead.current_insurance or 'No especificado'}\n"
+                f"Estado: {lead.status}\n"
+                f"Notas: {lead.notes or ''}\n"
+            )
+            system_content = system_content + lead_context
 
     messages = [{"role": "system", "content": system_content}] + list(body.messages)
 
-    # Set up streaming client — use agent config when available (Phase 7)
-    _model = agent.model if agent is not None else client.model
+    # Set up streaming client — use resolved model config
     streaming_client = OpenAIStreamingClient(
         api_key=api_key,
         model=_model,
     )
 
-    # Parse tools from agent config (Phase 7) or client config (legacy)
-    _tools_enabled_str = (
-        agent.tools_enabled if agent is not None else client.tools_enabled
-    )
-    tools = None
-    if _tools_enabled_str:
-        try:
-            enabled_tool_names = json.loads(_tools_enabled_str)
-            tools = _build_tool_definitions(enabled_tool_names)
-        except (json.JSONDecodeError, TypeError):
-            tools = None
-
     # Create or reuse session ID
     # Keyed by (client_id, conversation_id) to prevent cross-tenant state leakage
-    conv_state = (
-        session_store.get((client_id, conversation_id)) if conversation_id else None
-    )
     session_id: str | None = None
     if conversation_id and conv_state:
         session_id = conv_state.session_id
@@ -713,11 +880,20 @@ async def _process_custom_llm_request(
         new_session_id = (
             str(new_session.id) if hasattr(new_session, "id") else str(new_session)
         )
+
+        # VSC-8 Fix B (restructured): Use context already built inside the DB session above.
+        # build_voice_context was called earlier (NEW SESSION PATH branch) and the result
+        # stored in _new_session_context — no second call needed here. This eliminates the
+        # duplicate build_memory_context() that caused 8 redundant DB queries on first turn.
+        # When the earlier build failed, _new_session_context is None (graceful degradation).
+        initial_context: "VoiceSessionContext | None" = _new_session_context
+
         session_store.create(
             conversation_id=conversation_id,
             client_id=client_id,
             lead_id=coerced_lead_id,
             session_id=new_session_id,
+            context=initial_context,
         )
         session_id = new_session_id
         conv_state = session_store.get((client_id, conversation_id))
@@ -728,9 +904,7 @@ async def _process_custom_llm_request(
         if session_id:
             schedule_user_turn_persist(session_id, body.messages)
 
-        # Use agent config when available (Phase 7), else client config (legacy)
-        _temperature = agent.temperature if agent is not None else client.temperature
-        _max_tokens = agent.max_tokens if agent is not None else client.max_tokens
+        # _temperature and _max_tokens are pre-resolved above (from cached context or agent config)
         try:
             async for chunk in _stream_llm_response(
                 client=streaming_client,
