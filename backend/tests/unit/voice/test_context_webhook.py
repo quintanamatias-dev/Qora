@@ -27,13 +27,14 @@ from pydantic import SecretStr
 
 def make_voice_context(
     system_prompt: str = "You are Aria. Cached system prompt.",
-    skills_content: str = "",
+    skills_content: str | None = None,
     misc_notes: str = "",
     lead_profile: str = "",
     model: str = "gpt-4o",
     temperature: float = 0.7,
     max_tokens: int = 300,
     tools: list | None = None,
+    skills_index: str | None = None,
 ):
     from app.voice.context import VoiceSessionContext
 
@@ -46,6 +47,7 @@ def make_voice_context(
         temperature=temperature,
         max_tokens=max_tokens,
         tools=tools,
+        skills_index=skills_index,
     )
 
 
@@ -400,9 +402,10 @@ async def test_cached_path_includes_all_4_components(webhook_app_client):
 
     ctx = make_voice_context(
         system_prompt="Base system prompt.",
-        skills_content="## Skill: Objeción precio\nSi dicen caro, responder con valor.",
+        skills_content=None,
         misc_notes="Lead menciona que ya tiene seguro con Mapfre.",
         lead_profile="[CONTEXTO DEL LEAD]\nNombre: Juan García\nAuto: Toyota Corolla 2020",
+        skills_index="## Skill: Objeción precio\nSi dicen caro, responder con valor.",
     )
 
     conversation_id = "all-components-conv-001"
@@ -444,7 +447,7 @@ async def test_cached_path_includes_all_4_components(webhook_app_client):
         f"system_prompt missing from system message. Got:\n{system_content!r}"
     )
     assert "Skill: Objeción precio" in system_content, (
-        f"skills_content missing from system message. Got:\n{system_content!r}"
+        f"skills_index missing from system message. Got:\n{system_content!r}"
     )
     assert "Lead menciona que ya tiene seguro con Mapfre." in system_content, (
         f"misc_notes missing from system message. Got:\n{system_content!r}"
@@ -534,9 +537,10 @@ async def test_lazy_fallback_path_includes_all_4_components(webhook_app_client):
 
     lazy_ctx = make_voice_context(
         system_prompt="Lazy base prompt.",
-        skills_content="## Skill: Lazy skill content",
+        skills_content=None,
         misc_notes="Notas de llamada anterior.",
         lead_profile="[CONTEXTO DEL LEAD]\nNombre: María López",
+        skills_index="## Skill: Lazy skill content",
     )
 
     captured_messages: list[list[dict]] = []
@@ -574,7 +578,7 @@ async def test_lazy_fallback_path_includes_all_4_components(webhook_app_client):
         f"system_prompt missing from lazy fallback system message. Got:\n{system_content!r}"
     )
     assert "Lazy skill content" in system_content, (
-        f"skills_content missing from lazy fallback system message. Got:\n{system_content!r}"
+        f"skills_index missing from lazy fallback system message. Got:\n{system_content!r}"
     )
     assert "Notas de llamada anterior." in system_content, (
         f"misc_notes missing from lazy fallback system message. Got:\n{system_content!r}"

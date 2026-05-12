@@ -40,7 +40,9 @@ class VoiceSessionContext:
 
     Fields:
         system_prompt: Fully rendered system prompt, ready to use as system message.
-        skills_content: Concatenated *.agent-skill.md files (empty if none).
+        skills_content: Legacy field — always None in registry mode. Kept for
+            backward compatibility with existing tests that construct this dataclass
+            directly. Do NOT use for new code; use skills_index instead.
         misc_notes: From extracted_facts["misc_notes"] (empty if absent/no lead).
         lead_profile: Formatted lead data block (empty if no lead).
         model: LLM model identifier from agent config.
@@ -51,10 +53,13 @@ class VoiceSessionContext:
             assembled system message. Set when the agent uses template vars ({{lead_name}},
             etc.) so render_for_agent() already substituted lead data — appending lead_profile
             would duplicate it (Issue #21).
+        skills_index: Formatted ## Available Skills index block from registry.yaml.
+            None when agent has no registry (no skills injected). Set by build_voice_context()
+            from load_agent_skills() output.
     """
 
     system_prompt: str
-    skills_content: str
+    skills_content: str | None
     misc_notes: str
     lead_profile: str
     model: str
@@ -66,6 +71,8 @@ class VoiceSessionContext:
     tts_speed: float = 0.95
     tts_stability: float = 0.4
     tts_similarity_boost: float = 0.75
+    # Registry-based skills index — NEW in Phase 1 (dynamic-agent-skills)
+    skills_index: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -151,8 +158,13 @@ async def build_voice_context(
     # Render system prompt (may raise — let it propagate per VSC-2)
     system_prompt = await loader.render_for_agent(agent, lead, db=db, client=client)
 
-    # Load skills (filesystem, no DB) — always succeeds (empty string on missing)
-    skills_content = await loader.load_agent_skills(client_id, agent_slug)
+    # Load skills registry index — returns ## Available Skills block or '' if no registry
+    # The old glob-all behavior is REMOVED. No registry.yaml → no skills.
+    _skills_raw = await loader.load_agent_skills(client_id, agent_slug)
+    # Normalize: empty string → None (no block injected into prompt)
+    skills_index: str | None = _skills_raw if _skills_raw else None
+    # skills_content is always None in registry mode
+    skills_content: str | None = None
 
     # Extract misc_notes from lead.extracted_facts
     # misc_notes in DB can be a dict {"notes": [...]} or a plain string
@@ -235,4 +247,5 @@ async def build_voice_context(
         tts_speed=tts_speed,
         tts_stability=tts_stability,
         tts_similarity_boost=tts_similarity_boost,
+        skills_index=skills_index,
     )

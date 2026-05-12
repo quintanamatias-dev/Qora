@@ -246,8 +246,18 @@ async def test_build_voice_context_system_prompt_from_render_for_agent():
 
 
 @pytest.mark.asyncio
-async def test_build_voice_context_skills_content_from_load_agent_skills():
-    """VSC-2: skills_content equals output of PromptLoader.load_agent_skills()."""
+async def test_build_voice_context_skills_index_from_load_agent_skills():
+    """Phase 1 (dynamic-agent-skills): skills_index holds load_agent_skills() result.
+
+    The old skills_content field is always None in registry mode.
+    load_agent_skills() now returns a ## Available Skills index block (or '').
+    build_voice_context() stores it in skills_index (None when empty string).
+
+    GIVEN load_agent_skills returns a non-empty index block
+    WHEN build_voice_context() is called
+    THEN skills_index equals the load_agent_skills() output
+    AND skills_content is None (registry mode is the only mode)
+    """
     from app.voice.context import build_voice_context
 
     agent = make_agent(client_id="acme", slug="aria")
@@ -255,12 +265,12 @@ async def test_build_voice_context_skills_content_from_load_agent_skills():
     client = make_client()
     mock_db = AsyncMock()
 
-    expected_skills = "# Greeting skill\n\n---\n\n# Objections skill"
+    expected_index = "## Available Skills\n| qora-info | Qora details | when needed |"
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         mock_instance = MockLoader.return_value
         mock_instance.render_for_agent = AsyncMock(return_value="prompt")
-        mock_instance.load_agent_skills = AsyncMock(return_value=expected_skills)
+        mock_instance.load_agent_skills = AsyncMock(return_value=expected_index)
 
         result = await build_voice_context(
             agent=agent,
@@ -269,7 +279,8 @@ async def test_build_voice_context_skills_content_from_load_agent_skills():
             client=client,
         )
 
-    assert result.skills_content == expected_skills
+    assert result.skills_index == expected_index
+    assert result.skills_content is None  # Always None in registry mode
     # Verify load_agent_skills was called with correct args
     mock_instance.load_agent_skills.assert_called_once_with("acme", "aria")
 

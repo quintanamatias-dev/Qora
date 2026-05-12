@@ -516,15 +516,24 @@ async def custom_llm_path_route(
 
 
 def _assemble_context_system_content(ctx: "VoiceSessionContext") -> str:
-    """Assemble the full system message content from all 4 VoiceSessionContext components.
+    """Assemble the full system message content from VoiceSessionContext components.
 
-    Components are concatenated with a blank-line separator. Empty components are
-    skipped so no trailing whitespace or stray separators are added.
+    Assembly order:
+    1. system_prompt (always included)
+    2. skills_index (## Available Skills block, when not None/empty)
+    3. misc_notes (when not empty)
+    4. lead_profile (when not empty and skip_lead_profile_in_assembly is False)
+
+    Empty components are skipped so no trailing whitespace or stray separators
+    are added.
 
     When ctx.skip_lead_profile_in_assembly is True, the lead_profile block is omitted.
     This happens when the agent uses template vars ({{lead_name}}, etc.) — render_for_agent()
     already substituted lead data into system_prompt, so appending lead_profile would
     duplicate it (Issue #21).
+
+    Note: skills_index replaces the old skills_content field. skills_content is kept
+    in the dataclass for backward compatibility but is never injected here.
 
     Args:
         ctx: The cached VoiceSessionContext for this session.
@@ -533,8 +542,8 @@ def _assemble_context_system_content(ctx: "VoiceSessionContext") -> str:
         A single string ready to be used as the system message content.
     """
     parts = [ctx.system_prompt]
-    if ctx.skills_content:
-        parts.append(ctx.skills_content)
+    if ctx.skills_index:
+        parts.append(ctx.skills_index)
     if ctx.misc_notes:
         parts.append(ctx.misc_notes)
     if ctx.lead_profile and not ctx.skip_lead_profile_in_assembly:
