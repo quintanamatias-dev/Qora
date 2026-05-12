@@ -1,5 +1,7 @@
 # QORA — System Architecture
 
+> **Canonical project truth:** this file is the source of truth for Qora's runtime architecture, configuration ownership, and major implementation decisions. If another README or test comment disagrees with this document, update that file or update this document deliberately in the same change.
+
 ## Overview
 
 QORA is a Custom LLM webhook server that powers ElevenLabs Conversational AI agents with GPT-4o, multi-tenant routing, lead context injection, and CRM tool execution.
@@ -72,16 +74,35 @@ QORA is a Custom LLM webhook server that powers ElevenLabs Conversational AI age
 
 A single-page browser application. It connects to ElevenLabs via WebSocket using a signed URL (fetched from `/api/v1/voice/signed-url`). It sends microphone audio as PCM chunks, receives TTS audio and transcript events, and displays the conversation in real time.
 
+The demo page does **not** own prompt, model, or voice-tuning defaults. It reads the selected agent configuration from Qora and sends only safe ElevenLabs runtime overrides generated from that agent state.
+
 **WebSocket close handling:**
 - Code `1000` → "Conversación finalizada" (clean end)
 - Code `1006` or other → "Se perdió la conexión" + reconnect button
+
+### Admin UI (`frontend/src/features/admin`)
+
+The **only** admin UI is the React/Vite frontend at:
+
+```text
+http://localhost:5173/admin
+```
+
+The backend does not serve a second editable admin. Requests to backend `/admin` redirect to the canonical frontend admin. Do not recreate or edit `backend/app/static/admin/index.html`; that static admin was removed to avoid two competing sources of truth.
+
+Admin responsibilities:
+- Client CRUD.
+- Agent CRUD.
+- Per-agent runtime configuration, including Voice Tuning (`tts_speed`, `tts_stability`, `tts_similarity_boost`).
 
 ### ElevenLabs Agent
 
 The ElevenLabs agent is configured in the ElevenLabs dashboard with:
 - **Custom LLM URL**: points to the QORA webhook
 - **customLlmExtraBody**: `{ "client_id": "quintana-seguros" }` (injected into every request)
-- **Voice**: configured per tenant in the DB (`voice_id` column)
+- **Voice**: bound to a Qora Agent (`Agent.voice_id` / `Agent.elevenlabs_agent_id`)
+
+Qora may send ElevenLabs conversation overrides, but Qora is the owner of the values. Do not manually tune runtime values in multiple places and then rely on dashboard state.
 
 ### Custom LLM Webhook (`app/voice/webhook.py`)
 
@@ -145,9 +166,47 @@ Dispatches GPT-4o tool calls to implementations:
 ### Source of Truth
 
 - `Client` table: tenant identity, broker metadata, scheduler config.
-- `Agent` table: per-client AI agent config (voice, model, temperature, tools, `system_prompt` as legacy fallback).
+- `Agent` table: per-client AI agent runtime config.
 - `Lead` table: lead contact data, status, extracted facts, call count.
 - `CallSession` table: per-call records with summaries and outcome data.
+
+### Runtime Configuration Sources
+
+| Concern | Source of truth | Fallback / notes |
+|---------|-----------------|------------------|
+| Admin UI | `frontend/src/features/admin` | Backend `/admin` redirects to frontend admin. No static backend admin. |
+| Agent identity/routing | `Agent` DB row | `client_id`, `agent_id`, `slug`, `is_default`, `is_active`. |
+| LLM model params | `Agent.model`, `Agent.temperature`, `Agent.max_tokens` | Legacy `Client` columns are fallback only where still present. |
+| Voice binding | `Agent.voice_id`, `Agent.elevenlabs_agent_id` | ElevenLabs dashboard must point to Qora Custom LLM, but Qora owns agent binding. |
+| Voice tuning / TTS overrides | `Agent.tts_speed`, `Agent.tts_stability`, `Agent.tts_similarity_boost` | `Settings`/`.env` are defaults/backfill only, not the live runtime source once an Agent exists. |
+| System prompt behavior | `backend/clients/{client_id}/agents/{agent_slug}/system-prompt.md` | DB `agent.system_prompt` is legacy fallback only. |
+| Runtime knowledge / product-agent skills | `backend/clients/{client_id}/agents/{agent_slug}/skills/*.agent-skill.md` | Skill files are client/agent-scoped; never leak another client into a demo agent. |
+| Lead/customer context | `Lead` + call memory tables | Injected by `build_voice_context` / prompt renderer per call. |
+
+**Do not add new runtime knobs to the browser.** Browser UI may display and forward resolved values, but the source belongs to the Agent row or filesystem prompt/skill files above.
+
+### Qora Demo Agent (`qora-demo / qora-explainer`)
+
+The Qora explainer demo is configured as:
+
+```text
+backend/clients/qora-demo/agents/qora-explainer/
+├── system-prompt.md                         ← behavior / soul: Mariano
+└── skills/
+    └── Qora-info.agent-skill.md             ← factual Qora knowledge
+```
+
+Important behavior decisions:
+- The agent is **Mariano**, not Sofia.
+- It presents itself when the call starts because the intended flow is outbound-style: Qora/ElevenLabs initiates contact.
+- It must not know or mention client-specific agents from other tenants.
+- It speaks in short, semi-formal Rioplatense Spanish by default.
+- Qora-info is knowledge, not personality; `system-prompt.md` is the dominant behavior contract.
+
+Voice tuning constraints:
+- `tts_speed` must stay in the ElevenLabs-safe range `0.7–1.2`.
+- `tts_stability` and `tts_similarity_boost` must stay in `0.0–1.0`.
+- If ElevenLabs rejects a TTS override with WebSocket `1008`, the browser reconnects once without that override.
 
 **Agent system prompts**: The filesystem file is the source of truth.
 
@@ -156,6 +215,14 @@ backend/clients/{client_id}/agents/{agent_slug}/system-prompt.md   ← SOURCE OF
 ```
 
 When this file exists, it overrides `agent.system_prompt` (DB). The DB field is a legacy fallback for agents not yet migrated to the filesystem layout. This makes prompts visible, reviewable in git, and independent of database state.
+
+**Agent runtime skills / knowledge**: product-agent skill files are loaded from:
+
+```text
+backend/clients/{client_id}/agents/{agent_slug}/skills/*.agent-skill.md
+```
+
+Do not use `SKILL.md` for runtime product-agent skills. `SKILL.md` is reserved for project developer skills under root `skills/`.
 
 ### Client and Agent Configuration at Startup
 

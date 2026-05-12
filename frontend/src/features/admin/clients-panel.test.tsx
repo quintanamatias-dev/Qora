@@ -25,10 +25,10 @@ function renderClientsPanel() {
 }
 
 describe('ClientsPanel', () => {
-  it('renders Create Client form', () => {
+  it('renders New Client form section', () => {
     renderClientsPanel()
-    // "Create Client" appears as heading and button — use heading role to disambiguate
-    expect(screen.getByRole('heading', { name: 'Create Client' })).toBeInTheDocument()
+    // "New Client" is the ALL-CAPS card section title in the updated admin design
+    expect(screen.getByText('New Client')).toBeInTheDocument()
   })
 
   it('renders Client ID, Broker Name, and Agent Name input fields', () => {
@@ -56,13 +56,13 @@ describe('ClientsPanel', () => {
     expect(screen.getByText('Demo Broker')).toBeInTheDocument()
   })
 
-  it('renders Clients table heading', async () => {
+  it('renders All Clients table heading', async () => {
     renderClientsPanel()
-    // The "Clients" card heading
+    // The "All Clients" card section title in the updated admin design
     await waitFor(() => {
       expect(screen.queryByTestId('clients-loading')).not.toBeInTheDocument()
     })
-    expect(screen.getByText('Clients')).toBeInTheDocument()
+    expect(screen.getByText('All Clients')).toBeInTheDocument()
   })
 
   it('shows Edit and Deactivate buttons for active clients', async () => {

@@ -2,7 +2,7 @@
  * AdminPage tests
  *
  * Verifies:
- * - Renders tabs (Clients, Agents)
+ * - Renders tabs (Clients, Agents & Voice Config)
  * - Default tab is Clients
  * - Switching tabs shows correct panel
  */
@@ -33,40 +33,40 @@ function renderAdminPage() {
 }
 
 describe('AdminPage', () => {
-  it('renders Clients and Agents tabs', () => {
+  it('renders Clients and Agents & Voice Config tabs', () => {
     renderAdminPage()
     expect(screen.getByRole('tab', { name: 'Clients' })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Agents' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Agents & Voice Config' })).toBeInTheDocument()
   })
 
   it('default tab is Clients (aria-selected=true)', () => {
     renderAdminPage()
     const clientsTab = screen.getByRole('tab', { name: 'Clients' })
-    const agentsTab = screen.getByRole('tab', { name: 'Agents' })
+    const agentsTab = screen.getByRole('tab', { name: 'Agents & Voice Config' })
     expect(clientsTab).toHaveAttribute('aria-selected', 'true')
     expect(agentsTab).toHaveAttribute('aria-selected', 'false')
   })
 
-  it('renders Create Client form by default (Clients tab)', () => {
+  it('renders New Client section by default (Clients tab)', () => {
     renderAdminPage()
-    // "Create Client" appears as heading and button — use heading role to disambiguate
-    expect(screen.getByRole('heading', { name: 'Create Client' })).toBeInTheDocument()
+    // "New Client" is the ALL-CAPS card title in the updated admin design
+    expect(screen.getByText('New Client')).toBeInTheDocument()
   })
 
-  it('switching to Agents tab shows AgentsPanel', async () => {
+  it('switching to Agents & Voice Config tab shows AgentsPanel', async () => {
     renderAdminPage()
-    const agentsTab = screen.getByRole('tab', { name: 'Agents' })
+    const agentsTab = screen.getByRole('tab', { name: 'Agents & Voice Config' })
     await userEvent.click(agentsTab)
     expect(screen.getByText('Select Client')).toBeInTheDocument()
   })
 
   it('switching back to Clients tab shows ClientsPanel', async () => {
     renderAdminPage()
-    const agentsTab = screen.getByRole('tab', { name: 'Agents' })
+    const agentsTab = screen.getByRole('tab', { name: 'Agents & Voice Config' })
     await userEvent.click(agentsTab)
     const clientsTab = screen.getByRole('tab', { name: 'Clients' })
     await userEvent.click(clientsTab)
-    // "Create Client" appears as heading and button — use heading role to disambiguate
-    expect(screen.getByRole('heading', { name: 'Create Client' })).toBeInTheDocument()
+    // "New Client" is the ALL-CAPS card title in the updated admin design
+    expect(screen.getByText('New Client')).toBeInTheDocument()
   })
 })

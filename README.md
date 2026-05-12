@@ -12,6 +12,8 @@ QORA is a B2B SaaS platform that replaces traditional call center agents with AI
 
 Full client dashboard, CRM, internal admin panel, call scheduler, post-call analysis, agent entity model, and unified design system — all implemented and tested.
 
+> **Architecture source of truth:** `docs/architecture.md` owns Qora's runtime architecture, configuration precedence, and source-of-truth decisions. Keep README high-level; put detailed architecture decisions there.
+
 ### What works today
 
 | Feature | Status |

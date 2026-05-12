@@ -473,3 +473,127 @@ def test_readiness_missing_prompt():
     )
     assert resp.is_conversation_ready is False
     assert resp.has_prompt is False
+
+
+# ---------------------------------------------------------------------------
+# TTS fields — AgentCreate defaults, ranges, AgentUpdate, AgentResponse
+# ---------------------------------------------------------------------------
+
+
+def test_agent_create_tts_defaults():
+    """AgentCreate defaults: tts_speed=0.95, tts_stability=0.4, tts_similarity_boost=0.75."""
+    from app.agents.schemas import AgentCreate
+
+    agent = AgentCreate(slug="tts-default", name="TTS Agent", voice_id="v1")
+
+    assert agent.tts_speed == 0.95
+    assert agent.tts_stability == 0.4
+    assert agent.tts_similarity_boost == 0.75
+
+
+def test_agent_create_tts_custom_values():
+    """AgentCreate accepts explicit TTS values within valid ranges."""
+    from app.agents.schemas import AgentCreate
+
+    agent = AgentCreate(
+        slug="tts-custom",
+        name="Custom TTS",
+        voice_id="v1",
+        tts_speed=1.2,
+        tts_stability=0.5,
+        tts_similarity_boost=0.8,
+    )
+
+    assert agent.tts_speed == 1.2
+    assert agent.tts_stability == 0.5
+    assert agent.tts_similarity_boost == 0.8
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("tts_speed", 0.1),       # below EL min 0.7 — was incorrectly allowed before
+        ("tts_speed", 0.6),       # below EL min 0.7 (lower-bound boundary)
+        ("tts_speed", 1.3),       # above EL max 1.2 (upper-bound boundary)
+        ("tts_speed", 2.0),       # above EL max 1.2 — was incorrectly allowed before
+        ("tts_stability", -0.1),  # below min 0.0
+        ("tts_stability", 1.1),   # above max 1.0
+        ("tts_similarity_boost", -0.1),  # below min 0.0
+        ("tts_similarity_boost", 1.1),   # above max 1.0
+    ],
+)
+def test_agent_create_tts_out_of_range_raises_422(field: str, value: float):
+    """AgentCreate rejects TTS fields outside their valid EL ranges with ValidationError.
+
+    ElevenLabs Conversational AI speed range is [0.7, 1.2]. Values outside this
+    range cause 1008 WebSocket rejection. stability and similarity_boost are [0.0, 1.0].
+    """
+    from app.agents.schemas import AgentCreate
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentCreate(
+            slug="tts-bad",
+            name="Bad TTS",
+            voice_id="v1",
+            **{field: value},
+        )
+
+    assert field in str(exc_info.value)
+
+
+def test_agent_update_tts_fields_optional():
+    """AgentUpdate accepts TTS fields when provided; they are optional.
+
+    Uses 1.1 — within EL valid range [0.7, 1.2].
+    """
+    from app.agents.schemas import AgentUpdate
+
+    update = AgentUpdate(tts_speed=1.1, tts_stability=0.3, tts_similarity_boost=0.9)
+    data = update.model_dump(exclude_unset=True)
+
+    assert data["tts_speed"] == 1.1
+    assert data["tts_stability"] == 0.3
+    assert data["tts_similarity_boost"] == 0.9
+
+
+def test_agent_update_empty_body_does_not_include_tts():
+    """AgentUpdate with empty body does not include TTS fields in unset dump."""
+    from app.agents.schemas import AgentUpdate
+
+    update = AgentUpdate()
+    data = update.model_dump(exclude_unset=True)
+
+    assert "tts_speed" not in data
+    assert "tts_stability" not in data
+    assert "tts_similarity_boost" not in data
+
+
+def test_agent_response_includes_tts_fields():
+    """AgentResponse includes tts_speed, tts_stability, tts_similarity_boost."""
+    from datetime import datetime, timezone
+    from app.agents.schemas import AgentResponse
+
+    now = datetime.now(timezone.utc)
+    resp = AgentResponse(
+        agent_id="tts-resp-1",
+        client_id="c1",
+        slug="main",
+        name="Main",
+        voice_id="v1",
+        system_prompt=None,
+        knowledge_base=None,
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools_enabled=[],
+        is_active=True,
+        is_default=False,
+        created_at=now,
+        tts_speed=0.9,
+        tts_stability=0.5,
+        tts_similarity_boost=0.8,
+    )
+
+    assert resp.tts_speed == 0.9
+    assert resp.tts_stability == 0.5
+    assert resp.tts_similarity_boost == 0.8

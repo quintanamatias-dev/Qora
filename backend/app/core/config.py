@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     port: int = 8000
     log_level: str = "INFO"
     debug: bool = False
+    frontend_url: str = "http://localhost:5173"
 
     # ------------------------------------------------------------------
     # Filler

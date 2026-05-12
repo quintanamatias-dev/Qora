@@ -85,10 +85,12 @@ describe('REQ-4.1 Production route config — correct rendering', () => {
     expect(routes).toHaveLength(4)
   })
 
-  it('/admin renders AdminLayout with "QORA Admin" header', () => {
+  it('/admin renders AdminLayout with QORA logo and Admin badge', () => {
     renderAt('/admin')
     expect(screen.getByTestId('admin-header')).toBeInTheDocument()
-    expect(screen.getByText('QORA Admin')).toBeInTheDocument()
+    // Header shows "QORA" logo + "Admin" badge as separate elements
+    expect(screen.getByText('QORA')).toBeInTheDocument()
+    expect(screen.getByText('Admin')).toBeInTheDocument()
   })
 
   it('/app/:clientId children include dashboard, leads, leads/:leadId, and import', () => {

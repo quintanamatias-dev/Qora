@@ -160,9 +160,11 @@ export function ClientsPanel() {
 
       {/* Create Client form */}
       <Card>
-        <h2 className="font-display text-base font-semibold text-on-surface mb-4">
-          Create Client
-        </h2>
+        <div className="flex items-center justify-between mb-4">
+          <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-on-surface-variant">
+            New Client
+          </p>
+        </div>
         <form onSubmit={handleCreateSubmit} className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <Input
@@ -202,9 +204,12 @@ export function ClientsPanel() {
       {/* Edit Client inline panel */}
       {editingClient && (
         <Card stripe>
-          <h2 className="font-display text-base font-semibold text-on-surface mb-4">
-            Edit Client: <code className="text-primary font-mono text-sm">{editingClient.client_id}</code>
-          </h2>
+          <div className="mb-4">
+            <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-on-surface-variant">
+              Edit Client
+            </p>
+            <code className="text-primary font-mono text-xs mt-0.5 block">{editingClient.client_id}</code>
+          </div>
           <form onSubmit={handleEditSubmit} className="space-y-4">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <Input
@@ -242,9 +247,16 @@ export function ClientsPanel() {
 
       {/* Clients table */}
       <Card>
-        <h2 className="font-display text-base font-semibold text-on-surface mb-4">
-          Clients
-        </h2>
+        <div className="flex items-center justify-between mb-4">
+          <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-on-surface-variant">
+            All Clients
+          </p>
+          <div className="flex items-center gap-3">
+            <span className="text-[0.75rem] text-on-surface-variant">
+              Voice config: <strong className="text-on-surface">Agents &amp; Voice Config</strong> tab
+            </span>
+          </div>
+        </div>
 
         {isLoading && (
           <div data-testid="clients-loading" className="space-y-2">

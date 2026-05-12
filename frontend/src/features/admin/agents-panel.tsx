@@ -111,6 +111,9 @@ export function AgentsPanel() {
     model: 'gpt-4o',
     system_prompt: '',
     tools_enabled: [...AVAILABLE_TOOLS],
+    tts_speed: 0.95,
+    tts_stability: 0.4,
+    tts_similarity_boost: 0.75,
   })
 
   // Edit form state
@@ -123,6 +126,9 @@ export function AgentsPanel() {
     knowledge_base: '',
     temperature: 0.7,
     max_tokens: 512,
+    tts_speed: 0.95,
+    tts_stability: 0.4,
+    tts_similarity_boost: 0.75,
   })
 
   function showToast(message: string, status: 'success' | 'error') {
@@ -163,6 +169,9 @@ export function AgentsPanel() {
         model: createForm.model.trim() || 'gpt-4o',
         system_prompt: createForm.system_prompt.trim() || null,
         tools_enabled: createForm.tools_enabled,
+        tts_speed: createForm.tts_speed,
+        tts_stability: createForm.tts_stability,
+        tts_similarity_boost: createForm.tts_similarity_boost,
       },
       {
         onSuccess: () => {
@@ -174,6 +183,9 @@ export function AgentsPanel() {
             model: 'gpt-4o',
             system_prompt: '',
             tools_enabled: [...AVAILABLE_TOOLS],
+            tts_speed: 0.95,
+            tts_stability: 0.4,
+            tts_similarity_boost: 0.75,
           })
         },
         onError: (err) => {
@@ -196,6 +208,9 @@ export function AgentsPanel() {
       knowledge_base: agent.knowledge_base ?? '',
       temperature: agent.temperature ?? 0.7,
       max_tokens: agent.max_tokens ?? 512,
+      tts_speed: agent.tts_speed ?? 0.95,
+      tts_stability: agent.tts_stability ?? 0.4,
+      tts_similarity_boost: agent.tts_similarity_boost ?? 0.75,
     })
   }
 
@@ -219,6 +234,9 @@ export function AgentsPanel() {
           knowledge_base: editForm.knowledge_base || null,
           temperature: editForm.temperature,
           max_tokens: editForm.max_tokens,
+          tts_speed: editForm.tts_speed,
+          tts_stability: editForm.tts_stability,
+          tts_similarity_boost: editForm.tts_similarity_boost,
         },
       },
       {
@@ -264,9 +282,11 @@ export function AgentsPanel() {
 
       {/* Client selector */}
       <Card>
-        <h2 className="font-display text-base font-semibold text-on-surface mb-4">
-          Select Client
-        </h2>
+        <div className="mb-4">
+          <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-on-surface-variant">
+            Select Client
+          </p>
+        </div>
         <div className="max-w-xs">
           <Select
             label="Client"
@@ -292,9 +312,12 @@ export function AgentsPanel() {
           {/* Edit Agent inline panel */}
           {editingAgent && (
             <Card stripe>
-              <h2 className="font-display text-base font-semibold text-on-surface mb-4">
-                Edit Agent: <code className="text-primary font-mono text-sm">{editingAgent.slug}</code>
-              </h2>
+              <div className="mb-4">
+                <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-on-surface-variant">
+                  Edit Agent
+                </p>
+                <code className="text-primary font-mono text-xs mt-0.5 block">{editingAgent.slug}</code>
+              </div>
 
               {/* Readiness Checklist */}
               <div className="mb-6 p-4 rounded-md border border-surface-container-high bg-surface-container/50">
@@ -424,6 +447,53 @@ export function AgentsPanel() {
 
                 <div>
                   <p className="text-xs font-medium uppercase tracking-widest text-on-surface-variant mb-2">
+                    Voice Tuning
+                  </p>
+                  <p className="text-xs text-on-surface-variant mb-3">
+                    Adjust how the voice sounds during live calls. Changes take effect on the next call.
+                  </p>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    <div>
+                      <Input
+                        label="Speed"
+                        type="number"
+                        min={0.7}
+                        max={1.2}
+                        step={0.05}
+                        value={String(editForm.tts_speed)}
+                        onChange={(e) =>
+                          setEditForm((f) => ({ ...f, tts_speed: parseFloat(e.target.value) || 0.95 }))
+                        }
+                      />
+                      <p className="text-xs text-on-surface-variant mt-1">EL range: 0.7 – 1.2</p>
+                    </div>
+                    <Input
+                      label="Stability"
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={String(editForm.tts_stability)}
+                      onChange={(e) =>
+                        setEditForm((f) => ({ ...f, tts_stability: parseFloat(e.target.value) || 0.4 }))
+                      }
+                    />
+                    <Input
+                      label="Similarity boost"
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={String(editForm.tts_similarity_boost)}
+                      onChange={(e) =>
+                        setEditForm((f) => ({ ...f, tts_similarity_boost: parseFloat(e.target.value) || 0.75 }))
+                      }
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-widest text-on-surface-variant mb-2">
                     Tools Enabled
                   </p>
                   <div className="flex flex-wrap gap-4">
@@ -456,9 +526,12 @@ export function AgentsPanel() {
 
           {/* Agents table */}
           <Card>
-            <h2 className="font-display text-base font-semibold text-on-surface mb-4">
-              Agents for <code className="text-primary font-mono text-sm">{selectedClientId}</code>
-            </h2>
+            <div className="flex items-center justify-between mb-4">
+              <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-on-surface-variant">
+                Agents
+              </p>
+              <code className="font-mono text-xs text-primary">{selectedClientId}</code>
+            </div>
 
             {agentsLoading && (
               <div data-testid="agents-loading" className="space-y-2">
@@ -489,6 +562,7 @@ export function AgentsPanel() {
                     <TableHead>Name</TableHead>
                     <TableHead>Voice ID</TableHead>
                     <TableHead>Model</TableHead>
+                    <TableHead>Voice Tuning</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
@@ -505,6 +579,13 @@ export function AgentsPanel() {
                       </TableCell>
                       <TableCell>
                         <code className="font-mono text-xs text-on-surface-variant">{agent.model}</code>
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-xs text-on-surface-variant space-y-0.5" data-testid={`voice-tuning-${agent.agent_id}`}>
+                          <div>Speed: <span className="font-medium text-on-surface">{agent.tts_speed}</span></div>
+                          <div>Stability: <span className="font-medium text-on-surface">{agent.tts_stability}</span></div>
+                          <div>Similarity: <span className="font-medium text-on-surface">{agent.tts_similarity_boost}</span></div>
+                        </div>
                       </TableCell>
                       <TableCell>
                         <div className="flex gap-1 flex-wrap">
@@ -557,9 +638,11 @@ export function AgentsPanel() {
 
           {/* Create Agent form */}
           <Card>
-            <h2 className="font-display text-base font-semibold text-on-surface mb-4">
-              Create Agent
-            </h2>
+            <div className="mb-4">
+              <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-on-surface-variant">
+                New Agent
+              </p>
+            </div>
             <form onSubmit={handleCreateSubmit} className="space-y-4">
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <Input
@@ -597,6 +680,52 @@ export function AgentsPanel() {
                 minRows={4}
                 placeholder="System prompt for the agent…"
               />
+              <div>
+                <p className="text-xs font-medium uppercase tracking-widest text-on-surface-variant mb-2">
+                  Voice Tuning
+                </p>
+                <p className="text-xs text-on-surface-variant mb-3">
+                  How the voice sounds during live calls. Defaults work well for most agents.
+                </p>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <div>
+                    <Input
+                      label="Speed"
+                      type="number"
+                      min={0.7}
+                      max={1.2}
+                      step={0.05}
+                      value={String(createForm.tts_speed)}
+                      onChange={(e) =>
+                        setCreateForm((f) => ({ ...f, tts_speed: parseFloat(e.target.value) || 0.95 }))
+                      }
+                    />
+                    <p className="text-xs text-on-surface-variant mt-1">EL range: 0.7 – 1.2</p>
+                  </div>
+                  <Input
+                    label="Stability"
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={String(createForm.tts_stability)}
+                    onChange={(e) =>
+                      setCreateForm((f) => ({ ...f, tts_stability: parseFloat(e.target.value) || 0.4 }))
+                    }
+                  />
+                  <Input
+                    label="Similarity boost"
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={String(createForm.tts_similarity_boost)}
+                    onChange={(e) =>
+                      setCreateForm((f) => ({ ...f, tts_similarity_boost: parseFloat(e.target.value) || 0.75 }))
+                    }
+                  />
+                </div>
+              </div>
               <div>
                 <p className="text-xs font-medium uppercase tracking-widest text-on-surface-variant mb-2">
                   Tools Enabled

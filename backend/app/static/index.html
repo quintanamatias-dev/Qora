@@ -136,6 +136,7 @@
     let isMuted = false;
     let currentClientData = {};  // holds the selected client's broker_name, agent_name, etc.
     let currentSessionId = null;  // ElevenLabs conversation_id for the active session
+    let currentAgentConfig = null;  // holds the selected agent's TTS config, or null if not available
 
     // ── Client/Lead loading ─────────────────────────────────────────────────────
     async function loadClients() {
@@ -199,6 +200,7 @@
         const defaultAgent = agents.find(a => a.is_default) || agents[0] || null;
 
         if (!defaultAgent) {
+          currentAgentConfig = null;
           if (agentHint) {
             agentHint.textContent = '⚠ Sin agente configurado para este cliente.';
             agentHint.style.display = 'block';
@@ -208,6 +210,20 @@
 
         const elId = defaultAgent.elevenlabs_agent_id || '';
         agentInput.value = elId;
+
+        // Store TTS config from agent API — used by buildInitPayload to set EL override.
+        // Do NOT fall back to hardcoded literals: if the API returns null for a field,
+        // hasTts will be false and buildInitPayload will skip the TTS override entirely.
+        const hasTts = (
+          defaultAgent.tts_speed            != null &&
+          defaultAgent.tts_stability        != null &&
+          defaultAgent.tts_similarity_boost != null
+        );
+        currentAgentConfig = hasTts ? {
+          tts_speed:            defaultAgent.tts_speed,
+          tts_stability:        defaultAgent.tts_stability,
+          tts_similarity_boost: defaultAgent.tts_similarity_boost,
+        } : null;
 
         if (!elId && agentHint) {
           agentHint.textContent = '⚠ Agente sin ElevenLabs Agent ID. Configuralo en el panel admin.';
@@ -409,22 +425,33 @@
     // ── WebSocket conversation ──────────────────────────────────────────────────
 
     // Internal: build the conversation_initiation_client_data payload.
-    // Speed + LLM overrides — V3 Conversational may reject these. Check console for 1008.
-    function buildInitPayload(lead, leadId, selectedClientId, skipTtsOverride, skipAgentOverride) {
-      // [tts] Speed override: only include if not explicitly skipped.
-      // [llm] Model override: only include if not explicitly skipped.
-      // If EL closes the WS with 1008, we reconnect without both (see openWebSocket).
-      const ttsOverride = skipTtsOverride ? {} : { tts: { speed: 1.2, similarity_boost: 1.0, stability: 0.40 } };
-      const agentOverride = skipAgentOverride ? {} : { agent: { prompt: { llm: 'gpt-4o' } } };
-      if (!skipTtsOverride) {
-        console.log('[tts] Sending speed override: 1.1');
-      }
-      if (!skipAgentOverride) {
-        console.log('[llm] Sending model override: gpt-4o');
+    // TTS override uses per-agent values from currentAgentConfig (fetched from Agent API).
+    // No agent.prompt or model override (would trigger 1008).
+    // The agent prompt and model are configured via the ElevenLabs dashboard / DB seed.
+    function buildInitPayload(lead, leadId, selectedClientId, skipTtsOverride) {
+      // [tts] Per-agent speed/stability/similarity_boost override — loaded from Agent API.
+      // If EL closes the WS with 1008, we reconnect without the TTS override (see openWebSocket).
+      // If currentAgentConfig is null (agent had no TTS values), skip the override entirely.
+      const sendTts = !skipTtsOverride && currentAgentConfig != null;
+      const ttsOverride = sendTts ? {
+        tts: {
+          speed:            currentAgentConfig.tts_speed,
+          stability:        currentAgentConfig.tts_stability,
+          similarity_boost: currentAgentConfig.tts_similarity_boost,
+        }
+      } : {};
+      if (sendTts) {
+        // Log the actual ElevenLabs payload keys (speed/stability/similarity_boost)
+        // so console verification matches what EL receives. EL range: speed=[0.7,1.2].
+        console.log('[tts] Sending EL conversation_config_override.tts:', {
+          speed:            currentAgentConfig.tts_speed,
+          stability:        currentAgentConfig.tts_stability,
+          similarity_boost: currentAgentConfig.tts_similarity_boost,
+        });
       }
       const payload = {
         type: 'conversation_initiation_client_data',
-        conversation_config_override: { ...agentOverride, ...ttsOverride },
+        conversation_config_override: { ...ttsOverride },
         dynamic_variables: {
           // Underscore-wrapped names match the agent's first-message template: {{_lead_name_}}
           _lead_name_:         lead.name             || '',
@@ -456,8 +483,8 @@
     }
 
     // Internal: open a WebSocket and wire all handlers.
-    // skipTtsOverride / skipAgentOverride: true on the fallback reconnect after a 1008 rejection.
-    function openWebSocket(agentId, leadId, selectedClientId, lead, skipTtsOverride, skipAgentOverride) {
+    // skipTtsOverride: true on the fallback reconnect after a 1008 rejection.
+    function openWebSocket(agentId, leadId, selectedClientId, lead, skipTtsOverride) {
       // Direct WebSocket — no SDK, no LiveKit, no WebRTC
       const wsUrl = 'wss://api.elevenlabs.io/v1/convai/conversation?agent_id=' + agentId;
       ws = new WebSocket(wsUrl);
@@ -471,7 +498,7 @@
         // and is forwarded to every custom-LLM request as elevenlabs_extra_body.
         // We propagate lead_id here so the backend can persist it on the CallSession.
         // We do NOT include client_id — it's already in the custom-LLM URL path.
-        const initPayload = buildInitPayload(lead, leadId, selectedClientId, skipTtsOverride, skipAgentOverride);
+        const initPayload = buildInitPayload(lead, leadId, selectedClientId, skipTtsOverride);
         ws.send(JSON.stringify(initPayload));
 
         // Re-enable stop/mute buttons — needed both for the initial connection and for
@@ -547,13 +574,13 @@
       ws.onclose = (e) => {
         console.log('WebSocket closed:', e.code, e.reason);
 
-        // 1008: ElevenLabs rejected an override (TTS or agent/LLM).
-        // Reconnect once with both overrides skipped — ONE-TIME fallback, no further retry.
-        if (e.code === 1008 && (!skipTtsOverride || !skipAgentOverride)) {
-          console.warn('[override] Override rejected (1008). Reconnecting without TTS + agent overrides.');
+        // 1008: ElevenLabs rejected the TTS override.
+        // Reconnect once without TTS override — ONE-TIME fallback, no further retry.
+        if (e.code === 1008 && !skipTtsOverride) {
+          console.warn('[override] TTS override rejected (1008). Reconnecting without TTS override.');
           cleanup();
-          setStatus('⚠ Override rechazado — reconectando sin overrides...', 'connecting');
-          openWebSocket(agentId, leadId, selectedClientId, lead, true, true);
+          setStatus('⚠ Override rechazado — reconectando sin override de TTS...', 'connecting');
+          openWebSocket(agentId, leadId, selectedClientId, lead, true);
           return;
         }
 

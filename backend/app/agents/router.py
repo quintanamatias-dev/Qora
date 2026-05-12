@@ -67,6 +67,18 @@ def _deserialize_tools(tools_enabled: str | list | None) -> list[str]:
     return []
 
 
+def _tts_field(agent: Agent, field: str, default: float) -> float:
+    """Return an agent TTS float column, falling back to *default* only when the
+    column is None (missing / not-yet-migrated row).
+
+    Using ``value or default`` is WRONG: it replaces the valid boundary value
+    ``0.0`` with the default because ``0.0`` is falsy in Python.  An explicit
+    ``None`` check is required.
+    """
+    value = getattr(agent, field, None)
+    return default if value is None else value
+
+
 def _agent_to_response(agent: Agent) -> AgentResponse:
     """Map an Agent ORM object to an AgentResponse schema."""
     has_prompt = bool(agent.system_prompt and agent.system_prompt.strip())
@@ -92,6 +104,9 @@ def _agent_to_response(agent: Agent) -> AgentResponse:
         has_prompt=has_prompt,
         has_elevenlabs_agent_id=has_el_id,
         is_conversation_ready=has_prompt and has_el_id,
+        tts_speed=_tts_field(agent, "tts_speed", 0.95),
+        tts_stability=_tts_field(agent, "tts_stability", 0.4),
+        tts_similarity_boost=_tts_field(agent, "tts_similarity_boost", 0.75),
     )
 
 
@@ -163,6 +178,9 @@ async def create_agent(
             is_active=True,
             is_default=payload.is_default,
             elevenlabs_agent_id=payload.elevenlabs_agent_id,
+            tts_speed=payload.tts_speed,
+            tts_stability=payload.tts_stability,
+            tts_similarity_boost=payload.tts_similarity_boost,
         )
     except ValueError as exc:
         msg = str(exc)

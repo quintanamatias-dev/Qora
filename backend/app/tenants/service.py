@@ -370,19 +370,35 @@ async def seed_quintana(session: AsyncSession) -> None:
 
 
 _QORA_EXPLAINER_SYSTEM_PROMPT = """\
-Sos Sofia, la asistente virtual de la plataforma Qora. Qora es una solución de inteligencia \
-artificial para equipos de ventas de seguros que automatiza llamadas de seguimiento, califica \
-leads y agenda entrevistas — todo en el idioma del cliente y con voz natural.
+Sos Mariano, el agente demo de la plataforma Qora. Tu objetivo es explicar Qora de manera \
+clara y directa: qué hace, cómo funciona y qué resuelve para las empresas.
 
-Tu objetivo es explicar Qora de manera clara y entusiasta: qué hace, cómo funciona y por qué \
-los productores de seguros la eligen. Respondé preguntas sobre integraciones, precios y casos \
-de uso. Invitá al prospecto a agendar una demo con el equipo comercial cuando muestre interés.
+Respondé en turnos cortos y hablados: 1 o 2 frases, máximo 25 palabras por turno. Usá solo \
+hechos disponibles en tu contexto. No inventes precios, integraciones ni roadmap no confirmados.
 
-Hablá siempre en el idioma del prospecto. Sé concisa, cálida y profesional.\
+Hablá en el idioma del usuario. Español rioplatense con voseo; en inglés, cálido y preciso.\
 """
 
-# Sofia voice on ElevenLabs — configure EL agent in dashboard, not via voice_id override
+# Mariano voice on ElevenLabs — configure EL agent in dashboard, not via voice_id override
 _QORA_DEMO_VOICE_ID = "4wDRKlxcHNOFO5kBvE81"
+
+# Deterministic per-agent TTS values for qora-demo.
+# These are the single source of truth — set on the Agent row so they are visible
+# and editable via the Agent API. Not hardcoded in the browser or EL dashboard.
+# Values chosen to match the Settings defaults (not the old browser ad-hoc values).
+_QORA_DEMO_TTS_SPEED: float = 0.95
+_QORA_DEMO_TTS_STABILITY: float = 0.40
+_QORA_DEMO_TTS_SIMILARITY_BOOST: float = 0.75
+
+# Seed lead notes for qora-demo. Jorge is a commercial manager evaluating Qora as a platform
+# to automate voice-agent follow-up for his sales team. Notes must remain free of any
+# insurance-domain wording so the agent does not leak domain context into the conversation.
+_QORA_DEMO_SEED_LEAD_NOTES = (
+    "Gerente comercial evaluando Qora para automatizar el seguimiento de leads con agentes de voz. "
+    "Maneja un equipo de 8 asesores y quiere reducir el tiempo entre el primer contacto y la "
+    "respuesta calificada. Ya probó otro CRM pero no tenía llamadas automáticas. "
+    "Quiere ver la demo para entender cómo funciona la voz y si se integra con su sistema actual."
+)
 
 
 async def seed_qora_demo(session: AsyncSession) -> None:
@@ -426,18 +442,29 @@ async def seed_qora_demo(session: AsyncSession) -> None:
         # Note: create_client() auto-creates the default Agent with the correct name and
         # system_prompt (passed via system_prompt_override → system_prompt on Agent).
 
-        # Always set elevenlabs_agent_id — fall back to the hardcoded canonical value.
+        # Always set elevenlabs_agent_id and TTS values on the newly seeded agent.
         agent = await get_default_agent(session, "qora-demo")
         if agent is not None:
             agent.elevenlabs_agent_id = el_agent_id
+            agent.tts_speed = _QORA_DEMO_TTS_SPEED
+            agent.tts_stability = _QORA_DEMO_TTS_STABILITY
+            agent.tts_similarity_boost = _QORA_DEMO_TTS_SIMILARITY_BOOST
             await session.flush()
     else:
-        # AD-2: Idempotent correction — update elevenlabs_agent_id if it is missing or
-        # pointing to a stale value (e.g. old Quintana agent was set by mistake).
+        # AD-2: Idempotent corrections — update elevenlabs_agent_id and system_prompt
+        # if they are missing or stale (e.g. old Quintana agent ID, stale system_prompt).
         agent = await get_default_agent(session, "qora-demo")
-        if agent is not None and agent.elevenlabs_agent_id != el_agent_id:
-            agent.elevenlabs_agent_id = el_agent_id
-            await session.flush()
+        if agent is not None:
+            updated = False
+            if agent.elevenlabs_agent_id != el_agent_id:
+                agent.elevenlabs_agent_id = el_agent_id
+                updated = True
+            # Fix stale system_prompt if it no longer matches the current constant
+            if agent.system_prompt != _QORA_EXPLAINER_SYSTEM_PROMPT:
+                agent.system_prompt = _QORA_EXPLAINER_SYSTEM_PROMPT
+                updated = True
+            if updated:
+                await session.flush()
 
     # Idempotently seed the demo lead for qora-demo.
     # Jorge is a broker/sales manager evaluating Qora as a potential customer.
@@ -450,13 +477,7 @@ async def seed_qora_demo(session: AsyncSession) -> None:
             client_id="qora-demo",
             name="Jorge Ramírez",
             phone="+54 11 5555-1234",
-            notes=(
-                "Gerente comercial de una productora de seguros en CABA. "
-                "Maneja un equipo de 8 asesores y está evaluando Qora para automatizar "
-                "el seguimiento de leads y reducir el tiempo entre contacto y cotización. "
-                "Ya probó otro CRM pero no tenía llamadas automáticas. "
-                "Quiere ver la demo para entender cómo funciona la voz y si se integra con su sistema actual."
-            ),
+            notes=_QORA_DEMO_SEED_LEAD_NOTES,
         )
 
 
@@ -481,6 +502,9 @@ async def create_agent(
     is_active: bool = True,
     is_default: bool = False,
     elevenlabs_agent_id: str | None = None,
+    tts_speed: float = 0.95,
+    tts_stability: float = 0.4,
+    tts_similarity_boost: float = 0.75,
 ) -> Agent:
     """Create and persist a new Agent record.
 
@@ -536,6 +560,9 @@ async def create_agent(
         is_active=is_active,
         is_default=is_default,
         elevenlabs_agent_id=elevenlabs_agent_id,
+        tts_speed=tts_speed,
+        tts_stability=tts_stability,
+        tts_similarity_boost=tts_similarity_boost,
     )
     session.add(agent)
     await session.flush()

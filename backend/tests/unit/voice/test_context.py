@@ -441,3 +441,130 @@ async def test_build_voice_context_no_silent_exception_swallowing():
                 db=mock_db,
                 client=client,
             )
+
+
+# ---------------------------------------------------------------------------
+# TTS fields in VoiceSessionContext
+# ---------------------------------------------------------------------------
+
+
+def make_agent_with_tts(
+    tts_speed: float = 0.95,
+    tts_stability: float = 0.4,
+    tts_similarity_boost: float = 0.75,
+) -> MagicMock:
+    """Build a mock Agent with TTS fields set."""
+    agent = make_agent()
+    agent.tts_speed = tts_speed
+    agent.tts_stability = tts_stability
+    agent.tts_similarity_boost = tts_similarity_boost
+    return agent
+
+
+def test_voice_session_context_includes_tts_fields():
+    """VoiceSessionContext can be constructed with tts_speed, tts_stability, tts_similarity_boost."""
+    from app.voice.context import VoiceSessionContext
+
+    ctx = VoiceSessionContext(
+        system_prompt="prompt",
+        skills_content="",
+        misc_notes="",
+        lead_profile="",
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools=None,
+        tts_speed=1.2,
+        tts_stability=0.5,
+        tts_similarity_boost=0.8,
+    )
+
+    assert ctx.tts_speed == 1.2
+    assert ctx.tts_stability == 0.5
+    assert ctx.tts_similarity_boost == 0.8
+
+
+def test_voice_session_context_tts_defaults():
+    """VoiceSessionContext defaults: tts_speed=0.95, tts_stability=0.4, tts_similarity_boost=0.75."""
+    from app.voice.context import VoiceSessionContext
+
+    ctx = VoiceSessionContext(
+        system_prompt="prompt",
+        skills_content="",
+        misc_notes="",
+        lead_profile="",
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools=None,
+    )
+
+    assert ctx.tts_speed == 0.95
+    assert ctx.tts_stability == 0.4
+    assert ctx.tts_similarity_boost == 0.75
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_reads_tts_from_agent():
+    """build_voice_context() reads tts_speed/stability/similarity_boost from agent.
+
+    GIVEN an agent with tts_speed=0.9, tts_stability=0.5, tts_similarity_boost=0.8
+    WHEN build_voice_context() is called
+    THEN VoiceSessionContext.tts_speed/stability/similarity_boost match the agent values
+    """
+    from app.voice.context import build_voice_context
+
+    agent = make_agent_with_tts(tts_speed=0.9, tts_stability=0.5, tts_similarity_boost=0.8)
+    client = make_client()
+    mock_db = AsyncMock()
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="prompt")
+        mock_instance.load_agent_skills = AsyncMock(return_value="")
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=None,
+            db=mock_db,
+            client=client,
+        )
+
+    assert result.tts_speed == 0.9
+    assert result.tts_stability == 0.5
+    assert result.tts_similarity_boost == 0.8
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_tts_falls_back_to_defaults_when_agent_columns_are_none():
+    """build_voice_context() falls back to defaults when agent tts_* columns are None.
+
+    GIVEN an agent where tts_speed/tts_stability/tts_similarity_boost are explicitly None
+    WHEN build_voice_context() is called
+    THEN tts_speed=0.95, tts_stability=0.4, tts_similarity_boost=0.75 (defaults)
+    """
+    from app.voice.context import build_voice_context
+
+    agent = make_agent()
+    # Simulate NULL columns (e.g. old DB row before migration backfill)
+    agent.tts_speed = None
+    agent.tts_stability = None
+    agent.tts_similarity_boost = None
+    client = make_client()
+    mock_db = AsyncMock()
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="prompt")
+        mock_instance.load_agent_skills = AsyncMock(return_value="")
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=None,
+            db=mock_db,
+            client=client,
+        )
+
+    assert result.tts_speed == 0.95
+    assert result.tts_stability == 0.4
+    assert result.tts_similarity_boost == 0.75

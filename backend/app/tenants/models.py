@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -60,6 +61,11 @@ class Agent(Base):
     elevenlabs_agent_id: Mapped[str | None] = mapped_column(
         String, nullable=True, default=None
     )
+    # TTS runtime config — per-agent ElevenLabs voice synthesis parameters
+    # Defaults match Settings.elevenlabs_speed/stability/similarity_boost
+    tts_speed: Mapped[float] = mapped_column(Float, nullable=False, default=0.95)
+    tts_stability: Mapped[float] = mapped_column(Float, nullable=False, default=0.4)
+    tts_similarity_boost: Mapped[float] = mapped_column(Float, nullable=False, default=0.75)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(

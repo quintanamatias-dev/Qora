@@ -446,3 +446,154 @@ async def test_agent_response_readiness_true_when_prompt_and_el_id(
     assert data["is_conversation_ready"] is True
     assert data["has_prompt"] is True
     assert data["has_elevenlabs_agent_id"] is True
+
+
+# ---------------------------------------------------------------------------
+# TTS fields — API round-trip (POST / GET / PATCH)
+# ---------------------------------------------------------------------------
+
+
+async def test_create_agent_returns_tts_defaults(agents_app: AsyncClient):
+    """POST /agents without TTS fields returns default tts_speed/stability/similarity_boost."""
+    response = await agents_app.post(_BASE, json=_VALID_AGENT)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["tts_speed"] == 0.95
+    assert data["tts_stability"] == 0.4
+    assert data["tts_similarity_boost"] == 0.75
+
+
+async def test_create_agent_with_tts_values(agents_app: AsyncClient):
+    """POST /agents with explicit TTS fields persists and returns those values."""
+    payload = {
+        **_VALID_AGENT,
+        "tts_speed": 1.2,
+        "tts_stability": 0.5,
+        "tts_similarity_boost": 0.9,
+    }
+    response = await agents_app.post(_BASE, json=payload)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["tts_speed"] == 1.2
+    assert data["tts_stability"] == 0.5
+    assert data["tts_similarity_boost"] == 0.9
+
+
+async def test_get_agent_returns_tts_fields(agents_app: AsyncClient):
+    """GET /agents/{id} returns tts_speed, tts_stability, tts_similarity_boost."""
+    create_resp = await agents_app.post(
+        _BASE,
+        json={**_VALID_AGENT, "tts_speed": 1.1, "tts_stability": 0.6, "tts_similarity_boost": 0.7},
+    )
+    assert create_resp.status_code == 201
+    agent_id = create_resp.json()["agent_id"]
+
+    get_resp = await agents_app.get(f"{_BASE}/{agent_id}")
+    assert get_resp.status_code == 200
+    data = get_resp.json()
+    assert data["tts_speed"] == 1.1
+    assert data["tts_stability"] == 0.6
+    assert data["tts_similarity_boost"] == 0.7
+
+
+async def test_patch_agent_updates_tts_speed(agents_app: AsyncClient):
+    """PATCH /agents/{id} with tts_speed updates only that field.
+
+    Uses 1.1 — within the EL valid range [0.7, 1.2].
+    """
+    create_resp = await agents_app.post(_BASE, json=_VALID_AGENT)
+    assert create_resp.status_code == 201
+    agent_id = create_resp.json()["agent_id"]
+
+    patch_resp = await agents_app.patch(
+        f"{_BASE}/{agent_id}",
+        json={"tts_speed": 1.1},
+    )
+    assert patch_resp.status_code == 200
+    data = patch_resp.json()
+    assert data["tts_speed"] == 1.1
+    # Other TTS fields unchanged
+    assert data["tts_stability"] == 0.4
+    assert data["tts_similarity_boost"] == 0.75
+
+
+async def test_create_agent_tts_out_of_range_returns_422(agents_app: AsyncClient):
+    """POST /agents with tts_speed outside EL valid range [0.7, 1.2] returns 422.
+
+    0.1 is below the EL minimum (0.7) and was the value that triggered 1008 rejections.
+    """
+    response = await agents_app.post(
+        _BASE,
+        json={**_VALID_AGENT, "tts_speed": 0.1},
+    )
+    assert response.status_code == 422
+
+
+async def test_create_agent_tts_speed_above_max_returns_422(agents_app: AsyncClient):
+    """POST /agents with tts_speed=1.5 (above EL max 1.2) returns 422."""
+    response = await agents_app.post(
+        _BASE,
+        json={**_VALID_AGENT, "tts_speed": 1.5},
+    )
+    assert response.status_code == 422
+
+
+async def test_patch_agent_tts_out_of_range_returns_422(agents_app: AsyncClient):
+    """PATCH /agents/{id} with tts_stability=-0.1 (out of range) returns 422."""
+    create_resp = await agents_app.post(_BASE, json=_VALID_AGENT)
+    assert create_resp.status_code == 201
+    agent_id = create_resp.json()["agent_id"]
+
+    patch_resp = await agents_app.patch(
+        f"{_BASE}/{agent_id}",
+        json={"tts_stability": -0.1},
+    )
+    assert patch_resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Boundary: valid 0.0 values must NOT be lost through API round-trip
+# ---------------------------------------------------------------------------
+
+
+async def test_create_agent_tts_stability_zero_is_preserved(agents_app: AsyncClient):
+    """POST /agents with tts_stability=0.0 must return exactly 0.0, not the default 0.4.
+
+    Regression: _agent_to_response used `value or default` which replaced 0.0 with the
+    default because 0.0 is falsy in Python. Fixed to use explicit None check.
+    """
+    payload = {**_VALID_AGENT, "tts_stability": 0.0, "tts_similarity_boost": 0.0}
+    response = await agents_app.post(_BASE, json=payload)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["tts_stability"] == 0.0, (
+        f"Expected tts_stability=0.0 but got {data['tts_stability']}. "
+        "Likely caused by `or default` pattern in _agent_to_response()"
+    )
+    assert data["tts_similarity_boost"] == 0.0, (
+        f"Expected tts_similarity_boost=0.0 but got {data['tts_similarity_boost']}. "
+        "Likely caused by `or default` pattern in _agent_to_response()"
+    )
+
+
+async def test_patch_agent_tts_stability_to_zero_is_preserved(agents_app: AsyncClient):
+    """PATCH /agents/{id} with tts_stability=0.0 must return 0.0 on GET.
+
+    Triangulation: ensures the fix works across update path too, not just create.
+    """
+    create_resp = await agents_app.post(_BASE, json=_VALID_AGENT)
+    assert create_resp.status_code == 201
+    agent_id = create_resp.json()["agent_id"]
+
+    patch_resp = await agents_app.patch(
+        f"{_BASE}/{agent_id}",
+        json={"tts_stability": 0.0, "tts_similarity_boost": 0.0},
+    )
+    assert patch_resp.status_code == 200
+    data = patch_resp.json()
+    assert data["tts_stability"] == 0.0, (
+        f"Expected patched tts_stability=0.0 but got {data['tts_stability']}"
+    )
+    assert data["tts_similarity_boost"] == 0.0, (
+        f"Expected patched tts_similarity_boost=0.0 but got {data['tts_similarity_boost']}"
+    )

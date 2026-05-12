@@ -1,9 +1,14 @@
-"""Tests for agents router registration and admin UI via the full app.
+"""Tests for agents router registration and admin UI routing.
 
 Verifies:
 - GET /api/v1/clients/{client_id}/agents is accessible via the full app
-- GET /admin returns 200 HTML containing generic "Company Name" label
-- GET /admin HTML does NOT contain a client_id input field for creation
+- GET /admin and GET /admin/ redirect (307) to http://localhost:5173/admin (canonical admin)
+- The backend does NOT serve a duplicate static admin UI
+- The canonical admin UI is the React/Vite frontend at http://localhost:5173/admin
+
+NOTE: The backend static admin (backend/app/static/admin/index.html) has been
+removed. The single admin source of truth is the React/Vite frontend. HTML-content
+tests have been moved to frontend/src/features/admin/*.test.tsx.
 """
 
 from __future__ import annotations
@@ -78,79 +83,80 @@ async def test_agents_endpoint_accessible_via_full_app(full_app: AsyncClient):
 
 
 # ---------------------------------------------------------------------------
-# Admin UI tests (task 3.1) — GET /admin
+# Single admin source of truth — backend /admin must redirect to React frontend
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture
-async def admin_app(tmp_path: Path):
-    """Full app fixture that mounts the /admin static UI.
+async def test_main_app_redirects_admin_slash(tmp_path: Path):
+    """The real main.py app must redirect /admin/ to the canonical frontend admin.
 
-    Builds the same structure as main.py (StaticFiles at /admin) so we can
-    hit GET /admin and assert the HTML content.
+    The admin UI is the React/Vite frontend at http://localhost:5173/admin.
+    The backend must NOT serve a duplicate static admin (that would create two
+    sources of truth), but it MUST redirect browsers to the canonical URL so
+    hitting the backend /admin URL does not return 404.
+
+    GET /admin/ → 307 redirect to http://localhost:5173/admin
     """
-    import os
-
-    from app.core.config import Settings
-    from app.core import database as db_module
-
-    settings = Settings(
-        openai_api_key=SecretStr("sk-test"),
-        elevenlabs_api_key=SecretStr("el-test"),
-        database_url=f"sqlite+aiosqlite:///{tmp_path}/admin_ui_test.db",
-    )
-    await db_module.init_db(settings)
-
-    from fastapi import FastAPI
-    from starlette.staticfiles import StaticFiles
-
-    mini_app = FastAPI()
-
-    # admin subdirectory — same pattern as main.py (/demo → static/, /admin → static/admin/)
-    admin_dir = os.path.join(
-        os.path.dirname(__file__), "..", "..", "app", "static", "admin"
-    )
-    admin_dir = os.path.normpath(admin_dir)
-
-    # Mount /admin — same pattern as main.py
-    mini_app.mount("/admin", StaticFiles(directory=admin_dir, html=True), name="admin")
+    from app.main import app as main_app
 
     async with AsyncClient(
-        transport=ASGITransport(app=mini_app),
+        transport=ASGITransport(app=main_app),
         base_url="http://test",
-        follow_redirects=True,
+        follow_redirects=False,
     ) as client:
-        yield client
-
-    await db_module.close_db()
-
-
-async def test_admin_returns_200_html(admin_app: AsyncClient):
-    """GET /admin returns 200 with HTML content-type."""
-    response = await admin_app.get("/admin")
-    assert response.status_code == 200
-    assert "text/html" in response.headers.get("content-type", "")
-
-
-async def test_admin_html_contains_company_name_label(admin_app: AsyncClient):
-    """GET /admin HTML contains generic 'Company Name' label, not 'Broker Name'."""
-    response = await admin_app.get("/admin")
-    html = response.text
-    # Must use generic label
-    assert "Company Name" in html
-    # Must NOT use broker-specific label
-    assert "Broker Name" not in html
+        response = await client.get("/admin/")
+        # Must redirect — not 200 (duplicate UI) and not 404 (bad UX)
+        assert response.status_code == 307, (
+            f"Expected 307 redirect from /admin/ but got {response.status_code}. "
+            "Backend /admin must redirect to the canonical React/Vite frontend admin."
+        )
+        assert response.headers["location"] == "http://localhost:5173/admin", (
+            f"Redirect location mismatch: {response.headers.get('location')}. "
+            "Must point to http://localhost:5173/admin (no trailing slash)."
+        )
 
 
-async def test_admin_html_has_no_client_id_creation_input(admin_app: AsyncClient):
-    """GET /admin create-client form does NOT contain a client_id input field.
+async def test_main_app_redirects_admin_no_slash(tmp_path: Path):
+    """GET /admin (no trailing slash) must also redirect to the canonical frontend admin.
 
-    Triangulation of test_admin_html_contains_company_name_label:
-    Different assertion — verifies the hidden-field design decision (no exposed
-    client_id input so the admin calls POST /clients without client_id).
+    Both /admin and /admin/ must redirect — users/browsers may omit the slash.
     """
-    response = await admin_app.get("/admin")
-    html = response.text
-    # The create-client form must NOT expose a client_id text input
-    assert 'id="newClientId"' not in html
-    assert 'name="client_id"' not in html
+    from app.main import app as main_app
+
+    async with AsyncClient(
+        transport=ASGITransport(app=main_app),
+        base_url="http://test",
+        follow_redirects=False,
+    ) as client:
+        response = await client.get("/admin")
+        assert response.status_code == 307, (
+            f"Expected 307 redirect from /admin but got {response.status_code}. "
+            "Both /admin and /admin/ must redirect to the canonical frontend admin."
+        )
+        assert response.headers["location"] == "http://localhost:5173/admin", (
+            f"Redirect location mismatch: {response.headers.get('location')}."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Backend does NOT serve static admin HTML
+# ---------------------------------------------------------------------------
+
+
+def test_static_admin_html_file_deleted():
+    """The static admin HTML file must be deleted (single source of truth is React).
+
+    This test ensures no one accidentally re-adds the old static admin.
+    The canonical admin UI is the React/Vite frontend at http://localhost:5173/admin.
+    HTML-content assertions (TTS fields, form labels) live in
+    frontend/src/features/admin/agents-panel.test.tsx.
+    """
+    admin_html = (
+        Path(__file__).parent.parent.parent / "app" / "static" / "admin" / "index.html"
+    )
+    assert not admin_html.exists(), (
+        f"Static admin HTML found at {admin_html}. "
+        "This file must be deleted — the single admin source of truth is "
+        "the React/Vite frontend at http://localhost:5173/admin. "
+        "Do NOT re-add a backend static admin UI."
+    )

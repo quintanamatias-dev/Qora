@@ -235,6 +235,10 @@ export interface Agent {
   has_elevenlabs_agent_id: boolean
   /** true when has_prompt AND has_elevenlabs_agent_id */
   is_conversation_ready: boolean
+  // Voice tuning — TTS runtime config
+  tts_speed: number
+  tts_stability: number
+  tts_similarity_boost: number
 }
 
 export interface CreateAgentPayload {
@@ -248,6 +252,10 @@ export interface CreateAgentPayload {
   knowledge_base?: string | null
   temperature?: number
   max_tokens?: number
+  // Voice tuning
+  tts_speed?: number
+  tts_stability?: number
+  tts_similarity_boost?: number
 }
 
 export interface UpdateAgentPayload {
@@ -259,6 +267,10 @@ export interface UpdateAgentPayload {
   knowledge_base?: string | null
   temperature?: number
   max_tokens?: number
+  // Voice tuning
+  tts_speed?: number
+  tts_stability?: number
+  tts_similarity_boost?: number
 }
 
 /** A single item in the agent readiness checklist */

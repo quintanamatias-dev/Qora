@@ -15,7 +15,11 @@ Registers all domain routers:
 - /api/v1/calls (calls admin/debug router)
 - /api/v1/tenants (backward-compat read-only alias)
 - /api/v1/health
-- /admin (internal admin UI — Phase 7)
+- /demo (voice call simulator static page)
+
+NOTE: The admin UI is served exclusively by the React/Vite frontend at
+      http://localhost:5173/admin. The previous /admin static mount has been
+      removed to avoid two editable admin UIs. Do NOT re-add it here.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI, Request, Response
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.staticfiles import StaticFiles
@@ -81,6 +86,36 @@ async def _ensure_startup_schema_compat(db_module) -> None:
             )
             logger.info(
                 "startup_schema_compat_added", column="agents.elevenlabs_agent_id"
+            )
+
+        # TTS runtime config columns (unify-qora-agent-runtime-config)
+        if "tts_speed" not in agent_columns:
+            await conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE agents "
+                    "ADD COLUMN tts_speed REAL NOT NULL DEFAULT 0.95"
+                )
+            )
+            logger.info("startup_schema_compat_added", column="agents.tts_speed")
+
+        if "tts_stability" not in agent_columns:
+            await conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE agents "
+                    "ADD COLUMN tts_stability REAL NOT NULL DEFAULT 0.4"
+                )
+            )
+            logger.info("startup_schema_compat_added", column="agents.tts_stability")
+
+        if "tts_similarity_boost" not in agent_columns:
+            await conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE agents "
+                    "ADD COLUMN tts_similarity_boost REAL NOT NULL DEFAULT 0.75"
+                )
+            )
+            logger.info(
+                "startup_schema_compat_added", column="agents.tts_similarity_boost"
             )
 
 
@@ -323,6 +358,22 @@ _STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 if os.path.isdir(_STATIC_DIR):
     app.mount("/demo", StaticFiles(directory=_STATIC_DIR, html=True), name="demo")
 
-_ADMIN_DIR = os.path.join(_STATIC_DIR, "admin")
-if os.path.isdir(_ADMIN_DIR):
-    app.mount("/admin", StaticFiles(directory=_ADMIN_DIR, html=True), name="admin")
+# ---------------------------------------------------------------------------
+# Admin redirect — single source of truth is the React/Vite frontend
+# ---------------------------------------------------------------------------
+# Hitting the backend /admin URL used to 404 after the static mount was removed.
+# These routes redirect both /admin and /admin/ to the canonical frontend admin
+# so users following old links or bookmarks still land in the right place.
+
+
+@app.get("/admin", include_in_schema=False)
+@app.get("/admin/", include_in_schema=False)
+async def redirect_to_frontend_admin(request: Request):
+    """Redirect /admin[/] → canonical React/Vite admin UI (no trailing-slash duplicate).
+
+    Falls back to a fresh Settings() when app.state.settings is not yet populated
+    (e.g. during tests that skip the lifespan startup).
+    """
+    settings: Settings = getattr(request.app.state, "settings", None) or Settings()
+    target = settings.frontend_url.rstrip("/") + "/admin"
+    return RedirectResponse(url=target, status_code=307)

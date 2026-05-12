@@ -62,6 +62,10 @@ class VoiceSessionContext:
     max_tokens: int
     tools: list[dict] | None
     skip_lead_profile_in_assembly: bool = False
+    # TTS runtime config — resolved from Agent columns (Agent-first, defaults as fallback)
+    tts_speed: float = 0.95
+    tts_stability: float = 0.4
+    tts_similarity_boost: float = 0.75
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +211,17 @@ async def build_voice_context(
         except (json.JSONDecodeError, TypeError, ImportError):
             tools = None
 
+    # TTS config — Agent columns are authoritative; fall back to module defaults when NULL/absent
+    tts_speed = getattr(agent, "tts_speed", None)
+    if tts_speed is None:
+        tts_speed = 0.95
+    tts_stability = getattr(agent, "tts_stability", None)
+    if tts_stability is None:
+        tts_stability = 0.4
+    tts_similarity_boost = getattr(agent, "tts_similarity_boost", None)
+    if tts_similarity_boost is None:
+        tts_similarity_boost = 0.75
+
     return VoiceSessionContext(
         system_prompt=system_prompt,
         skills_content=skills_content,
@@ -217,4 +232,7 @@ async def build_voice_context(
         max_tokens=max_tokens,
         tools=tools,
         skip_lead_profile_in_assembly=_agent_has_template_vars,
+        tts_speed=tts_speed,
+        tts_stability=tts_stability,
+        tts_similarity_boost=tts_similarity_boost,
     )

@@ -38,15 +38,18 @@ function renderAdminLayout(outletContent: React.ReactNode = null) {
 }
 
 describe('AdminLayout', () => {
-  it('renders admin header with "QORA Admin" text', () => {
+  it('renders admin header with "QORA" logo and "Admin" badge', () => {
     renderAdminLayout()
     expect(screen.getByTestId('admin-header')).toBeInTheDocument()
-    expect(screen.getByText('QORA Admin')).toBeInTheDocument()
+    // Header now shows "QORA" logo + "Admin" badge as separate elements
+    expect(screen.getByText('QORA')).toBeInTheDocument()
+    expect(screen.getByText('Admin')).toBeInTheDocument()
   })
 
-  it('renders "Internal management panel" subtitle', () => {
+  it('renders "Admin" badge in the header', () => {
     renderAdminLayout()
-    expect(screen.getByText('Internal management panel')).toBeInTheDocument()
+    // The "Admin" badge is visible in the header (sr-only subtitle is for screen readers)
+    expect(screen.getByText('Admin')).toBeInTheDocument()
   })
 
   it('renders Outlet content', () => {

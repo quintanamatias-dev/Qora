@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, Field
 
 # Slug must be all lowercase alphanumeric + hyphens, no leading/trailing hyphen.
 # Allows single alphanumeric chars (e.g. "a", "1").
@@ -64,6 +64,12 @@ class AgentCreate(BaseModel):
     tools_enabled: list[str] = _DEFAULT_TOOLS
     is_default: bool = False
     elevenlabs_agent_id: str | None = None
+    # TTS runtime config — per-agent ElevenLabs voice synthesis parameters
+    # ElevenLabs Conversational AI valid range: speed=[0.7, 1.2], stability=[0.0, 1.0],
+    # similarity_boost=[0.0, 1.0]. Values outside these ranges are rejected with 1008.
+    tts_speed: float = Field(default=0.95, ge=0.7, le=1.2)
+    tts_stability: float = Field(default=0.4, ge=0.0, le=1.0)
+    tts_similarity_boost: float = Field(default=0.75, ge=0.0, le=1.0)
 
     @field_validator("slug")
     @classmethod
@@ -98,6 +104,11 @@ class AgentUpdate(BaseModel):
     max_tokens: int | None = None
     tools_enabled: list[str] = []
     elevenlabs_agent_id: str | None = None
+    # TTS runtime config — optional per-agent overrides
+    # ElevenLabs Conversational AI valid range: speed=[0.7, 1.2]
+    tts_speed: float | None = Field(default=None, ge=0.7, le=1.2)
+    tts_stability: float | None = Field(default=None, ge=0.0, le=1.0)
+    tts_similarity_boost: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @field_validator("tools_enabled")
     @classmethod
@@ -130,5 +141,9 @@ class AgentResponse(BaseModel):
     is_conversation_ready: bool = False
     has_prompt: bool = False
     has_elevenlabs_agent_id: bool = False
+    # TTS runtime config — per-agent ElevenLabs voice synthesis parameters
+    tts_speed: float = 0.95
+    tts_stability: float = 0.4
+    tts_similarity_boost: float = 0.75
 
     model_config = {"from_attributes": True}

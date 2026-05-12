@@ -583,7 +583,7 @@ async def test_seed_qora_demo_creates_client_and_agent(session: AsyncSession):
     - Client with id='qora-demo'
     - Default agent with name='qora-explainer' and system_prompt that:
         * mentions Qora (the platform being explained)
-        * describes the agent's role as explaining Qora, not selling insurance
+        * describes the agent's role as Mariano, the Qora demo explainer
     """
     from app.tenants.service import seed_qora_demo, get_client
     from sqlalchemy import select
@@ -610,7 +610,7 @@ async def test_seed_qora_demo_creates_client_and_agent(session: AsyncSession):
     assert (
         "Qora" in agent.system_prompt
     ), "system_prompt must mention 'Qora' — agent explains the platform"
-    # The agent's role is to explain Qora (explicar), not to sell insurance directly
+    # The agent's role is to explain Qora (Mariano demo agent, not insurance-domain bot)
     prompt_lower = agent.system_prompt.lower()
     assert (
         "explicar" in prompt_lower or "explain" in prompt_lower
@@ -650,11 +650,11 @@ async def test_seed_qora_demo_agent_prompt_describes_qora_not_insurance(
     """Triangulation: system_prompt positions the agent as a Qora explainer.
 
     The agent's role is to explain the Qora platform. The prompt must:
-    - Reference Sofia as the Qora platform assistant (not a generic insurance agent)
+    - Reference Mariano as the Qora platform demo agent
     - Describe the goal as explaining Qora ('explicar Qora')
-    - NOT have the primary goal of selling insurance policies directly
+    - NOT contain insurance-domain wording (seguros, cotización, productora)
 
-    This distinguishes the Qora demo agent from a generic insurance-sales bot.
+    This distinguishes the Qora demo agent from any insurance-domain bot.
     """
     from app.tenants.service import seed_qora_demo
     from sqlalchemy import select
@@ -682,7 +682,7 @@ async def test_seed_qora_demo_agent_prompt_describes_qora_not_insurance(
     # The agent's goal is to explain Qora — the phrase must appear explicitly
     assert (
         "explicar Qora" in prompt or "explain Qora" in prompt
-    ), "system_prompt goal must be explaining Qora, not generic insurance sales"
+    ), "system_prompt goal must be explaining Qora (Mariano demo agent)"
 
 
 # ---------------------------------------------------------------------------

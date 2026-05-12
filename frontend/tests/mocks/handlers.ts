@@ -192,6 +192,10 @@ const agentsFixture: Agent[] = [
     has_prompt: true,
     has_elevenlabs_agent_id: true,
     is_conversation_ready: true,
+    // Voice tuning
+    tts_speed: 0.95,
+    tts_stability: 0.4,
+    tts_similarity_boost: 0.75,
   },
   {
     agent_id: 'agent-002',
@@ -214,6 +218,10 @@ const agentsFixture: Agent[] = [
     has_prompt: false,
     has_elevenlabs_agent_id: false,
     is_conversation_ready: false,
+    // Voice tuning — defaults
+    tts_speed: 0.95,
+    tts_stability: 0.4,
+    tts_similarity_boost: 0.75,
   },
 ]
 
@@ -283,6 +291,17 @@ export const handlers = [
       is_active: true,
       is_default: false,
       created_at: new Date().toISOString(),
+      elevenlabs_agent_id: body.elevenlabs_agent_id ?? null,
+      knowledge_base: body.knowledge_base ?? null,
+      temperature: body.temperature ?? 0.7,
+      max_tokens: body.max_tokens ?? 512,
+      custom_llm_url: `/api/v1/voice/${params.clientId}/custom-llm/chat/completions`,
+      has_prompt: Boolean(body.system_prompt),
+      has_elevenlabs_agent_id: Boolean(body.elevenlabs_agent_id),
+      is_conversation_ready: Boolean(body.system_prompt) && Boolean(body.elevenlabs_agent_id),
+      tts_speed: body.tts_speed ?? 0.95,
+      tts_stability: body.tts_stability ?? 0.4,
+      tts_similarity_boost: body.tts_similarity_boost ?? 0.75,
     }
     return HttpResponse.json(newAgent, { status: 201 })
   }),
