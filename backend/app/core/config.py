@@ -18,11 +18,12 @@ class Settings(BaseSettings):
     # ElevenLabs
     # ------------------------------------------------------------------
     elevenlabs_api_key: SecretStr
-    elevenlabs_agent_id: str = ""
-    elevenlabs_voice_id: str = "pNInz6obpgDQGcFmaJgB"  # Adam
+    elevenlabs_agent_id: str = "agent_8201kra4wjhve0srcwgbtwfetr5n"  # Qora Demo agent
+    elevenlabs_voice_id: str = "4wDRKlxcHNOFO5kBvE81"  # Melisa (Sofia — Qora demo)
     elevenlabs_model: str = "eleven_flash_v2_5"
     elevenlabs_stability: float = 0.4
     elevenlabs_speed: float = 0.95
+    elevenlabs_similarity_boost: float = 0.75
 
     # ------------------------------------------------------------------
     # Database

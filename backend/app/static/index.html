@@ -407,37 +407,57 @@
     }
 
     // ── WebSocket conversation ──────────────────────────────────────────────────
-    async function startConversation() {
-      const agentId = document.getElementById('agentId').value.trim();
-      const leadId = document.getElementById('leadId').value;
-      const selectedClientId = document.getElementById('clientId').value;
 
-      if (!agentId) { setStatus('⚠ Agente sin ElevenLabs Agent ID — configuralo en /admin', 'error'); return; }
-      if (!selectedClientId) { setStatus('⚠ Seleccioná un cliente', 'error'); return; }
-      if (!leadId) { setStatus('⚠ Seleccioná un lead', 'error'); return; }
-
-      hideReconnectButton();
-      setStatus('Pidiendo acceso al micrófono...', 'connecting');
-      setButtons(true);
-      document.getElementById('transcript').innerHTML = '';
-
-      try {
-        await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch (e) {
-        setStatus('Micrófono denegado — habilitalo en el navegador', 'error');
-        setButtons(false);
-        return;
+    // Internal: build the conversation_initiation_client_data payload.
+    // Speed + LLM overrides — V3 Conversational may reject these. Check console for 1008.
+    function buildInitPayload(lead, leadId, selectedClientId, skipTtsOverride, skipAgentOverride) {
+      // [tts] Speed override: only include if not explicitly skipped.
+      // [llm] Model override: only include if not explicitly skipped.
+      // If EL closes the WS with 1008, we reconnect without both (see openWebSocket).
+      const ttsOverride = skipTtsOverride ? {} : { tts: { speed: 1.2, similarity_boost: 1.0, stability: 0.40 } };
+      const agentOverride = skipAgentOverride ? {} : { agent: { prompt: { llm: 'gpt-4o' } } };
+      if (!skipTtsOverride) {
+        console.log('[tts] Sending speed override: 1.1');
       }
+      if (!skipAgentOverride) {
+        console.log('[llm] Sending model override: gpt-4o');
+      }
+      const payload = {
+        type: 'conversation_initiation_client_data',
+        conversation_config_override: { ...agentOverride, ...ttsOverride },
+        dynamic_variables: {
+          // Underscore-wrapped names match the agent's first-message template: {{_lead_name_}}
+          _lead_name_:         lead.name             || '',
+          lead_name:           lead.name             || '',
+          _car_make_:          lead.car_make          || '',
+          car_make:            lead.car_make          || '',
+          _car_model_:         lead.car_model         || '',
+          car_model:           lead.car_model         || '',
+          _car_year_:          String(lead.car_year   || ''),
+          car_year:            String(lead.car_year   || ''),
+          _current_insurance_: lead.current_insurance || 'no tiene',
+          current_insurance:   lead.current_insurance || 'no tiene',
+          _broker_name_:       currentClientData.broker_name || '',
+          broker_name:         currentClientData.broker_name || '',
+          _agent_name_:        currentClientData.agent_name  || '',
+          agent_name:          currentClientData.agent_name  || '',
+          notes:               lead.notes            || '',
+          client_id:           selectedClientId,  // explicit client routing
+        }
+      };
+      if (leadId) {
+        // custom_llm_extra_body is forwarded to every custom-LLM request as
+        // elevenlabs_extra_body so the backend can persist the lead_id on the
+        // CallSession. Per ElevenLabs docs, the schema only exposes temperature
+        // and max_tokens but the field is pass-through for custom-LLM setups.
+        payload.custom_llm_extra_body = { lead_id: leadId };
+      }
+      return payload;
+    }
 
-      // Fetch lead data BEFORE connecting to populate dynamic variables
-      let lead = {};
-      try {
-        const r = await fetch('/api/v1/leads/' + leadId);
-        if (r.ok) { lead = await r.json(); updateLeadPanel(lead); }
-      } catch(e) { console.warn('Could not fetch lead:', e); }
-
-      setStatus('Conectando con ElevenLabs...', 'connecting');
-
+    // Internal: open a WebSocket and wire all handlers.
+    // skipTtsOverride / skipAgentOverride: true on the fallback reconnect after a 1008 rejection.
+    function openWebSocket(agentId, leadId, selectedClientId, lead, skipTtsOverride, skipAgentOverride) {
       // Direct WebSocket — no SDK, no LiveKit, no WebRTC
       const wsUrl = 'wss://api.elevenlabs.io/v1/convai/conversation?agent_id=' + agentId;
       ws = new WebSocket(wsUrl);
@@ -451,32 +471,12 @@
         // and is forwarded to every custom-LLM request as elevenlabs_extra_body.
         // We propagate lead_id here so the backend can persist it on the CallSession.
         // We do NOT include client_id — it's already in the custom-LLM URL path.
-        const initPayload = {
-          type: 'conversation_initiation_client_data',
-          dynamic_variables: {
-            // Underscore-wrapped names match the agent's first-message template: {{_lead_name_}}
-            _lead_name_:         lead.name             || '',
-            lead_name:           lead.name             || '',
-            _car_make_:          lead.car_make          || '',
-            car_make:            lead.car_make          || '',
-            _car_model_:         lead.car_model         || '',
-            car_model:           lead.car_model         || '',
-            _car_year_:          String(lead.car_year   || ''),
-            car_year:            String(lead.car_year   || ''),
-            _current_insurance_: lead.current_insurance || 'no tiene',
-            current_insurance:   lead.current_insurance || 'no tiene',
-            _broker_name_:       currentClientData.broker_name || '',
-            broker_name:         currentClientData.broker_name || '',
-            _agent_name_:        currentClientData.agent_name  || '',
-            agent_name:          currentClientData.agent_name  || '',
-            notes:               lead.notes            || '',
-            client_id:           selectedClientId,  // explicit client routing
-          }
-        };
-        if (leadId) {
-          initPayload.custom_llm_extra_body = { lead_id: leadId };
-        }
+        const initPayload = buildInitPayload(lead, leadId, selectedClientId, skipTtsOverride, skipAgentOverride);
         ws.send(JSON.stringify(initPayload));
+
+        // Re-enable stop/mute buttons — needed both for the initial connection and for
+        // the fallback reconnection (1008 → cleanup() disables them → new WS opens here).
+        setButtons(true);
 
         // Start microphone
         await startMicrophone();
@@ -547,6 +547,16 @@
       ws.onclose = (e) => {
         console.log('WebSocket closed:', e.code, e.reason);
 
+        // 1008: ElevenLabs rejected an override (TTS or agent/LLM).
+        // Reconnect once with both overrides skipped — ONE-TIME fallback, no further retry.
+        if (e.code === 1008 && (!skipTtsOverride || !skipAgentOverride)) {
+          console.warn('[override] Override rejected (1008). Reconnecting without TTS + agent overrides.');
+          cleanup();
+          setStatus('⚠ Override rechazado — reconectando sin overrides...', 'connecting');
+          openWebSocket(agentId, leadId, selectedClientId, lead, true, true);
+          return;
+        }
+
         // CAP-3 compliance: MUST call /end on every WebSocket close.
         //   - code 1000 → reason="user_hangup"
         //   - non-1000  → reason="network_drop"
@@ -568,6 +578,40 @@
         }
         cleanup();
       };
+    }
+
+    async function startConversation() {
+      const agentId = document.getElementById('agentId').value.trim();
+      const leadId = document.getElementById('leadId').value;
+      const selectedClientId = document.getElementById('clientId').value;
+
+      if (!agentId) { setStatus('⚠ Agente sin ElevenLabs Agent ID — configuralo en /admin', 'error'); return; }
+      if (!selectedClientId) { setStatus('⚠ Seleccioná un cliente', 'error'); return; }
+      if (!leadId) { setStatus('⚠ Seleccioná un lead', 'error'); return; }
+
+      hideReconnectButton();
+      setStatus('Pidiendo acceso al micrófono...', 'connecting');
+      setButtons(true);
+      document.getElementById('transcript').innerHTML = '';
+
+      try {
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (e) {
+        setStatus('Micrófono denegado — habilitalo en el navegador', 'error');
+        setButtons(false);
+        return;
+      }
+
+      // Fetch lead data BEFORE connecting to populate dynamic variables
+      let lead = {};
+      try {
+        const r = await fetch('/api/v1/leads/' + leadId);
+        if (r.ok) { lead = await r.json(); updateLeadPanel(lead); }
+      } catch(e) { console.warn('Could not fetch lead:', e); }
+
+      setStatus('Conectando con ElevenLabs...', 'connecting');
+
+      openWebSocket(agentId, leadId, selectedClientId, lead);
     }
 
     /**

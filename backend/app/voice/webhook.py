@@ -93,6 +93,37 @@ async def get_signed_url(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# TTS settings endpoint — serves browser with config-driven voice params
+# ---------------------------------------------------------------------------
+
+
+@router.get("/tts-settings")
+async def get_tts_settings(request: Request) -> dict:
+    """Return ElevenLabs TTS override settings from app config.
+
+    The demo page fetches these values before opening the WebSocket so the
+    browser can send them in conversation_initiation_client_data.tts without
+    hardcoding anything. All toggles must be enabled in the ElevenLabs
+    dashboard (Seguridad → Sobrescrituras) for overrides to take effect.
+
+    Returns:
+        JSON with stability, speed, and similarity_boost floats.
+    """
+    try:
+        settings = request.app.state.settings
+    except AttributeError:
+        from app.core.config import Settings
+
+        settings = Settings()
+
+    return {
+        "stability": settings.elevenlabs_stability,
+        "speed": settings.elevenlabs_speed,
+        "similarity_boost": settings.elevenlabs_similarity_boost,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Request schemas
 # ---------------------------------------------------------------------------
 
