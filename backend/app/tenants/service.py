@@ -382,7 +382,7 @@ Hablá siempre en el idioma del prospecto. Sé concisa, cálida y profesional.\
 """
 
 # Sofia voice on ElevenLabs — configure EL agent in dashboard, not via voice_id override
-_QORA_DEMO_VOICE_ID = "ByVRQtaK1WDOvTmP1PKO"
+_QORA_DEMO_VOICE_ID = "4wDRKlxcHNOFO5kBvE81"
 
 
 async def seed_qora_demo(session: AsyncSession) -> None:
@@ -400,6 +400,11 @@ async def seed_qora_demo(session: AsyncSession) -> None:
     from app.core.config import Settings
 
     settings = Settings()
+
+    # The canonical ElevenLabs agent ID for Qora Demo.
+    # Settings.elevenlabs_agent_id defaults to this value; the env var can override it.
+    _CORRECT_EL_AGENT_ID = "agent_8201kra4wjhve0srcwgbtwfetr5n"
+    el_agent_id = settings.elevenlabs_agent_id or _CORRECT_EL_AGENT_ID
 
     existing = await get_client(session, "qora-demo")
     if existing is None:
@@ -421,14 +426,21 @@ async def seed_qora_demo(session: AsyncSession) -> None:
         # Note: create_client() auto-creates the default Agent with the correct name and
         # system_prompt (passed via system_prompt_override → system_prompt on Agent).
 
-        # Set elevenlabs_agent_id from settings if configured
-        if settings.elevenlabs_agent_id:
-            agent = await get_default_agent(session, "qora-demo")
-            if agent is not None:
-                agent.elevenlabs_agent_id = settings.elevenlabs_agent_id
-                await session.flush()
+        # Always set elevenlabs_agent_id — fall back to the hardcoded canonical value.
+        agent = await get_default_agent(session, "qora-demo")
+        if agent is not None:
+            agent.elevenlabs_agent_id = el_agent_id
+            await session.flush()
+    else:
+        # AD-2: Idempotent correction — update elevenlabs_agent_id if it is missing or
+        # pointing to a stale value (e.g. old Quintana agent was set by mistake).
+        agent = await get_default_agent(session, "qora-demo")
+        if agent is not None and agent.elevenlabs_agent_id != el_agent_id:
+            agent.elevenlabs_agent_id = el_agent_id
+            await session.flush()
 
-    # Idempotently seed the Demo Visitor lead for qora-demo
+    # Idempotently seed the demo lead for qora-demo.
+    # Jorge is a broker/sales manager evaluating Qora as a potential customer.
     from app.leads.service import list_leads_for_client, create_lead
 
     existing_leads = await list_leads_for_client(session, "qora-demo")
@@ -436,9 +448,15 @@ async def seed_qora_demo(session: AsyncSession) -> None:
         await create_lead(
             session,
             client_id="qora-demo",
-            name="Demo Visitor",
-            phone="+10000000000",
-            notes="Demo lead — used by Qora demo page conversation flow",
+            name="Jorge Ramírez",
+            phone="+54 11 5555-1234",
+            notes=(
+                "Gerente comercial de una productora de seguros en CABA. "
+                "Maneja un equipo de 8 asesores y está evaluando Qora para automatizar "
+                "el seguimiento de leads y reducir el tiempo entre contacto y cotización. "
+                "Ya probó otro CRM pero no tenía llamadas automáticas. "
+                "Quiere ver la demo para entender cómo funciona la voz y si se integra con su sistema actual."
+            ),
         )
 
 
