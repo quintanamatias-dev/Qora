@@ -8,7 +8,7 @@ Architecture decisions:
 - AD-1: VoiceSessionContext lives here (not in session.py) — single
   responsibility; session.py stays pure state tracking.
 - AD-2: Cache location is ConversationState.context (in-memory) — no new infra.
-- AD-4: Skills loaded via PromptLoader.load_agent_skills() — filesystem glob.
+- AD-4: Skills loaded via PromptLoader.load_agent_skills() — registry-based index only (no glob-all).
 - AD-5: misc_notes from lead.extracted_facts["misc_notes"] — reuse existing.
 - AD-6: system_prompt built by existing PromptLoader.render_for_agent().
 
