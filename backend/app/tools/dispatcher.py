@@ -83,8 +83,11 @@ async def dispatch_tool(
         # in the conversation is the text itself (not a dict-encoded JSON wrapper).
         if "content" in raw:
             return raw["content"]
-        # Error case: return the error message as a plain string
-        return raw.get("error", "Unknown error loading skill.")
+        # Error case: always prefix with "Error:" so the webhook cache guard
+        # (which checks `not tool_result.startswith("Error:")`) can reliably
+        # reject failures without relying on specific error message wording.
+        error_msg = raw.get("error", "Unknown error loading skill.")
+        return f"Error: {error_msg}"
 
     handler = _TOOL_REGISTRY.get(tool_name)
     if handler is None:

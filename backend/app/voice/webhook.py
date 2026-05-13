@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator
 
 if TYPE_CHECKING:
     from app.voice.context import VoiceSessionContext
+    from app.voice.session import ConversationState
 
 import httpx as _httpx
 import structlog
@@ -185,6 +186,10 @@ def _sse_stop() -> str:
 # ---------------------------------------------------------------------------
 # TOOL_FILLER_PHRASES and DEFAULT_FILLER are imported from app.tools.registry above.
 
+# Pause between filler TTS emission and tool execution (seconds).
+# Gives the TTS engine time to begin speaking before the tool call blocks.
+FILLER_PAUSE_SECONDS = 0.7
+
 
 # ---------------------------------------------------------------------------
 # Tool execution (dispatches to tools module)
@@ -243,6 +248,7 @@ async def _stream_llm_response(
     conversation_id: str | None,
     agent_slug: str | None = None,
     registry_entries: "list | None" = None,
+    conv_state: "ConversationState | None" = None,
 ) -> AsyncGenerator[str, None]:
     """Generate SSE chunks from GPT-4o, handling tool calls mid-stream.
 
@@ -250,14 +256,19 @@ async def _stream_llm_response(
     1. Start streaming GPT-4o.
     2. Yield content tokens as SSE.
     3. If tool_call detected:
-       a. Emit filler speech tokens (before tool runs — ElevenLabs TTS picks up immediately).
-       b. Execute tool, re-call GPT-4o, stream final reply.
+       a. Check if load_skill result is already cached in conv_state.loaded_skills.
+          If cached: skip filler, sleep, and tool execution; inject cached content directly.
+       b. If not cached: emit filler speech tokens, await asyncio.sleep(FILLER_PAUSE_SECONDS),
+          execute tool, and store successful load_skill results in conv_state.loaded_skills.
+       c. Re-call GPT-4o with tool result, stream final reply.
     4. Persist transcript turn.
     5. Yield [DONE].
 
     Args:
         registry_entries: Parsed registry entries for this session. Used to look up
             per-skill filler_text for load_skill calls. Pass [] when not applicable.
+        conv_state: Optional ConversationState for the current session. Used to cache
+            load_skill results and skip duplicate tool calls on subsequent turns.
     """
     full_response_text = ""
 
@@ -284,36 +295,74 @@ async def _stream_llm_response(
                     except json.JSONDecodeError:
                         args = {}
 
-                    # --- Filler speech: emitted BEFORE tool execution ---
-                    # For load_skill: use the registry entry's filler_text.
-                    # For other tools: use per-tool default from TOOL_FILLER_PHRASES.
-                    filler_text: str | None = None
-                    if event.function_name == "load_skill":
-                        skill_name = args.get("skill_name", "")
-                        # Build a fast name→entry lookup
-                        _entries = registry_entries or []
-                        _reg_by_name = {e.name: e for e in _entries}
-                        entry = _reg_by_name.get(skill_name)
-                        if entry is not None:
-                            filler_text = entry.filler_text
-                        else:
-                            filler_text = TOOL_FILLER_PHRASES.get("load_skill", DEFAULT_FILLER)
-                    else:
-                        # For non-load_skill tools: use per-tool phrase if configured,
-                        # fall back to DEFAULT_FILLER so the caller always hears something.
-                        filler_text = TOOL_FILLER_PHRASES.get(event.function_name, DEFAULT_FILLER)
-
-                    if filler_text:
-                        yield _sse_chunk(filler_text)
-
-                    tool_result = await _execute_tool(
-                        event.function_name,
-                        args,
-                        client_id=client_id,
-                        lead_id=lead_id,
-                        agent_slug=agent_slug,
-                        registry_entries=registry_entries or [],
+                    # --- Cache short-circuit for load_skill ---
+                    # If this is a load_skill call and the skill is already cached in
+                    # conv_state.loaded_skills, skip filler, sleep, and tool execution
+                    # entirely — inject the cached content directly into the follow-up.
+                    _skill_name_for_cache = (
+                        args.get("skill_name", "")
+                        if event.function_name == "load_skill"
+                        else ""
                     )
+                    _cached_skill: str | None = None
+                    if (
+                        event.function_name == "load_skill"
+                        and conv_state is not None
+                        and _skill_name_for_cache
+                    ):
+                        _cached_skill = conv_state.loaded_skills.get(_skill_name_for_cache)
+
+                    if _cached_skill is not None:
+                        # Use cached content — no filler, no sleep, no tool call
+                        # dispatcher returns raw string for load_skill; match that shape here
+                        tool_result = _cached_skill
+                    else:
+                        # --- Filler speech: emitted BEFORE tool execution ---
+                        # For load_skill: use the registry entry's filler_text.
+                        # For other tools: use per-tool default from TOOL_FILLER_PHRASES.
+                        filler_text: str | None = None
+                        if event.function_name == "load_skill":
+                            skill_name = args.get("skill_name", "")
+                            # Build a fast name→entry lookup
+                            _entries = registry_entries or []
+                            _reg_by_name = {e.name: e for e in _entries}
+                            entry = _reg_by_name.get(skill_name)
+                            if entry is not None:
+                                filler_text = entry.filler_text
+                            else:
+                                filler_text = TOOL_FILLER_PHRASES.get("load_skill", DEFAULT_FILLER)
+                        else:
+                            # For non-load_skill tools: use per-tool phrase if configured,
+                            # fall back to DEFAULT_FILLER so the caller always hears something.
+                            filler_text = TOOL_FILLER_PHRASES.get(event.function_name, DEFAULT_FILLER)
+
+                        if filler_text:
+                            yield _sse_chunk(filler_text)
+                            # Pause after filler so TTS has time to begin speaking
+                            # before the tool call blocks the stream.
+                            await asyncio.sleep(FILLER_PAUSE_SECONDS)
+
+                        tool_result = await _execute_tool(
+                            event.function_name,
+                            args,
+                            client_id=client_id,
+                            lead_id=lead_id,
+                            agent_slug=agent_slug,
+                            registry_entries=registry_entries or [],
+                        )
+
+                        # After a successful load_skill, store the content in conv_state
+                        # so subsequent turns can skip the tool call entirely (AC-2).
+                        # dispatch_tool returns a raw string for load_skill:
+                        # success → plain markdown string; failure → "Error: ..." string.
+                        if (
+                            event.function_name == "load_skill"
+                            and conv_state is not None
+                            and _skill_name_for_cache
+                            and isinstance(tool_result, str)
+                            and not tool_result.startswith("Error:")
+                        ):
+                            conv_state.loaded_skills[_skill_name_for_cache] = tool_result
 
                     # Persist tool_call and tool_result turns BEFORE follow-up LLM call
                     if session_id:
@@ -566,7 +615,10 @@ async def custom_llm_path_route(
 # ---------------------------------------------------------------------------
 
 
-def _assemble_context_system_content(ctx: "VoiceSessionContext") -> str:
+def _assemble_context_system_content(
+    ctx: "VoiceSessionContext",
+    loaded_skills: "dict[str, str] | None" = None,
+) -> str:
     """Assemble the full system message content from VoiceSessionContext components.
 
     Assembly order:
@@ -574,6 +626,7 @@ def _assemble_context_system_content(ctx: "VoiceSessionContext") -> str:
     2. skills_index (## Available Skills block, when not None/empty)
     3. misc_notes (when not empty)
     4. lead_profile (when not empty and skip_lead_profile_in_assembly is False)
+    5. Loaded skill blocks (## Loaded Skill: {name} + content, one per entry)
 
     Empty components are skipped so no trailing whitespace or stray separators
     are added.
@@ -588,6 +641,10 @@ def _assemble_context_system_content(ctx: "VoiceSessionContext") -> str:
 
     Args:
         ctx: The cached VoiceSessionContext for this session.
+        loaded_skills: Optional dict of already-loaded skills — keyed by skill_name,
+            value is raw skill markdown. When present, each entry is appended as a
+            fenced ## Loaded Skill: {name} block after the skills index. Injected in
+            insertion order for deterministic output. None or empty dict → no blocks added.
 
     Returns:
         A single string ready to be used as the system message content.
@@ -599,6 +656,9 @@ def _assemble_context_system_content(ctx: "VoiceSessionContext") -> str:
         parts.append(ctx.misc_notes)
     if ctx.lead_profile and not ctx.skip_lead_profile_in_assembly:
         parts.append(ctx.lead_profile)
+    if loaded_skills:
+        for skill_name, skill_content in loaded_skills.items():
+            parts.append(f"## Loaded Skill: {skill_name}\n{skill_content}")
     return "\n\n".join(parts)
 
 
@@ -701,7 +761,7 @@ async def _process_custom_llm_request(
         # FAST PATH: Use cached VoiceSessionContext — zero DB queries
         # -----------------------------------------------------------------------
         ctx = conv_state.context
-        system_content = _assemble_context_system_content(ctx)
+        system_content = _assemble_context_system_content(ctx, loaded_skills=conv_state.loaded_skills)
         tools = ctx.tools
         _model = ctx.model
         _temperature = ctx.temperature
@@ -761,7 +821,7 @@ async def _process_custom_llm_request(
                             client=client_orm,
                         )
                         conv_state.context = lazy_ctx
-                        system_content = _assemble_context_system_content(lazy_ctx)
+                        system_content = _assemble_context_system_content(lazy_ctx, loaded_skills=conv_state.loaded_skills)
                         tools = lazy_ctx.tools
                         _model = lazy_ctx.model
                         _temperature = lazy_ctx.temperature
@@ -990,6 +1050,7 @@ async def _process_custom_llm_request(
                 conversation_id=conversation_id,
                 agent_slug=_agent_slug,
                 registry_entries=_registry_entries,
+                conv_state=conv_state,
             ):
                 yield chunk
         except Exception as exc:
