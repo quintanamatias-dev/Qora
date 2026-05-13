@@ -56,6 +56,19 @@ async def handle_load_skill(
         NEVER raises.
     """
     try:
+        # --- Security: explicit path-separator validation (defense-in-depth) ---
+        # Reject any skill_name containing path separators or '..' components BEFORE
+        # registry lookup. The registry allowlist is the primary guard, but a poisoned
+        # registry entry with a slash in the name could otherwise escape the skills dir.
+        _UNSAFE_CHARS = ("/", "\\", "..")
+        if any(ch in skill_name for ch in _UNSAFE_CHARS):
+            return {
+                "error": (
+                    f"Invalid skill name '{skill_name}': "
+                    "path separators and '..' are not allowed."
+                )
+            }
+
         # --- Security: validate against registry allowlist ---
         # Build a lookup dict: name → entry
         registry_by_name = {entry.name: entry for entry in registry_entries}

@@ -125,8 +125,12 @@ async def test_dispatch_tool_routes_load_skill(tmp_path: Path):
         clients_dir=tmp_path / "clients",
     )
 
-    assert "error" not in result, f"Unexpected error: {result}"
-    assert result["content"] == "# Qora Info\nPlatform details."
+    # dispatch_tool returns plain string (not wrapped dict) — WARNING-2 fix
+    assert isinstance(result, str), f"Expected plain string, got {type(result)}: {result!r}"
+    assert "error" not in result.lower() or result == "# Qora Info\nPlatform details.", (
+        f"Unexpected error in result: {result}"
+    )
+    assert result == "# Qora Info\nPlatform details."
 
 
 @pytest.mark.asyncio
@@ -154,8 +158,9 @@ async def test_dispatch_tool_load_skill_unknown_name(tmp_path: Path):
         clients_dir=tmp_path / "clients",
     )
 
-    assert "error" in result
-    assert "nonexistent-skill" in result["error"]
+    # dispatch_tool returns plain string (not wrapped dict) — WARNING-2 fix
+    assert isinstance(result, str), f"Expected plain string, got {type(result)}: {result!r}"
+    assert "nonexistent-skill" in result
 
 
 @pytest.mark.asyncio
@@ -173,7 +178,10 @@ async def test_dispatch_tool_load_skill_no_registry_entries(tmp_path: Path):
         clients_dir=tmp_path / "clients",
     )
 
-    assert "error" in result
+    # dispatch_tool returns plain string (not wrapped dict) — WARNING-2 fix
+    assert isinstance(result, str), f"Expected plain string, got {type(result)}: {result!r}"
+    # Error message should describe the problem
+    assert "any-skill" in result or "error" in result.lower()
 
 
 @pytest.mark.asyncio
@@ -213,6 +221,78 @@ async def test_dispatch_tool_crm_tools_unchanged_after_load_skill_wired(tmp_path
         assert result["id"] == "lead-quintana-001"
     finally:
         await db_module.close_db()
+
+
+# ---------------------------------------------------------------------------
+# WARNING 2: dispatch_tool returns raw skill text, not wrapped dict
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dispatch_tool_load_skill_returns_plain_string(tmp_path: Path):
+    """dispatch_tool('load_skill') must return a plain string, not {'content': ...}.
+
+    The LLM receives the tool result via json.dumps(tool_result). A plain string
+    gives the LLM clean text. A wrapped dict forces the LLM to parse JSON metadata.
+    """
+    from app.prompts.skill_loader import SkillRegistryEntry
+    from app.tools.dispatcher import dispatch_tool
+
+    skills_dir = tmp_path / "clients" / "test-client" / "agents" / "test-agent" / "skills"
+    skills_dir.mkdir(parents=True)
+    skill_content = "# Qora Info\nThis is the platform overview."
+    (skills_dir / "qora-info.agent-skill.md").write_text(skill_content)
+
+    registry_entries = [
+        SkillRegistryEntry(
+            name="qora-info",
+            description="Qora platform info",
+            trigger_hint="About Qora",
+            filler_text="Déjame revisar...",
+        )
+    ]
+
+    result = await dispatch_tool(
+        tool_name="load_skill",
+        tool_args={"skill_name": "qora-info"},
+        client_id="test-client",
+        lead_id=None,
+        agent_slug="test-agent",
+        registry_entries=registry_entries,
+        clients_dir=tmp_path / "clients",
+    )
+
+    # Result must be a plain string (the skill text), not a dict
+    assert isinstance(result, str), (
+        f"dispatch_tool('load_skill') must return a plain string. Got {type(result)}: {result!r}"
+    )
+    assert result == skill_content, (
+        f"Expected skill file content. Got: {result!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_tool_load_skill_error_still_returns_string(tmp_path: Path):
+    """Triangulation: dispatch_tool('load_skill') returns error string when skill not found."""
+    from app.tools.dispatcher import dispatch_tool
+
+    result = await dispatch_tool(
+        tool_name="load_skill",
+        tool_args={"skill_name": "nonexistent"},
+        client_id="test-client",
+        lead_id=None,
+        agent_slug="test-agent",
+        registry_entries=[],
+        clients_dir=tmp_path / "clients",
+    )
+
+    # Error case must also be a plain string
+    assert isinstance(result, str), (
+        f"dispatch_tool('load_skill') error must be a plain string. Got {type(result)}: {result!r}"
+    )
+    assert "nonexistent" in result or "error" in result.lower(), (
+        f"Expected error info about 'nonexistent' skill. Got: {result!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -395,12 +475,28 @@ async def test_default_filler_for_non_load_skill_tool():
         ):
             collected_chunks.append(chunk)
 
-    # Must emit some filler (default phrase) before tool execution
-    # We just verify that at least one content chunk was emitted before [DONE]
-    # (The default filler is configurable — just verify something was emitted)
-    content_chunks = [c for c in collected_chunks if '"content"' in c and "[DONE]" not in c and "finish_reason" not in c.replace('"finish_reason": null', "")]
-    # There should be at least the filler + any follow-up LLM response chunks
-    assert len(collected_chunks) > 1, (
-        "Expected more than one chunk (filler + stop/done). "
-        f"Got: {collected_chunks}"
+    # Must emit the DEFAULT_FILLER text before tool execution
+    from app.voice.webhook import DEFAULT_FILLER
+    # DEFAULT_FILLER may contain non-ASCII — check by decoding the JSON chunks
+    import json as _json
+    filler_found = False
+    for chunk in collected_chunks:
+        if not chunk.startswith("data: "):
+            continue
+        raw = chunk[len("data: "):]
+        if raw.strip() == "[DONE]":
+            continue
+        try:
+            parsed = _json.loads(raw)
+            choices = parsed.get("choices", [])
+            if choices:
+                delta_content = choices[0].get("delta", {}).get("content", "")
+                if delta_content == DEFAULT_FILLER:
+                    filler_found = True
+                    break
+        except Exception:
+            continue
+    assert filler_found, (
+        f"Expected DEFAULT_FILLER {DEFAULT_FILLER!r} in SSE content chunks. "
+        f"Got chunks: {collected_chunks}"
     )

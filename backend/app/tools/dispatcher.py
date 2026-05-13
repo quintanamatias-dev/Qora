@@ -70,13 +70,21 @@ async def dispatch_tool(
         from app.tools.skill_loader import handle_load_skill
 
         skill_name = tool_args.get("skill_name", "")
-        return await handle_load_skill(
+        raw = await handle_load_skill(
             client_id=client_id,
             agent_slug=agent_slug or "",
             skill_name=skill_name,
             registry_entries=registry_entries or [],
             clients_dir=clients_dir,
         )
+        # Unwrap the handler result to a plain string — the LLM needs raw text,
+        # not JSON metadata. handle_load_skill returns {"content": ...} on success
+        # or {"error": ...} on failure; both are unwrapped here so the tool result
+        # in the conversation is the text itself (not a dict-encoded JSON wrapper).
+        if "content" in raw:
+            return raw["content"]
+        # Error case: return the error message as a plain string
+        return raw.get("error", "Unknown error loading skill.")
 
     handler = _TOOL_REGISTRY.get(tool_name)
     if handler is None:

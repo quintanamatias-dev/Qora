@@ -302,7 +302,9 @@ async def _stream_llm_response(
                         else:
                             filler_text = TOOL_FILLER_PHRASES.get("load_skill", DEFAULT_FILLER)
                     else:
-                        filler_text = TOOL_FILLER_PHRASES.get(event.function_name)
+                        # For non-load_skill tools: use per-tool phrase if configured,
+                        # fall back to DEFAULT_FILLER so the caller always hears something.
+                        filler_text = TOOL_FILLER_PHRASES.get(event.function_name, DEFAULT_FILLER)
 
                     if filler_text:
                         yield _sse_chunk(filler_text)

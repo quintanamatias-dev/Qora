@@ -352,10 +352,13 @@ async def test_full_tool_flow_load_skill_returns_real_file_content():
         clients_dir=_CLIENTS_DIR,
     )
 
-    assert "error" not in result, f"Expected success, got error: {result}"
-    assert "content" in result, "Result must have 'content' key"
+    # dispatch_tool('load_skill') returns plain string (WARNING-2 fix)
+    assert isinstance(result, str), f"Expected plain string, got {type(result)}: {result!r}"
+    assert "error" not in result.lower() or "Qora" in result, (
+        f"Expected success (skill content), got error: {result}"
+    )
     # The real file contains 'Qora' in its content
-    assert "Qora" in result["content"], (
+    assert "Qora" in result, (
         "Content must come from the real Qora-info.agent-skill.md file"
     )
 
@@ -497,13 +500,14 @@ async def test_full_tool_flow_multi_skill_sequential_calls(tmp_path: Path):
         clients_dir=tmp_path,
     )
 
-    assert "error" not in result_a, f"skill-a load failed: {result_a}"
-    assert "error" not in result_b, f"skill-b load failed: {result_b}"
+    # dispatch_tool('load_skill') returns plain string (WARNING-2 fix)
+    assert isinstance(result_a, str), f"skill-a: expected str, got {type(result_a)}: {result_a!r}"
+    assert isinstance(result_b, str), f"skill-b: expected str, got {type(result_b)}: {result_b!r}"
 
-    assert result_a["content"] == "# Skill A\nContent of skill A.", (
+    assert result_a == "# Skill A\nContent of skill A.", (
         "First skill must return its own content"
     )
-    assert result_b["content"] == "# Skill B\nContent of skill B.", (
+    assert result_b == "# Skill B\nContent of skill B.", (
         "Second skill must return its own content"
     )
 

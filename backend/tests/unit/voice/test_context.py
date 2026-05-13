@@ -588,3 +588,126 @@ async def test_build_voice_context_tts_falls_back_to_defaults_when_agent_columns
     assert result.tts_speed == 0.95
     assert result.tts_stability == 0.4
     assert result.tts_similarity_boost == 0.75
+
+
+# ---------------------------------------------------------------------------
+# CRITICAL 1: load_skill always available when agent has registry entries
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_load_skill_injected_when_registry_has_entries():
+    """load_skill must be in tools when agent has registry entries, even if tools_enabled is '[]'.
+
+    GIVEN an agent with tools_enabled='[]' (empty) but with registry entries
+    WHEN build_voice_context() is called
+    THEN the returned context.tools contains load_skill
+    """
+    from app.voice.context import build_voice_context
+    from app.prompts.skill_loader import SkillRegistryEntry
+
+    agent = make_agent(tools_enabled="[]")  # Empty tools list in DB
+    client = make_client()
+    mock_db = AsyncMock()
+
+    registry_entry = SkillRegistryEntry(
+        name="qora-info",
+        description="Platform info",
+        trigger_hint="About Qora",
+        filler_text="Un momento...",
+    )
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="prompt")
+        mock_instance.load_agent_skills = AsyncMock(return_value="## Available Skills\n...")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[registry_entry])
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=None,
+            db=mock_db,
+            client=client,
+        )
+
+    assert result.tools is not None, "tools must not be None when registry has entries"
+    tool_names = [t["function"]["name"] for t in result.tools]
+    assert "load_skill" in tool_names, (
+        f"load_skill must be in tools when registry has entries. Got: {tool_names}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_load_skill_not_injected_when_registry_empty():
+    """load_skill must NOT appear in tools when agent has no registry entries.
+
+    GIVEN an agent with tools_enabled='[]' and no registry entries
+    WHEN build_voice_context() is called
+    THEN the returned context.tools is None (or doesn't contain load_skill)
+    """
+    from app.voice.context import build_voice_context
+
+    agent = make_agent(tools_enabled="[]")
+    client = make_client()
+    mock_db = AsyncMock()
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="prompt")
+        mock_instance.load_agent_skills = AsyncMock(return_value="")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=None,
+            db=mock_db,
+            client=client,
+        )
+
+    # tools should be None (empty tools_enabled + no registry → no tools)
+    if result.tools is not None:
+        tool_names = [t["function"]["name"] for t in result.tools]
+        assert "load_skill" not in tool_names, (
+            "load_skill must NOT appear in tools when registry is empty"
+        )
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_load_skill_alongside_crm_tools():
+    """Triangulation: load_skill injected alongside CRM tools from tools_enabled.
+
+    GIVEN an agent with tools_enabled='["get_lead_details"]' and registry entries
+    WHEN build_voice_context() is called
+    THEN both get_lead_details and load_skill are in context.tools
+    """
+    from app.voice.context import build_voice_context
+    from app.prompts.skill_loader import SkillRegistryEntry
+
+    agent = make_agent(tools_enabled='["get_lead_details"]')
+    client = make_client()
+    mock_db = AsyncMock()
+
+    registry_entry = SkillRegistryEntry(
+        name="qora-info",
+        description="Platform info",
+        trigger_hint="About Qora",
+        filler_text="Un momento...",
+    )
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="prompt")
+        mock_instance.load_agent_skills = AsyncMock(return_value="## Available Skills\n...")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[registry_entry])
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=None,
+            db=mock_db,
+            client=client,
+        )
+
+    assert result.tools is not None
+    tool_names = [t["function"]["name"] for t in result.tools]
+    assert "load_skill" in tool_names, f"load_skill missing. Got: {tool_names}"
+    assert "get_lead_details" in tool_names, f"get_lead_details missing. Got: {tool_names}"

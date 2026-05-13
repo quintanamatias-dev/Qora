@@ -224,16 +224,29 @@ async def build_voice_context(
         max_tokens = 300
 
     # Parse tools from agent.tools_enabled
+    # load_skill is ALWAYS injected when the agent has registry entries — it is an
+    # infrastructure tool, not a CRM tool, and must be available regardless of what
+    # tools_enabled lists. A demo agent seeded with tools_enabled="[]" would otherwise
+    # be unable to call load_skill even when a registry.yaml is present (CRITICAL-1 fix).
     tools: list[dict] | None = None
     tools_enabled_str = getattr(agent, "tools_enabled", None)
-    if tools_enabled_str:
-        try:
-            from app.voice.webhook import _build_tool_definitions
+    try:
+        from app.voice.webhook import _build_tool_definitions
 
-            enabled_names = json.loads(tools_enabled_str)
-            tools = _build_tool_definitions(enabled_names)
-        except (json.JSONDecodeError, TypeError, ImportError):
-            tools = None
+        enabled_names: list[str] = []
+        if tools_enabled_str:
+            try:
+                enabled_names = json.loads(tools_enabled_str)
+            except (json.JSONDecodeError, TypeError):
+                enabled_names = []
+
+        # Inject load_skill unconditionally when the agent has registry entries
+        if skill_registry_entries and "load_skill" not in enabled_names:
+            enabled_names = list(enabled_names) + ["load_skill"]
+
+        tools = _build_tool_definitions(enabled_names)
+    except ImportError:
+        tools = None
 
     # TTS config — Agent columns are authoritative; fall back to module defaults when NULL/absent
     tts_speed = getattr(agent, "tts_speed", None)

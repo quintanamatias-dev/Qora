@@ -204,6 +204,96 @@ async def test_handle_load_skill_dotdot_name_blocked(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# Security: explicit path-separator rejection (defense-in-depth)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_handle_load_skill_forward_slash_in_name_rejected_with_specific_message(tmp_path: Path):
+    """skill_name containing '/' is rejected by explicit char validation with specific error message.
+
+    This validates the char-validation runs BEFORE filesystem access — the error message
+    must mention path separators, not 'not found in registry' or 'could not be read'.
+    """
+    from app.tools.skill_loader import handle_load_skill
+
+    class _FakeEntry:
+        name = "valid/hack"  # Poisoned registry entry with slash in name
+        description = "d"
+        trigger_hint = "t"
+        filler_text = "f"
+
+    # Write a real file at the escaped path to prove it's never reached
+    escaped_dir = tmp_path / "clients" / "test-client" / "agents" / "test-agent" / "skills"
+    escaped_dir.mkdir(parents=True, exist_ok=True)
+    (escaped_dir / "valid_hack.agent-skill.md").write_text("SECRET CONTENT")
+
+    result = await handle_load_skill(
+        client_id="test-client",
+        agent_slug="test-agent",
+        skill_name="valid/hack",
+        registry_entries=[_FakeEntry()],
+        clients_dir=tmp_path / "clients",
+    )
+
+    assert "error" in result
+    # Must say "invalid" or mention the character — NOT a generic "not found" or "could not be read"
+    assert "invalid" in result["error"].lower(), (
+        f"Expected 'invalid' in error message for path-separator rejection, got: {result['error']!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_load_skill_backslash_in_name_rejected(tmp_path: Path):
+    """skill_name containing '\\' is rejected by explicit char validation."""
+    from app.tools.skill_loader import handle_load_skill
+
+    class _FakeEntry:
+        name = "skill\\hack"
+        description = "d"
+        trigger_hint = "t"
+        filler_text = "f"
+
+    result = await handle_load_skill(
+        client_id="test-client",
+        agent_slug="test-agent",
+        skill_name="skill\\hack",
+        registry_entries=[_FakeEntry()],
+        clients_dir=tmp_path / "clients",
+    )
+
+    assert "error" in result
+    assert "invalid" in result["error"].lower(), (
+        f"Expected 'invalid' in error message for backslash rejection, got: {result['error']!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_load_skill_dotdot_component_rejected(tmp_path: Path):
+    """skill_name containing '..' is rejected by explicit char validation."""
+    from app.tools.skill_loader import handle_load_skill
+
+    class _FakeEntry:
+        name = "..secret"
+        description = "d"
+        trigger_hint = "t"
+        filler_text = "f"
+
+    result = await handle_load_skill(
+        client_id="test-client",
+        agent_slug="test-agent",
+        skill_name="..secret",
+        registry_entries=[_FakeEntry()],
+        clients_dir=tmp_path / "clients",
+    )
+
+    assert "error" in result
+    assert "invalid" in result["error"].lower(), (
+        f"Expected 'invalid' in error message for dotdot rejection, got: {result['error']!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Session continues: handler never raises exceptions
 # ---------------------------------------------------------------------------
 
