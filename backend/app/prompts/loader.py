@@ -158,6 +158,30 @@ class PromptLoader:
         )
         return build_skills_index(entries)
 
+    async def load_skill_registry_entries(
+        self, client_id: str, agent_slug: str
+    ) -> list:
+        """Return the raw list of SkillRegistryEntry objects for the agent.
+
+        Unlike load_agent_skills() which returns formatted index text, this
+        method returns the parsed entry objects used by the load_skill handler
+        for allowlist validation.
+
+        Args:
+            client_id: Client slug (e.g. ``"quintana-seguros"``).
+            agent_slug: Agent slug (e.g. ``"aria"``).
+
+        Returns:
+            List of SkillRegistryEntry objects, empty if no registry.
+        """
+        from app.prompts.skill_loader import load_skill_registry
+
+        return await load_skill_registry(
+            client_id=client_id,
+            agent_slug=agent_slug,
+            clients_dir=self.clients_dir,
+        )
+
     async def load_agent_system_prompt(
         self, client_id: str, agent_slug: str
     ) -> str | None:

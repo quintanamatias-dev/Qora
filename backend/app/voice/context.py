@@ -18,10 +18,11 @@ Covers: VSC-1, VSC-2, VSC-3.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from app.prompts.loader import PromptLoader
+from app.prompts.skill_loader import SkillRegistryEntry
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,6 +74,12 @@ class VoiceSessionContext:
     tts_similarity_boost: float = 0.75
     # Registry-based skills index — NEW in Phase 1 (dynamic-agent-skills)
     skills_index: str | None = None
+    # Registry entries stored as tuple (frozen dataclass requires hashable types)
+    # NEW in Phase 2: used by load_skill dispatcher to validate + load skill files
+    skill_registry_entries: tuple[SkillRegistryEntry, ...] = ()
+    # Agent slug stored for tool routing (load_skill needs client_id + agent_slug)
+    # NEW in Phase 2
+    agent_slug: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +173,11 @@ async def build_voice_context(
     # skills_content is always None in registry mode
     skills_content: str | None = None
 
+    # Load registry entries (raw objects) for load_skill allowlist validation
+    # Stored as a tuple (frozen dataclass requires hashable types)
+    _registry_entries_list = await loader.load_skill_registry_entries(client_id, agent_slug)
+    skill_registry_entries: tuple[SkillRegistryEntry, ...] = tuple(_registry_entries_list)
+
     # Extract misc_notes from lead.extracted_facts
     # misc_notes in DB can be a dict {"notes": [...]} or a plain string
     misc_notes = ""
@@ -248,4 +260,6 @@ async def build_voice_context(
         tts_stability=tts_stability,
         tts_similarity_boost=tts_similarity_boost,
         skills_index=skills_index,
+        skill_registry_entries=skill_registry_entries,
+        agent_slug=agent_slug,
     )

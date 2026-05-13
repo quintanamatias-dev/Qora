@@ -159,6 +159,7 @@ async def test_build_voice_context_sets_skills_index_from_load_agent_skills():
         mock_instance = MockLoader.return_value
         mock_instance.render_for_agent = AsyncMock(return_value="system prompt")
         mock_instance.load_agent_skills = AsyncMock(return_value=expected_index)
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
 
         result = await build_voice_context(
             agent=agent,
@@ -188,6 +189,7 @@ async def test_build_voice_context_skills_content_is_none():
         mock_instance = MockLoader.return_value
         mock_instance.render_for_agent = AsyncMock(return_value="prompt")
         mock_instance.load_agent_skills = AsyncMock(return_value="")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
 
         result = await build_voice_context(
             agent=agent,
@@ -217,6 +219,7 @@ async def test_build_voice_context_no_registry_skills_index_is_none():
         mock_instance = MockLoader.return_value
         mock_instance.render_for_agent = AsyncMock(return_value="prompt")
         mock_instance.load_agent_skills = AsyncMock(return_value="")  # no registry
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
 
         result = await build_voice_context(
             agent=agent,
@@ -361,3 +364,120 @@ def test_assemble_context_empty_skills_index_not_injected():
 
     assert result == "Only base."
     assert "## Available Skills" not in result
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — skill_registry_entries field in VoiceSessionContext
+# ---------------------------------------------------------------------------
+
+
+def test_voice_session_context_has_skill_registry_entries_field():
+    """VoiceSessionContext has a skill_registry_entries field (default empty tuple)."""
+    from app.voice.context import VoiceSessionContext
+
+    ctx = VoiceSessionContext(
+        system_prompt="prompt",
+        skills_content=None,
+        misc_notes="",
+        lead_profile="",
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools=None,
+    )
+
+    # Default: empty tuple (no registry entries)
+    assert hasattr(ctx, "skill_registry_entries")
+    assert ctx.skill_registry_entries == ()
+
+
+def test_voice_session_context_stores_registry_entries():
+    """VoiceSessionContext stores SkillRegistryEntry objects as a tuple."""
+    from app.voice.context import VoiceSessionContext
+    from app.prompts.skill_loader import SkillRegistryEntry
+
+    entries = (
+        SkillRegistryEntry(
+            name="qora-info",
+            description="Qora details",
+            trigger_hint="About Qora",
+            filler_text="Déjame revisar...",
+        ),
+    )
+
+    ctx = VoiceSessionContext(
+        system_prompt="prompt",
+        skills_content=None,
+        misc_notes="",
+        lead_profile="",
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools=None,
+        skill_registry_entries=entries,
+    )
+
+    assert len(ctx.skill_registry_entries) == 1
+    assert ctx.skill_registry_entries[0].name == "qora-info"
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_populates_skill_registry_entries():
+    """build_voice_context() stores registry entries in skill_registry_entries when registry exists."""
+    from app.voice.context import build_voice_context
+    from app.prompts.skill_loader import SkillRegistryEntry
+
+    agent = make_agent()
+    client = make_client()
+    mock_db = AsyncMock()
+
+    expected_entries = [
+        SkillRegistryEntry(
+            name="qora-info",
+            description="Qora platform info",
+            trigger_hint="About Qora",
+            filler_text="Déjame revisar...",
+        )
+    ]
+    expected_index = "## Available Skills\n| qora-info | Qora platform info | About Qora |"
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="system prompt")
+        mock_instance.load_agent_skills = AsyncMock(return_value=expected_index)
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=expected_entries)
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=None,
+            db=mock_db,
+            client=client,
+        )
+
+    assert len(result.skill_registry_entries) == 1
+    assert result.skill_registry_entries[0].name == "qora-info"
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_empty_registry_entries_when_no_registry():
+    """build_voice_context() sets skill_registry_entries to empty tuple when no registry."""
+    from app.voice.context import build_voice_context
+
+    agent = make_agent()
+    client = make_client()
+    mock_db = AsyncMock()
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="prompt")
+        mock_instance.load_agent_skills = AsyncMock(return_value="")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=None,
+            db=mock_db,
+            client=client,
+        )
+
+    assert result.skill_registry_entries == ()

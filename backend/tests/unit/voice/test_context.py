@@ -202,6 +202,7 @@ async def test_build_voice_context_returns_voice_session_context():
         mock_instance = MockLoader.return_value
         mock_instance.render_for_agent = AsyncMock(return_value="Rendered system prompt")
         mock_instance.load_agent_skills = AsyncMock(return_value="# Skill content")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
 
         result = await build_voice_context(
             agent=agent,
@@ -234,6 +235,7 @@ async def test_build_voice_context_system_prompt_from_render_for_agent():
         mock_instance = MockLoader.return_value
         mock_instance.render_for_agent = AsyncMock(return_value=expected_prompt)
         mock_instance.load_agent_skills = AsyncMock(return_value="")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
 
         result = await build_voice_context(
             agent=agent,
@@ -271,6 +273,7 @@ async def test_build_voice_context_skills_index_from_load_agent_skills():
         mock_instance = MockLoader.return_value
         mock_instance.render_for_agent = AsyncMock(return_value="prompt")
         mock_instance.load_agent_skills = AsyncMock(return_value=expected_index)
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
 
         result = await build_voice_context(
             agent=agent,
@@ -299,6 +302,7 @@ async def test_build_voice_context_misc_notes_from_extracted_facts():
         mock_instance = MockLoader.return_value
         mock_instance.render_for_agent = AsyncMock(return_value="prompt")
         mock_instance.load_agent_skills = AsyncMock(return_value="")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
 
         result = await build_voice_context(
             agent=agent,
@@ -324,6 +328,7 @@ async def test_build_voice_context_lead_profile_contains_lead_name():
         mock_instance = MockLoader.return_value
         mock_instance.render_for_agent = AsyncMock(return_value="prompt")
         mock_instance.load_agent_skills = AsyncMock(return_value="")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
 
         result = await build_voice_context(
             agent=agent,
@@ -355,6 +360,7 @@ async def test_build_voice_context_no_lead_returns_empty_misc_and_profile():
         mock_instance = MockLoader.return_value
         mock_instance.render_for_agent = AsyncMock(return_value="prompt without lead")
         mock_instance.load_agent_skills = AsyncMock(return_value="")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
 
         result = await build_voice_context(
             agent=agent,
@@ -381,6 +387,7 @@ async def test_build_voice_context_model_temperature_max_tokens_from_agent():
         mock_instance = MockLoader.return_value
         mock_instance.render_for_agent = AsyncMock(return_value="prompt")
         mock_instance.load_agent_skills = AsyncMock(return_value="")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
 
         result = await build_voice_context(
             agent=agent,
@@ -533,6 +540,7 @@ async def test_build_voice_context_reads_tts_from_agent():
         mock_instance = MockLoader.return_value
         mock_instance.render_for_agent = AsyncMock(return_value="prompt")
         mock_instance.load_agent_skills = AsyncMock(return_value="")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
 
         result = await build_voice_context(
             agent=agent,
@@ -568,6 +576,7 @@ async def test_build_voice_context_tts_falls_back_to_defaults_when_agent_columns
         mock_instance = MockLoader.return_value
         mock_instance.render_for_agent = AsyncMock(return_value="prompt")
         mock_instance.load_agent_skills = AsyncMock(return_value="")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
 
         result = await build_voice_context(
             agent=agent,
