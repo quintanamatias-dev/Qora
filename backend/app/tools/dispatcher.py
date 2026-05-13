@@ -3,9 +3,13 @@
 Used by the Custom LLM webhook to execute tools mid-stream.
 
 Covers: T5.5 tool registry + dispatcher.
+Phase 2: adds load_skill routing.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +21,9 @@ from app.tools.get_lead_profile import get_lead_profile
 from app.tools.mark_not_interested import mark_not_interested
 from app.tools.register_interest import register_interest
 from app.tools.schedule_followup import schedule_followup
+
+if TYPE_CHECKING:
+    from app.prompts.skill_loader import SkillRegistryEntry
 
 
 # Tool registry: name → handler function
@@ -37,6 +44,10 @@ async def dispatch_tool(
     client_id: str,
     lead_id: str | None,
     session: AsyncSession | None = None,
+    *,
+    agent_slug: str | None = None,
+    registry_entries: "list[SkillRegistryEntry] | None" = None,
+    clients_dir: Path | None = None,
 ) -> dict:
     """Route a tool call to the correct handler.
 
@@ -46,10 +57,27 @@ async def dispatch_tool(
         client_id: Tenant client id (for context).
         lead_id: Lead ID from conversation context (fallback if not in args).
         session: Optional async DB session. If None, a new session is opened.
+        agent_slug: Agent slug — required for load_skill routing.
+        registry_entries: Parsed registry entries for this session — required for
+            load_skill validation (allowlist check).
+        clients_dir: Override clients root — used in tests via tmp_path.
 
     Returns:
         Tool result dict. Always returns a dict — never raises.
     """
+    # --- load_skill is handled separately (no DB session needed) ---
+    if tool_name == "load_skill":
+        from app.tools.skill_loader import handle_load_skill
+
+        skill_name = tool_args.get("skill_name", "")
+        return await handle_load_skill(
+            client_id=client_id,
+            agent_slug=agent_slug or "",
+            skill_name=skill_name,
+            registry_entries=registry_entries or [],
+            clients_dir=clients_dir,
+        )
+
     handler = _TOOL_REGISTRY.get(tool_name)
     if handler is None:
         return {"error": f"unknown_tool: {tool_name}"}

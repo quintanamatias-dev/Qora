@@ -175,6 +175,21 @@ def _sse_stop() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Filler speech config — emitted to SSE stream BEFORE tool execution
+# ---------------------------------------------------------------------------
+
+# Per-tool default filler phrases. load_skill uses the registry entry's
+# filler_text; other tools fall back to this dict, then to DEFAULT_FILLER.
+TOOL_FILLER_PHRASES: dict[str, str] = {
+    "load_skill": "Un momento, déjame revisar eso...",
+    # CRM tools intentionally omitted — they're fast, no filler needed.
+    # Add entries here to configure per-tool filler for future tools.
+}
+
+DEFAULT_FILLER = "Un momento por favor..."
+
+
+# ---------------------------------------------------------------------------
 # Tool execution (dispatches to tools module)
 # ---------------------------------------------------------------------------
 
@@ -184,11 +199,15 @@ async def _execute_tool(
     tool_args: dict,
     client_id: str,
     lead_id: str | None,
+    *,
+    agent_slug: str | None = None,
+    registry_entries: list | None = None,
+    clients_dir: Any | None = None,
 ) -> dict:
     """Execute a tool by name and return the result dict.
 
     For Phase 0, tools are dispatched directly from here.
-    Phase 1 can introduce a full registry.
+    Phase 2 adds load_skill support via agent_slug + registry_entries.
     """
     try:
         from app.tools.dispatcher import dispatch_tool
@@ -198,6 +217,9 @@ async def _execute_tool(
             tool_args=tool_args,
             client_id=client_id,
             lead_id=lead_id,
+            agent_slug=agent_slug,
+            registry_entries=registry_entries or [],
+            clients_dir=clients_dir,
         )
     except ImportError:
         # Tools module not yet implemented — return safe stub
@@ -222,15 +244,23 @@ async def _stream_llm_response(
     lead_id: str | None,
     session_id: str | None,
     conversation_id: str | None,
+    agent_slug: str | None = None,
+    registry_entries: "list | None" = None,
 ) -> AsyncGenerator[str, None]:
     """Generate SSE chunks from GPT-4o, handling tool calls mid-stream.
 
     Flow:
     1. Start streaming GPT-4o.
     2. Yield content tokens as SSE.
-    3. If tool_call detected: execute tool, re-call GPT-4o, stream final reply.
+    3. If tool_call detected:
+       a. Emit filler speech tokens (before tool runs — ElevenLabs TTS picks up immediately).
+       b. Execute tool, re-call GPT-4o, stream final reply.
     4. Persist transcript turn.
     5. Yield [DONE].
+
+    Args:
+        registry_entries: Parsed registry entries for this session. Used to look up
+            per-skill filler_text for load_skill calls. Pass [] when not applicable.
     """
     full_response_text = ""
 
@@ -247,7 +277,7 @@ async def _stream_llm_response(
                     yield _sse_chunk(event.text)
 
                 elif isinstance(event, ToolCallDelta):
-                    # Tool call detected — execute and continue
+                    # Tool call detected — emit filler FIRST, then execute
                     try:
                         args = (
                             json.loads(event.function_args)
@@ -257,11 +287,33 @@ async def _stream_llm_response(
                     except json.JSONDecodeError:
                         args = {}
 
+                    # --- Filler speech: emitted BEFORE tool execution ---
+                    # For load_skill: use the registry entry's filler_text.
+                    # For other tools: use per-tool default from TOOL_FILLER_PHRASES.
+                    filler_text: str | None = None
+                    if event.function_name == "load_skill":
+                        skill_name = args.get("skill_name", "")
+                        # Build a fast name→entry lookup
+                        _entries = registry_entries or []
+                        _reg_by_name = {e.name: e for e in _entries}
+                        entry = _reg_by_name.get(skill_name)
+                        if entry is not None:
+                            filler_text = entry.filler_text
+                        else:
+                            filler_text = TOOL_FILLER_PHRASES.get("load_skill", DEFAULT_FILLER)
+                    else:
+                        filler_text = TOOL_FILLER_PHRASES.get(event.function_name)
+
+                    if filler_text:
+                        yield _sse_chunk(filler_text)
+
                     tool_result = await _execute_tool(
                         event.function_name,
                         args,
                         client_id=client_id,
                         lead_id=lead_id,
+                        agent_slug=agent_slug,
+                        registry_entries=registry_entries or [],
                     )
 
                     # Persist tool_call and tool_result turns BEFORE follow-up LLM call
@@ -641,6 +693,9 @@ async def _process_custom_llm_request(
     _new_session_context: "VoiceSessionContext | None" = None
     # True when build_voice_context was used (not the per-turn render_for_agent fallback)
     _used_voice_context = False
+    # agent_slug + registry_entries for load_skill tool routing (Phase 2)
+    _agent_slug: str | None = None
+    _registry_entries: "list" = []
 
     if conv_state is not None and conv_state.context is not None:
         # -----------------------------------------------------------------------
@@ -653,6 +708,9 @@ async def _process_custom_llm_request(
         _temperature = ctx.temperature
         _max_tokens = ctx.max_tokens
         _used_voice_context = True
+        # Extract skill routing data from context (Phase 2)
+        _agent_slug = ctx.agent_slug
+        _registry_entries = list(ctx.skill_registry_entries)
 
         # Still need a valid api_key — already retrieved above
         # Validate tenant is accessible (minimal check — context was already built)
@@ -710,6 +768,9 @@ async def _process_custom_llm_request(
                         _temperature = lazy_ctx.temperature
                         _max_tokens = lazy_ctx.max_tokens
                         _used_voice_context = True
+                        # Phase 2: extract skill routing data
+                        _agent_slug = getattr(agent, "slug", None)
+                        _registry_entries = list(lazy_ctx.skill_registry_entries)
                     except Exception as exc:
                         structlog.get_logger().warning(
                             "voice_context_lazy_build_failed",
@@ -743,6 +804,9 @@ async def _process_custom_llm_request(
                     # Store the built context for use during session creation below
                     # (will be attached to the new session_store entry)
                     _new_session_context = new_ctx
+                    # Phase 2: extract skill routing data
+                    _agent_slug = getattr(agent, "slug", None)
+                    _registry_entries = list(new_ctx.skill_registry_entries)
                 except Exception as exc:
                     structlog.get_logger().warning(
                         "voice_context_new_session_build_failed",
@@ -925,6 +989,8 @@ async def _process_custom_llm_request(
                 lead_id=lead_id,
                 session_id=session_id,
                 conversation_id=conversation_id,
+                agent_slug=_agent_slug,
+                registry_entries=_registry_entries,
             ):
                 yield chunk
         except Exception as exc:
@@ -1055,6 +1121,28 @@ QORA_TOOL_DEFINITIONS = {
                     "lead_id": {"type": "string", "description": "ID del lead"}
                 },
                 "required": ["lead_id"],
+            },
+        },
+    },
+    "load_skill": {
+        "type": "function",
+        "function": {
+            "name": "load_skill",
+            "description": (
+                "Load detailed knowledge about a specific topic from your available skills. "
+                "Call this when the conversation requires specialized knowledge listed in "
+                "## Available Skills. Call it ONCE per skill per conversation — the knowledge "
+                "persists in context after loading."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "skill_name": {
+                        "type": "string",
+                        "description": "The skill name from the ## Available Skills list",
+                    }
+                },
+                "required": ["skill_name"],
             },
         },
     },
