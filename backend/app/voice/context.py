@@ -231,7 +231,7 @@ async def build_voice_context(
     tools: list[dict] | None = None
     tools_enabled_str = getattr(agent, "tools_enabled", None)
     try:
-        from app.voice.webhook import _build_tool_definitions
+        from app.tools.registry import build_tool_definitions as _build_tool_definitions
 
         enabled_names: list[str] = []
         if tools_enabled_str:

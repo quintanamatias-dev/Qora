@@ -12,6 +12,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.leads.service import get_lead, get_interest_history
 
+TOOL_DEFINITION = {
+    "type": "function",
+    "function": {
+        "name": "get_lead_history",
+        "description": "Obtenés el historial de interés del lead a lo largo de las llamadas anteriores",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "lead_id": {"type": "string", "description": "ID del lead"}
+            },
+            "required": ["lead_id"],
+        },
+    },
+}
+
 
 async def get_lead_history(
     session: AsyncSession,

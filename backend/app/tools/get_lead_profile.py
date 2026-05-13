@@ -12,6 +12,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.leads.service import get_lead, get_active_profile_facts
 
+TOOL_DEFINITION = {
+    "type": "function",
+    "function": {
+        "name": "get_lead_profile",
+        "description": "Obtenés el perfil acumulado del lead: datos personales, puntos de dolor, señales de compra y más",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "lead_id": {"type": "string", "description": "ID del lead"}
+            },
+            "required": ["lead_id"],
+        },
+    },
+}
+
 
 # Namespace prefix → Spanish section label for voice output
 _NAMESPACE_LABELS = [

@@ -37,13 +37,13 @@ def _context_preview(ctx) -> dict:
     """Serialize a VoiceSessionContext into a preview dict (truncated fields)."""
     return {
         "system_prompt_preview": _preview(ctx.system_prompt),
-        "system_prompt_length": len(ctx.system_prompt),
-        "skills_content_preview": _preview(ctx.skills_content),
-        "skills_content_length": len(ctx.skills_content),
+        "system_prompt_length": len(ctx.system_prompt or ""),
+        "skills_index_preview": _preview(ctx.skills_index),
+        "skills_index_length": len(ctx.skills_index or ""),
         "misc_notes_preview": _preview(ctx.misc_notes),
-        "misc_notes_length": len(ctx.misc_notes),
+        "misc_notes_length": len(ctx.misc_notes or ""),
         "lead_profile_preview": _preview(ctx.lead_profile),
-        "lead_profile_length": len(ctx.lead_profile),
+        "lead_profile_length": len(ctx.lead_profile or ""),
         "model": ctx.model,
         "temperature": ctx.temperature,
         "max_tokens": ctx.max_tokens,
@@ -54,7 +54,7 @@ def _context_full(ctx) -> dict:
     """Serialize a VoiceSessionContext into a full (un-truncated) dict."""
     return {
         "system_prompt": ctx.system_prompt,
-        "skills_content": ctx.skills_content,
+        "skills_index": ctx.skills_index,
         "misc_notes": ctx.misc_notes,
         "lead_profile": ctx.lead_profile,
         "model": ctx.model,

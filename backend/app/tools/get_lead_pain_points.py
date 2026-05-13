@@ -12,6 +12,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.leads.service import get_lead, get_facts_by_namespace
 
+TOOL_DEFINITION = {
+    "type": "function",
+    "function": {
+        "name": "get_lead_pain_points",
+        "description": "Obtenés los puntos de dolor y problemas de servicio acumulados del lead",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "lead_id": {"type": "string", "description": "ID del lead"}
+            },
+            "required": ["lead_id"],
+        },
+    },
+}
+
 
 async def get_lead_pain_points(
     session: AsyncSession,

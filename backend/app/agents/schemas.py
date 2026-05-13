@@ -4,7 +4,7 @@ Slug validation: ^[a-z0-9][a-z0-9-]*[a-z0-9]?$ (no leading/trailing hyphens).
 Single-char slugs (all lowercase letters or digits) are also valid.
 
 tools_enabled validation: must be list[str] containing only keys from
-QORA_TOOL_DEFINITIONS in app.voice.webhook.
+TOOL_DEFINITIONS in app.tools.registry.
 
 The service layer is responsible for serializing list[str] → JSON string before
 persisting to the DB, and deserializing JSON string → list[str] when returning
@@ -22,9 +22,9 @@ from pydantic import BaseModel, field_validator, Field
 # Allows single alphanumeric chars (e.g. "a", "1").
 _SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
 
-# Derive known tool names from the canonical QORA_TOOL_DEFINITIONS dict.
-# This avoids duplicating tool names — single source of truth in webhook.py.
-from app.voice.webhook import QORA_TOOL_DEFINITIONS as _TOOL_DEFS  # noqa: E402
+# Derive known tool names from the canonical TOOL_DEFINITIONS dict.
+# This avoids duplicating tool names — single source of truth in app.tools.registry.
+from app.tools.registry import TOOL_DEFINITIONS as _TOOL_DEFS  # noqa: E402
 
 QORA_TOOL_NAMES: frozenset[str] = frozenset(_TOOL_DEFS.keys())
 
