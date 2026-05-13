@@ -1,0 +1,5 @@
+skills:
+  - name: Qora-info
+    description: "Informacion completa sobre la plataforma Qora: identidad, funcionamiento, capacidades, casos de uso y limites del demo"
+    trigger_hint: "Cuando el usuario pregunte sobre Qora, sus capacidades, como funciona, precios, integraciones o el demo de Mariano"
+    filler_text: "Dejame buscar esa informacion..."

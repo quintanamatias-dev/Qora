@@ -133,40 +133,54 @@ class PromptLoader:
         return JAUMPABLO_PROMPT_TEMPLATE
 
     async def load_agent_skills(self, client_id: str, agent_slug: str) -> str:
-        """Load and concatenate all *.agent-skill.md files from agent's skills dir.
+        """Return the registry-based ## Available Skills index block for the agent.
 
-        Scans ``clients/{client_id}/agents/{agent_slug}/skills/`` for files
-        matching ``*.agent-skill.md``. Files are read and concatenated in
-        alphabetical order, separated by ``"\\n\\n---\\n\\n"``.
+        Reads ``clients/{client_id}/agents/{agent_slug}/skills/registry.yaml`` and
+        builds a compact index text for injection into the system prompt.
+
+        The old glob-all behavior (concatenating all *.agent-skill.md files) is
+        REMOVED. No registry.yaml → empty string. Empty registry → empty string.
+        There is NO fallback to globbing skill files.
 
         Args:
             client_id: Client slug (e.g. ``"quintana-seguros"``).
             agent_slug: Agent slug (e.g. ``"aria"``).
 
         Returns:
-            Concatenated skill content (empty string if dir missing or no files).
+            Formatted ``## Available Skills`` index block, or ``""`` if no registry.
         """
-        skills_dir = self.clients_dir / client_id / "agents" / agent_slug / "skills"
+        from app.prompts.skill_loader import load_skill_registry, build_skills_index
 
-        dir_exists = await asyncio.to_thread(skills_dir.is_dir)
-        if not dir_exists:
-            return ""
-
-        skill_files = sorted(
-            await asyncio.to_thread(
-                lambda: list(skills_dir.glob("*.agent-skill.md"))
-            )
+        entries = await load_skill_registry(
+            client_id=client_id,
+            agent_slug=agent_slug,
+            clients_dir=self.clients_dir,
         )
+        return build_skills_index(entries)
 
-        if not skill_files:
-            return ""
+    async def load_skill_registry_entries(
+        self, client_id: str, agent_slug: str
+    ) -> list:
+        """Return the raw list of SkillRegistryEntry objects for the agent.
 
-        contents = []
-        for skill_file in skill_files:
-            content = await asyncio.to_thread(skill_file.read_text, encoding="utf-8")
-            contents.append(content)
+        Unlike load_agent_skills() which returns formatted index text, this
+        method returns the parsed entry objects used by the load_skill handler
+        for allowlist validation.
 
-        return "\n\n---\n\n".join(contents)
+        Args:
+            client_id: Client slug (e.g. ``"quintana-seguros"``).
+            agent_slug: Agent slug (e.g. ``"aria"``).
+
+        Returns:
+            List of SkillRegistryEntry objects, empty if no registry.
+        """
+        from app.prompts.skill_loader import load_skill_registry
+
+        return await load_skill_registry(
+            client_id=client_id,
+            agent_slug=agent_slug,
+            clients_dir=self.clients_dir,
+        )
 
     async def load_agent_system_prompt(
         self, client_id: str, agent_slug: str

@@ -8,7 +8,7 @@ Architecture decisions:
 - AD-1: VoiceSessionContext lives here (not in session.py) — single
   responsibility; session.py stays pure state tracking.
 - AD-2: Cache location is ConversationState.context (in-memory) — no new infra.
-- AD-4: Skills loaded via PromptLoader.load_agent_skills() — filesystem glob.
+- AD-4: Skills loaded via PromptLoader.load_agent_skills() — registry-based index only (no glob-all).
 - AD-5: misc_notes from lead.extracted_facts["misc_notes"] — reuse existing.
 - AD-6: system_prompt built by existing PromptLoader.render_for_agent().
 
@@ -18,10 +18,11 @@ Covers: VSC-1, VSC-2, VSC-3.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from app.prompts.loader import PromptLoader
+from app.prompts.skill_loader import SkillRegistryEntry
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,7 +41,9 @@ class VoiceSessionContext:
 
     Fields:
         system_prompt: Fully rendered system prompt, ready to use as system message.
-        skills_content: Concatenated *.agent-skill.md files (empty if none).
+        skills_content: Legacy field — always None in registry mode. Kept for
+            backward compatibility with existing tests that construct this dataclass
+            directly. Do NOT use for new code; use skills_index instead.
         misc_notes: From extracted_facts["misc_notes"] (empty if absent/no lead).
         lead_profile: Formatted lead data block (empty if no lead).
         model: LLM model identifier from agent config.
@@ -51,10 +54,13 @@ class VoiceSessionContext:
             assembled system message. Set when the agent uses template vars ({{lead_name}},
             etc.) so render_for_agent() already substituted lead data — appending lead_profile
             would duplicate it (Issue #21).
+        skills_index: Formatted ## Available Skills index block from registry.yaml.
+            None when agent has no registry (no skills injected). Set by build_voice_context()
+            from load_agent_skills() output.
     """
 
     system_prompt: str
-    skills_content: str
+    skills_content: str | None
     misc_notes: str
     lead_profile: str
     model: str
@@ -66,6 +72,14 @@ class VoiceSessionContext:
     tts_speed: float = 0.95
     tts_stability: float = 0.4
     tts_similarity_boost: float = 0.75
+    # Registry-based skills index — NEW in Phase 1 (dynamic-agent-skills)
+    skills_index: str | None = None
+    # Registry entries stored as tuple (frozen dataclass requires hashable types)
+    # NEW in Phase 2: used by load_skill dispatcher to validate + load skill files
+    skill_registry_entries: tuple[SkillRegistryEntry, ...] = ()
+    # Agent slug stored for tool routing (load_skill needs client_id + agent_slug)
+    # NEW in Phase 2
+    agent_slug: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -151,8 +165,18 @@ async def build_voice_context(
     # Render system prompt (may raise — let it propagate per VSC-2)
     system_prompt = await loader.render_for_agent(agent, lead, db=db, client=client)
 
-    # Load skills (filesystem, no DB) — always succeeds (empty string on missing)
-    skills_content = await loader.load_agent_skills(client_id, agent_slug)
+    # Load skills registry index — returns ## Available Skills block or '' if no registry
+    # The old glob-all behavior is REMOVED. No registry.yaml → no skills.
+    _skills_raw = await loader.load_agent_skills(client_id, agent_slug)
+    # Normalize: empty string → None (no block injected into prompt)
+    skills_index: str | None = _skills_raw if _skills_raw else None
+    # skills_content is always None in registry mode
+    skills_content: str | None = None
+
+    # Load registry entries (raw objects) for load_skill allowlist validation
+    # Stored as a tuple (frozen dataclass requires hashable types)
+    _registry_entries_list = await loader.load_skill_registry_entries(client_id, agent_slug)
+    skill_registry_entries: tuple[SkillRegistryEntry, ...] = tuple(_registry_entries_list)
 
     # Extract misc_notes from lead.extracted_facts
     # misc_notes in DB can be a dict {"notes": [...]} or a plain string
@@ -200,16 +224,29 @@ async def build_voice_context(
         max_tokens = 300
 
     # Parse tools from agent.tools_enabled
+    # load_skill is ALWAYS injected when the agent has registry entries — it is an
+    # infrastructure tool, not a CRM tool, and must be available regardless of what
+    # tools_enabled lists. A demo agent seeded with tools_enabled="[]" would otherwise
+    # be unable to call load_skill even when a registry.yaml is present (CRITICAL-1 fix).
     tools: list[dict] | None = None
     tools_enabled_str = getattr(agent, "tools_enabled", None)
-    if tools_enabled_str:
-        try:
-            from app.voice.webhook import _build_tool_definitions
+    try:
+        from app.voice.webhook import _build_tool_definitions
 
-            enabled_names = json.loads(tools_enabled_str)
-            tools = _build_tool_definitions(enabled_names)
-        except (json.JSONDecodeError, TypeError, ImportError):
-            tools = None
+        enabled_names: list[str] = []
+        if tools_enabled_str:
+            try:
+                enabled_names = json.loads(tools_enabled_str)
+            except (json.JSONDecodeError, TypeError):
+                enabled_names = []
+
+        # Inject load_skill unconditionally when the agent has registry entries
+        if skill_registry_entries and "load_skill" not in enabled_names:
+            enabled_names = list(enabled_names) + ["load_skill"]
+
+        tools = _build_tool_definitions(enabled_names)
+    except ImportError:
+        tools = None
 
     # TTS config — Agent columns are authoritative; fall back to module defaults when NULL/absent
     tts_speed = getattr(agent, "tts_speed", None)
@@ -235,4 +272,7 @@ async def build_voice_context(
         tts_speed=tts_speed,
         tts_stability=tts_stability,
         tts_similarity_boost=tts_similarity_boost,
+        skills_index=skills_index,
+        skill_registry_entries=skill_registry_entries,
+        agent_slug=agent_slug,
     )
