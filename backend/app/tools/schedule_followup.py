@@ -21,6 +21,26 @@ from app.leads.service import get_lead, transition_lead_status, InvalidTransitio
 
 logger = structlog.get_logger(__name__)
 
+TOOL_DEFINITION = {
+    "type": "function",
+    "function": {
+        "name": "schedule_followup",
+        "description": "Agendás un seguimiento para el lead en una fecha específica",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "lead_id": {"type": "string"},
+                "followup_date": {
+                    "type": "string",
+                    "description": "Fecha ISO 8601",
+                },
+                "note": {"type": "string"},
+            },
+            "required": ["lead_id", "followup_date"],
+        },
+    },
+}
+
 
 def _parse_followup_date(
     followup_date: str,

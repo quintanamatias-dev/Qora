@@ -14,6 +14,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.leads.service import get_lead
 
+TOOL_DEFINITION = {
+    "type": "function",
+    "function": {
+        "name": "get_lead_details",
+        "description": "Obtenés los datos completos del lead del CRM",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "lead_id": {"type": "string", "description": "ID del lead"}
+            },
+            "required": ["lead_id"],
+        },
+    },
+}
+
 
 async def get_lead_details(
     session: AsyncSession,

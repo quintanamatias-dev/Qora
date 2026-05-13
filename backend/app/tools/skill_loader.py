@@ -25,6 +25,31 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+TOOL_DEFINITION = {
+    "type": "function",
+    "function": {
+        "name": "load_skill",
+        "description": (
+            "Load detailed knowledge about a specific topic from your available skills. "
+            "Call this when the conversation requires specialized knowledge listed in "
+            "## Available Skills. Call it ONCE per skill per conversation — the knowledge "
+            "persists in context after loading."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "skill_name": {
+                    "type": "string",
+                    "description": "The skill name from the ## Available Skills list",
+                }
+            },
+            "required": ["skill_name"],
+        },
+    },
+}
+
+FILLER_TEXT = "Un momento, déjame revisar eso..."
+
 # Default clients directory (same resolution as skill_loader.py in prompts)
 _DEFAULT_CLIENTS_DIR = Path(__file__).resolve().parents[2] / "clients"
 

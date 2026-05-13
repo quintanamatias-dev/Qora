@@ -13,6 +13,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.leads.service import get_lead, transition_lead_status, InvalidTransitionError
 
+TOOL_DEFINITION = {
+    "type": "function",
+    "function": {
+        "name": "mark_not_interested",
+        "description": "Marcás al lead como no interesado con una razón",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "lead_id": {"type": "string"},
+                "reason": {"type": "string", "description": "Razón del rechazo"},
+            },
+            "required": ["lead_id", "reason"],
+        },
+    },
+}
+
 
 async def mark_not_interested(
     session: AsyncSession,

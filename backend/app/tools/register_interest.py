@@ -13,6 +13,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.leads.service import get_lead, transition_lead_status, InvalidTransitionError
 
+TOOL_DEFINITION = {
+    "type": "function",
+    "function": {
+        "name": "register_interest",
+        "description": "Registrás el interés del lead y lo marcás para cotización",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "lead_id": {"type": "string"},
+                "car_make": {"type": "string"},
+                "car_model": {"type": "string"},
+                "car_year": {"type": "integer"},
+                "current_insurance": {"type": "string"},
+                "notes": {"type": "string"},
+            },
+            "required": ["lead_id", "car_make", "car_model", "car_year"],
+        },
+    },
+}
+
 
 async def register_interest(
     session: AsyncSession,

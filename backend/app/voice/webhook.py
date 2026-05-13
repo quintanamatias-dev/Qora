@@ -44,6 +44,12 @@ from app.core.database import get_session as db_session
 from app.leads.service import get_lead
 from app.prompts.loader import PromptLoader
 from app.tenants.service import get_client, get_default_agent
+from app.tools.registry import (
+    TOOL_DEFINITIONS as QORA_TOOL_DEFINITIONS,
+    TOOL_FILLER_PHRASES,
+    DEFAULT_FILLER,
+    build_tool_definitions as _build_tool_definitions,
+)
 from app.voice.context import build_voice_context
 from app.voice.session import session_store
 
@@ -177,16 +183,7 @@ def _sse_stop() -> str:
 # ---------------------------------------------------------------------------
 # Filler speech config — emitted to SSE stream BEFORE tool execution
 # ---------------------------------------------------------------------------
-
-# Per-tool default filler phrases. load_skill uses the registry entry's
-# filler_text; other tools fall back to this dict, then to DEFAULT_FILLER.
-TOOL_FILLER_PHRASES: dict[str, str] = {
-    "load_skill": "Un momento, déjame revisar eso...",
-    # CRM tools intentionally omitted — they're fast, no filler needed.
-    # Add entries here to configure per-tool filler for future tools.
-}
-
-DEFAULT_FILLER = "Un momento por favor..."
+# TOOL_FILLER_PHRASES and DEFAULT_FILLER are imported from app.tools.registry above.
 
 
 # ---------------------------------------------------------------------------
@@ -1011,151 +1008,5 @@ async def _process_custom_llm_request(
     )
 
 
-# ---------------------------------------------------------------------------
-# Helper: build tool definitions
-# ---------------------------------------------------------------------------
-
-
-QORA_TOOL_DEFINITIONS = {
-    "get_lead_details": {
-        "type": "function",
-        "function": {
-            "name": "get_lead_details",
-            "description": "Obtenés los datos completos del lead del CRM",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "lead_id": {"type": "string", "description": "ID del lead"}
-                },
-                "required": ["lead_id"],
-            },
-        },
-    },
-    "register_interest": {
-        "type": "function",
-        "function": {
-            "name": "register_interest",
-            "description": "Registrás el interés del lead y lo marcás para cotización",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "lead_id": {"type": "string"},
-                    "car_make": {"type": "string"},
-                    "car_model": {"type": "string"},
-                    "car_year": {"type": "integer"},
-                    "current_insurance": {"type": "string"},
-                    "notes": {"type": "string"},
-                },
-                "required": ["lead_id", "car_make", "car_model", "car_year"],
-            },
-        },
-    },
-    "mark_not_interested": {
-        "type": "function",
-        "function": {
-            "name": "mark_not_interested",
-            "description": "Marcás al lead como no interesado con una razón",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "lead_id": {"type": "string"},
-                    "reason": {"type": "string", "description": "Razón del rechazo"},
-                },
-                "required": ["lead_id", "reason"],
-            },
-        },
-    },
-    "schedule_followup": {
-        "type": "function",
-        "function": {
-            "name": "schedule_followup",
-            "description": "Agendás un seguimiento para el lead en una fecha específica",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "lead_id": {"type": "string"},
-                    "followup_date": {
-                        "type": "string",
-                        "description": "Fecha ISO 8601",
-                    },
-                    "note": {"type": "string"},
-                },
-                "required": ["lead_id", "followup_date"],
-            },
-        },
-    },
-    "get_lead_profile": {
-        "type": "function",
-        "function": {
-            "name": "get_lead_profile",
-            "description": "Obtenés el perfil acumulado del lead: datos personales, puntos de dolor, señales de compra y más",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "lead_id": {"type": "string", "description": "ID del lead"}
-                },
-                "required": ["lead_id"],
-            },
-        },
-    },
-    "get_lead_history": {
-        "type": "function",
-        "function": {
-            "name": "get_lead_history",
-            "description": "Obtenés el historial de interés del lead a lo largo de las llamadas anteriores",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "lead_id": {"type": "string", "description": "ID del lead"}
-                },
-                "required": ["lead_id"],
-            },
-        },
-    },
-    "get_lead_pain_points": {
-        "type": "function",
-        "function": {
-            "name": "get_lead_pain_points",
-            "description": "Obtenés los puntos de dolor y problemas de servicio acumulados del lead",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "lead_id": {"type": "string", "description": "ID del lead"}
-                },
-                "required": ["lead_id"],
-            },
-        },
-    },
-    "load_skill": {
-        "type": "function",
-        "function": {
-            "name": "load_skill",
-            "description": (
-                "Load detailed knowledge about a specific topic from your available skills. "
-                "Call this when the conversation requires specialized knowledge listed in "
-                "## Available Skills. Call it ONCE per skill per conversation — the knowledge "
-                "persists in context after loading."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "skill_name": {
-                        "type": "string",
-                        "description": "The skill name from the ## Available Skills list",
-                    }
-                },
-                "required": ["skill_name"],
-            },
-        },
-    },
-}
-
-
-def _build_tool_definitions(tool_names: list[str]) -> list[dict] | None:
-    """Build OpenAI tool definitions for the given tool names."""
-    tools = [
-        QORA_TOOL_DEFINITIONS[name]
-        for name in tool_names
-        if name in QORA_TOOL_DEFINITIONS
-    ]
-    return tools if tools else None
+# QORA_TOOL_DEFINITIONS and _build_tool_definitions are imported from
+# app.tools.registry at the top of this module.
