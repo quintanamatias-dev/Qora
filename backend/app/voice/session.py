@@ -36,6 +36,12 @@ class ConversationState:
     # VSC-4: Per-session context cache — built once at initiation, zero queries per turn
     context: "VoiceSessionContext | None" = None
 
+    # fix-dynamic-skills-live-bugs: Per-session loaded skill cache.
+    # Keyed by skill_name (str), value is the raw skill markdown content (str).
+    # Populated by _stream_llm_response after a successful load_skill tool call.
+    # Injected into system prompt via _assemble_context_system_content on subsequent turns.
+    loaded_skills: dict[str, str] = field(default_factory=dict)
+
 
 # ---------------------------------------------------------------------------
 # SessionStore — module-level singleton per process
