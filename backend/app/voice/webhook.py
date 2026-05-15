@@ -187,8 +187,31 @@ def _sse_stop() -> str:
 # TOOL_FILLER_PHRASES and DEFAULT_FILLER are imported from app.tools.registry above.
 
 # Pause between filler TTS emission and tool execution (seconds).
-# Gives the TTS engine time to begin speaking before the tool call blocks.
-FILLER_PAUSE_SECONDS = 0.7
+# 2.5 s gives the TTS engine enough time to finish speaking the filler phrase
+# before the follow-up LLM response begins — prevents both running together.
+FILLER_PAUSE_SECONDS = 2.5
+
+# Default transition phrase prepended to the follow-up system message when
+# a skill registry entry does not specify its own transition_text.
+_DEFAULT_TRANSITION_TEXT = "Listo, ya encontré la información."
+
+
+def _normalize_filler(text: str) -> str:
+    """Ensure filler text ends with '. ' for ElevenLabs buffer-word behavior.
+
+    ElevenLabs commits a TTS buffer word when it sees sentence-ending punctuation
+    followed by whitespace. Without the trailing space the filler may be held in
+    the buffer and merged with the next chunk.
+
+    Rules:
+    - Strip trailing whitespace.
+    - If it does not already end with '.', '!', '?', or '…', append '.'.
+    - Always append a trailing space.
+    """
+    text = text.rstrip()
+    if text and text[-1] not in (".", "!", "?", "…"):
+        text += "."
+    return text + " "
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +335,15 @@ async def _stream_llm_response(
                     ):
                         _cached_skill = conv_state.loaded_skills.get(_skill_name_for_cache)
 
+                    # Pre-resolve the skill registry entry for load_skill calls.
+                    # Used for both filler_text (uncached path) and transition_text
+                    # (both cached and uncached follow-up messages).
+                    _skill_entry = None
+                    if event.function_name == "load_skill":
+                        _entries_pre = registry_entries or []
+                        _reg_pre = {e.name: e for e in _entries_pre}
+                        _skill_entry = _reg_pre.get(args.get("skill_name", ""))
+
                     if _cached_skill is not None:
                         # Use cached content — no filler, no sleep, no tool call
                         # dispatcher returns raw string for load_skill; match that shape here
@@ -322,13 +354,9 @@ async def _stream_llm_response(
                         # For other tools: use per-tool default from TOOL_FILLER_PHRASES.
                         filler_text: str | None = None
                         if event.function_name == "load_skill":
-                            skill_name = args.get("skill_name", "")
-                            # Build a fast name→entry lookup
-                            _entries = registry_entries or []
-                            _reg_by_name = {e.name: e for e in _entries}
-                            entry = _reg_by_name.get(skill_name)
-                            if entry is not None:
-                                filler_text = entry.filler_text
+                            # _skill_entry already resolved above (pre-resolve block)
+                            if _skill_entry is not None:
+                                filler_text = _skill_entry.filler_text
                             else:
                                 filler_text = TOOL_FILLER_PHRASES.get("load_skill", DEFAULT_FILLER)
                         else:
@@ -337,9 +365,11 @@ async def _stream_llm_response(
                             filler_text = TOOL_FILLER_PHRASES.get(event.function_name, DEFAULT_FILLER)
 
                         if filler_text:
-                            yield _sse_chunk(filler_text)
-                            # Pause after filler so TTS has time to begin speaking
-                            # before the tool call blocks the stream.
+                            # Normalize: ensure sentence-ending punctuation + trailing space
+                            # so ElevenLabs commits the buffer word before the next chunk.
+                            yield _sse_chunk(_normalize_filler(filler_text))
+                            # Pause after filler so TTS has time to finish speaking
+                            # before the follow-up LLM response begins (Approach E).
                             await asyncio.sleep(FILLER_PAUSE_SECONDS)
 
                         tool_result = await _execute_tool(
@@ -389,6 +419,17 @@ async def _stream_llm_response(
                                 session_id=session_id,
                             )
 
+                    # Resolve transition_text for load_skill follow-up.
+                    # When a skill registry entry has a transition_text, it is
+                    # injected as a system instruction so the LLM begins its
+                    # answer with a natural spoken transition (Approach E).
+                    _transition_text: str | None = None
+                    if event.function_name == "load_skill":
+                        if _skill_entry is not None and hasattr(_skill_entry, "transition_text"):
+                            _transition_text = _skill_entry.transition_text
+                        if not _transition_text:
+                            _transition_text = _DEFAULT_TRANSITION_TEXT
+
                     # Build follow-up messages with tool result
                     follow_up_messages = list(messages) + [
                         {
@@ -410,6 +451,17 @@ async def _stream_llm_response(
                             "content": json.dumps(tool_result),
                         },
                     ]
+
+                    # Append a system instruction with the transition phrase so
+                    # the follow-up response begins with the spoken transition.
+                    if _transition_text:
+                        follow_up_messages.append({
+                            "role": "system",
+                            "content": (
+                                f"Begin your response with: \"{_transition_text}\" "
+                                "Then answer the user's question using the skill content above."
+                            ),
+                        })
 
                     # Second GPT-4o call for final response
                     async for follow_event in client.stream_events(

@@ -268,11 +268,14 @@ async def test_load_skill_registry_malformed_yaml_returns_empty(
 async def test_load_skill_registry_missing_required_field_returns_empty(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ):
-    """Entry missing required field → logs warning and returns [].
+    """Entry missing a truly required field (name/description/trigger_hint) → logs warning and returns [].
 
-    GIVEN a registry.yaml entry is missing filler_text
+    GIVEN a registry.yaml entry is missing 'description' (always required)
     WHEN load_skill_registry() is called
     THEN returns [] and a warning is logged (design: log+empty on malformed)
+
+    Note: filler_text and transition_text are optional — they default to sensible
+    values for backward compatibility with registries that omit them.
     """
     import logging
     from app.prompts.skill_loader import load_skill_registry
@@ -283,7 +286,6 @@ async def test_load_skill_registry_missing_required_field_returns_empty(
         """
 skills:
   - name: incomplete-skill
-    description: Missing filler_text field
     trigger_hint: some trigger
 """
     )

@@ -40,8 +40,11 @@ _REQUIRED_ENTRY_FIELDS: tuple[str, ...] = (
     "name",
     "description",
     "trigger_hint",
-    "filler_text",
 )
+
+# Optional fields and their defaults — omitting them in YAML is safe.
+_DEFAULT_FILLER_TEXT = "Un momento, déjame revisar eso..."
+_DEFAULT_TRANSITION_TEXT = "Listo, ya encontré la información."
 
 
 # ---------------------------------------------------------------------------
@@ -53,17 +56,24 @@ _REQUIRED_ENTRY_FIELDS: tuple[str, ...] = (
 class SkillRegistryEntry:
     """One entry from registry.yaml.
 
-    Fields match the YAML schema exactly:
-        name:          Unique skill identifier (used as load_skill argument).
-        description:   What the skill contains (shown in system prompt index).
-        trigger_hint:  When the LLM should use this skill (shown in index).
-        filler_text:   Phrase emitted to SSE stream before loading (Phase 2).
+    Fields:
+        name:            Unique skill identifier (used as load_skill argument).
+        description:     What the skill contains (shown in system prompt index).
+        trigger_hint:    When the LLM should use this skill (shown in index).
+        filler_text:     Phrase emitted to SSE stream before loading the skill.
+                         Optional — defaults to _DEFAULT_FILLER_TEXT if absent.
+        transition_text: Phrase prepended to the follow-up LLM system message
+                         after the skill is loaded, so the assistant begins its
+                         answer with a natural transition (e.g. "Listo, ya
+                         encontré la información."). Optional — defaults to
+                         _DEFAULT_TRANSITION_TEXT if absent.
     """
 
     name: str
     description: str
     trigger_hint: str
-    filler_text: str
+    filler_text: str = _DEFAULT_FILLER_TEXT
+    transition_text: str = _DEFAULT_TRANSITION_TEXT
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +174,8 @@ async def load_skill_registry(
                 name=item["name"],
                 description=item["description"],
                 trigger_hint=item["trigger_hint"],
-                filler_text=item["filler_text"],
+                filler_text=item.get("filler_text") or _DEFAULT_FILLER_TEXT,
+                transition_text=item.get("transition_text") or _DEFAULT_TRANSITION_TEXT,
             )
         )
 

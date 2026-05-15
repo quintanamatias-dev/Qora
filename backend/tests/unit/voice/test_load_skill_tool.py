@@ -475,7 +475,9 @@ async def test_default_filler_for_non_load_skill_tool():
         ):
             collected_chunks.append(chunk)
 
-    # Must emit the DEFAULT_FILLER text before tool execution
+    # Must emit the DEFAULT_FILLER text before tool execution.
+    # Filler is normalized via _normalize_filler() so it ends with '. ' (trailing space).
+    # We check that the emitted chunk CONTAINS the DEFAULT_FILLER prefix, not exact match.
     from app.voice.webhook import DEFAULT_FILLER
     # DEFAULT_FILLER may contain non-ASCII — check by decoding the JSON chunks
     import json as _json
@@ -491,12 +493,13 @@ async def test_default_filler_for_non_load_skill_tool():
             choices = parsed.get("choices", [])
             if choices:
                 delta_content = choices[0].get("delta", {}).get("content", "")
-                if delta_content == DEFAULT_FILLER:
+                # _normalize_filler may append '.' and/or trailing space, so check prefix
+                if delta_content.startswith(DEFAULT_FILLER.rstrip()):
                     filler_found = True
                     break
         except Exception:
             continue
     assert filler_found, (
-        f"Expected DEFAULT_FILLER {DEFAULT_FILLER!r} in SSE content chunks. "
+        f"Expected filler starting with DEFAULT_FILLER {DEFAULT_FILLER!r} in SSE chunks. "
         f"Got chunks: {collected_chunks}"
     )

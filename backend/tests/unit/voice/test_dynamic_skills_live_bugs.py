@@ -509,8 +509,8 @@ async def test_load_skill_awaits_sleep_after_filler():
     assert len(sleep_calls) == 1, (
         f"asyncio.sleep must be called exactly once after filler. Called {len(sleep_calls)} time(s)"
     )
-    assert sleep_calls[0] == pytest.approx(0.7), (
-        f"asyncio.sleep must be called with FILLER_PAUSE_SECONDS=0.7. Got: {sleep_calls[0]}"
+    assert sleep_calls[0] == pytest.approx(2.5), (
+        f"asyncio.sleep must be called with FILLER_PAUSE_SECONDS=2.5. Got: {sleep_calls[0]}"
     )
 
 
@@ -636,4 +636,318 @@ def test_filler_strings_end_with_sentence_punctuation():
         + "\n".join(violations)
         + "\n\nAll filler strings must end with sentence-ending punctuation "
         "so TTS engines generate a natural pause."
+    )
+
+
+# ===========================================================================
+# Approach E — Filler pause 2.5 s + filler normalization + transition_text
+# ===========================================================================
+
+
+def test_filler_pause_seconds_is_2_5():
+    """Approach E: FILLER_PAUSE_SECONDS must be 2.5 (not 0.7)."""
+    from app.voice.webhook import FILLER_PAUSE_SECONDS
+
+    assert FILLER_PAUSE_SECONDS == pytest.approx(2.5), (
+        f"FILLER_PAUSE_SECONDS must be 2.5 for Approach E. Got: {FILLER_PAUSE_SECONDS}"
+    )
+
+
+def test_normalize_filler_appends_period_and_trailing_space():
+    """_normalize_filler adds '.' and trailing space when text has no sentence-ending punct."""
+    from app.voice.webhook import _normalize_filler
+
+    result = _normalize_filler("Un momento")
+    assert result == "Un momento. ", repr(result)
+
+
+def test_normalize_filler_keeps_existing_period():
+    """_normalize_filler does not add a second '.' if text already ends with '.'."""
+    from app.voice.webhook import _normalize_filler
+
+    result = _normalize_filler("Un momento.")
+    assert result == "Un momento. ", repr(result)
+
+
+def test_normalize_filler_keeps_ellipsis():
+    """_normalize_filler keeps '...' and only adds trailing space."""
+    from app.voice.webhook import _normalize_filler
+
+    result = _normalize_filler("Dejame buscar esa informacion...")
+    assert result == "Dejame buscar esa informacion... ", repr(result)
+
+
+def test_normalize_filler_strips_leading_trailing_whitespace():
+    """_normalize_filler strips trailing whitespace before processing."""
+    from app.voice.webhook import _normalize_filler
+
+    result = _normalize_filler("Un momento   ")
+    assert result == "Un momento. ", repr(result)
+
+
+def test_normalize_filler_question_mark_preserved():
+    """_normalize_filler keeps '?' and only appends trailing space."""
+    from app.voice.webhook import _normalize_filler
+
+    result = _normalize_filler("¿Un momento?")
+    assert result == "¿Un momento? ", repr(result)
+
+
+# ---------------------------------------------------------------------------
+# transition_text in SkillRegistryEntry
+# ---------------------------------------------------------------------------
+
+
+def test_skill_registry_entry_has_transition_text_field():
+    """SkillRegistryEntry must have a transition_text field with a sensible default."""
+    from app.prompts.skill_loader import SkillRegistryEntry
+
+    entry = SkillRegistryEntry(
+        name="test-skill",
+        description="Test",
+        trigger_hint="When needed",
+    )
+
+    assert hasattr(entry, "transition_text"), "SkillRegistryEntry must have transition_text"
+    assert entry.transition_text, "transition_text must not be empty by default"
+    assert isinstance(entry.transition_text, str)
+
+
+def test_skill_registry_entry_custom_transition_text():
+    """SkillRegistryEntry accepts a custom transition_text."""
+    from app.prompts.skill_loader import SkillRegistryEntry
+
+    entry = SkillRegistryEntry(
+        name="test-skill",
+        description="Test",
+        trigger_hint="When needed",
+        transition_text="Ya tengo la info.",
+    )
+
+    assert entry.transition_text == "Ya tengo la info."
+
+
+def test_skill_registry_entry_filler_text_optional():
+    """SkillRegistryEntry uses a sensible default when filler_text is omitted."""
+    from app.prompts.skill_loader import SkillRegistryEntry
+
+    entry = SkillRegistryEntry(
+        name="test-skill",
+        description="Test",
+        trigger_hint="When needed",
+    )
+
+    assert entry.filler_text, "filler_text must not be empty by default"
+    assert isinstance(entry.filler_text, str)
+
+
+@pytest.mark.asyncio
+async def test_registry_yaml_with_transition_text_is_loaded(tmp_path):
+    """load_skill_registry parses transition_text from registry.yaml."""
+    from app.prompts.skill_loader import load_skill_registry
+
+    skills_dir = tmp_path / "client" / "agents" / "agent" / "skills"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "registry.yaml").write_text(
+        """
+skills:
+  - name: my-skill
+    description: My skill
+    trigger_hint: When needed
+    filler_text: "Buscando..."
+    transition_text: "Perfecto, ya lo encontre."
+"""
+    )
+
+    entries = await load_skill_registry(
+        "client", "agent", clients_dir=tmp_path
+    )
+
+    assert len(entries) == 1
+    assert entries[0].transition_text == "Perfecto, ya lo encontre."
+
+
+@pytest.mark.asyncio
+async def test_registry_yaml_without_transition_text_uses_default(tmp_path):
+    """load_skill_registry uses default transition_text when field is absent."""
+    from app.prompts.skill_loader import load_skill_registry, _DEFAULT_TRANSITION_TEXT
+
+    skills_dir = tmp_path / "client" / "agents" / "agent" / "skills"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "registry.yaml").write_text(
+        """
+skills:
+  - name: my-skill
+    description: My skill
+    trigger_hint: When needed
+    filler_text: "Buscando..."
+"""
+    )
+
+    entries = await load_skill_registry(
+        "client", "agent", clients_dir=tmp_path
+    )
+
+    assert len(entries) == 1
+    assert entries[0].transition_text == _DEFAULT_TRANSITION_TEXT
+
+
+@pytest.mark.asyncio
+async def test_registry_yaml_without_filler_text_uses_default(tmp_path):
+    """load_skill_registry uses default filler_text when field is absent (backward compat)."""
+    from app.prompts.skill_loader import load_skill_registry, _DEFAULT_FILLER_TEXT
+
+    skills_dir = tmp_path / "client" / "agents" / "agent" / "skills"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "registry.yaml").write_text(
+        """
+skills:
+  - name: my-skill
+    description: My skill
+    trigger_hint: When needed
+"""
+    )
+
+    entries = await load_skill_registry(
+        "client", "agent", clients_dir=tmp_path
+    )
+
+    assert len(entries) == 1
+    assert entries[0].filler_text == _DEFAULT_FILLER_TEXT
+
+
+# ---------------------------------------------------------------------------
+# transition_text injected into follow-up messages
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_transition_text_injected_in_followup_messages():
+    """Approach E: follow-up messages after load_skill include a system instruction with transition_text."""
+    from app.voice.webhook import _stream_llm_response
+    from app.ai.llm_streaming import OpenAIStreamingClient, ToolCallDelta, StreamDone
+    from app.prompts.skill_loader import SkillRegistryEntry
+    import json
+
+    transition = "Listo, encontre la info."
+    entry = SkillRegistryEntry(
+        name="pricing",
+        description="Pricing",
+        trigger_hint="When asked about price",
+        filler_text="Un momento...",
+        transition_text=transition,
+    )
+
+    conv_state = _make_conv_state(loaded_skills={})
+
+    tool_event = ToolCallDelta(
+        tool_call_id="call-001",
+        function_name="load_skill",
+        function_args=json.dumps({"skill_name": "pricing"}),
+    )
+
+    captured_follow_up_messages = []
+    call_count = [0]
+
+    async def switching_stream(**kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            yield tool_event
+            yield StreamDone()
+        else:
+            # Capture the messages passed to the follow-up call
+            captured_follow_up_messages.extend(kwargs.get("messages", []))
+            from app.ai.llm_streaming import ContentDelta
+            yield ContentDelta(text="Respuesta.")
+            yield StreamDone()
+
+    mock_client = MagicMock(spec=OpenAIStreamingClient)
+    mock_client.stream_events = switching_stream
+
+    with patch(
+        "app.voice.webhook._execute_tool",
+        new_callable=AsyncMock,
+        return_value="# Pricing content",
+    ), patch("app.voice.webhook.asyncio.sleep", new_callable=AsyncMock):
+        async for _ in _stream_llm_response(
+            client=mock_client,
+            messages=[{"role": "user", "content": "prices?"}],
+            tools=None,
+            temperature=0.7,
+            max_tokens=300,
+            client_id="acme",
+            lead_id="lead-001",
+            session_id=None,
+            conversation_id=None,
+            conv_state=conv_state,
+            registry_entries=[entry],
+        ):
+            pass
+
+    # The follow-up messages should include a system message with the transition phrase
+    system_messages = [m for m in captured_follow_up_messages if m.get("role") == "system"]
+    assert system_messages, "A system message with transition_text must be in follow-up messages"
+    combined = " ".join(m.get("content", "") for m in system_messages)
+    assert transition in combined, (
+        f"transition_text '{transition}' must appear in follow-up system messages. "
+        f"Got: {combined!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_default_transition_text_used_when_no_registry_entry():
+    """Approach E: default transition_text is used when skill has no registry entry."""
+    from app.voice.webhook import _stream_llm_response, _DEFAULT_TRANSITION_TEXT
+    from app.ai.llm_streaming import OpenAIStreamingClient, ToolCallDelta, StreamDone
+    import json
+
+    conv_state = _make_conv_state(loaded_skills={})
+
+    tool_event = ToolCallDelta(
+        tool_call_id="call-001",
+        function_name="load_skill",
+        function_args=json.dumps({"skill_name": "unknown-skill"}),
+    )
+
+    captured_messages = []
+    call_count = [0]
+
+    async def switching_stream(**kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            yield tool_event
+            yield StreamDone()
+        else:
+            captured_messages.extend(kwargs.get("messages", []))
+            from app.ai.llm_streaming import ContentDelta
+            yield ContentDelta(text="Respuesta.")
+            yield StreamDone()
+
+    mock_client = MagicMock(spec=OpenAIStreamingClient)
+    mock_client.stream_events = switching_stream
+
+    with patch(
+        "app.voice.webhook._execute_tool",
+        new_callable=AsyncMock,
+        return_value="# Skill content",
+    ), patch("app.voice.webhook.asyncio.sleep", new_callable=AsyncMock):
+        async for _ in _stream_llm_response(
+            client=mock_client,
+            messages=[{"role": "user", "content": "info?"}],
+            tools=None,
+            temperature=0.7,
+            max_tokens=300,
+            client_id="acme",
+            lead_id=None,
+            session_id=None,
+            conversation_id=None,
+            conv_state=conv_state,
+            registry_entries=[],  # empty registry — no entry found
+        ):
+            pass
+
+    system_messages = [m for m in captured_messages if m.get("role") == "system"]
+    combined = " ".join(m.get("content", "") for m in system_messages)
+    assert _DEFAULT_TRANSITION_TEXT in combined, (
+        f"Default transition_text must appear when no registry entry found. Got: {combined!r}"
     )
