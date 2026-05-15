@@ -1,19 +1,48 @@
-# QORA — Post-Call Analysis Pipeline
+# Post-Call Analysis Pipeline
 
-## Overview
+After every call ends, Qora runs a fully asynchronous analysis pipeline that extracts structured intelligence from the transcript. The pipeline fans out 11 independent analysis dimensions in parallel (plus 3 stateful pipelines), then feeds all results into a `next_action` decision engine. It runs as an `asyncio.create_task` after the session closes — it **never blocks the call**, and any failure is caught and stored as a partial-failure marker.
 
-After every call ends, QORA runs a fully asynchronous analysis pipeline that extracts structured intelligence from the transcript. The pipeline is orchestrated by `backend/app/summarizer.py` and uses `gpt-4o-mini` with structured outputs (Pydantic + OpenAI `beta.chat.completions.parse`).
+---
 
-The pipeline never blocks the call. It runs as an `asyncio.create_task` after the session closes, and **any failure in the pipeline must never affect the call itself** — all errors are caught, logged, and stored as partial-failure markers.
+## Table of Contents
 
-## Triggering the Pipeline
+1. [How It's Triggered](#1-how-its-triggered)
+2. [Pipeline Architecture](#2-pipeline-architecture)
+3. [Graceful Degradation](#3-graceful-degradation)
+4. [Analysis Language](#4-analysis-language)
+5. [The 11 Dimensions — Quick Reference](#5-the-11-dimensions--quick-reference)
+6. [Dimension Details](#6-dimension-details)
+   - [summary](#61-summary)
+   - [outcome](#62-outcome)
+   - [interests + interest_level](#63-interests--interest_level)
+   - [commitments](#64-commitments)
+   - [objections](#65-objections)
+   - [problem](#66-problem)
+   - [service_issues](#67-service_issues)
+   - [profile_facts](#68-profile_facts)
+   - [misc_notes](#69-misc_notes)
+   - [data_corrections](#610-data_corrections)
+   - [next_action](#611-next_action)
+7. [Storage Architecture](#7-storage-architecture)
+
+---
+
+## 1. How It's Triggered
 
 The pipeline is triggered in two ways:
 
-1. **Frontend `/calls/{id}/end`** — The browser calls this endpoint when the WebSocket closes (code `1000`). `close_session()` schedules `generate_summary_and_facts()` via `asyncio.create_task`.
-2. **ElevenLabs post-call webhook** — ElevenLabs sends a `POST /api/v1/calls/elevenlabs-postcall` after the conversation ends. If the session was previously closed (status = `completed`), any extra turns from ElevenLabs are merged and the summarizer is re-triggered on the updated transcript.
+| Trigger | Endpoint | When |
+|---------|----------|------|
+| Frontend close | `POST /calls/{id}/end` | Browser calls this when WebSocket closes with code `1000` |
+| ElevenLabs webhook | `POST /api/v1/calls/elevenlabs-postcall` | ElevenLabs sends this after the conversation ends |
 
-## Architecture: Fan-Out Pipeline
+In both cases, `generate_summary_and_facts()` is scheduled via `asyncio.create_task`.
+
+> **Note on ElevenLabs webhook:** If the session was already `completed`, any extra turns from ElevenLabs are merged into the transcript before the summarizer is re-triggered.
+
+---
+
+## 2. Pipeline Architecture
 
 ```
 transcript_text
@@ -69,26 +98,54 @@ transcript_text
                     auto_schedule() if needed
 ```
 
-## Graceful Degradation
-
-- Each dimension runs in its own coroutine. If one throws, `return_exceptions=True` captures the error — the other dimensions are unaffected.
-- Stateful pipelines (`profile_facts`, `misc_notes`, `data_corrections`) catch all internal exceptions and return empty results — they **never raise**.
-- If **all** dimensions fail, a partial-failure `CallAnalysis` row is written with `analysis_status="failed"`.
-- The `next_action` pipeline failure is non-critical — the `next_action_suggested` field defaults to `None`.
-
-## Analysis Language
-
-All text-valued fields in each dimension (e.g. `reason`, `description`, `evidence`, `note`) are written in the client's configured `analysis_language` (default: `"Spanish"`). Canonical code fields (`classification`, `category`, `confidence`, `operation`, etc.) always stay as English codes regardless of language setting.
+**Orchestrator**: `backend/app/summarizer.py`  
+**Model**: `gpt-4o-mini` with structured outputs (Pydantic + OpenAI `beta.chat.completions.parse`)
 
 ---
 
-## The 11 Universal Dimensions
+## 3. Graceful Degradation
 
-### 1. `summary` (`universal/summary.py`)
+| Scenario | Behavior |
+|----------|----------|
+| One dimension throws | `return_exceptions=True` captures the error — other dimensions unaffected |
+| Stateful pipeline throws | Catches all internal exceptions, returns empty results — never raises |
+| All dimensions fail | Writes a partial-failure `CallAnalysis` row with `analysis_status="failed"` |
+| `next_action` pipeline fails | Non-critical — `next_action_suggested` defaults to `None` |
 
-**What it extracts**: A single sentence describing what happened during the call — factual, third-person, no opinions.
+---
 
-**Model**: `gpt-4o-mini`
+## 4. Analysis Language
+
+All **text-valued** fields (e.g. `reason`, `description`, `evidence`, `note`) are written in the client's configured `analysis_language` (default: `"Spanish"`).
+
+**Canonical code fields** (`classification`, `category`, `confidence`, `operation`, etc.) always remain as English codes regardless of the language setting.
+
+---
+
+## 5. The 11 Dimensions — Quick Reference
+
+| # | Dimension | Module | Type | What It Extracts |
+|---|-----------|--------|------|------------------|
+| 1 | `summary` | `universal/summary.py` | Stateless | One sentence: what happened on the call |
+| 2 | `outcome` | `universal/outcome.py` | Stateless | Semantic call classification + abandonment analysis |
+| 3 | `interests` | `universal/interest/interests.py` | Sequential (2-agent) | Product interests + specific needs per product |
+| 4 | `interest_level` | `universal/interest/interest_level.py` | Sequential (2-agent) | 0–100 engagement score + signals |
+| 5 | `commitments` | `universal/commitments.py` | Stateless | Bilateral commitments and next steps made on the call |
+| 6 | `objections` | `universal/objections.py` | Stateless | Concerns and pushback raised; how the agent handled them |
+| 7 | `problem` | `universal/problem.py` | Stateless | Underlying pain points that motivate the lead's interest |
+| 8 | `service_issues` | `universal/service_issues.py` | Stateless | Specific service complaints about past or current providers |
+| 9 | `profile_facts` | `universal/profile_facts.py` | Stateful | Stable personality traits; persisted as `add/update/remove` ops |
+| 10 | `misc_notes` | `universal/misc_notes.py` | Stateful | Temporal/operational context for the next call (sliding window) |
+| 11 | `data_corrections` | `universal/data_corrections.py` | Stateful | Explicit corrections to lead personal data made during the call |
+| — | `next_action` | `universal/next_action.py` | Post-analysis | Next action decision from rules engine + GPT validation |
+
+---
+
+## 6. Dimension Details
+
+### 6.1 `summary`
+
+**Extracts**: A single sentence describing what happened during the call — factual, third-person, no opinions.
 
 **Output schema**:
 ```python
@@ -100,11 +157,9 @@ class SummaryAxis(BaseModel):
 
 ---
 
-### 2. `outcome` (`universal/outcome.py`)
+### 6.2 `outcome`
 
-**What it extracts**: Semantic classification of how the call went, including abandonment analysis.
-
-**Model**: `gpt-4o-mini`
+**Extracts**: Semantic classification of how the call went, including abandonment analysis.
 
 **Output schema**:
 ```python
@@ -114,25 +169,25 @@ class CallOutcome(BaseModel):
         "completed_positive", "completed_neutral", "completed_negative",
         "do_not_contact", "wrong_number", "hostile", "confused", "technical_issue"
     ]
-    reason: str          # one sentence (in analysis_language)
+    reason: str                    # one sentence (in analysis_language)
     confidence: Literal["low", "medium", "high"]
-    was_abrupt: bool | None    # null for completed/callback outcomes
+    was_abrupt: bool | None        # null for completed/callback outcomes
     abandonment_trigger: Literal[
         "price_shock", "lost_patience", "external_interruption",
         "objection_escalation", "no_interest", "technical_failure",
         "time_constraint", "other"
-    ] | None                   # null for completed/callback outcomes
+    ] | None                       # null for completed/callback outcomes
 ```
 
 **Business rules**:
-- `was_abrupt` and `abandonment_trigger` are automatically set to `None` for `completed_positive`, `completed_neutral`, `completed_negative`, and `callback_requested` outcomes (enforced by Pydantic `model_validator`).
+- `was_abrupt` and `abandonment_trigger` are automatically `None` for `completed_positive`, `completed_neutral`, `completed_negative`, and `callback_requested` (enforced by Pydantic `model_validator`).
 - `do_not_contact` classification sets `Lead.do_not_call = True`.
 
 **Stored in**: `CallAnalysis.classification`, `.outcome_reason`, `.was_abrupt`, `.abandonment_trigger`; `Lead.extracted_facts["call_outcome"]`
 
 ---
 
-### 3. `interests` + `interest_level` (`universal/interest/`)
+### 6.3 `interests` + `interest_level`
 
 **Architecture**: Two-agent sequential pipeline (`run_interest_pipeline`).
 
@@ -149,7 +204,7 @@ class InterestsAxis(BaseModel):
     items: list[InterestItem]  # max 5
 ```
 
-**Agent 2 — Interest Level** (`interest_level.py`): Scores the overall lead engagement on a 0–100 scale.
+**Agent 2 — Interest Level** (`interest_level.py`): Scores overall lead engagement on a 0–100 scale.
 
 ```python
 class InterestLevelResult(BaseModel):
@@ -163,18 +218,19 @@ class InterestLevelResult(BaseModel):
 ```
 
 **Score formula**:
-- With previous score: `round(max(product_scores) * 0.7 + previous * 0.3)` (70/30 exponential smoothing)
-- Without previous: `max(product_scores)` (first call — 100% current signal)
+
+| Situation | Formula |
+|-----------|---------|
+| First call (no previous score) | `max(product_scores)` — 100% current signal |
+| Subsequent calls | `round(max(product_scores) * 0.7 + previous * 0.3)` — 70/30 exponential smoothing |
 
 **Stored in**: `CallAnalysis.products`, `.specific_needs`; `Lead.interest_level`; `LeadInterestHistory`
 
 ---
 
-### 4. `commitments` (`universal/commitments.py`)
+### 6.4 `commitments`
 
-**What it extracts**: Concrete bilateral commitments and next-step actions made during the call (e.g. "agent will send a quote", "lead will consult their partner").
-
-**Model**: `gpt-4o-mini`
+**Extracts**: Concrete bilateral commitments and next-step actions made during the call (e.g. "agent will send a quote", "lead will consult their partner").
 
 **Output schema**:
 ```python
@@ -195,17 +251,17 @@ class CommitmentsAxis(BaseModel):
     commitments: list[Commitment]  # max 5
 ```
 
-**Business rules**: `callback` commitments (strength=strong/medium, owner=lead/both) trigger `schedule_call` in the `next_action` pipeline. `receive_quote` commitments trigger `follow_up`.
+**Business rules**:
+- `callback` commitments (strength=strong/medium, owner=lead/both) → trigger `schedule_call` in the `next_action` pipeline.
+- `receive_quote` commitments → trigger `follow_up`.
 
 **Stored in**: `CallAnalysis.commitment_signals`; `Lead.extracted_facts["commitments"]`
 
 ---
 
-### 5. `objections` (`universal/objections.py`)
+### 6.5 `objections`
 
-**What it extracts**: Concerns, hesitations, and pushback raised by the lead. Tracks how the agent handled each objection.
-
-**Model**: `gpt-4o-mini`
+**Extracts**: Concerns, hesitations, and pushback raised by the lead. Tracks how the agent handled each objection.
 
 **Output schema**:
 ```python
@@ -228,17 +284,17 @@ class ObjectionsAxis(BaseModel):
     objections: list[Objection]  # max 5
 ```
 
-**Business rules**: Unresolved `hard_rejection` with `strength=high` + client's `close_on_hard_rejection=True` → `close_lead` action. Objection categories are unioned across calls in `Lead.objections_heard` (not replaced).
+**Business rules**:
+- Unresolved `hard_rejection` with `strength=high` + client's `close_on_hard_rejection=True` → `close_lead` action.
+- Objection categories are **unioned** across calls in `Lead.objections_heard` (not replaced).
 
 **Stored in**: `CallAnalysis.objections`; `Lead.objections_heard` (union)
 
 ---
 
-### 6. `problem` (`universal/problem.py`)
+### 6.6 `problem`
 
-**What it extracts**: Underlying pain points and unmet needs that motivate the lead's interest.
-
-**Model**: `gpt-4o-mini`
+**Extracts**: Underlying pain points and unmet needs that motivate the lead's interest.
 
 **Output schema**:
 ```python
@@ -257,19 +313,20 @@ class ProblemAxis(BaseModel):
     pain_points: list[PainPoint]  # max 5
 ```
 
-**Boundary rules**:
-- `bad_experience` = a general past experience that motivates exploration (NOT a specific service complaint → that goes to `service_issues`)
-- `cost` = a background cost concern that drives exploration (NOT active price negotiation → that goes to `objections`)
+**Boundary rules** (to avoid overlap with other dimensions):
+
+| Category value | When to use here | When NOT to use here |
+|----------------|-----------------|---------------------|
+| `bad_experience` | General past experience that motivates exploration | Specific service complaint → use `service_issues` |
+| `cost` | Background cost concern driving exploration | Active price negotiation → use `objections` |
 
 **Stored in**: `CallAnalysis.pain_points`, `.urgency`, `.primary_need`; `Lead.extracted_facts["identified_problem"]`
 
 ---
 
-### 7. `service_issues` (`universal/service_issues.py`)
+### 6.7 `service_issues`
 
-**What it extracts**: Specific service complaints about current, previous, or our own insurance providers.
-
-**Model**: `gpt-4o-mini`
+**Extracts**: Specific service complaints about current, previous, or our own insurance providers.
 
 **Output schema**:
 ```python
@@ -293,13 +350,11 @@ class ServiceIssuesAxis(BaseModel):
 
 ---
 
-### 8. `profile_facts` (`universal/profile_facts.py`)
+### 6.8 `profile_facts`
 
-**What it extracts**: Stable personality traits, preferences, and lifestyle attributes about the lead. These persist across calls via the `LeadProfileFact` table.
+**Extracts**: Stable personality traits, preferences, and lifestyle attributes about the lead. These persist across calls via the `LeadProfileFact` table.
 
 **Architecture**: Stateful pipeline (`run_profile_facts_pipeline`). Receives the lead's current active profile facts and returns `add/update/remove` operations.
-
-**Model**: `gpt-4o-mini`
 
 **Output schema**:
 ```python
@@ -328,31 +383,31 @@ class ProfileFactsAxis(BaseModel):
     updates: list[ProfileFactUpdate]  # max 5
 ```
 
-**Boundary rules**: Profile facts = **stable traits** (e.g. "consults partner before decisions"). NOT temporal context (→ misc_notes), NOT product interests (→ interests dimension), NOT service complaints (→ service_issues).
+**Boundary rule**: Profile facts = **stable traits** (e.g. "consults partner before decisions"). NOT temporal context (→ `misc_notes`), NOT product interests (→ `interests`), NOT service complaints (→ `service_issues`).
 
-**Validation**: `update/remove` operations with invalid `target_fact_id` are silently demoted to `add`. Operations on first call (no current facts) are filtered to `add` only.
+**Validation edge cases**:
+- `update/remove` operations with invalid `target_fact_id` are silently demoted to `add`.
+- Operations on first call (no current facts) are filtered to `add` only.
 
 **Stored in**: `LeadProfileFact` table (upsert/supersede semantics); `CallAnalysis.profile_facts`
 
 ---
 
-### 9. `misc_notes` (`universal/misc_notes.py`)
+### 6.9 `misc_notes`
 
-**What it extracts**: Temporal and operational context for the agent's next call. Managed as a sliding window — old, expired, or resolved notes are dropped; new ones are added.
+**Extracts**: Temporal and operational context for the agent's next call. Managed as a sliding window — old, expired, or resolved notes are dropped; new ones are added.
 
 **Architecture**: Stateful pipeline (`run_misc_notes_pipeline`). Receives previous notes from `Lead.extracted_facts["misc_notes"]` and outputs the **full updated list** (not a diff).
-
-**Model**: `gpt-4o-mini`
 
 **Output schema**:
 ```python
 class MiscNote(BaseModel):
     type: Literal[
-        "continuity",       # context that should persist across calls
-        "pending_topic",    # something unresolved from this call
-        "tone_context",     # emotional tone / communication style
+        "continuity",        # context that should persist across calls
+        "pending_topic",     # something unresolved from this call
+        "tone_context",      # emotional tone / communication style
         "temporary_context", # transient fact (upcoming event, time constraint)
-        "caution",          # warning about lead behavior or sensitivity
+        "caution",           # warning about lead behavior or sensitivity
         "other"
     ]
     note: str  # one sentence, max ~100 chars (in analysis_language)
@@ -361,21 +416,19 @@ class MiscNotesAxis(BaseModel):
     notes: list[MiscNote]  # max 5, prefer 3
 ```
 
-**Boundary rules**: Misc notes = **temporal/operational** context. NOT stable personality traits (→ profile_facts).
+**Boundary rule**: Misc notes = **temporal/operational** context. NOT stable personality traits (→ `profile_facts`).
 
 **Stored in**: `Lead.extracted_facts["misc_notes"]`; `CallAnalysis.misc_notes`; injected into memory context as `--- Notas operativas ---` section
 
 ---
 
-### 10. `data_corrections` (`universal/data_corrections.py`)
+### 6.10 `data_corrections`
 
-**What it extracts**: Explicit corrections the lead made to their personal data during the call (e.g. "actually my car year is 2019, not 2018").
+**Extracts**: Explicit corrections the lead made to their personal data during the call (e.g. "actually my car year is 2019, not 2018").
 
 **Architecture**: Stateful pipeline (`run_data_corrections_pipeline`). Receives the current lead field snapshot and returns validated corrections.
 
 **Correctable fields**: `name`, `phone`, `email`, `age`, `car_make`, `car_model`, `car_year`, `current_insurance`
-
-**Model**: `gpt-4o-mini`
 
 **Output schema**:
 ```python
@@ -389,23 +442,24 @@ class DataCorrection(BaseModel):
     rejection_reason: str | None
 ```
 
-**Post-processing**: Each correction goes through 4 gates:
-1. **Registry lookup**: unknown fields are silently dropped
-2. **Idempotency**: if `corrected_value == current_value` → dropped
-3. **Per-field validation**: phone (≥10 digits), email (RFC 5322), car_year (1900–2030), age (1–120)
-4. **Confidence gate**: currently disabled (`threshold=0.0` — all valid corrections auto-apply)
+**Post-processing validation gates** (applied in order):
 
-**Applied corrections**: Written to `Lead` column directly via `setattr`. Also stored as `LeadProfileFact` rows for audit trail.
+| Gate | Rule |
+|------|------|
+| 1. Registry lookup | Unknown fields are silently dropped |
+| 2. Idempotency | If `corrected_value == current_value` → dropped |
+| 3. Per-field validation | phone (≥10 digits), email (RFC 5322), car_year (1900–2030), age (1–120) |
+| 4. Confidence gate | Currently disabled (`threshold=0.0` — all valid corrections auto-apply) |
+
+Applied corrections are written to the `Lead` column directly via `setattr`. Also stored as `LeadProfileFact` rows for audit trail.
 
 **Stored in**: `Lead` direct columns (if applied); `CallAnalysis.data_corrections` (JSON list of all corrections with `applied` flag)
 
 ---
 
-### 11. `next_action` (`universal/next_action.py`)
+### 6.11 `next_action`
 
-**Architecture**: Post-analysis sequential pipeline (`run_next_action_pipeline`). Runs **after** all parallel dimensions complete. Receives structured outputs, NOT the transcript.
-
-**Model**: `gpt-4o-mini` (for GPT validation and fallback only)
+**Architecture**: Post-analysis sequential pipeline (`run_next_action_pipeline`). Runs **after** all parallel dimensions complete. Receives structured dimension outputs — NOT the transcript.
 
 **Output schema**:
 ```python
@@ -418,10 +472,10 @@ class NextActionResult(BaseModel):
     priority: Literal["urgent", "normal", "low"]
 ```
 
-**Decision flow (strict priority, first match wins)**:
+**Decision flow** (strict priority, first match wins):
 
-| Priority | Rule | Action |
-|----------|------|--------|
+| Priority | Condition | Action |
+|----------|-----------|--------|
 | P1 | `do_not_contact` / `wrong_number` / `hostile` classification, or `lead.do_not_call=True`, or unresolved hard rejection + `close_on_hard_rejection=True` | `close_lead` |
 | P2 | `lead.call_count >= client.max_attempts` | `close_lead` |
 | P3 | Strong/medium `callback` commitment (owner=lead/both) | `schedule_call` |
@@ -438,12 +492,12 @@ After rules fire, GPT independently validates the decision. If GPT agrees → ke
 
 ---
 
-## Storage Architecture
+## 7. Storage Architecture
 
 All analysis outputs are written atomically inside a single DB savepoint (nested transaction):
 
-```
-async with db.begin_nested():        ← savepoint
+```python
+async with db.begin_nested():        # savepoint
     cs.summary = summary
     cs.extracted_facts = facts
     await _merge_facts_into_lead()
@@ -456,10 +510,11 @@ If any write fails, the savepoint rolls back — no partial data is committed.
 ### Dual-Write Pattern
 
 Analysis is stored in two places for different access patterns:
-- `CallSession.extracted_facts` (JSON blob) — backward compatibility and raw fact access
-- `CallAnalysis` table (normalized columns) — structured queries, analytics, indexing
 
-The `CallAnalysis` table is the authoritative target for analytics queries. `CallSession.extracted_facts` is maintained for backward compatibility and memory context injection.
+| Store | Purpose |
+|-------|---------|
+| `CallSession.extracted_facts` (JSON blob) | Backward compatibility and raw fact access |
+| `CallAnalysis` table (normalized columns) | Structured queries, analytics, indexing — **authoritative for analytics** |
 
 ### Lead Merge Strategy
 

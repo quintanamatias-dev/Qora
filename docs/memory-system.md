@@ -1,27 +1,41 @@
-# QORA — Cross-Call Memory System
+# Cross-Call Memory System
 
-## Overview
-
-The QORA memory system injects accumulated knowledge about a lead into the system prompt at the start of every call. This allows the AI agent to behave as if it remembers the lead from previous conversations — referencing past call outcomes, known preferences, and operational notes — without requiring the LLM to retain state between sessions.
+The Qora memory system injects accumulated knowledge about a lead into the system prompt at the start of every call. This lets the AI agent behave as if it remembers the lead from previous conversations — referencing past call outcomes, known preferences, and operational notes — without requiring the LLM to retain state between sessions. Memory is **static within a call**: it reflects the state at call start and is not updated mid-conversation.
 
 The canonical implementation is `backend/app/memory.py`.
 
+---
+
+## TL;DR
+
+| What gets remembered | Where it's stored | How it reaches the agent |
+|----------------------|-------------------|--------------------------|
+| Last 3 call summaries | `CallSession.summary` | `{{call_history}}` template variable |
+| Scalar facts (interest level, outcome, etc.) | `Lead.extracted_facts` | `{{confirmed_facts}}` template variable |
+| Operational notes (sliding window) | `Lead.extracted_facts["misc_notes"]` | `{{confirmed_facts}}` — `--- Notas operativas ---` section |
+| Stable profile traits | `LeadProfileFact` table | `{{confirmed_facts}}` — `--- Perfil acumulado ---` section |
+| Interest score history | `LeadInterestHistory` table | `{{confirmed_facts}}` — `Evolución de interés` line |
+
+---
+
 ## How Memory Is Injected
 
-Memory context is injected via two paths:
+Memory context flows into the system prompt through two paths:
 
-1. **Initiation webhook** (`app/voice/initiation.py`): `build_memory_context()` runs inside the initiation handler. The resulting `call_history` and `confirmed_facts` strings are returned to ElevenLabs as `dynamic_variables` (the `type: "conversation_initiation_client_data"` response). ElevenLabs substitutes them into the agent's template via `{{call_history}}` / `{{confirmed_facts}}` before the first turn.
+**Path 1 — Initiation webhook** (`app/voice/initiation.py`)
+`build_memory_context()` runs inside the initiation handler. The resulting strings are returned to ElevenLabs as `dynamic_variables` (the `type: "conversation_initiation_client_data"` response). ElevenLabs substitutes them into the agent's template before the first turn.
 
-2. **Prompt loader** (`app/prompts/loader.py`): `PromptLoader.render_for_agent()` also calls `build_memory_context()` during per-turn system prompt rendering. This serves the Custom LLM webhook path (when the agent uses static prompts or no initiation webhook was called).
+**Path 2 — Prompt loader** (`app/prompts/loader.py`)
+`PromptLoader.render_for_agent()` also calls `build_memory_context()` during per-turn system prompt rendering. This serves the Custom LLM webhook path when no initiation webhook was called.
 
-Memory context is assembled by `build_memory_context(db, lead)` and injected into the system prompt by `PromptLoader.render_for_agent()` via template variable substitution:
+Both paths inject two template variables:
 
 ```
 {{call_history}}      ← last 3 call summaries
 {{confirmed_facts}}   ← extracted facts + misc notes + accumulated profile
 ```
 
-Both variables are populated from `MemoryContext`:
+### `MemoryContext` object
 
 ```python
 class MemoryContext(TypedDict):
@@ -31,33 +45,30 @@ class MemoryContext(TypedDict):
     call_number: int         # lead.call_count + 1
 ```
 
-## `build_memory_context(db, lead)` — Function Contract
+---
+
+## `build_memory_context(db, lead)`
 
 ```python
 async def build_memory_context(db: AsyncSession, lead: Lead) -> MemoryContext
 ```
 
-**What it queries:**
+**Queries executed**:
 
-1. **Any completed session?** (`SELECT 1 ... LIMIT 1`) — determines `is_returning_caller`. Completely independent of whether any session has a summary.
+| Query | Purpose |
+|-------|---------|
+| `SELECT 1 FROM call_sessions … LIMIT 1` | Determines `is_returning_caller` — independent of whether any session has a summary |
+| Last 3 completed sessions with non-empty summaries (newest first) | Drives `call_history` formatting |
+| All active `LeadProfileFact` rows (`superseded_at IS NULL`) | Drives `--- Perfil acumulado ---` section |
+| Last 5 `LeadInterestHistory` rows | Drives `Evolución de interés: 75→60→85` line |
 
-2. **Last 3 completed sessions with non-empty summaries** (newest first) — drives `call_history` formatting.
-
-3. **All active `LeadProfileFact` rows** (`superseded_at IS NULL`) — drives the `--- Perfil acumulado ---` section.
-
-4. **Last 5 `LeadInterestHistory` rows** — drives the `Evolución de interés: 75→60→85` line.
-
-**Returns** a `MemoryContext` with:
-- `call_history`: dated summary lines for the last 3 calls
-- `confirmed_facts`: assembled from extracted_facts + misc_notes + accumulated profile
-- `is_returning_caller`: `True` if **any** completed session exists (regardless of summary)
-- `call_number`: `lead.call_count + 1` (the current call's number)
+---
 
 ## What Gets Injected
 
-### 1. Call History (`call_history`)
+### 1. Call History (`{{call_history}}`)
 
-Up to the last **3** completed call summaries, formatted as:
+Up to the last **3** completed call summaries, formatted as dated lines:
 
 ```
 Llamada del 15/04/2025: "El lead mostró interés en seguro de auto..."
@@ -65,17 +76,18 @@ Llamada del 22/04/2025: "El lead pidió llamar el martes con su esposa."
 Llamada del 30/04/2025: "El lead confirmó interés y solicitó cotización."
 ```
 
-Dates are displayed in `America/Argentina/Buenos_Aires` timezone (configurable per architecture decision AD-3).
+- Dates are displayed in `America/Argentina/Buenos_Aires` timezone (see AD-3).
+- Sessions without a summary are **excluded** from call history but still count for `is_returning_caller`.
 
-Sessions without a summary are **excluded** from call history (but still count for `is_returning_caller`).
+---
 
-### 2. Confirmed Facts (`confirmed_facts`)
+### 2. Confirmed Facts (`{{confirmed_facts}}`)
 
-Assembled from three sources, in this order:
+Assembled from three sources in this order:
 
-#### A. Scalar facts from `Lead.extracted_facts` (Tier 1 + Tier 2)
+#### A. Scalar facts from `Lead.extracted_facts`
 
-**Tier 1** — Known keys, fixed order, Spanish labels:
+**Tier 1** — Known keys, fixed order, Spanish labels (controlled by `_KNOWN_FACTS` list, not dict iteration order — see AD-6):
 ```
 - Seguro actual: Mapfre
 - Nivel de interés: 72/100
@@ -91,13 +103,12 @@ Assembled from three sources, in this order:
 - Identified Problem: costo (high) — seguros están subiendo de precio
 ```
 
-Nested axis dicts are flattened to one-line summaries. `None`, empty strings, and empty lists are skipped.
+> Nested axis dicts are flattened to one-line summaries. `None`, empty strings, and empty lists are skipped.
+> Keys `profile_facts` and `misc_notes` are always skipped here — they have their own dedicated sections below.
 
-**Keys that are always skipped**: `profile_facts` (rendered separately), `misc_notes` (rendered separately as its own section).
+#### B. Operational Notes (`--- Notas operativas ---`)
 
-#### B. Operational Notes from `misc_notes` (dedicated section)
-
-The `misc_notes` dimension produces a sliding-window set of operational notes injected as a separate section after the facts list:
+The `misc_notes` dimension produces a sliding-window set of operational notes:
 
 ```
 --- Notas operativas ---
@@ -106,11 +117,13 @@ The `misc_notes` dimension produces a sliding-window set of operational notes in
 - [caution] Irritable si se lo interrumpe
 ```
 
-Up to 5 notes, max 3 preferred. Notes are written in `analysis_language`. Notes about resolved/expired topics are dropped by the pipeline on each call.
+- Up to 5 notes, max 3 preferred.
+- Written in `analysis_language`.
+- Resolved/expired topics are dropped by the pipeline on each call.
 
-#### C. Accumulated Profile from Relational Tables (dedicated section)
+#### C. Accumulated Profile (`--- Perfil acumulado ---`)
 
-Profile facts and interest history from `LeadProfileFact` and `LeadInterestHistory`, injected as a final section:
+Profile facts and interest history from relational tables:
 
 ```
 --- Perfil acumulado ---
@@ -122,44 +135,51 @@ Profile facts and interest history from `LeadProfileFact` and `LeadInterestHisto
 ```
 
 Token budget: max 10 items per namespace. Namespaces rendered:
-- `profile:` → Datos personales (grouped by category for structured facts)
-- `pain:` → Puntos de dolor
-- `service_issue:` → Problemas de servicio
-- `signal:` → Señales de compromiso
-- `buying_signal:` → Señales de compra
 
-Interest history shows the last 5 data points in chronological order (oldest→newest).
+| Namespace prefix | Label |
+|-----------------|-------|
+| `profile:` | Datos personales (grouped by category) |
+| `pain:` | Puntos de dolor |
+| `service_issue:` | Problemas de servicio |
+| `signal:` | Señales de compromiso |
+| `buying_signal:` | Señales de compra |
+
+Interest history shows the last 5 data points in chronological order (oldest → newest).
+
+---
 
 ## Memory Growth Over Multiple Calls
 
-Each call adds to the memory in the following ways:
-
-| After call N | Memory addition |
-|-------------|-----------------|
+| After call N | What gets added to memory |
+|-------------|--------------------------|
 | Call summary generated | Added to `CallSession.summary`; appears in `call_history` on call N+1 |
 | Interest level computed | `Lead.interest_level` updated; `LeadInterestHistory` row appended |
-| Profile facts extracted | `LeadProfileFact` rows added/updated/superseded |
+| Profile facts extracted | `LeadProfileFact` rows added / updated / superseded |
 | Misc notes updated | `Lead.extracted_facts["misc_notes"]` replaced with sliding window |
-| Data corrections applied | `Lead` columns updated; `LeadProfileFact` rows for audit |
+| Data corrections applied | `Lead` columns updated; `LeadProfileFact` rows added for audit |
 | `next_action` decided | `Lead.next_action`, `Lead.next_action_at` updated |
 
-After 5+ calls, `build_memory_context()` will return:
+After 5+ calls, `build_memory_context()` returns:
 - Up to 3 call summaries (most recent)
-- The full accumulated interest history (up to 5 points)
+- Full accumulated interest history (up to 5 data points)
 - All active profile facts (grouped by category)
 - Current operational notes (3–5 notes, freshly updated)
 
-## Per-Session Context Cache
+---
 
-`build_memory_context()` is called **once per incoming webhook request** (not once per turn). The voice session stores the `system_prompt` generated at call start in the in-memory `ConversationState` and reuses it for all subsequent turns in that call. Memory is static within a call — it reflects the state at call start.
+## Per-Session Cache
 
-Session state is managed by `app/voice/session.py` (`session_store`). Sessions expire after 5 minutes of inactivity (TTL cleanup background task runs every 60 seconds).
+`build_memory_context()` is called **once per incoming webhook request** (not once per turn). The generated system prompt is stored in the in-memory `ConversationState` and reused for all subsequent turns in that call.
+
+Session state is managed by `app/voice/session.py` (`session_store`). Sessions expire after **5 minutes of inactivity** (TTL cleanup background task runs every 60 seconds).
+
+---
 
 ## Architecture Decisions
 
-| Decision | Description |
-|----------|-------------|
-| AD-1 | `build_memory_context` is at `app/memory.py` (top-level) — serves both the Custom LLM path (`prompts/loader.py`) and the Twilio/SIP path (`voice/initiation.py`) without circular imports |
+| ID | Decision |
+|----|---------|
+| AD-1 | `build_memory_context` lives at `app/memory.py` (top-level) — serves both the Custom LLM path (`prompts/loader.py`) and the Twilio/SIP path (`voice/initiation.py`) without circular imports |
 | AD-2 | `MemoryContext` is a `TypedDict` so it merges into the variables dict via `{**vars, **memory}` |
 | AD-3 | Dates are converted to `America/Argentina/Buenos_Aires` timezone before formatting (hardcoded; could be per-client in the future) |
-| AD-6 | `confirmed_facts` Tier 1 key ordering is fixed by code (`_KNOWN_FACTS` list), not dict iteration order |
+| AD-6 | `confirmed_facts` Tier 1 key ordering is fixed by the `_KNOWN_FACTS` list in code, not by dict iteration order |

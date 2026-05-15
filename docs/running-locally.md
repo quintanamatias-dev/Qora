@@ -2,6 +2,8 @@
 
 Step-by-step guide to get QORA running on your machine and exposed to ElevenLabs.
 
+**You will**: clone the repo → configure API keys → start the dev server → expose it via ngrok → connect it to your ElevenLabs agent → run the demo. Total setup time: ~10 minutes assuming you already have API keys.
+
 ## Prerequisites
 
 - Python 3.11 or higher

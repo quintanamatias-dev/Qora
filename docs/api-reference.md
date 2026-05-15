@@ -1,4 +1,4 @@
-# QORA — API Reference
+# API Reference
 
 All endpoints are prefixed with `/api/v1`. The base URL is `http://localhost:8000` in local development.
 
@@ -6,7 +6,98 @@ Interactive documentation is available at `/docs` (Swagger UI) and `/redoc` (ReD
 
 ---
 
-## Meta
+## Table of Contents
+
+1. [All Endpoints — Quick Reference](#1-all-endpoints--quick-reference)
+2. [Meta](#2-meta)
+3. [Voice](#3-voice)
+4. [Calls](#4-calls)
+5. [Analytics](#5-analytics)
+6. [Clients](#6-clients)
+7. [Agents](#7-agents)
+8. [Leads](#8-leads)
+9. [Scheduler](#9-scheduler)
+10. [Static Pages](#10-static-pages)
+
+---
+
+## 1. All Endpoints — Quick Reference
+
+### Voice
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/v1/voice/signed-url` | Generate ElevenLabs signed WebSocket URL |
+| POST | `/api/v1/voice/{client_id}/custom-llm/chat/completions` | Multi-tenant Custom LLM webhook (primary) |
+| POST | `/api/v1/voice/custom-llm` | Legacy Custom LLM webhook (deprecated) |
+| POST | `/api/v1/voice/initiation` | Call initiation webhook — injects lead context |
+
+### Calls
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/v1/calls` | List call sessions for a client |
+| GET | `/api/v1/calls/metrics` | Aggregated call metrics |
+| GET | `/api/v1/calls/{session_id}` | Get a single call session |
+| GET | `/api/v1/calls/{session_id}/transcript` | Get all transcript turns |
+| POST | `/api/v1/calls/{conversation_id}/end` | Close a call session (idempotent) |
+| POST | `/api/v1/calls/elevenlabs-postcall` | ElevenLabs post-call webhook |
+
+### Analytics
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/v1/analytics/{client_id}/overview` | Aggregated metrics for a period |
+| GET | `/api/v1/analytics/{client_id}/service-issues` | Ranked service issue breakdown |
+| GET | `/api/v1/analytics/{client_id}/interests` | Top interests with trend direction |
+| GET | `/api/v1/analytics/{client_id}/agent-stats` | Per-agent call statistics |
+
+### Clients
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/v1/clients` | Create a new client (tenant) |
+| GET | `/api/v1/clients` | List all active clients |
+| GET | `/api/v1/clients/{client_id}` | Get a single client |
+| PATCH | `/api/v1/clients/{client_id}` | Partial update |
+| DELETE | `/api/v1/clients/{client_id}` | Soft delete (sets `is_active=False`) |
+| GET | `/api/v1/tenants/{client_id}` | Read-only alias for GET `/clients/{client_id}` (deprecated) |
+
+### Agents
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/v1/clients/{client_id}/agents` | Create a new agent |
+| GET | `/api/v1/clients/{client_id}/agents` | List active agents for a client |
+| GET | `/api/v1/clients/{client_id}/agents/{agent_id}` | Get a single agent |
+| PATCH | `/api/v1/clients/{client_id}/agents/{agent_id}` | Partial update |
+| POST | `/api/v1/clients/{client_id}/agents/{agent_id}/deactivate` | Soft delete agent |
+| POST | `/api/v1/clients/{client_id}/agents/{agent_id}/make-default` | Atomically swap default agent |
+
+### Leads
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/v1/leads` | List leads for a client |
+| GET | `/api/v1/leads/{lead_id}` | Get lead details + extracted facts |
+| POST | `/api/v1/leads` | Create a new lead |
+| PATCH | `/api/v1/leads/{lead_id}/status` | Transition lead status (state machine) |
+| GET | `/api/v1/leads/{lead_id}/history` | Call session history for a lead |
+
+### Scheduler
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/v1/scheduler/{client_id}/queue` | Create manual scheduled call |
+| GET | `/api/v1/scheduler/{client_id}/queue` | List scheduled calls (filterable) |
+| GET | `/api/v1/scheduler/{client_id}/queue/{id}` | Get a single scheduled call |
+| POST | `/api/v1/scheduler/{client_id}/queue/{id}/cancel` | Cancel a pending call |
+| PATCH | `/api/v1/scheduler/{client_id}/queue/{id}` | Reschedule a pending call |
+| PATCH | `/api/v1/clients/{client_id}/scheduled-calls/{id}/complete` | Mark a scheduled call as completed |
+
+---
+
+## 2. Meta
 
 ### `GET /api/v1/health`
 
@@ -23,7 +114,7 @@ Returns service health status and uptime.
 
 ---
 
-## Voice
+## 3. Voice
 
 ### `GET /api/v1/voice/signed-url`
 
@@ -40,9 +131,9 @@ Generates an ElevenLabs signed WebSocket URL for the demo UI. Using a signed URL
 
 ### `POST /api/v1/voice/{client_id}/custom-llm/chat/completions`
 
-The primary Custom LLM webhook. ElevenLabs posts here on every conversational turn. Returns an OpenAI-compatible Server-Sent Events (SSE) stream.
+**Primary** Custom LLM webhook. ElevenLabs posts here on every conversational turn. Returns an OpenAI-compatible Server-Sent Events (SSE) stream.
 
-This endpoint:
+**What this endpoint does**:
 1. Validates `client_id` and loads the tenant's default active agent.
 2. Extracts `lead_id` from `elevenlabs_extra_body` (optional).
 3. Renders the system prompt with lead context, memory, and skills index.
@@ -69,9 +160,12 @@ This endpoint:
 **Response**: SSE stream with OpenAI-compatible `data:` chunks, terminated by `data: [DONE]`.
 
 **Errors**:
-- `422` — `client_id` missing from `elevenlabs_extra_body`
-- `404` — client not found
-- `403` — client is inactive
+
+| Code | Reason |
+|------|--------|
+| `422` | `client_id` missing from `elevenlabs_extra_body` |
+| `404` | Client not found |
+| `403` | Client is inactive |
 
 ---
 
@@ -81,15 +175,15 @@ Also available at:
 - `POST /api/v1/voice/custom-llm/chat/completions`
 - `POST /api/v1/voice/chat/completions`
 
-Legacy Custom LLM webhook routes. Extract `client_id` from `elevenlabs_extra_body` (or top-level field / `model_extra`) instead of the URL path. Deprecated — use the path-based route `POST /api/v1/voice/{client_id}/custom-llm/chat/completions` above. Every call emits a `custom_llm_legacy_route_used` warning log.
+Legacy Custom LLM webhook routes. Extract `client_id` from `elevenlabs_extra_body` (or top-level field / `model_extra`) instead of the URL path. **Deprecated** — use the path-based route above. Every call emits a `custom_llm_legacy_route_used` warning log.
 
 ---
 
 ### `POST /api/v1/voice/initiation`
 
-ElevenLabs call initiation webhook. Called by ElevenLabs at the very start of a new conversation, before the first turn. QORA uses this to inject lead context as dynamic variables (`lead_name`, `car_make`, etc.) and to create the `CallSession` record.
+ElevenLabs call initiation webhook. Called by ElevenLabs at the start of a new conversation, before the first turn. Qora uses this to inject lead context as dynamic variables and to create the `CallSession` record.
 
-**Request body** (all fields optional — `client_id`/`lead_id` can also be passed as query params):
+**Request body** (all fields optional — `client_id`/`lead_id` can also be query params):
 ```json
 {
   "client_id": "quintana-seguros",
@@ -116,46 +210,22 @@ ElevenLabs call initiation webhook. Called by ElevenLabs at the very start of a 
 
 ---
 
-## Tenants (backward-compat alias)
-
-### `GET /api/v1/tenants/{client_id}`
-
-Read-only backward-compatibility alias for `GET /api/v1/clients/{client_id}`. Returns basic tenant configuration fields. New integrations should use the `/clients` routes instead.
-
-**Response 200**:
-```json
-{
-  "id": "quintana-seguros",
-  "name": "Quintana Seguros",
-  "broker_name": "Quintana",
-  "agent_name": "Nico",
-  "voice_id": "...",
-  "model": "gpt-4o",
-  "temperature": 0.7,
-  "max_tokens": 300,
-  "tools_enabled": "[\"get_lead_details\"]",
-  "is_active": true,
-  "created_at": "2025-01-01T00:00:00Z"
-}
-```
-
-**Response 404**: Client not found.
-
----
-
-## Calls
+## 4. Calls
 
 ### `GET /api/v1/calls`
 
 List all call sessions for a client.
 
 **Query parameters**:
-- `client_id` (required) — tenant client id
-- `lead_id` (optional) — filter by specific lead
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `client_id` | ✅ | Tenant client ID |
+| `lead_id` | — | Filter by specific lead |
 
 Returns sessions ordered by `started_at` DESC. Ghost sessions (status=`initiated`, no turns, no duration) are filtered out.
 
-**Response 200**: Array of call session objects.
+**Response 200**:
 ```json
 [
   {
@@ -172,7 +242,7 @@ Returns sessions ordered by `started_at` DESC. Ghost sessions (status=`initiated
     "total_user_turns": 12,
     "total_agent_turns": 12,
     "summary": "El lead mostró interés en seguro de auto...",
-    "extracted_facts": { "interest_level": 72, "call_outcome": { ... } },
+    "extracted_facts": { "interest_level": 72, "call_outcome": { "..." } },
     "merged_into_session_id": null
   }
 ]
@@ -185,10 +255,13 @@ Returns sessions ordered by `started_at` DESC. Ghost sessions (status=`initiated
 Returns aggregated call metrics for a client.
 
 **Query parameters**:
-- `client_id` (required)
-- `lead_id` (optional) — filter to a specific lead
-- `date_from` (optional) — ISO 8601 datetime lower bound (inclusive)
-- `date_to` (optional) — ISO 8601 datetime upper bound (inclusive)
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `client_id` | ✅ | Tenant client ID |
+| `lead_id` | — | Filter to a specific lead |
+| `date_from` | — | ISO 8601 datetime lower bound (inclusive) |
+| `date_to` | — | ISO 8601 datetime upper bound (inclusive) |
 
 **Response 200**:
 ```json
@@ -249,11 +322,12 @@ Get all transcript turns for a call session.
 
 Close a call session. The path parameter is the ElevenLabs `conversation_id`.
 
-Idempotent: if the session is already completed, returns `200` without double-incrementing `Lead.call_count`.
+**Idempotent**: if the session is already completed, returns `200` without double-incrementing `Lead.call_count`.
 
-Sets `status="completed"`, `ended_at`, `duration_seconds`, `billable_minutes`, `closed_reason`. Increments `Lead.call_count` and `Lead.last_called_at` on first close only.
-
-Triggers the post-call analysis summarizer asynchronously.
+**What this does**:
+- Sets `status="completed"`, `ended_at`, `duration_seconds`, `billable_minutes`, `closed_reason`
+- Increments `Lead.call_count` and `Lead.last_called_at` on first close only
+- Triggers the post-call analysis summarizer asynchronously
 
 **Request body**:
 ```json
@@ -281,8 +355,9 @@ Triggers the post-call analysis summarizer asynchronously.
 
 ### `POST /api/v1/calls/elevenlabs-postcall`
 
-ElevenLabs post-call webhook. Called by ElevenLabs after every conversation ends. Handles two cases:
+ElevenLabs post-call webhook. Called by ElevenLabs after every conversation ends.
 
+**Handles two cases**:
 - **Session was `initiated`** (never closed by frontend): closes it with `reason="network_drop"` and increments lead counters.
 - **Session was `completed`**: merges any extra transcript turns ElevenLabs has that aren't in the DB yet. If turns were merged, re-triggers the summarizer.
 
@@ -307,18 +382,18 @@ ElevenLabs post-call webhook. Called by ElevenLabs after every conversation ends
 
 ---
 
-## Analytics
+## 5. Analytics
 
-All analytics endpoints accept the same query parameters:
+All analytics endpoints share the same query parameters:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `period` | string | `month` | One of: `day`, `week`, `month`, `custom` |
-| `start_date` | date | — | Required when `period=custom` (ISO 8601 date, e.g. `2025-04-01`) |
+| `start_date` | date | — | Required when `period=custom` (ISO 8601, e.g. `2025-04-01`) |
 | `end_date` | date | — | Required when `period=custom` |
 | `agent_id` | string | — | Filter to a specific agent |
 
-**Errors**:
+**Common errors**:
 - `400` — invalid period value, or `custom` period without `start_date`/`end_date`
 - `404` — client not found
 
@@ -444,7 +519,7 @@ Returns per-agent call statistics for the period.
 
 ---
 
-## Clients
+## 6. Clients
 
 ### `POST /api/v1/clients`
 
@@ -452,7 +527,7 @@ Create a new client (tenant). Automatically bootstraps a default `Agent` for the
 
 When `client_id` is omitted, a URL-safe slug is auto-generated from `broker_name` (e.g. `"Acme Corp"` → `"acme-corp"`). Collisions are resolved by appending `-2`, `-3`, etc.
 
-**Request body**:
+**Request body** (only `broker_name` is required):
 ```json
 {
   "broker_name": "Acme Corp",
@@ -470,8 +545,6 @@ When `client_id` is omitted, a URL-safe slug is auto-generated from `broker_name
 }
 ```
 
-Only `broker_name` is required. All scheduler fields have defaults.
-
 **Response 201**: `ClientResponse` object.
 
 **Response 409**: `client_id` or `broker_name` already exists.
@@ -482,8 +555,7 @@ Only `broker_name` is required. All scheduler fields have defaults.
 
 List all active clients (where `is_active=True`).
 
-**Response 200**: Array of `ClientResponse` objects.
-
+**Response 200**:
 ```json
 [
   {
@@ -509,7 +581,7 @@ List all active clients (where `is_active=True`).
 
 ### `GET /api/v1/clients/{client_id}`
 
-Get a single client by id.
+Get a single client by ID.
 
 **Response 200**: `ClientResponse` object.
 
@@ -545,7 +617,7 @@ Validates that `scheduler_allowed_hours_start < scheduler_allowed_hours_end` aft
 
 ### `DELETE /api/v1/clients/{client_id}`
 
-Soft-delete a client (sets `is_active=False`). The record is NOT removed from the database. Associated leads, sessions, and agents remain intact.
+Soft-delete a client (sets `is_active=False`). The record is **not** removed from the database. Associated leads, sessions, and agents remain intact.
 
 Inactive clients receive `403 Forbidden` on any webhook call.
 
@@ -555,7 +627,32 @@ Inactive clients receive `403 Forbidden` on any webhook call.
 
 ---
 
-## Agents
+### `GET /api/v1/tenants/{client_id}` (deprecated)
+
+Read-only backward-compatibility alias for `GET /api/v1/clients/{client_id}`. Returns basic tenant configuration fields. New integrations should use `/clients` routes instead.
+
+**Response 200**:
+```json
+{
+  "id": "quintana-seguros",
+  "name": "Quintana Seguros",
+  "broker_name": "Quintana",
+  "agent_name": "Nico",
+  "voice_id": "...",
+  "model": "gpt-4o",
+  "temperature": 0.7,
+  "max_tokens": 300,
+  "tools_enabled": "[\"get_lead_details\"]",
+  "is_active": true,
+  "created_at": "2025-01-01T00:00:00Z"
+}
+```
+
+**Response 404**: Client not found.
+
+---
+
+## 7. Agents
 
 All agent endpoints are nested under `/api/v1/clients/{client_id}/agents`.
 
@@ -563,8 +660,7 @@ All agent endpoints are nested under `/api/v1/clients/{client_id}/agents`.
 
 List all active agents for a client.
 
-**Response 200**: Array of `AgentResponse` objects.
-
+**Response 200**:
 ```json
 [
   {
@@ -600,7 +696,7 @@ List all active agents for a client.
 
 ### `POST /api/v1/clients/{client_id}/agents`
 
-Create a new agent for a client.
+Create a new agent for a client. Only `slug` and `name` are required.
 
 **Request body**:
 ```json
@@ -622,19 +718,17 @@ Create a new agent for a client.
 }
 ```
 
-Only `slug` and `name` are required.
-
 **Response 201**: `AgentResponse` object.
 
 **Response 404**: Client not found.
 
-**Response 409**: Slug already exists for this client, or is_default conflict.
+**Response 409**: Slug already exists for this client, or `is_default` conflict.
 
 ---
 
 ### `GET /api/v1/clients/{client_id}/agents/{agent_id}`
 
-Get a single agent by id.
+Get a single agent by ID.
 
 **Response 200**: `AgentResponse` object.
 
@@ -687,14 +781,17 @@ Atomically swap the default agent. Sets `agent_id` as default, unsets all other 
 
 ---
 
-## Leads
+## 8. Leads
 
 ### `GET /api/v1/leads`
 
 List leads for a client.
 
 **Query parameters**:
-- `client_id` (required) — tenant client ID to scope results
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `client_id` | ✅ | Tenant client ID to scope results |
 
 **Response 200**: Array of lead objects with CRM fields, profile facts, interest history, and next scheduled call time.
 
@@ -702,7 +799,7 @@ List leads for a client.
 
 ### `GET /api/v1/leads/{lead_id}`
 
-Get a single lead by id. Includes full `extracted_facts`, active `profile_facts`, and `interest_history`.
+Get a single lead by ID. Includes full `extracted_facts`, active `profile_facts`, and `interest_history`.
 
 **Response 200**:
 ```json
@@ -727,7 +824,7 @@ Get a single lead by id. Includes full `extracted_facts`, active `profile_facts`
   "do_not_call": false,
   "next_action": "follow_up",
   "next_action_at": "2025-05-05T10:00:00Z",
-  "extracted_facts": { ... },
+  "extracted_facts": { "..." },
   "profile_facts": [
     {
       "fact_key": "profile:decision_style",
@@ -774,10 +871,13 @@ Create a new lead.
 
 Transition lead status (state machine enforced).
 
-Valid transitions:
-- `new` → `called`
-- `called` → `interested` | `not_interested` | `follow_up`
-- `follow_up` → `called`
+**Valid transitions**:
+
+| From | To |
+|------|----|
+| `new` | `called` |
+| `called` | `interested`, `not_interested`, `follow_up` |
+| `follow_up` | `called` |
 
 **Request body**:
 ```json
@@ -788,7 +888,7 @@ Valid transitions:
 
 **Response 404**: Lead not found.
 
-**Response 409**: Invalid state transition (state machine enforcement).
+**Response 409**: Invalid state transition.
 
 ---
 
@@ -800,13 +900,15 @@ Get all call sessions for a lead, ordered by `started_at` DESC.
 
 ---
 
-## Scheduler
+## 9. Scheduler
+
+All scheduler endpoints are also available under `/api/v1/clients/{client_id}/scheduled-calls` (alias path).
 
 ### `POST /api/v1/scheduler/{client_id}/queue`
 
-Also available at: `POST /api/v1/clients/{client_id}/scheduled-calls`
-
 Create a manual scheduled call for a client's lead.
+
+`scheduled_at` must be within the client's `scheduler_allowed_hours` window (local timezone).
 
 **Request body**:
 ```json
@@ -817,34 +919,33 @@ Create a manual scheduled call for a client's lead.
 }
 ```
 
-`scheduled_at` must be within the client's `scheduler_allowed_hours` window (local timezone).
-
 **Response 201**: `ScheduledCallResponse` object.
 
-**Response 404**: Client or lead not found.
+**Errors**:
 
-**Response 403**: Lead does not belong to this client.
-
-**Response 409**: An active scheduled call already exists for this lead.
-
-**Response 422**: `scheduled_at` is outside allowed hours.
+| Code | Reason |
+|------|--------|
+| `404` | Client or lead not found |
+| `403` | Lead does not belong to this client |
+| `409` | An active scheduled call already exists for this lead |
+| `422` | `scheduled_at` is outside allowed hours |
 
 ---
 
 ### `GET /api/v1/scheduler/{client_id}/queue`
 
-Also available at: `GET /api/v1/clients/{client_id}/scheduled-calls`
-
 List scheduled calls with optional filters.
 
 **Query parameters**:
-- `status` (optional) — comma-separated status filter (e.g. `pending,in_progress`)
-- `lead_id` (optional)
-- `scheduled_from` (optional) — ISO 8601 datetime lower bound
-- `scheduled_to` (optional) — ISO 8601 datetime upper bound
 
-**Response 200**: Array of `ScheduledCallResponse` objects.
+| Parameter | Description |
+|-----------|-------------|
+| `status` | Comma-separated status filter (e.g. `pending,in_progress`) |
+| `lead_id` | Filter by lead |
+| `scheduled_from` | ISO 8601 datetime lower bound |
+| `scheduled_to` | ISO 8601 datetime upper bound |
 
+**Response 200**:
 ```json
 [
   {
@@ -869,8 +970,6 @@ List scheduled calls with optional filters.
 
 ### `GET /api/v1/scheduler/{client_id}/queue/{scheduled_call_id}`
 
-Also available at: `GET /api/v1/clients/{client_id}/scheduled-calls/{id}`
-
 Get a single scheduled call.
 
 **Response 200**: `ScheduledCallResponse` object.
@@ -880,8 +979,6 @@ Get a single scheduled call.
 ---
 
 ### `POST /api/v1/scheduler/{client_id}/queue/{scheduled_call_id}/cancel`
-
-Also available at: `PATCH /api/v1/clients/{client_id}/scheduled-calls/{id}/cancel`
 
 Cancel a pending or in_progress scheduled call (transitions to `cancelled`).
 
@@ -894,8 +991,6 @@ Cancel a pending or in_progress scheduled call (transitions to `cancelled`).
 ---
 
 ### `PATCH /api/v1/scheduler/{client_id}/queue/{scheduled_call_id}`
-
-Also available at: `PATCH /api/v1/clients/{client_id}/scheduled-calls/{id}/reschedule`
 
 Reschedule a pending call to a new datetime. Must be within client's allowed hours.
 
@@ -924,7 +1019,7 @@ Mark a scheduled call as completed.
 
 ---
 
-## Static Pages
+## 10. Static Pages
 
 | Path | Description |
 |------|-------------|

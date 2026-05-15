@@ -2,6 +2,18 @@
 
 > **Canonical project truth:** this file is the source of truth for Qora's runtime architecture, configuration ownership, and major implementation decisions. If another README or test comment disagrees with this document, update that file or update this document deliberately in the same change.
 
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Component Diagram](#component-diagram)
+3. [Components](#components)
+4. [Data Flow — Single Conversation Turn](#data-flow--single-conversation-turn)
+5. [Data Flow — Post-Call Analysis](#data-flow--post-call-analysis)
+6. [Data Lifecycle](#data-lifecycle)
+7. [Phase Roadmap](#phase-roadmap)
+
+---
+
 ## Overview
 
 QORA is a Custom LLM webhook server that powers ElevenLabs Conversational AI agents with GPT-4o, multi-tenant routing, lead context injection, CRM tool execution, post-call analysis, cross-call memory, and dynamic skill loading.
