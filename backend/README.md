@@ -1,14 +1,19 @@
 # QORA — AI Call Center
 
-QORA is an AI-powered outbound call center platform built on ElevenLabs Conversational AI and GPT-4o. It orchestrates real-time voice conversations between an AI insurance agent ("Jaumpablo") and leads — no Twilio, no Whisper, no VAD pipeline.
+QORA is an AI-powered outbound call center platform built on ElevenLabs Conversational AI and GPT-4o. It orchestrates real-time voice conversations between an AI agent and leads, extracts structured intelligence from every call, and automatically schedules follow-ups.
 
 ## What QORA Is
 
 QORA connects ElevenLabs' voice agent directly to a Custom LLM webhook backed by GPT-4o. ElevenLabs handles speech-to-text, text-to-speech, and WebSocket transport. QORA provides:
 
-- **Multi-tenant routing** — each client (`client_id`) has its own config in the database
+- **Multi-tenant routing** — each client (`client_id`) has its own agents, leads, and config in the database
 - **Lead context injection** — lead data (name, car, current insurance) is injected into the system prompt at runtime
-- **Tool execution** — GPT-4o can call CRM tools mid-conversation (register interest, mark not interested, schedule follow-up)
+- **Tool execution** — GPT-4o can call CRM tools mid-conversation (register interest, mark not interested, schedule follow-up, load skill)
+- **Dynamic skill loading** — agents can load detailed product knowledge on demand via `load_skill` tool + `registry.yaml`
+- **Post-call analysis** — 13 GPT-4o-mini dimensions run in parallel after every call (summary, outcome, interests, objections, commitments, pain points, service issues, profile facts, misc notes, data corrections, next action, and more)
+- **Cross-call memory** — `build_memory_context()` injects last 3 call summaries, profile facts, interest history, and operational notes into every new call
+- **Automated scheduling** — `next_action` pipeline determines follow-up strategy and creates `ScheduledCall` entries automatically
+- **Analytics dashboard** — overview, service issues, interests, and per-agent stats via `/api/v1/analytics`
 - **Demo UI** — browser-based WebSocket demo at `/demo/`
 
 ## Architecture Overview
@@ -22,7 +27,7 @@ Browser (Demo UI)
 │         ElevenLabs Agent        │
 │  (STT → LLM → TTS pipeline)    │
 └────────────────┬────────────────┘
-                 │  POST /api/v1/voice/custom-llm
+                 │  POST /api/v1/voice/{client_id}/custom-llm/chat/completions
                  │  (OpenAI-compatible SSE request)
                  ▼
 ┌─────────────────────────────────┐
@@ -33,6 +38,8 @@ Browser (Demo UI)
 │  2. Load tenant config (DB)     │
 │  3. Load lead context (DB)      │
 │  4. Build system prompt         │
+│     + skills index              │
+│     + memory context            │
 │  5. Stream GPT-4o via SSE       │
 │  6. Handle tool calls           │
 │  7. Persist transcript          │
@@ -42,6 +49,9 @@ Browser (Demo UI)
       ▼             ▼
   GPT-4o         CRM Tools
   (OpenAI)       (DB ops)
+             ┌───┴───┐
+             ▼       ▼
+       load_skill  schedule_followup
 ```
 
 ## Prerequisites
@@ -55,7 +65,7 @@ Browser (Demo UI)
 1. **Clone and navigate to backend**
 
    ```bash
-   cd V1-CallCenter/backend
+   cd Qora/backend
    ```
 
 2. **Create and activate a virtual environment**
@@ -98,25 +108,91 @@ Browser (Demo UI)
    ```
 
    Configure your ElevenLabs agent's Custom LLM URL:
-
-   **Recommended (path-based, multi-tenant):**
-   `https://<your-ngrok-id>.ngrok-free.app/api/v1/voice/{client_id}/custom-llm`
-
-   **Legacy (deprecated — use path-based route):**
-   `https://<your-ngrok-id>.ngrok-free.app/api/v1/voice/custom-llm`
+   ```
+   https://<your-ngrok-id>.ngrok-free.app/api/v1/voice/{client_id}/custom-llm
+   ```
+   ElevenLabs will append `/chat/completions` automatically.
 
 ## API Endpoints
 
+### Voice
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/v1/health` | Health check |
 | GET | `/api/v1/voice/signed-url` | Generate ElevenLabs signed WebSocket URL |
-| POST | `/api/v1/voice/{client_id}/custom-llm/chat/completions` | **Path-based** multi-tenant Custom LLM webhook (recommended) |
-| POST | `/api/v1/voice/custom-llm` | Legacy Custom LLM webhook (deprecated — use path-based route) |
-| POST | `/api/v1/voice/custom-llm/chat/completions` | Legacy (ElevenLabs appends path — deprecated) |
-| GET | `/api/v1/leads/{lead_id}` | Get lead details |
-| GET | `/demo/` | Browser demo UI |
+| POST | `/api/v1/voice/{client_id}/custom-llm/chat/completions` | Multi-tenant Custom LLM webhook |
+| POST | `/api/v1/voice/initiation` | ElevenLabs call initiation webhook (injects lead context) |
+| POST | `/api/v1/voice/webhook` | Legacy webhook path (deprecated) |
+
+### Calls
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/calls` | List all call sessions for a client |
+| GET | `/api/v1/calls/metrics` | Aggregated call metrics (count, duration, outcomes) |
+| GET | `/api/v1/calls/{session_id}` | Get a single call session |
+| GET | `/api/v1/calls/{session_id}/transcript` | Get all transcript turns |
+| POST | `/api/v1/calls/{conversation_id}/end` | Close a call session (idempotent) |
+| POST | `/api/v1/calls/elevenlabs-postcall` | ElevenLabs post-call webhook (transcript merge) |
+
+### Analytics
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/analytics/{client_id}/overview` | Aggregated call metrics (period filter) |
+| GET | `/api/v1/analytics/{client_id}/service-issues` | Ranked service issues |
+| GET | `/api/v1/analytics/{client_id}/interests` | Top interests with trend direction |
+| GET | `/api/v1/analytics/{client_id}/agent-stats` | Per-agent statistics |
+
+### Clients
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/v1/clients` | Create a new client (tenant) |
+| GET | `/api/v1/clients` | List all active clients |
+| GET | `/api/v1/clients/{client_id}` | Get a single client |
+| PATCH | `/api/v1/clients/{client_id}` | Partial update (scheduler config, voice, etc.) |
+| DELETE | `/api/v1/clients/{client_id}` | Soft delete (sets is_active=False) |
+
+### Agents
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/v1/clients/{client_id}/agents` | Create a new agent |
+| GET | `/api/v1/clients/{client_id}/agents` | List all active agents for a client |
+| GET | `/api/v1/clients/{client_id}/agents/{agent_id}` | Get a single agent |
+| PATCH | `/api/v1/clients/{client_id}/agents/{agent_id}` | Partial update (model, voice, TTS params, etc.) |
+| POST | `/api/v1/clients/{client_id}/agents/{agent_id}/deactivate` | Soft delete agent |
+| POST | `/api/v1/clients/{client_id}/agents/{agent_id}/make-default` | Atomically swap default agent |
+
+### Scheduler
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/v1/scheduler/{client_id}/queue` | Create manual scheduled call |
+| GET | `/api/v1/scheduler/{client_id}/queue` | List scheduled calls (filterable) |
+| GET | `/api/v1/scheduler/{client_id}/queue/{id}` | Get a single scheduled call |
+| POST | `/api/v1/scheduler/{client_id}/queue/{id}/cancel` | Cancel a pending call |
+| PATCH | `/api/v1/scheduler/{client_id}/queue/{id}` | Reschedule a pending call |
+
+### Leads
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/leads` | List leads for a client |
+| GET | `/api/v1/leads/{lead_id}` | Get lead details + extracted facts |
+| POST | `/api/v1/leads` | Create a new lead |
+| PATCH | `/api/v1/leads/{lead_id}/status` | Transition lead status (state machine) |
+| GET | `/api/v1/leads/{lead_id}/history` | Call session history for a lead |
+
+### Meta
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/health` | Health check (status + uptime) |
 | GET | `/docs` | Swagger UI |
+| GET | `/redoc` | ReDoc UI |
+| GET | `/demo/` | Browser voice call demo |
 
 ## ElevenLabs Agent Configuration
 
@@ -143,23 +219,64 @@ pytest tests/ --cov=app --cov-report=term-missing
 ```
 backend/
 ├── app/
-│   ├── main.py                  # FastAPI app, lifespan, DB init
+│   ├── main.py                  # FastAPI app, lifespan, DB init, router registration
+│   ├── memory.py                # Cross-call memory builder (build_memory_context)
+│   ├── summarizer.py            # Post-call analysis orchestrator (13 dimensions)
+│   ├── sweeper.py               # Background stale session cleanup
 │   ├── core/
 │   │   ├── config.py            # pydantic-settings (env vars)
 │   │   └── database.py          # SQLAlchemy async engine
 │   ├── voice/
 │   │   ├── webhook.py           # Custom LLM webhook (core of QORA)
-│   │   └── initiation.py        # Lead injection endpoint
+│   │   ├── initiation.py        # ElevenLabs call initiation webhook
+│   │   ├── context.py           # build_voice_context() helper
+│   │   └── session.py           # In-memory per-call ConversationState store
 │   ├── prompts/
-│   │   └── insurance_agent.py   # Jaumpablo system prompt renderer
-│   ├── tenants/                 # Multi-tenant config (Client model + service)
+│   │   ├── loader.py            # PromptLoader — system prompt renderer
+│   │   ├── skill_loader.py      # Skill registry parser + skills index builder
+│   │   └── insurance_agent.py   # Legacy Jaumpablo prompt template
+│   ├── analysis/
+│   │   ├── schema.py            # PostCallAnalysis Pydantic model
+│   │   ├── enums.py             # Shared enum types
+│   │   └── universal/           # 13 analysis dimension modules
+│   │       ├── summary.py
+│   │       ├── outcome.py
+│   │       ├── commitments.py
+│   │       ├── objections.py
+│   │       ├── problem.py
+│   │       ├── service_issues.py
+│   │       ├── profile_facts.py
+│   │       ├── misc_notes.py
+│   │       ├── data_corrections.py
+│   │       ├── next_action.py
+│   │       └── interest/
+│   │           ├── interests.py
+│   │           ├── interest_level.py
+│   │           ├── catalog.py
+│   │           └── pipeline.py
+│   ├── tenants/                 # Multi-tenant config (Client + Agent models + service)
+│   ├── clients/                 # Full CRUD router for clients
+│   ├── agents/                  # Full CRUD router for agents
 │   ├── leads/                   # Lead CRM (Lead model + service + state machine)
-│   ├── calls/                   # Call session tracking (transcript persistence)
+│   ├── calls/                   # Call session lifecycle + transcript persistence
+│   ├── analytics/               # Analytics aggregation endpoints
+│   ├── scheduler/               # Outbound call scheduler (tick + CRUD)
 │   ├── tools/                   # CRM tool implementations (GPT-4o function calls)
 │   ├── ai/
 │   │   └── llm_streaming.py     # OpenAI streaming client
 │   └── static/
 │       └── index.html           # Browser demo UI
+├── clients/
+│   ├── qora-demo/
+│   │   └── agents/qora-explainer/
+│   │       ├── system-prompt.md
+│   │       └── skills/
+│   │           ├── registry.yaml
+│   │           └── Qora-info.agent-skill.md
+│   └── quintana-seguros/
+│       └── agents/jaumpablo/
+│           └── skills/
+│               └── registry.yaml
 ├── tests/
 │   ├── unit/                    # Unit tests per module
 │   ├── integration/             # Integration tests (webhook, app wiring)

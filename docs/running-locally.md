@@ -15,7 +15,7 @@ Step-by-step guide to get QORA running on your machine and exposed to ElevenLabs
 
 ```bash
 git clone <repo-url>
-cd V1-CallCenter/backend
+cd Qora/backend
 
 # Create virtual environment
 python -m venv .venv
@@ -97,7 +97,7 @@ Verify it's running:
 curl http://localhost:8000/api/v1/health
 ```
 
-Expected: `{"status": "ok", ...}`
+Expected: `{"status": "healthy", "uptime_seconds": ..., "version": "0.1.0"}`
 
 The demo UI is available at: **http://localhost:8000/demo/**
 
@@ -179,22 +179,15 @@ pytest tests/integration/voice/ -v
 
 ---
 
-## 9. n8n (modeling reference only)
+## 9. Post-Call Analysis
 
-QORA's post-call analysis pipeline is fully Python-native. Each dimension under
-`backend/app/analysis/universal/` owns its own prompt, schema, and OpenAI call;
-the summarizer runs all 13 in parallel via `asyncio.gather`.
+QORA's post-call analysis pipeline is fully Python-native. When a call ends, the
+summarizer (`backend/app/summarizer.py`) fans out 13 analysis dimensions in parallel
+via `asyncio.gather`. Each dimension under `backend/app/analysis/universal/` owns its
+own prompt, schema, and OpenAI call.
 
-The files below are kept only as diagramming / modeling references — they are
-NOT part of the runtime path:
-
-- `docs/n8n-workflows/post-call-analysis.json`
-- `docker-compose.n8n-local.yml`
-
-If you want to inspect the workflow visually, you can still spin up the local
-n8n container with `docker compose -f docker-compose.n8n-local.yml up -d` and
-import the JSON, but the backend will neither call it nor receive callbacks
-from it.
+See [`docs/analysis-pipeline.md`](analysis-pipeline.md) for full documentation on the
+analysis pipeline and all 13 dimensions.
 
 ---
 
