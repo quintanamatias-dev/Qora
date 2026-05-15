@@ -329,7 +329,6 @@ from app.leads.router import router as leads_router  # noqa: E402
 from app.calls.router import router as calls_router  # noqa: E402
 from app.voice.initiation import router as initiation_router  # noqa: E402
 from app.voice.webhook import router as webhook_router  # noqa: E402
-from app.voice.debug import router as voice_debug_router  # noqa: E402
 from app.scheduler.router import router as scheduler_router  # noqa: E402
 from app.analytics.router import router as analytics_router  # noqa: E402
 
@@ -342,7 +341,6 @@ api_v1_router.include_router(leads_router)
 api_v1_router.include_router(calls_router)
 api_v1_router.include_router(initiation_router)
 api_v1_router.include_router(webhook_router)
-api_v1_router.include_router(voice_debug_router)  # /api/v1/voice/debug — temporary debug
 api_v1_router.include_router(scheduler_router)  # /api/v1/scheduler — Phase 6
 api_v1_router.include_router(analytics_router)  # /api/v1/analytics — Issue #37
 
