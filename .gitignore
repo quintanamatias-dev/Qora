@@ -59,6 +59,7 @@ ngrok.yml
 
 # Test output
 test_output/
+backend/test_outputs/
 
 # Node / Frontend
 node_modules/

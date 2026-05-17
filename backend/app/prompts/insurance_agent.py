@@ -12,6 +12,14 @@ AD-1: Filler strategy — system prompt only (Option A).
 CAP-8: Configurable system prompt with full conversation flow.
 CAP-2 (T24): render_system_prompt accepts optional ``memory: MemoryContext | None``
     kwarg so callers can pass real memory without changing existing call sites.
+
+TODO(dead-code): This module is a hardcoded insurance-specific fallback used only
+when no prompt.md file is found for a client. The long-term goal is to replace
+this fallback with a generic "no prompt configured" error and migrate the
+Quintana Seguros prompt to clients/quintana-seguros/prompt.md. Many tests in
+test_insurance_agent.py and test_loader.py depend on JAUMPABLO_PROMPT_TEMPLATE and
+render_system_prompt — update those tests before removing this module.
+See: loader.py load_prompt(), render(), render_for_agent() fallback paths.
 """
 
 from __future__ import annotations

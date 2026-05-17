@@ -2,9 +2,21 @@
 
 > **Canonical project truth:** this file is the source of truth for Qora's runtime architecture, configuration ownership, and major implementation decisions. If another README or test comment disagrees with this document, update that file or update this document deliberately in the same change.
 
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Component Diagram](#component-diagram)
+3. [Components](#components)
+4. [Data Flow — Single Conversation Turn](#data-flow--single-conversation-turn)
+5. [Data Flow — Post-Call Analysis](#data-flow--post-call-analysis)
+6. [Data Lifecycle](#data-lifecycle)
+7. [Phase Roadmap](#phase-roadmap)
+
+---
+
 ## Overview
 
-QORA is a Custom LLM webhook server that powers ElevenLabs Conversational AI agents with GPT-4o, multi-tenant routing, lead context injection, and CRM tool execution.
+QORA is a Custom LLM webhook server that powers ElevenLabs Conversational AI agents with GPT-4o, multi-tenant routing, lead context injection, CRM tool execution, post-call analysis, cross-call memory, and dynamic skill loading.
 
 ## Component Diagram
 
@@ -30,7 +42,7 @@ QORA is a Custom LLM webhook server that powers ElevenLabs Conversational AI age
 │   └──────────────┘                               ▼          │
 └───────────────────────────────────────────────────────────--┘
                                                    │
-                           POST /api/v1/voice/custom-llm
+                           POST /api/v1/voice/webhook
                            (OpenAI-compatible SSE)
                                                    │
                            ┌───────────────────────▼───────────────────────┐
@@ -42,12 +54,14 @@ QORA is a Custom LLM webhook server that powers ElevenLabs Conversational AI age
                            │  │  1. Parse ElevenLabsExtraBody            │ │
                            │  │     → client_id (required)              │ │
                            │  │     → lead_id (optional)                │ │
-                           │  │  2. Load Client from DB                  │ │
+                           │  │  2. Load Client + Agent from DB          │ │
                            │  │  3. Load Lead from DB (if lead_id given) │ │
-                           │  │  4. render_system_prompt(client, lead)   │ │
+                           │  │  4. render_system_prompt(agent, lead)    │ │
+                           │  │     + skills index injection             │ │
+                           │  │     + memory context injection           │ │
                            │  │  5. Stream GPT-4o (SSE)                  │ │
-                           │  │  7. Handle tool calls (mid-stream)       │ │
-                           │  │  8. Persist transcript turn to DB        │ │
+                           │  │  6. Handle tool calls (mid-stream)       │ │
+                           │  │  7. Persist transcript turn to DB        │ │
                            │  └───────────┬──────────────────────────────┘ │
                            │              │                                  │
                            │    ┌─────────▼──────────┐                     │
@@ -60,11 +74,23 @@ QORA is a Custom LLM webhook server that powers ElevenLabs Conversational AI age
                            │    │  (if tool call)     │                     │
                            │    └─────────┬──────────┘                     │
                            │              │                                  │
-                           │    ┌─────────▼──────────┐                     │
-                           │    │  SQLite (qora.db)   │                     │
-                           │    │  clients │ leads    │                     │
-                           │    │  calls   │ turns    │                     │
-                           │    └──────────────────── ┘                     │
+                           │    ┌─────────▼──────────────────────────┐     │
+                           │    │         SQLite (qora.db)            │     │
+                           │    │  clients │ agents │ leads           │     │
+                           │    │  call_sessions │ transcript_turns   │     │
+                           │    │  call_analyses │ scheduled_calls    │     │
+                           │    │  lead_profile_facts │               │     │
+                           │    │  lead_interest_history              │     │
+                           │    └─────────────────────────────────── ┘     │
+                           └────────────────────────────────────────────────┘
+                                              │
+                               (after call ends)
+                                              │
+                           ┌───────────────────▼───────────────────────────┐
+                           │         Post-Call Summarizer                   │
+                           │   asyncio.gather → 13 analysis dimensions      │
+                           │   → CallAnalysis row + Lead facts merge        │
+                           │   → next_action pipeline → ScheduledCall       │
                            └────────────────────────────────────────────────┘
 ```
 
@@ -98,7 +124,7 @@ Admin responsibilities:
 ### ElevenLabs Agent
 
 The ElevenLabs agent is configured in the ElevenLabs dashboard with:
-- **Custom LLM URL**: points to the QORA webhook
+- **Custom LLM URL**: points to the QORA webhook (`/api/v1/voice/{client_id}/custom-llm/chat/completions`)
 - **customLlmExtraBody**: `{ "client_id": "quintana-seguros" }` (injected into every request)
 - **Voice**: bound to a Qora Agent (`Agent.voice_id` / `Agent.elevenlabs_agent_id`)
 
@@ -108,18 +134,20 @@ Qora may send ElevenLabs conversation overrides, but Qora is the owner of the va
 
 The core of QORA. Receives OpenAI-compatible POST requests from ElevenLabs and:
 1. Validates `client_id` from `elevenlabs_extra_body` (required — 422 if missing)
-2. Looks up the `Client` (tenant) in the database
+2. Looks up the `Client` (tenant) and `Agent` in the database
 3. Optionally loads a `Lead` record for context
 4. Renders the system prompt using `PromptLoader().render_for_agent(agent, lead, db, client)` from `app/prompts/loader.py`
-5. Streams GPT-4o responses as SSE, intercepting tool calls
-7. Persists each agent turn to the `call_turns` table
+5. Injects the skills index from `registry.yaml` and memory context from `build_memory_context()`
+6. Streams GPT-4o responses as SSE, intercepting tool calls
+7. Persists each agent turn to the `transcript_turns` table
 
 ### System Prompt Renderer (`app/prompts/loader.py`)
 
 `PromptLoader().render_for_agent(agent, lead, db, client)` renders the system prompt with:
 - Filesystem-first resolution: `backend/clients/{client_id}/agents/{agent_slug}/system-prompt.md` → DB `agent.system_prompt` → legacy client prompt → hardcoded template
 - Template variable substitution: `broker_name`, `agent_name`, `lead_name`, `car_make`, `car_model`, `car_year`, `current_insurance`, `call_history`, `confirmed_facts`
-- Returning-caller context injected via `build_memory_context(db, lead)`
+- Returning-caller context injected via `build_memory_context(db, lead)` (see `docs/memory-system.md`)
+- Skills index injected via `build_skills_index()` (see `docs/skills-system.md`)
 
 ### Tool Dispatcher (`app/tools/dispatcher.py`)
 
@@ -131,34 +159,73 @@ Dispatches GPT-4o tool calls to implementations:
 | `register_interest` | Transition lead → `interested`, persist car data |
 | `mark_not_interested` | Transition lead → `not_interested`, persist reason |
 | `schedule_followup` | Transition lead → `follow_up`, persist date + note |
+| `load_skill` | Load a skill from `registry.yaml` at runtime (dynamic knowledge injection) |
+
+### Post-Call Summarizer (`app/summarizer.py`)
+
+Runs automatically after a call ends. See `docs/analysis-pipeline.md` for full documentation.
+
+The summarizer fans out 13 analysis dimensions in parallel via `asyncio.gather`, then runs a post-analysis `next_action` pipeline to determine the recommended next step for the lead. Results are persisted atomically to `CallAnalysis`, `Lead`, `LeadProfileFact`, and `LeadInterestHistory`.
+
+### Memory System (`app/memory.py`)
+
+`build_memory_context(db, lead)` assembles cross-call memory for injection into the system prompt. See `docs/memory-system.md` for full documentation.
+
+### Scheduler (`app/scheduler/`)
+
+Background tick (`scheduler_tick()`) runs every minute and dispatches pending `ScheduledCall` entries to the ElevenLabs outbound call API. Schedule entries are created automatically by the `next_action` pipeline after each call.
 
 ### Database (`qora.db` — SQLite)
 
 | Table | Purpose |
 |-------|---------|
-| `clients` | Tenant config (model, temperature, voice_id, agent_name, etc.) |
-| `leads` | Lead CRM (name, car, insurance, status, call_count) |
-| `call_sessions` | Call records (started_at, ended_at, outcome, billable_minutes) |
-| `call_turns` | Transcript turns (role, content, timestamp) |
+| `clients` | Tenant config (broker_name, voice_id, scheduler settings, analysis_language) |
+| `agents` | Per-client AI agents (model, temperature, voice_id, tts tuning, elevenlabs_agent_id) |
+| `leads` | Lead CRM (name, phone, car, insurance, status, call_count, interest_level, extracted_facts) |
+| `call_sessions` | Call records (started_at, ended_at, duration, summary, extracted_facts) |
+| `transcript_turns` | Per-turn transcript (role, content, timestamp) |
+| `call_analyses` | Normalized analysis per call (1:1 with call_sessions, structured query target) |
+| `scheduled_calls` | Outbound call queue (scheduled_at, status, trigger_reason, attempt_number) |
+| `lead_profile_facts` | Append-and-supersede key-value profile facts per lead (namespaced by prefix) |
+| `lead_interest_history` | Append-only time series of interest_level per lead |
 
 ## Data Flow — Single Conversation Turn
 
 ```
 1. User speaks into microphone
 2. ElevenLabs STT transcribes audio → text
-3. ElevenLabs posts to QORA: POST /api/v1/voice/custom-llm
+3. ElevenLabs posts to QORA: POST /api/v1/voice/{client_id}/custom-llm/chat/completions
    Body: { messages: [...], elevenlabs_extra_body: { client_id, lead_id } }
 4. QORA:
-   a. Validates client_id → loads Client from DB
+   a. Validates client_id → loads Client + default Agent from DB
    b. Loads Lead from DB (optional)
    c. Renders system prompt (PromptLoader.render_for_agent)
+      — includes skills index + memory context
    d. Streams GPT-4o → SSE tokens
    e. If tool call detected: executes tool → second GPT-4o call → more SSE tokens
+      — load_skill injects skill content mid-stream
    f. Emits SSE [DONE]
    g. Persists agent turn to DB
 5. ElevenLabs TTS converts SSE text tokens → audio
 6. Browser plays audio through speaker
 7. Browser displays transcript (agent_response event)
+```
+
+## Data Flow — Post-Call Analysis
+
+```
+1. Call ends (ElevenLabs sends post-call webhook or frontend calls /calls/{id}/end)
+2. QORA closes the CallSession (status → "completed")
+3. Summarizer is triggered asynchronously (asyncio.create_task)
+4. Summarizer loads transcript turns from DB
+5. Runs 13 analysis dimensions in parallel + stateful pipelines
+6. Persists:
+   - CallSession.summary, .extracted_facts
+   - CallAnalysis row (normalized per-column)
+   - Lead.interest_level, .objections_heard, .extracted_facts
+   - LeadProfileFact rows (upsert / supersede)
+   - LeadInterestHistory row (append-only)
+7. Runs next_action pipeline → creates ScheduledCall if needed
 ```
 
 ## Data Lifecycle
@@ -169,6 +236,7 @@ Dispatches GPT-4o tool calls to implementations:
 - `Agent` table: per-client AI agent runtime config.
 - `Lead` table: lead contact data, status, extracted facts, call count.
 - `CallSession` table: per-call records with summaries and outcome data.
+- `CallAnalysis` table: normalized analysis per call (structured query target).
 
 ### Runtime Configuration Sources
 
@@ -193,6 +261,7 @@ The Qora explainer demo is configured as:
 backend/clients/qora-demo/agents/qora-explainer/
 ├── system-prompt.md                         ← behavior / soul: Mariano
 └── skills/
+    ├── registry.yaml                        ← skill registry
     └── Qora-info.agent-skill.md             ← factual Qora knowledge
 ```
 
@@ -261,5 +330,8 @@ All prompt paths support `{{variable}}` template substitution (lead_name, call_h
 | Phase | Status | Description |
 |-------|--------|-------------|
 | Phase 0 | ✅ Complete | Single tenant (Quintana Seguros), demo UI, tools, transcript |
-| Phase 1 | 🔲 Planned | Multi-tenant admin UI, JSON config import CLI, Twilio outbound |
-| Phase 2 | 🔲 Planned | Analytics dashboard, A/B prompt testing, call scheduling |
+| Phase 1 | ✅ Complete | Multi-tenant admin UI, Client CRUD, Agent CRUD, skill registry |
+| Phase 2 | ✅ Complete | Post-call analysis pipeline (13 dimensions), memory system |
+| Phase 3 | ✅ Complete | Analytics dashboard, interest scoring, profile facts |
+| Phase 4 | ✅ Complete | Data corrections, misc notes, objections, service issues dimensions |
+| Phase 5 | ✅ Complete | Next-action decision engine, scheduler, outbound call queue |

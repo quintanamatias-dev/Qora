@@ -1,6 +1,6 @@
 /**
- * ImportPage — Placeholder
- * Phase 4 feature: CSV import for bulk lead upload
+ * ImportPage — Coming Soon
+ * CSV bulk lead import — not yet implemented.
  */
 
 import { useParams } from 'react-router'
@@ -19,7 +19,7 @@ export function ImportPage() {
         </p>
       )}
       <p className="text-on-surface-variant mt-4">
-        CSV import coming in Phase 4.
+        CSV bulk lead import is coming soon.
       </p>
     </div>
   )
