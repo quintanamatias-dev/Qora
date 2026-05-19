@@ -8,7 +8,7 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { fetchMetrics, fetchCallSessions, fetchTranscript } from './calls'
+import { fetchMetrics, fetchCallSessions, fetchTranscript, fetchCallAnalysis } from './calls'
 import { fetchLeads, fetchLead } from './leads'
 import { fetchClient, fetchClients, createClient, updateClient, deactivateClient } from './clients'
 import { fetchAgents, createAgent, updateAgent, deactivateAgent, makeAgentDefault } from './agents'
@@ -19,6 +19,7 @@ import {
   fetchAnalyticsAgentStats,
 } from './analytics'
 import type {
+  CallAnalysis,
   CallMetricsResponse,
   Lead,
   CallSession,
@@ -115,6 +116,27 @@ export function useTranscript(sessionId: string) {
     queryKey: ['transcript', sessionId],
     queryFn: () => fetchTranscript(sessionId),
     enabled: Boolean(sessionId),
+  })
+}
+
+/**
+ * useCallAnalysis — fetches the full analysis (all 12 dimensions) for a session
+ * queryKey: ['call-analysis', sessionId]
+ * Returns undefined (not an error) when session has no analysis (404 is caught gracefully).
+ */
+export function useCallAnalysis(sessionId: string) {
+  return useQuery<CallAnalysis | null>({
+    queryKey: ['call-analysis', sessionId],
+    queryFn: async () => {
+      try {
+        return await fetchCallAnalysis(sessionId)
+      } catch {
+        // 404 means no analysis yet — return null instead of throwing
+        return null
+      }
+    },
+    enabled: Boolean(sessionId),
+    staleTime: 30_000,
   })
 }
 

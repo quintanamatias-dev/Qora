@@ -26,6 +26,7 @@ import { ImportPage } from './features/import/page'
 import { AdminLayout } from './features/admin/admin-layout'
 import { AdminPage } from './features/admin/page'
 import { AnalyticsDashboardPage } from './features/analytics/page'
+import { CallDetailPage } from './features/calls/call-detail-page'
 
 /**
  * Shared route definitions — used by both the production router and test helpers.
@@ -65,6 +66,10 @@ export const routes: RouteObject[] = [
       {
         path: 'analytics',
         element: <AnalyticsDashboardPage />,
+      },
+      {
+        path: 'calls/:sessionId',
+        element: <CallDetailPage />,
       },
     ],
   },

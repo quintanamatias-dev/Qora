@@ -2,12 +2,13 @@
 
 Phase 2a: End session and ElevenLabs post-call webhook models.
 Transcript storage improvements: TranscriptTurnResponse, SessionTranscriptResponse.
+Call detail view: CallAnalysisResponse (all 12 analysis dimensions).
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -88,3 +89,46 @@ class ElevenLabsPostCallPayload(BaseModel):
     metadata: dict | None = None
 
     model_config = {"extra": "allow"}
+
+
+class CallAnalysisResponse(BaseModel):
+    """Full analysis response for GET /calls/{session_id}/analysis.
+
+    JSON text columns (objections, products, pain_points, service_issues,
+    misc_notes, data_corrections, profile_facts, commitment_signals,
+    specific_needs, extra_axes_data) are returned as parsed Python objects.
+    All analysis fields are Optional since analysis can be partial.
+    """
+
+    session_id: str
+
+    # Scalar analysis fields
+    summary: str | None = None
+    interest_level: int | None = None
+    classification: str | None = None
+    outcome_reason: str | None = None
+    urgency: str | None = None
+    primary_need: str | None = None
+    next_action_suggested: str | None = None
+    current_insurance: str | None = None
+
+    # JSON columns — returned as parsed Python objects (list or dict)
+    objections: list[Any] | None = None
+    products: list[Any] | None = None
+    pain_points: list[Any] | None = None
+    service_issues: list[Any] | None = None
+    profile_facts: list[Any] | None = None
+    commitment_signals: list[Any] | None = None
+    specific_needs: list[Any] | None = None
+    misc_notes: dict[str, Any] | list[Any] | None = None
+    data_corrections: list[Any] | None = None
+    extra_axes_data: dict[str, Any] | None = None
+
+    # Abandonment
+    was_abrupt: bool | None = None
+    abandonment_trigger: str | None = None
+
+    # Audit metadata
+    analysis_status: str
+    analysis_error: str | None = None
+    analyzed_at: datetime

@@ -1,0 +1,33 @@
+# registry.yaml — Runtime skill registry for this agent.
+# One entry per .agent-skill.md file. Create this LAST, after all skills are final.
+# The agent uses "description" and "trigger_hint" to decide when to load each skill.
+# "filler_text" is what the agent SAYS while the skill is loading — keep it natural and brief.
+# Remove these comments before deploy.
+
+skills:
+  - name: [skill-name]
+    # Must match the filename without ".agent-skill.md"
+    # Example: if file is product-pricing.agent-skill.md → name: product-pricing
+
+    description: "[What this skill provides. The agent reads this to decide if this skill is relevant.
+    Be specific but not so narrow that the agent misses related questions.
+    Example: 'Pricing plans, payment methods, and discount conditions for [PRODUCT].']"
+
+    trigger_hint: "[When the agent should load this skill. List the specific question types
+    or scenarios that should trigger loading. Be concrete.
+    Example: 'When the user asks about pricing, costs, payment, plans, discounts, or billing.']"
+
+    filler_text: "[What the agent says while loading. Must be natural spoken speech.
+    Example: 'Dejame buscar esa información...' or 'Un momento, lo consulto ahora mismo.']"
+
+  # Add one block per skill. Example with two skills:
+  #
+  # - name: cancellation-policy
+  #   description: "Cancellation process, refund conditions, and reactivation steps."
+  #   trigger_hint: "When the user asks about cancelling, getting a refund, or pausing their account."
+  #   filler_text: "Dejame revisar eso..."
+  #
+  # - name: product-features
+  #   description: "Full list of product features, what is included in each plan, and current limitations."
+  #   trigger_hint: "When the user asks what the product can do, what is included, or how a specific feature works."
+  #   filler_text: "Un momento, lo consulto..."
