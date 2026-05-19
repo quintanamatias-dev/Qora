@@ -162,6 +162,42 @@ export interface SessionTranscript {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Call Analysis — matches backend CallAnalysisResponse
+// GET /api/v1/calls/{session_id}/analysis
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface CallAnalysis {
+  session_id: string
+  // Scalar analysis fields
+  summary: string | null
+  interest_level: number | null
+  classification: string | null
+  outcome_reason: string | null
+  urgency: string | null
+  primary_need: string | null
+  next_action_suggested: string | null
+  current_insurance: string | null
+  // JSON columns — returned as parsed Python objects (list or dict)
+  objections: Record<string, unknown>[] | null
+  products: string[] | null
+  pain_points: Record<string, unknown>[] | null
+  service_issues: Record<string, unknown>[] | null
+  profile_facts: Record<string, unknown>[] | null
+  commitment_signals: Record<string, unknown>[] | null
+  specific_needs: string[] | null
+  misc_notes: Record<string, unknown> | Record<string, unknown>[] | null
+  data_corrections: Record<string, unknown>[] | null
+  extra_axes_data: Record<string, unknown> | null
+  // Abandonment
+  was_abrupt: boolean | null
+  abandonment_trigger: string | null
+  // Audit
+  analysis_status: string
+  analysis_error: string | null
+  analyzed_at: string
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Metrics — matches backend CallMetricsResponse
 // ──────────────────────────────────────────────────────────────────────────────
 

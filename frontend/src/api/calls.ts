@@ -5,7 +5,7 @@
  */
 
 import { apiFetch } from './client'
-import type { CallMetricsResponse, CallSession, SessionTranscript } from './types'
+import type { CallAnalysis, CallMetricsResponse, CallSession, SessionTranscript } from './types'
 
 interface MetricsParams {
   date_from?: string
@@ -45,5 +45,16 @@ export async function fetchCallSessions(clientId: string, leadId?: string): Prom
 export async function fetchTranscript(sessionId: string): Promise<SessionTranscript> {
   return apiFetch<SessionTranscript>(
     `/api/v1/calls/${encodeURIComponent(sessionId)}/transcript`
+  )
+}
+
+/**
+ * GET /api/v1/calls/:sessionId/analysis
+ * Returns the full analysis (all 12 dimensions) for a specific call session.
+ * Throws if the session doesn't exist or has no analysis (404).
+ */
+export async function fetchCallAnalysis(sessionId: string): Promise<CallAnalysis> {
+  return apiFetch<CallAnalysis>(
+    `/api/v1/calls/${encodeURIComponent(sessionId)}/analysis`
   )
 }

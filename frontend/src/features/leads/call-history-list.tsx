@@ -9,6 +9,7 @@
  *   - Empty: "No calls yet"
  */
 
+import { useParams, useNavigate } from 'react-router'
 import type { CallSession, CallOutcome } from '@/api/types'
 import { Badge } from '@/design/components/badge'
 import { formatDuration } from '@/lib/format-duration'
@@ -58,6 +59,9 @@ export function CallHistoryList({
   expandedSessionId,
   onToggleSession,
 }: CallHistoryListProps) {
+  const { clientId } = useParams<{ clientId: string }>()
+  const navigate = useNavigate()
+
   if (sessions.length === 0) {
     return (
       <div className="py-8 text-center">
@@ -116,10 +120,23 @@ export function CallHistoryList({
                 </span>
               )}
 
-              {/* Expand indicator */}
-              <span className="text-on-surface-variant ml-auto text-xs">
-                {isExpanded ? '▲' : '▼'}
-              </span>
+              {/* Detail link + expand indicator */}
+              <div className="ml-auto flex items-center gap-3">
+                <button
+                  type="button"
+                  data-testid="call-detail-link"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    navigate(`/app/${clientId}/calls/${session.id}`)
+                  }}
+                  className="text-xs text-primary hover:underline"
+                >
+                  View detail
+                </button>
+                <span className="text-on-surface-variant text-xs">
+                  {isExpanded ? '▲' : '▼'}
+                </span>
+              </div>
             </div>
 
             {/* Transcript viewer — inline accordion */}

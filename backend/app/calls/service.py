@@ -14,7 +14,7 @@ import structlog
 from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.calls.models import CallSession, TranscriptTurn
+from app.calls.models import CallAnalysis, CallSession, TranscriptTurn
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -713,6 +713,24 @@ async def _persist_user_turn(session_id: str, content: str) -> None:
             session_id=session_id,
             error=str(exc),
         )
+
+
+async def get_call_analysis(
+    session: AsyncSession, session_id: str
+) -> CallAnalysis | None:
+    """Fetch the CallAnalysis record for a given call session.
+
+    Args:
+        session: Active async DB session.
+        session_id: UUID of the call session.
+
+    Returns:
+        CallAnalysis instance or None if no analysis exists for the session.
+    """
+    result = await session.execute(
+        select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+    )
+    return result.scalar_one_or_none()
 
 
 def schedule_user_turn_persist(session_id: str, messages: list[dict]) -> None:

@@ -3,6 +3,7 @@
 Provides:
 - GET  /{session_id}            — inspect a call session
 - GET  /{session_id}/transcript — inspect transcript turns
+- GET  /{session_id}/analysis   — inspect call analysis (all 12 dimensions)
 - POST /{session_id}/end        — close a session (CAP-2a)
 - POST /elevenlabs-postcall     — ElevenLabs post-call webhook (CAP-2b)
 
@@ -11,12 +12,15 @@ Covers: T3.5 admin/debug router + Phase 2a session lifecycle.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
+from typing import Any
 
 import structlog
 from fastapi import APIRouter, HTTPException
 
 from app.calls.schemas import (
+    CallAnalysisResponse,
     CallMetricsResponse,
     ElevenLabsPostCallPayload,
     EndSessionRequest,
@@ -29,6 +33,7 @@ from app.calls.service import (
     _schedule_summarize,
     add_transcript_turn,
     close_session,
+    get_call_analysis,
     get_call_metrics,
     get_session,
     get_session_by_elevenlabs_id,
@@ -329,4 +334,73 @@ async def get_call_transcript(session_id: str):
                 )
                 for t in turns
             ],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Helpers — JSON text column parsing
+# ---------------------------------------------------------------------------
+
+
+def _parse_json_col(value: str | None, default: Any = None) -> Any:
+    """Parse a JSON text column into a Python object.
+
+    Returns default (None) if value is None or empty string.
+    Returns default on parse error to avoid crashing on legacy data.
+    """
+    if value is None or value == "":
+        return default
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return default
+
+
+@router.get("/{session_id}/analysis", response_model=CallAnalysisResponse)
+async def get_call_analysis_endpoint(session_id: str):
+    """Get the full analysis for a call session (all 12 dimensions).
+
+    Returns 404 if:
+    - The call session does not exist.
+    - No analysis record exists for the session.
+
+    JSON text columns (objections, products, etc.) are returned as parsed
+    Python lists/dicts, not raw JSON strings.
+    """
+    async with db_session() as session:
+        cs = await get_session(session, session_id)
+        if cs is None:
+            raise HTTPException(status_code=404, detail="Call session not found")
+
+        analysis = await get_call_analysis(session, session_id)
+        if analysis is None:
+            raise HTTPException(
+                status_code=404, detail="No analysis available for this call session"
+            )
+
+        return CallAnalysisResponse(
+            session_id=analysis.session_id,
+            summary=analysis.summary,
+            interest_level=analysis.interest_level,
+            classification=analysis.classification,
+            outcome_reason=analysis.outcome_reason,
+            urgency=analysis.urgency,
+            primary_need=analysis.primary_need,
+            next_action_suggested=analysis.next_action_suggested,
+            current_insurance=analysis.current_insurance,
+            objections=_parse_json_col(analysis.objections),
+            products=_parse_json_col(analysis.products),
+            pain_points=_parse_json_col(analysis.pain_points),
+            service_issues=_parse_json_col(analysis.service_issues),
+            profile_facts=_parse_json_col(analysis.profile_facts),
+            commitment_signals=_parse_json_col(analysis.commitment_signals),
+            specific_needs=_parse_json_col(analysis.specific_needs),
+            misc_notes=_parse_json_col(analysis.misc_notes),
+            data_corrections=_parse_json_col(analysis.data_corrections),
+            extra_axes_data=_parse_json_col(analysis.extra_axes_data),
+            was_abrupt=analysis.was_abrupt,
+            abandonment_trigger=analysis.abandonment_trigger,
+            analysis_status=analysis.analysis_status,
+            analysis_error=analysis.analysis_error,
+            analyzed_at=analysis.analyzed_at,
         )
