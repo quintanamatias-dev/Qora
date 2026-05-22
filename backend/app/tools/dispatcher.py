@@ -4,6 +4,7 @@ Used by the Custom LLM webhook to execute tools mid-stream.
 
 Covers: T5.5 tool registry + dispatcher.
 Phase 2: adds load_skill routing.
+Phase 1 (configurable-agent-tools): adds capture_data routing with agent_tool_config.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.leads.service import get_lead
+from app.tools.capture_data import capture_data as _capture_data_handler
 from app.tools.get_lead_details import get_lead_details
 from app.tools.get_lead_history import get_lead_history
 from app.tools.get_lead_pain_points import get_lead_pain_points
@@ -27,6 +29,7 @@ if TYPE_CHECKING:
 
 
 # Tool registry: name → handler function
+# Note: capture_data is NOT in this dict — it requires special routing via agent_tool_config
 _TOOL_REGISTRY = {
     "get_lead_details": get_lead_details,
     "get_lead_profile": get_lead_profile,
@@ -48,6 +51,7 @@ async def dispatch_tool(
     agent_slug: str | None = None,
     registry_entries: "list[SkillRegistryEntry] | None" = None,
     clients_dir: Path | None = None,
+    agent_tool_config: dict | None = None,
 ) -> dict:
     """Route a tool call to the correct handler.
 
@@ -61,10 +65,37 @@ async def dispatch_tool(
         registry_entries: Parsed registry entries for this session — required for
             load_skill validation (allowlist check).
         clients_dir: Override clients root — used in tests via tmp_path.
+        agent_tool_config: Optional per-agent tool config dict (parsed from JSON).
+            Required for capture_data routing — passed to the handler for schema
+            validation. Ignored for all other tool names.
 
     Returns:
         Tool result dict. Always returns a dict — never raises.
     """
+    # --- capture_data is handled separately — requires agent_tool_config ---
+    if tool_name == "capture_data":
+        async def _call_capture_data(sess: AsyncSession) -> dict:
+            effective_lead_id = tool_args.get("lead_id") or lead_id or None
+            if not effective_lead_id:
+                return {"error": "lead_not_found"}
+            # Build captured_fields: all tool_args except lead_id
+            captured_fields = {k: v for k, v in tool_args.items() if k != "lead_id"}
+            return await _capture_data_handler(
+                session=sess,
+                lead_id=effective_lead_id,
+                tool_config=agent_tool_config or {},
+                captured_fields=captured_fields,
+                client_id=client_id,
+            )
+
+        if session is not None:
+            return await _call_capture_data(session)
+        else:
+            from app.core.database import get_session
+
+            async with get_session() as new_session:
+                return await _call_capture_data(new_session)
+
     # --- load_skill is handled separately (no DB session needed) ---
     if tool_name == "load_skill":
         from app.tools.skill_loader import handle_load_skill

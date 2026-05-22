@@ -244,7 +244,22 @@ async def build_voice_context(
         if skill_registry_entries and "load_skill" not in enabled_names:
             enabled_names = list(enabled_names) + ["load_skill"]
 
-        tools = _build_tool_definitions(enabled_names)
+        # Parse agent's tool_config (JSON TEXT column → dict) for dynamic tool schemas
+        # Used by capture_data to get the per-agent parameters schema.
+        _agent_tool_config_raw = getattr(agent, "tool_config", None)
+        agent_tool_config: dict | None = None
+        if _agent_tool_config_raw:
+            if isinstance(_agent_tool_config_raw, dict):
+                agent_tool_config = _agent_tool_config_raw
+            else:
+                try:
+                    parsed_tc = json.loads(_agent_tool_config_raw)
+                    if isinstance(parsed_tc, dict):
+                        agent_tool_config = parsed_tc
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        tools = _build_tool_definitions(enabled_names, agent_tool_config=agent_tool_config)
     except ImportError:
         tools = None
 

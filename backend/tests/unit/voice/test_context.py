@@ -711,3 +711,94 @@ async def test_build_voice_context_load_skill_alongside_crm_tools():
     tool_names = [t["function"]["name"] for t in result.tools]
     assert "load_skill" in tool_names, f"load_skill missing. Got: {tool_names}"
     assert "get_lead_details" in tool_names, f"get_lead_details missing. Got: {tool_names}"
+
+
+# ---------------------------------------------------------------------------
+# Task 1.5 — build_voice_context passes tool_config to build_tool_definitions
+# Spec: Dynamic Schema Resolution for capture_data
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_passes_tool_config_for_capture_data():
+    """build_voice_context passes agent.tool_config to build_tool_definitions.
+
+    GIVEN an agent with tools_enabled=["capture_data"] and tool_config JSON
+    WHEN build_voice_context() is called
+    THEN context.tools contains capture_data with dynamic schema from tool_config
+    """
+    from app.voice.context import build_voice_context
+    import json
+
+    tool_config_dict = {
+        "capture_data": {
+            "type": "object",
+            "properties": {
+                "marca": {"type": "string"},
+                "modelo": {"type": "string"},
+            },
+            "required": ["lead_id", "marca"],
+        }
+    }
+    agent = make_agent(tools_enabled='["capture_data"]')
+    agent.tool_config = json.dumps(tool_config_dict)  # stored as JSON TEXT in DB
+    client = make_client()
+    mock_db = AsyncMock()
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="prompt")
+        mock_instance.load_agent_skills = AsyncMock(return_value="")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=None,
+            db=mock_db,
+            client=client,
+        )
+
+    assert result.tools is not None, "tools must not be None when capture_data has config"
+    tool_names = [t["function"]["name"] for t in result.tools]
+    assert "capture_data" in tool_names, f"capture_data missing from tools. Got: {tool_names}"
+    # Verify dynamic schema was injected
+    capture_def = next(t for t in result.tools if t["function"]["name"] == "capture_data")
+    params = capture_def["function"]["parameters"]
+    assert "marca" in params["properties"], "Dynamic property 'marca' must be in schema"
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_excludes_capture_data_when_tool_config_missing():
+    """build_voice_context excludes capture_data when tool_config is NULL.
+
+    GIVEN an agent with tools_enabled=["capture_data"] but tool_config=NULL
+    WHEN build_voice_context() is called
+    THEN context.tools is None or does not contain capture_data
+    AND no exception is raised
+    """
+    from app.voice.context import build_voice_context
+
+    agent = make_agent(tools_enabled='["capture_data"]')
+    agent.tool_config = None  # NULL — no config stored
+    client = make_client()
+    mock_db = AsyncMock()
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="prompt")
+        mock_instance.load_agent_skills = AsyncMock(return_value="")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=None,
+            db=mock_db,
+            client=client,
+        )
+
+    # capture_data must be excluded (graceful degradation)
+    if result.tools is not None:
+        tool_names = [t["function"]["name"] for t in result.tools]
+        assert "capture_data" not in tool_names, (
+            "capture_data must be excluded when tool_config is NULL"
+        )

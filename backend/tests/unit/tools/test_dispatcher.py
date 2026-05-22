@@ -188,3 +188,88 @@ async def test_dispatcher_passes_client_id_to_schedule_followup(db_with_schedule
             f"got {sc.scheduled_at}. "
             f"If 13:00, client_id was not passed (UTC fallback + clamp)."
         )
+
+
+# ---------------------------------------------------------------------------
+# Task 1.5 — capture_data dispatch with agent_tool_config injection
+# Spec: Dispatcher Injects Agent Config into capture_data Calls
+# ---------------------------------------------------------------------------
+
+
+async def test_dispatcher_routes_capture_data_with_agent_tool_config(db):
+    """dispatch_tool routes 'capture_data' and passes agent_tool_config to handler.
+
+    GIVEN dispatch_tool called with capture_data and valid agent_tool_config
+    WHEN agent tool config has capture_data schema
+    THEN result contains status=captured
+    AND no error is returned
+    """
+    from app.tools.dispatcher import dispatch_tool
+    from app.leads.models import LeadProfileFact
+    from sqlalchemy import select
+
+    tool_config = {
+        "capture_data": {
+            "type": "object",
+            "properties": {
+                "marca": {"type": "string"},
+                "modelo": {"type": "string"},
+            },
+            "required": ["lead_id", "marca", "modelo"],
+        }
+    }
+
+    async with db.async_session_factory() as sess:
+        result = await dispatch_tool(
+            tool_name="capture_data",
+            tool_args={
+                "lead_id": "lead-quintana-001",
+                "marca": "Toyota",
+                "modelo": "Corolla",
+            },
+            client_id="quintana-seguros",
+            lead_id="lead-quintana-001",
+            session=sess,
+            agent_tool_config=tool_config,
+        )
+        await sess.commit()
+
+    assert "error" not in result, f"Expected success, got: {result}"
+    assert result.get("status") == "captured"
+    assert "marca" in result.get("fields", [])
+
+    # Verify DB write
+    async with db.async_session_factory() as sess:
+        rows = await sess.execute(
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == "lead-quintana-001",
+                LeadProfileFact.fact_key == "captured:marca",
+                LeadProfileFact.superseded_at == None,  # noqa: E711
+            )
+        )
+        facts = list(rows.scalars().all())
+    assert len(facts) == 1
+    assert facts[0].fact_value == "Toyota"
+
+
+async def test_dispatcher_capture_data_without_tool_config_returns_error(db):
+    """dispatch_tool with capture_data and no agent_tool_config returns error.
+
+    GIVEN dispatch_tool called with capture_data but agent_tool_config=None
+    WHEN called
+    THEN result contains an error (missing_tool_config or similar)
+    AND no exception is raised
+    """
+    from app.tools.dispatcher import dispatch_tool
+
+    async with db.async_session_factory() as sess:
+        result = await dispatch_tool(
+            tool_name="capture_data",
+            tool_args={"lead_id": "lead-quintana-001", "marca": "Toyota"},
+            client_id="quintana-seguros",
+            lead_id="lead-quintana-001",
+            session=sess,
+            agent_tool_config=None,
+        )
+
+    assert "error" in result, f"Expected error, got: {result}"
