@@ -80,16 +80,18 @@
   <div class="card">
     <div class="card-title">Configuración del Agente</div>
     <div class="form-group">
-      <label>ElevenLabs Agent ID</label>
-      <input type="text" id="agentId" placeholder="agent_xxxxxxxxxxxxxxxxxx" value="" />
-      <span id="agentIdHint" style="display:none;font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem;"></span>
-    </div>
-    <div class="form-group">
       <label>Cliente</label>
       <select id="clientId" onchange="onClientChange()">
         <option value="" disabled selected>Cargando clientes...</option>
       </select>
       <span id="clientError" style="display:none;color:var(--red);font-size:0.78rem;margin-top:0.2rem;"></span>
+    </div>
+    <div class="form-group">
+      <label>Agente</label>
+      <select id="agentSelect" onchange="onAgentChange()" disabled>
+        <option value="" disabled selected>Seleccioná un cliente primero...</option>
+      </select>
+      <span id="agentIdHint" style="display:none;font-size:0.75rem;color:var(--red);margin-top:0.2rem;"></span>
     </div>
     <div class="form-group">
       <label>Lead a simular</label>
@@ -137,6 +139,9 @@
     let currentClientData = {};  // holds the selected client's broker_name, agent_name, etc.
     let currentSessionId = null;  // ElevenLabs conversation_id for the active session
     let currentAgentConfig = null;  // holds the selected agent's TTS config, or null if not available
+    let clientAgents = [];  // all active agents for the selected client
+    let selectedAgentId = '';  // resolved elevenlabs_agent_id from the selected agent
+    let selectedAgentSlug = '';  // slug of the selected agent for dynamic_variables
 
     // ── Client/Lead loading ─────────────────────────────────────────────────────
     async function loadClients() {
@@ -181,26 +186,31 @@
     }
 
     async function loadAgentForClient(clientId) {
-      // Fetch the default agent for this client and populate the EL agent ID input.
+      // Fetch agents for this client and populate the agent selector dropdown.
       // Per spec: demo MUST read elevenlabs_agent_id from the API — no hardcoded value.
-      const agentInput = document.getElementById('agentId');
-      const agentHint  = document.getElementById('agentIdHint');
+      const agentSelect = document.getElementById('agentSelect');
+      const agentHint   = document.getElementById('agentIdHint');
 
-      agentInput.value = '';
+      clientAgents = [];
+      selectedAgentId = '';
+      selectedAgentSlug = '';
+      currentAgentConfig = null;
+      agentSelect.innerHTML = '<option value="" disabled selected>Cargando agentes...</option>';
+      agentSelect.disabled = true;
       if (agentHint) { agentHint.style.display = 'none'; agentHint.textContent = ''; }
 
-      if (!clientId) return;
+      if (!clientId) {
+        agentSelect.innerHTML = '<option value="" disabled selected>Seleccioná un cliente primero...</option>';
+        return;
+      }
 
       try {
         const r = await fetch('/api/v1/clients/' + encodeURIComponent(clientId) + '/agents');
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const agents = await r.json();
 
-        // Find the default agent (is_default: true); fall back to first active agent
-        const defaultAgent = agents.find(a => a.is_default) || agents[0] || null;
-
-        if (!defaultAgent) {
-          currentAgentConfig = null;
+        if (!agents || agents.length === 0) {
+          agentSelect.innerHTML = '<option value="" disabled selected>Sin agentes configurados</option>';
           if (agentHint) {
             agentHint.textContent = '⚠ Sin agente configurado para este cliente.';
             agentHint.style.display = 'block';
@@ -208,29 +218,71 @@
           return;
         }
 
-        const elId = defaultAgent.elevenlabs_agent_id || '';
-        agentInput.value = elId;
+        // Store the full agents array for lookup on selection change
+        clientAgents = agents;
 
-        // Store TTS config from agent API — used by buildInitPayload to set EL override.
-        // Do NOT fall back to hardcoded literals: if the API returns null for a field,
-        // hasTts will be false and buildInitPayload will skip the TTS override entirely.
-        const hasTts = (
-          defaultAgent.tts_speed            != null &&
-          defaultAgent.tts_stability        != null &&
-          defaultAgent.tts_similarity_boost != null
-        );
-        currentAgentConfig = hasTts ? {
-          tts_speed:            defaultAgent.tts_speed,
-          tts_stability:        defaultAgent.tts_stability,
-          tts_similarity_boost: defaultAgent.tts_similarity_boost,
-        } : null;
+        // Populate dropdown
+        agentSelect.innerHTML = '';
+        agents.forEach(a => {
+          const opt = document.createElement('option');
+          opt.value = a.agent_id;
+          opt.textContent = a.name;
+          if (a.is_default) opt.selected = true;
+          agentSelect.appendChild(opt);
+        });
+        agentSelect.disabled = false;
 
-        if (!elId && agentHint) {
-          agentHint.textContent = '⚠ Agente sin ElevenLabs Agent ID. Configuralo en el panel admin.';
-          agentHint.style.display = 'block';
-        }
+        // If no agent was marked default, select the first one
+        if (agentSelect.selectedIndex < 0) agentSelect.selectedIndex = 0;
+
+        // Trigger initial agent selection to set config
+        onAgentChange();
+
       } catch (e) {
         console.warn('Failed to load agents for client:', e);
+        agentSelect.innerHTML = '<option value="" disabled selected>Error cargando agentes</option>';
+      }
+    }
+
+    function onAgentChange() {
+      const agentSelect = document.getElementById('agentSelect');
+      const agentHint   = document.getElementById('agentIdHint');
+      const selectedId  = agentSelect.value;
+
+      const agent = clientAgents.find(a => String(a.agent_id) === String(selectedId));
+      if (!agent) {
+        selectedAgentId = '';
+        selectedAgentSlug = '';
+        currentAgentConfig = null;
+        return;
+      }
+
+      selectedAgentId = agent.elevenlabs_agent_id || '';
+      selectedAgentSlug = agent.slug || '';
+
+      // Store TTS config from agent API — used by buildInitPayload to set EL override.
+      // Do NOT fall back to hardcoded literals: if the API returns null for a field,
+      // hasTts will be false and buildInitPayload will skip the TTS override entirely.
+      const hasTts = (
+        agent.tts_speed            != null &&
+        agent.tts_stability        != null &&
+        agent.tts_similarity_boost != null
+      );
+      currentAgentConfig = hasTts ? {
+        tts_speed:            agent.tts_speed,
+        tts_stability:        agent.tts_stability,
+        tts_similarity_boost: agent.tts_similarity_boost,
+      } : null;
+
+      // Show/hide warning based on whether this agent has an ElevenLabs Agent ID
+      if (agentHint) {
+        if (!selectedAgentId) {
+          agentHint.textContent = '⚠ Agente sin ElevenLabs Agent ID. Configuralo en el panel admin.';
+          agentHint.style.display = 'block';
+        } else {
+          agentHint.style.display = 'none';
+          agentHint.textContent = '';
+        }
       }
     }
 
@@ -245,7 +297,7 @@
         agent_name:  selectedOpt ? selectedOpt.dataset.agentName  || '' : '',
       };
 
-      // Fetch default agent and populate EL agent ID (no hardcoded fallback)
+      // Fetch agents and populate the agent selector dropdown
       await loadAgentForClient(clientId);
       await loadLeadsForClient(clientId);
     }
@@ -289,7 +341,7 @@
         // Select first by default
         leadSelect.selectedIndex = 0;
         // Clear any previous no-leads warning
-        setStatus('Listo — completá el Agent ID y dale a Iniciar', '');
+        setStatus('Listo — seleccioná un agente y dale a Iniciar', '');
 
       } catch (e) {
         console.error('Failed to load leads:', e);
@@ -470,6 +522,7 @@
           agent_name:          currentClientData.agent_name  || '',
           notes:               lead.notes            || '',
           client_id:           selectedClientId,  // explicit client routing
+          agent_slug:          selectedAgentSlug, // which agent is being used
         }
       };
       if (leadId) {
@@ -608,11 +661,11 @@
     }
 
     async function startConversation() {
-      const agentId = document.getElementById('agentId').value.trim();
+      const agentId = selectedAgentId;
       const leadId = document.getElementById('leadId').value;
       const selectedClientId = document.getElementById('clientId').value;
 
-      if (!agentId) { setStatus('⚠ Agente sin ElevenLabs Agent ID — configuralo en /admin', 'error'); return; }
+      if (!agentId) { setStatus('⚠ Agente sin ElevenLabs Agent ID — seleccioná otro agente o configuralo en /admin', 'error'); return; }
       if (!selectedClientId) { setStatus('⚠ Seleccioná un cliente', 'error'); return; }
       if (!leadId) { setStatus('⚠ Seleccioná un lead', 'error'); return; }
 
@@ -724,8 +777,7 @@
         if (droppedSessionId) {
           await closeSessionOnBackend(droppedSessionId, 'reconnect_attempt');
         }
-        // Restore the values in case they drifted
-        document.getElementById('agentId').value = agentId;
+        // Restore lead selection in case it drifted
         document.getElementById('leadId').value = leadId;
         startConversation();
       };

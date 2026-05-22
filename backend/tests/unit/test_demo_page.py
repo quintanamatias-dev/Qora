@@ -51,19 +51,18 @@ def test_demo_page_has_no_hardcoded_elevenlabs_agent_id(demo_html: str):
     )
 
 
-def test_demo_page_agentid_input_has_no_hardcoded_value(demo_html: str):
-    """The agentId <input> must NOT carry a non-empty value= attribute.
+def test_demo_page_agent_selector_exists(demo_html: str):
+    """The agent selector <select> must exist in the demo page.
 
-    Triangulation of test_demo_page_has_no_hardcoded_elevenlabs_agent_id:
-    Tests the pattern `value="agent_` which would match any hardcoded agent ID,
-    not just the specific one removed in task 4.2.
+    Replaced the old agentId text input with a dropdown that lists agents
+    for the selected client. The elevenlabs_agent_id is resolved from the
+    selected agent — no manual input.
     """
-    # Pattern: input with id="agentId" and value="agent_..." is forbidden
-    assert 'id="agentId"' in demo_html, "agentId input element must exist"
-    # Verify no hardcoded agent_ prefix in the value attribute
+    assert 'id="agentSelect"' in demo_html, "agentSelect dropdown must exist"
+    # Verify no hardcoded agent_ prefix anywhere
     assert 'value="agent_' not in demo_html, (
-        "agentId input has a hardcoded value starting with 'agent_'. "
-        "Must be empty — populated dynamically from API."
+        "Demo page has a hardcoded value starting with 'agent_'. "
+        "Must be populated dynamically from API."
     )
 
 
@@ -221,8 +220,8 @@ async def test_demo_endpoint_returns_200_html(demo_app):
         response = await client.get("/demo/")
         assert response.status_code == 200
         assert "text/html" in response.headers.get("content-type", "")
-        # Key structural assertion: agentId input must exist
-        assert 'id="agentId"' in response.text
+        # Key structural assertion: agentSelect dropdown must exist
+        assert 'id="agentSelect"' in response.text
 
 
 @pytest.mark.anyio
