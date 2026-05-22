@@ -152,19 +152,33 @@ async def test_stream_passes_agent_tool_config_to_execute_tool():
 
 
 def test_crm_tools_unchanged_after_load_skill_added():
-    """CRM tool schemas must be unchanged after adding load_skill to QORA_TOOL_DEFINITIONS."""
+    """CRM tool schemas must be unchanged after adding load_skill to QORA_TOOL_DEFINITIONS.
+
+    Phase 2: register_interest, mark_not_interested, and schedule_followup removed.
+    Only the remaining active CRM tools are checked here.
+    """
     from app.voice.webhook import QORA_TOOL_DEFINITIONS
 
-    crm_tools = [
-        "get_lead_details", "register_interest", "mark_not_interested",
-        "schedule_followup", "get_lead_profile", "get_lead_history",
-        "get_lead_pain_points"
+    # Phase 2: legacy tools removed from QORA_TOOL_DEFINITIONS
+    active_crm_tools = [
+        "get_lead_details",
+        "get_lead_profile",
+        "get_lead_history",
+        "get_lead_pain_points",
+        "capture_data",
     ]
-    for name in crm_tools:
-        assert name in QORA_TOOL_DEFINITIONS, f"CRM tool {name!r} missing from definitions"
+    for name in active_crm_tools:
+        assert name in QORA_TOOL_DEFINITIONS, f"Active CRM tool {name!r} missing from definitions"
         tool = QORA_TOOL_DEFINITIONS[name]
         assert tool["type"] == "function"
         assert tool["function"]["name"] == name
+
+    # Legacy tools must NOT be in definitions post-Phase 2
+    removed_tools = ["register_interest", "mark_not_interested", "schedule_followup"]
+    for name in removed_tools:
+        assert name not in QORA_TOOL_DEFINITIONS, (
+            f"Legacy tool {name!r} must be removed from QORA_TOOL_DEFINITIONS in Phase 2"
+        )
 
 
 # ---------------------------------------------------------------------------

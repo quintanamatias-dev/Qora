@@ -38,27 +38,25 @@ def test_agent_create_minimal_valid():
     assert agent.is_default is False
     assert agent.system_prompt is None
     assert agent.knowledge_base is None
-    # tools_enabled default is a list with all registered tools (Issue #36 adds 3 more)
+    # tools_enabled default is a list with all registered tools
+    # Phase 2: register_interest, mark_not_interested, schedule_followup removed
     assert isinstance(agent.tools_enabled, list)
-    # Must include the original 4 tools
-    expected_original = {
+    # Must include the current active tools
+    expected_active = {
         "get_lead_details",
-        "register_interest",
-        "mark_not_interested",
-        "schedule_followup",
-    }
-    assert expected_original.issubset(
-        set(agent.tools_enabled)
-    ), f"Original tools missing from default: {expected_original - set(agent.tools_enabled)}"
-    # Must also include Issue #36 new tools
-    expected_new = {
         "get_lead_profile",
         "get_lead_history",
         "get_lead_pain_points",
+        "capture_data",
     }
-    assert expected_new.issubset(
+    assert expected_active.issubset(
         set(agent.tools_enabled)
-    ), f"New Issue #36 tools missing from default: {expected_new - set(agent.tools_enabled)}"
+    ), f"Active tools missing from default: {expected_active - set(agent.tools_enabled)}"
+    # Legacy tools must NOT be in the defaults (Phase 2 removal)
+    removed_tools = {"register_interest", "mark_not_interested", "schedule_followup"}
+    assert removed_tools.isdisjoint(
+        set(agent.tools_enabled)
+    ), f"Removed legacy tools still in default: {removed_tools & set(agent.tools_enabled)}"
 
 
 def test_agent_create_custom_values():
@@ -153,17 +151,18 @@ def test_agent_create_invalid_tool_raises_422():
 
 
 def test_agent_create_valid_subset_of_tools():
-    """AgentCreate accepts a valid subset of tool names."""
+    """AgentCreate accepts a valid subset of tool names (Phase 2: legacy tools removed)."""
     from app.agents.schemas import AgentCreate
 
+    # Phase 2: register_interest no longer a valid tool name; use capture_data instead
     agent = AgentCreate(
         slug="test",
         name="Test",
         voice_id="v1",
-        tools_enabled=["get_lead_details", "register_interest"],
+        tools_enabled=["get_lead_details", "capture_data"],
     )
     assert isinstance(agent.tools_enabled, list)
-    assert agent.tools_enabled == ["get_lead_details", "register_interest"]
+    assert agent.tools_enabled == ["get_lead_details", "capture_data"]
 
 
 def test_agent_create_invalid_tool_name_string_raises_422():

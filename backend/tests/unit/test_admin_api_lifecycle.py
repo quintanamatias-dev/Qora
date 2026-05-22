@@ -105,7 +105,8 @@ async def test_admin_create_agent_and_verify_list(admin_app: AsyncClient):
             "slug": "second-agent",
             "name": "Second Agent",
             "voice_id": "voice-second",
-            "tools_enabled": ["get_lead_details", "register_interest"],
+            # Phase 2: register_interest removed; use capture_data instead
+            "tools_enabled": ["get_lead_details", "capture_data"],
         },
     )
     assert response.status_code == 201
@@ -113,7 +114,7 @@ async def test_admin_create_agent_and_verify_list(admin_app: AsyncClient):
     assert created["slug"] == "second-agent"
     assert created["voice_id"] == "voice-second"
     assert isinstance(created["tools_enabled"], list)
-    assert set(created["tools_enabled"]) == {"get_lead_details", "register_interest"}
+    assert set(created["tools_enabled"]) == {"get_lead_details", "capture_data"}
 
     # Verify the list now shows 2 agents
     list_response = await admin_app.get("/api/v1/clients/lifecycle-client/agents")

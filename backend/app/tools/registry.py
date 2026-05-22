@@ -8,6 +8,11 @@ Single source of truth for:
 - build_capture_data_definition(): build dynamic capture_data schema from agent config
 
 Each tool module owns its TOOL_DEFINITION constant. This module assembles them.
+
+Phase 2 (configurable-agent-tools): removed register_interest, mark_not_interested,
+and schedule_followup from TOOL_DEFINITIONS. Status transitions are now driven by
+the post-call analysis pipeline (apply_status_from_next_action in summarizer.py).
+Dispatcher returns tool_removed for any calls to these legacy names.
 """
 
 from __future__ import annotations
@@ -15,9 +20,6 @@ from __future__ import annotations
 import logging
 
 from app.tools.get_lead_details import TOOL_DEFINITION as _get_lead_details_def
-from app.tools.register_interest import TOOL_DEFINITION as _register_interest_def
-from app.tools.mark_not_interested import TOOL_DEFINITION as _mark_not_interested_def
-from app.tools.schedule_followup import TOOL_DEFINITION as _schedule_followup_def
 from app.tools.get_lead_profile import TOOL_DEFINITION as _get_lead_profile_def
 from app.tools.get_lead_history import TOOL_DEFINITION as _get_lead_history_def
 from app.tools.get_lead_pain_points import TOOL_DEFINITION as _get_lead_pain_points_def
@@ -49,13 +51,11 @@ _CAPTURE_DATA_BASE_DEF: dict = {
 
 # ---------------------------------------------------------------------------
 # Assembled tool definitions — single source of truth
+# Phase 2: register_interest, mark_not_interested, schedule_followup removed.
 # ---------------------------------------------------------------------------
 
 TOOL_DEFINITIONS: dict[str, dict] = {
     "get_lead_details": _get_lead_details_def,
-    "register_interest": _register_interest_def,
-    "mark_not_interested": _mark_not_interested_def,
-    "schedule_followup": _schedule_followup_def,
     "get_lead_profile": _get_lead_profile_def,
     "get_lead_history": _get_lead_history_def,
     "get_lead_pain_points": _get_lead_pain_points_def,
@@ -64,6 +64,11 @@ TOOL_DEFINITIONS: dict[str, dict] = {
     # The dynamic schema is built via build_capture_data_definition().
     "capture_data": _CAPTURE_DATA_BASE_DEF,
 }
+
+# Legacy tool names removed in Phase 2. Dispatcher returns tool_removed for calls.
+_REMOVED_TOOLS: frozenset[str] = frozenset(
+    {"register_interest", "mark_not_interested", "schedule_followup"}
+)
 
 # ---------------------------------------------------------------------------
 # Filler speech config — emitted to SSE stream BEFORE tool execution
