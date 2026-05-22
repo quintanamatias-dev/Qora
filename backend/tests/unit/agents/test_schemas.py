@@ -597,3 +597,151 @@ def test_agent_response_includes_tts_fields():
     assert resp.tts_speed == 0.9
     assert resp.tts_stability == 0.5
     assert resp.tts_similarity_boost == 0.8
+
+
+# ---------------------------------------------------------------------------
+# Task 1.1 (NEW) — tool_config field: AgentCreate, AgentUpdate, AgentResponse
+# Spec: Agent Stores Tool Config
+# ---------------------------------------------------------------------------
+
+
+def test_agent_create_tool_config_defaults_to_none():
+    """AgentCreate defaults tool_config to None when not provided."""
+    from app.agents.schemas import AgentCreate
+
+    agent = AgentCreate(slug="main", name="Main", voice_id="v1")
+    assert agent.tool_config is None
+
+
+def test_agent_create_accepts_valid_tool_config():
+    """AgentCreate accepts a valid tool_config dict with capture_data schema."""
+    from app.agents.schemas import AgentCreate
+
+    config = {
+        "capture_data": {
+            "type": "object",
+            "properties": {"marca": {"type": "string"}},
+            "required": ["lead_id", "marca"],
+        }
+    }
+    agent = AgentCreate(
+        slug="main",
+        name="Main",
+        voice_id="v1",
+        tools_enabled=["get_lead_details", "capture_data"],
+        tool_config=config,
+    )
+    assert agent.tool_config == config
+
+
+def test_agent_create_tool_config_extra_unknown_key_is_accepted():
+    """AgentCreate accepts tool_config with an unrecognized key (silently ignored)."""
+    from app.agents.schemas import AgentCreate
+
+    config = {"unknown_key": {"some": "value"}}
+    agent = AgentCreate(
+        slug="main",
+        name="Main",
+        voice_id="v1",
+        tool_config=config,
+    )
+    assert agent.tool_config == config
+
+
+def test_agent_update_tool_config_defaults_to_unset():
+    """AgentUpdate with no fields does not include tool_config in unset dump."""
+    from app.agents.schemas import AgentUpdate
+
+    update = AgentUpdate()
+    data = update.model_dump(exclude_unset=True)
+    assert "tool_config" not in data
+
+
+def test_agent_update_accepts_tool_config():
+    """AgentUpdate accepts tool_config dict."""
+    from app.agents.schemas import AgentUpdate
+
+    config = {"capture_data": {"type": "object", "properties": {}, "required": []}}
+    update = AgentUpdate(tool_config=config)
+    data = update.model_dump(exclude_unset=True)
+    assert data["tool_config"] == config
+
+
+def test_agent_response_tool_config_defaults_to_none():
+    """AgentResponse defaults tool_config to None."""
+    from datetime import datetime, timezone
+    from app.agents.schemas import AgentResponse
+
+    now = datetime.now(timezone.utc)
+    resp = AgentResponse(
+        agent_id="tc-1",
+        client_id="c1",
+        slug="main",
+        name="Main",
+        voice_id="v1",
+        system_prompt=None,
+        knowledge_base=None,
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools_enabled=[],
+        is_active=True,
+        is_default=False,
+        created_at=now,
+    )
+    assert resp.tool_config is None
+
+
+def test_agent_response_includes_tool_config_when_set():
+    """AgentResponse round-trips tool_config value correctly."""
+    from datetime import datetime, timezone
+    from app.agents.schemas import AgentResponse
+
+    now = datetime.now(timezone.utc)
+    config = {
+        "capture_data": {
+            "type": "object",
+            "properties": {"marca": {"type": "string"}},
+            "required": ["lead_id", "marca"],
+        }
+    }
+    resp = AgentResponse(
+        agent_id="tc-2",
+        client_id="c1",
+        slug="main",
+        name="Main",
+        voice_id="v1",
+        system_prompt=None,
+        knowledge_base=None,
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools_enabled=["get_lead_details", "capture_data"],
+        is_active=True,
+        is_default=False,
+        created_at=now,
+        tool_config=config,
+    )
+    assert resp.tool_config == config
+    assert resp.tool_config["capture_data"]["required"] == ["lead_id", "marca"]
+
+
+# ---------------------------------------------------------------------------
+# Task 1.1 (NEW) — capture_data as valid tool name in QORA_TOOL_NAMES
+# Spec: QORA_TOOL_NAMES includes capture_data
+# ---------------------------------------------------------------------------
+
+
+def test_capture_data_is_valid_tool_name():
+    """capture_data is accepted in tools_enabled validation (present in QORA_TOOL_NAMES)."""
+    from app.agents.schemas import AgentCreate, QORA_TOOL_NAMES
+
+    assert "capture_data" in QORA_TOOL_NAMES
+
+    agent = AgentCreate(
+        slug="test",
+        name="Test",
+        voice_id="v1",
+        tools_enabled=["get_lead_details", "capture_data"],
+    )
+    assert "capture_data" in agent.tools_enabled

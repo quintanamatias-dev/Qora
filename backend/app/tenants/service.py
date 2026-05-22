@@ -505,6 +505,7 @@ async def create_agent(
     tts_speed: float = 0.95,
     tts_stability: float = 0.4,
     tts_similarity_boost: float = 0.75,
+    tool_config: str | None = None,
 ) -> Agent:
     """Create and persist a new Agent record.
 
@@ -563,6 +564,7 @@ async def create_agent(
         tts_speed=tts_speed,
         tts_stability=tts_stability,
         tts_similarity_boost=tts_similarity_boost,
+        tool_config=tool_config,
     )
     session.add(agent)
     await session.flush()
