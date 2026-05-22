@@ -74,6 +74,83 @@ def test_build_tool_definitions_includes_load_skill_alongside_crm_tools():
     assert "get_lead_details" in names
 
 
+@pytest.mark.asyncio
+async def test_stream_passes_agent_tool_config_to_execute_tool():
+    """_stream_llm_response forwards cached context tool_config to tool dispatch.
+
+    This covers the end-to-end webhook → dispatcher → capture_data gap: the
+    dispatcher can only validate capture_data if the webhook passes the agent's
+    parsed tool_config from VoiceSessionContext.
+    """
+    import json
+    from unittest.mock import MagicMock, patch
+
+    from app.ai.llm_streaming import StreamDone, ToolCallDelta
+    from app.voice.context import VoiceSessionContext
+    from app.voice.session import ConversationState
+    from app.voice.webhook import _stream_llm_response
+
+    tool_config = {
+        "capture_data": {
+            "parameters": {
+                "type": "object",
+                "properties": {"lead_id": {"type": "string"}, "marca": {"type": "string"}},
+                "required": ["lead_id", "marca"],
+            }
+        }
+    }
+    captured_kwargs = {}
+
+    async def fake_stream_events(**kwargs):
+        yield ToolCallDelta(
+            tool_call_id="call-001",
+            function_name="capture_data",
+            function_args=json.dumps({"lead_id": "lead-1", "marca": "Toyota"}),
+        )
+        yield StreamDone()
+
+    async def fake_execute_tool(tool_name, tool_args, client_id, lead_id, **kwargs):
+        captured_kwargs.update(kwargs)
+        return {"status": "captured", "fields": ["marca"]}
+
+    mock_client = MagicMock()
+    mock_client.stream_events = fake_stream_events
+    conv_state = ConversationState(
+        conversation_id="conv-1",
+        client_id="client-1",
+        lead_id="lead-1",
+        session_id="session-1",
+        context=VoiceSessionContext(
+            system_prompt="prompt",
+            skills_content=None,
+            misc_notes="",
+            lead_profile="",
+            model="gpt-4o",
+            temperature=0.7,
+            max_tokens=300,
+            tools=None,
+            agent_tool_config=tool_config,
+        ),
+    )
+
+    with patch("app.voice.webhook._execute_tool", side_effect=fake_execute_tool):
+        async for _chunk in _stream_llm_response(
+            client=mock_client,
+            messages=[{"role": "user", "content": "Hola"}],
+            tools=None,
+            temperature=0.7,
+            max_tokens=300,
+            client_id="client-1",
+            lead_id="lead-1",
+            session_id=None,
+            conversation_id="conv-1",
+            conv_state=conv_state,
+        ):
+            pass
+
+    assert captured_kwargs["agent_tool_config"] == tool_config
+
+
 def test_crm_tools_unchanged_after_load_skill_added():
     """CRM tool schemas must be unchanged after adding load_skill to QORA_TOOL_DEFINITIONS."""
     from app.voice.webhook import QORA_TOOL_DEFINITIONS
@@ -188,7 +265,6 @@ async def test_dispatch_tool_load_skill_no_registry_entries(tmp_path: Path):
 async def test_dispatch_tool_crm_tools_unchanged_after_load_skill_wired(tmp_path: Path):
     """CRM tools still route correctly after load_skill is wired into dispatcher."""
     from app.tools.dispatcher import dispatch_tool
-    from pathlib import Path
     from pydantic import SecretStr
     from app.core.config import Settings
     from app.core import database as db_module
@@ -309,8 +385,8 @@ async def test_filler_emitted_before_tool_execution():
     THEN the filler text SSE chunk is yielded BEFORE the tool handler runs.
     """
     import json
-    from unittest.mock import AsyncMock, MagicMock, patch
-    from app.ai.llm_streaming import ToolCallDelta, StreamDone, ContentDelta
+    from unittest.mock import MagicMock, patch
+    from app.ai.llm_streaming import ToolCallDelta, StreamDone
     from app.voice.webhook import _stream_llm_response
 
     execution_order = []
@@ -328,8 +404,6 @@ async def test_filler_emitted_before_tool_execution():
         return {"content": "# Qora\nContent."}
 
     collected_chunks = []
-
-    original_execute = None
 
     # We need to intercept when chunks are yielded vs when tool executes
     # Use a custom wrapper that tracks ordering

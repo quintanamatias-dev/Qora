@@ -372,8 +372,6 @@ class TestQuintanaToolConfigParity:
         # Get the parameters block (may be nested or flat)
         params = capture_config.get("parameters", capture_config)
         props = params.get("properties", {})
-        required = params.get("required", [])
-
         # Must include car fields that map to the old register_interest behavior
         car_field_names = set(props.keys())
         assert any("car_make" in f or "marca" in f for f in car_field_names), (

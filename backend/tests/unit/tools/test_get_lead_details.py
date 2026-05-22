@@ -129,7 +129,7 @@ async def test_get_lead_details_does_not_increment_call_count(db):
         count_before = lead_before.call_count
 
     async with db.async_session_factory() as sess:
-        result = await get_lead_details(sess, lead_id="lead-quintana-001")
+        await get_lead_details(sess, lead_id="lead-quintana-001")
         await sess.commit()
 
     async with db.async_session_factory() as sess:

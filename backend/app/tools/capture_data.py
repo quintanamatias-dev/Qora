@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.leads.models import Lead, LeadProfileFact
+from app.leads.models import LeadProfileFact
 from app.leads.service import get_lead
 
 

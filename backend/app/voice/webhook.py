@@ -46,13 +46,15 @@ from app.leads.service import get_lead
 from app.prompts.loader import PromptLoader
 from app.tenants.service import get_client, get_default_agent
 from app.tools.registry import (
-    TOOL_DEFINITIONS as QORA_TOOL_DEFINITIONS,
+    TOOL_DEFINITIONS,
     TOOL_FILLER_PHRASES,
     DEFAULT_FILLER,
     build_tool_definitions as _build_tool_definitions,
 )
 from app.voice.context import build_voice_context
 from app.voice.session import session_store
+
+QORA_TOOL_DEFINITIONS = TOOL_DEFINITIONS
 
 router = APIRouter(prefix="/voice", tags=["voice"])
 
@@ -205,6 +207,7 @@ async def _execute_tool(
     agent_slug: str | None = None,
     registry_entries: list | None = None,
     clients_dir: Any | None = None,
+    agent_tool_config: dict | None = None,
 ) -> dict:
     """Execute a tool by name and return the result dict.
 
@@ -222,6 +225,7 @@ async def _execute_tool(
             agent_slug=agent_slug,
             registry_entries=registry_entries or [],
             clients_dir=clients_dir,
+            agent_tool_config=agent_tool_config,
         )
     except ImportError:
         # Tools module not yet implemented — return safe stub
@@ -349,6 +353,11 @@ async def _stream_llm_response(
                             lead_id=lead_id,
                             agent_slug=agent_slug,
                             registry_entries=registry_entries or [],
+                            agent_tool_config=(
+                                getattr(conv_state.context, "agent_tool_config", None)
+                                if conv_state is not None and conv_state.context is not None
+                                else None
+                            ),
                         )
 
                         # After a successful load_skill, store the content in conv_state

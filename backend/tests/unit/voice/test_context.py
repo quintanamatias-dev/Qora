@@ -31,6 +31,7 @@ def make_agent(
     temperature: float = 0.7,
     max_tokens: int = 300,
     tools_enabled: str | None = None,
+    tool_config: str | dict | None = None,
 ) -> MagicMock:
     agent = MagicMock()
     agent.client_id = client_id
@@ -42,6 +43,7 @@ def make_agent(
     agent.temperature = temperature
     agent.max_tokens = max_tokens
     agent.tools_enabled = tools_enabled
+    agent.tool_config = tool_config
     return agent
 
 

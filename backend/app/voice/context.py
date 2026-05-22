@@ -18,7 +18,7 @@ Covers: VSC-1, VSC-2, VSC-3.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from app.prompts.loader import PromptLoader
@@ -67,6 +67,9 @@ class VoiceSessionContext:
     temperature: float
     max_tokens: int
     tools: list[dict] | None
+    # Parsed Agent.tool_config JSON. Required by webhook dispatch so capture_data can
+    # validate runtime arguments against the same per-agent schema used for OpenAI tools.
+    agent_tool_config: dict | None = None
     skip_lead_profile_in_assembly: bool = False
     # TTS runtime config — resolved from Agent columns (Agent-first, defaults as fallback)
     tts_speed: float = 0.95
@@ -283,6 +286,7 @@ async def build_voice_context(
         temperature=temperature,
         max_tokens=max_tokens,
         tools=tools,
+        agent_tool_config=agent_tool_config,
         skip_lead_profile_in_assembly=_agent_has_template_vars,
         tts_speed=tts_speed,
         tts_stability=tts_stability,
