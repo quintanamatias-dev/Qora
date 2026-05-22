@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 
@@ -163,6 +164,28 @@ async def update_client(
 # These DB constants remain as a legacy seed/fallback — used by seed_quintana() to
 # populate agent.system_prompt when no filesystem file existed previously.
 # ---------------------------------------------------------------------------
+
+# Phase 1 (configurable-agent-tools): Quintana capture_data tool_config.
+# Maps old register_interest car fields to capture_data schema.
+# Dual-run: capture_data added alongside legacy register_interest in tools_enabled
+# so both write paths are active during Phase 1 validation.
+# Field names match the LeadProfileFact keys used by the existing car pipeline.
+_QUINTANA_TOOL_CONFIG = {
+    "capture_data": {
+        "description": "Registrás el interés del lead y los datos del vehículo para cotización",
+        "type": "object",
+        "properties": {
+            "car_make": {"type": "string", "description": "Marca del auto"},
+            "car_model": {"type": "string", "description": "Modelo del auto"},
+            "car_year": {"type": "integer", "description": "Año del auto"},
+            "current_insurance": {
+                "type": "string",
+                "description": "Aseguradora actual del cliente (opcional)",
+            },
+        },
+        "required": ["lead_id", "car_make", "car_model", "car_year"],
+    }
+}
 
 _QUINTANA_SYSTEM_PROMPT = """\
 Sos {{agent_name}}, asesor de seguros de {{broker_name}}, una correduría argentina.
@@ -336,6 +359,18 @@ async def seed_quintana(session: AsyncSession) -> None:
     AD-2: Non-overwrite guard — only updates agent fields when they are missing or blank
     (None or empty string). Protects runtime edits made via admin UI.
     """
+    # Phase 1 (configurable-agent-tools): tools_enabled includes capture_data for dual-run.
+    # Legacy tools stay alongside capture_data so both write paths are active during
+    # Phase 1 validation. Phase 2 will remove legacy tools.
+    _QUINTANA_TOOLS_ENABLED = json.dumps([
+        "get_lead_details",
+        "register_interest",
+        "mark_not_interested",
+        "schedule_followup",
+        "capture_data",
+    ])
+    _QUINTANA_TOOL_CONFIG_JSON = json.dumps(_QUINTANA_TOOL_CONFIG)
+
     existing = await get_client(session, "quintana-seguros")
     if existing is not None:
         # AD-2: One-time migration guard — populate agent fields only when missing or blank
@@ -347,6 +382,19 @@ async def seed_quintana(session: AsyncSession) -> None:
                 updated = True
             if not agent.knowledge_base:
                 agent.knowledge_base = _QUINTANA_KNOWLEDGE_BASE
+                updated = True
+            # Phase 1: Idempotently add capture_data to tools_enabled and set tool_config
+            # only if tool_config is not yet set (non-overwrite guard).
+            if not agent.tool_config:
+                agent.tool_config = _QUINTANA_TOOL_CONFIG_JSON
+                # Also add capture_data to tools_enabled if not already present
+                try:
+                    current_tools = json.loads(agent.tools_enabled or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    current_tools = []
+                if "capture_data" not in current_tools:
+                    current_tools.append("capture_data")
+                    agent.tools_enabled = json.dumps(current_tools)
                 updated = True
             if updated:
                 await session.flush()
@@ -362,10 +410,15 @@ async def seed_quintana(session: AsyncSession) -> None:
         model="gpt-4o",
         temperature=0.7,
         max_tokens=300,
-        tools_enabled='["get_lead_details","register_interest","mark_not_interested","schedule_followup"]',
+        tools_enabled=_QUINTANA_TOOLS_ENABLED,
         system_prompt_override=_QUINTANA_SYSTEM_PROMPT,
         knowledge_base=_QUINTANA_KNOWLEDGE_BASE,
     )
+    # Set tool_config on the newly created agent
+    new_agent = await get_default_agent(session, "quintana-seguros")
+    if new_agent is not None:
+        new_agent.tool_config = _QUINTANA_TOOL_CONFIG_JSON
+        await session.flush()
     # Note: create_client() auto-creates the default Agent — no separate create_agent() needed.
 
 
