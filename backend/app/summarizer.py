@@ -53,6 +53,73 @@ from app.leads.models import Lead, LeadInterestHistory, LeadProfileFact
 
 logger = structlog.get_logger(__name__)
 
+# Terminal states from which no further status transitions are allowed.
+_TERMINAL_STATUSES: frozenset[str] = frozenset({"interested", "not_interested"})
+
+# Negative close_lead outcome classifications → not_interested
+_NEGATIVE_CLASSIFICATIONS: frozenset[str] = frozenset(
+    {"completed_negative", "do_not_contact", "hostile"}
+)
+
+
+# ---------------------------------------------------------------------------
+# Pure helper: next_action_result → lead status target
+# ---------------------------------------------------------------------------
+
+
+def apply_status_from_next_action(
+    current_status: str,
+    next_action_result: dict | None,
+) -> str | None:
+    """Map next_action_result to a target lead status.
+
+    This is a pure function — no DB access, no side effects.
+    Returns the target status string to apply, or None if no transition
+    should be attempted.
+
+    Rules (spec: lead-status-lifecycle):
+    - Only applies when current_status == "called".
+    - Terminal states (interested, not_interested) → None (no transition).
+    - "new" / any other non-called state → None.
+    - action == "close_lead":
+        - outcome.classification == "completed_positive" → "interested"
+        - outcome.classification in {completed_negative, do_not_contact, hostile} → "not_interested"
+    - action in {"follow_up", "schedule_call"} → "follow_up"
+    - action in {"retry_call", "human_review"} → None
+    - Unknown/absent action → None
+
+    Args:
+        current_status: Lead.status value (string).
+        next_action_result: Dict with "action" key (and optional "outcome" sub-dict).
+
+    Returns:
+        Target status string or None.
+    """
+    if current_status != "called":
+        return None
+
+    if not next_action_result or not isinstance(next_action_result, dict):
+        return None
+
+    action = next_action_result.get("action")
+
+    if action == "close_lead":
+        outcome = next_action_result.get("outcome") or {}
+        classification = (
+            outcome.get("classification") if isinstance(outcome, dict) else None
+        )
+        if classification == "completed_positive":
+            return "interested"
+        if classification in _NEGATIVE_CLASSIFICATIONS:
+            return "not_interested"
+        return None
+
+    if action in ("follow_up", "schedule_call"):
+        return "follow_up"
+
+    # retry_call, human_review, or unknown → no change
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Core summarizer function
@@ -796,6 +863,33 @@ async def _merge_facts_into_lead(
     # next_action ← latest suggested action
     if facts.get("next_action_suggested"):
         lead.next_action = facts["next_action_suggested"]
+
+    # configurable-agent-tools Phase 2: apply status transitions from next_action_result.
+    # Only transitions when lead.status == "called"; terminal states are guarded in
+    # apply_status_from_next_action (returns None → no transition attempted).
+    _next_action_result_for_status = facts.get("next_action_result")
+    _target_status = apply_status_from_next_action(
+        current_status=lead.status,
+        next_action_result=_next_action_result_for_status,
+    )
+    if _target_status is not None:
+        from app.leads.service import transition_lead_status as _transition
+
+        try:
+            await _transition(db, lead_id, _target_status)
+            logger.info(
+                "summarizer_status_transitioned",
+                lead_id=lead_id,
+                from_status=lead.status,
+                to_status=_target_status,
+            )
+        except Exception as _exc:
+            logger.warning(
+                "summarizer_status_transition_failed",
+                lead_id=lead_id,
+                target_status=_target_status,
+                error=str(_exc),
+            )
 
     # qora-data-corrections: apply structured corrections from pipeline
     # corrections_axis is DataCorrectionsAxis from run_data_corrections_pipeline;

@@ -3805,3 +3805,187 @@ async def test_summarizer_misc_notes_coerces_legacy_string_from_extracted_facts(
     ), f"Expected 1 coerced note from legacy str, got {received_notes}"
     assert received_notes[0].type == "other"
     assert received_notes[0].note == "Cliente interesado en plan enterprise"
+
+
+# ===========================================================================
+# Phase 2 — Task 2.1: Summarizer lifecycle tests
+# next_action_result → lead status transitions (analysis-driven)
+# ===========================================================================
+
+
+def test_apply_status_positive_outcome_transitions_to_interested():
+    """close_lead + completed_positive → lead status transitions to 'interested'.
+
+    Spec: Analysis pipeline transitions status to 'interested' when
+    action='close_lead' + outcome='completed_positive'.
+    Only applied when current lead status == 'called'.
+    """
+    from app.summarizer import apply_status_from_next_action
+
+    result = apply_status_from_next_action(
+        current_status="called",
+        next_action_result={
+            "action": "close_lead",
+            "outcome": {"classification": "completed_positive"},
+        },
+    )
+    assert result == "interested", (
+        "close_lead + completed_positive from 'called' must transition to 'interested'"
+    )
+
+
+def test_apply_status_negative_outcome_transitions_to_not_interested():
+    """close_lead + completed_negative → lead status transitions to 'not_interested'.
+
+    Spec: Analysis pipeline transitions to 'not_interested' when
+    action='close_lead' + negative/hostile/dnc outcome.
+    """
+    from app.summarizer import apply_status_from_next_action
+
+    result = apply_status_from_next_action(
+        current_status="called",
+        next_action_result={
+            "action": "close_lead",
+            "outcome": {"classification": "completed_negative"},
+        },
+    )
+    assert result == "not_interested", (
+        "close_lead + completed_negative from 'called' must transition to 'not_interested'"
+    )
+
+
+def test_apply_status_hostile_outcome_transitions_to_not_interested():
+    """close_lead + hostile outcome → 'not_interested' (triangulation case)."""
+    from app.summarizer import apply_status_from_next_action
+
+    result = apply_status_from_next_action(
+        current_status="called",
+        next_action_result={
+            "action": "close_lead",
+            "outcome": {"classification": "hostile"},
+        },
+    )
+    assert result == "not_interested"
+
+
+def test_apply_status_do_not_contact_transitions_to_not_interested():
+    """close_lead + do_not_contact → 'not_interested'."""
+    from app.summarizer import apply_status_from_next_action
+
+    result = apply_status_from_next_action(
+        current_status="called",
+        next_action_result={
+            "action": "close_lead",
+            "outcome": {"classification": "do_not_contact"},
+        },
+    )
+    assert result == "not_interested"
+
+
+def test_apply_status_follow_up_action_transitions_to_follow_up():
+    """follow_up action → lead status transitions to 'follow_up'.
+
+    Spec: Analysis pipeline transitions to 'follow_up' when
+    action='follow_up' or 'schedule_call'.
+    """
+    from app.summarizer import apply_status_from_next_action
+
+    result = apply_status_from_next_action(
+        current_status="called",
+        next_action_result={"action": "follow_up"},
+    )
+    assert result == "follow_up", (
+        "follow_up action from 'called' must transition to 'follow_up'"
+    )
+
+
+def test_apply_status_schedule_call_transitions_to_follow_up():
+    """schedule_call action → 'follow_up' (triangulation case)."""
+    from app.summarizer import apply_status_from_next_action
+
+    result = apply_status_from_next_action(
+        current_status="called",
+        next_action_result={"action": "schedule_call"},
+    )
+    assert result == "follow_up"
+
+
+def test_apply_status_retry_call_returns_none():
+    """retry_call action → no status change (returns None).
+
+    Spec: 'retry_call' leaves status as 'called'; no transition_lead_status call.
+    """
+    from app.summarizer import apply_status_from_next_action
+
+    result = apply_status_from_next_action(
+        current_status="called",
+        next_action_result={"action": "retry_call"},
+    )
+    assert result is None, (
+        "retry_call must return None (no status change)"
+    )
+
+
+def test_apply_status_human_review_returns_none():
+    """human_review action → no status change (returns None).
+
+    Spec: 'human_review' leaves status as 'called'; no transition_lead_status call.
+    """
+    from app.summarizer import apply_status_from_next_action
+
+    result = apply_status_from_next_action(
+        current_status="called",
+        next_action_result={"action": "human_review"},
+    )
+    assert result is None, (
+        "human_review must return None (no status change)"
+    )
+
+
+def test_apply_status_terminal_interested_returns_none():
+    """Lead already in 'interested' (terminal state) → no transition attempted.
+
+    Spec: Pipeline does not attempt transitions on leads not in 'called' state.
+    """
+    from app.summarizer import apply_status_from_next_action
+
+    result = apply_status_from_next_action(
+        current_status="interested",
+        next_action_result={
+            "action": "close_lead",
+            "outcome": {"classification": "completed_positive"},
+        },
+    )
+    assert result is None, (
+        "Terminal state 'interested' must prevent transition; apply_status_from_next_action must return None"
+    )
+
+
+def test_apply_status_terminal_not_interested_returns_none():
+    """Lead already in 'not_interested' (terminal state) → no transition attempted."""
+    from app.summarizer import apply_status_from_next_action
+
+    result = apply_status_from_next_action(
+        current_status="not_interested",
+        next_action_result={"action": "follow_up"},
+    )
+    assert result is None
+
+
+def test_apply_status_new_lead_returns_none():
+    """Lead in 'new' state (not yet called) → no transition attempted.
+
+    Spec: Only applies transitions when lead.status == 'called'.
+    """
+    from app.summarizer import apply_status_from_next_action
+
+    result = apply_status_from_next_action(
+        current_status="new",
+        next_action_result={
+            "action": "close_lead",
+            "outcome": {"classification": "completed_positive"},
+        },
+    )
+    assert result is None, (
+        "'new' status (not 'called') must prevent transition"
+    )
