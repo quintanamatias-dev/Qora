@@ -435,3 +435,49 @@ def test_initiation_uses_shared_build_memory_context():
         "initiation.py must NOT define '_format_confirmed_facts' inline. "
         "T32 refactor must delete this function — it's now in app/memory.py."
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 1.6 — call_count increment moved to initiation
+# Design: initiation.py is the canonical "call started" event
+# ---------------------------------------------------------------------------
+
+
+async def test_initiation_increments_call_count(app_client: AsyncClient):
+    """POST /initiation increments lead.call_count and sets last_called_at.
+
+    Task 1.6: call_count increment MOVED from get_lead_details to initiation.
+    initiation.py is the canonical "call started" event.
+
+    GIVEN a lead with call_count=0
+    WHEN POST /initiation is called
+    THEN lead.call_count == 1
+    AND lead.last_called_at is set
+    """
+    from app.core import database as db_module
+    from app.leads.service import get_lead
+
+    # Verify baseline
+    async with db_module.async_session_factory() as sess:
+        lead_before = await get_lead(sess, "lead-quintana-001")
+        count_before = lead_before.call_count
+
+    response = await app_client.post(
+        "/api/v1/voice/initiation",
+        json={
+            "client_id": "quintana-seguros",
+            "lead_id": "lead-quintana-001",
+        },
+    )
+    assert response.status_code == 200
+
+    async with db_module.async_session_factory() as sess:
+        lead_after = await get_lead(sess, "lead-quintana-001")
+
+    assert lead_after.call_count == count_before + 1, (
+        f"initiation must increment call_count. "
+        f"Was {count_before}, expected {count_before + 1}, got {lead_after.call_count}"
+    )
+    assert lead_after.last_called_at is not None, (
+        "initiation must set last_called_at"
+    )

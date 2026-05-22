@@ -9,6 +9,8 @@ Covers: CAP-2 pre-call lead injection, CAP-6 memory injection.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import structlog
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -152,6 +154,15 @@ async def initiation_webhook(
                 confirmed_facts = memory["confirmed_facts"]
                 is_returning_caller = memory["is_returning_caller"]
                 call_number = memory["call_number"]
+
+                # Task 1.6 (configurable-agent-tools): Increment call_count and set
+                # last_called_at here — initiation is the canonical "call started" event.
+                # Previously done in get_lead_details (violating least-surprise for a
+                # query tool). Incrementing here keeps side-effects with the status
+                # transition and avoids double-counting on retried get_lead_details calls.
+                lead.call_count = (lead.call_count or 0) + 1
+                lead.last_called_at = datetime.now(timezone.utc)
+                await session.flush()
 
                 # Transition lead to 'called' (idempotent if already called)
                 try:
