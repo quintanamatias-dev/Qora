@@ -744,3 +744,75 @@ def test_capture_data_is_valid_tool_name():
         tools_enabled=["get_lead_details", "capture_data"],
     )
     assert "capture_data" in agent.tools_enabled
+
+
+# ---------------------------------------------------------------------------
+# Task 2.4 — Deprecation warnings / auto-strip for legacy tools
+# Spec: Deprecated tool names stripped on agent load with warning logged
+# ---------------------------------------------------------------------------
+
+
+def test_strip_deprecated_tools_removes_legacy_tools():
+    """strip_deprecated_tools removes register_interest, mark_not_interested,
+    schedule_followup from a tools list, returning only valid tools.
+
+    Spec: unknown names stripped with deprecation warning logged; agent continues.
+    """
+    from app.agents.schemas import strip_deprecated_tools
+
+    result = strip_deprecated_tools(
+        ["register_interest", "mark_not_interested", "schedule_followup", "get_lead_details"]
+    )
+    # Legacy tools must be removed
+    assert "register_interest" not in result
+    assert "mark_not_interested" not in result
+    assert "schedule_followup" not in result
+    # Valid tool preserved
+    assert "get_lead_details" in result
+
+
+def test_strip_deprecated_tools_preserves_valid_tools():
+    """strip_deprecated_tools does not remove valid tools (triangulation)."""
+    from app.agents.schemas import strip_deprecated_tools
+
+    result = strip_deprecated_tools(
+        ["get_lead_details", "capture_data", "get_lead_profile"]
+    )
+    assert result == ["get_lead_details", "capture_data", "get_lead_profile"]
+
+
+def test_strip_deprecated_tools_empty_list_returns_empty():
+    """strip_deprecated_tools handles empty list gracefully."""
+    from app.agents.schemas import strip_deprecated_tools
+
+    result = strip_deprecated_tools([])
+    assert result == []
+
+
+def test_strip_deprecated_tools_all_legacy_returns_empty():
+    """strip_deprecated_tools with all-legacy list returns empty list."""
+    from app.agents.schemas import strip_deprecated_tools
+
+    result = strip_deprecated_tools(
+        ["register_interest", "mark_not_interested", "schedule_followup"]
+    )
+    assert result == []
+
+
+def test_legacy_tools_rejected_in_api_create():
+    """AgentCreate API schema rejects legacy tool names (hard validation, not strip).
+
+    Spec: auto-strip is for agent LOAD from DB; API validation still rejects legacy names.
+    """
+    from app.agents.schemas import AgentCreate
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentCreate(
+            slug="test",
+            name="Test",
+            voice_id="v1",
+            tools_enabled=["get_lead_details", "register_interest"],
+        )
+    assert "register_interest" in str(exc_info.value)

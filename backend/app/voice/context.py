@@ -243,6 +243,13 @@ async def build_voice_context(
             except (json.JSONDecodeError, TypeError):
                 enabled_names = []
 
+        # Strip deprecated tool names from DB with deprecation warning (Phase 2).
+        # Agents that still have register_interest/mark_not_interested/schedule_followup
+        # in their stored tools_enabled continue operating with the remaining tools.
+        from app.agents.schemas import strip_deprecated_tools as _strip_deprecated
+
+        enabled_names = _strip_deprecated(enabled_names)
+
         # Inject load_skill unconditionally when the agent has registry entries
         if skill_registry_entries and "load_skill" not in enabled_names:
             enabled_names = list(enabled_names) + ["load_skill"]
