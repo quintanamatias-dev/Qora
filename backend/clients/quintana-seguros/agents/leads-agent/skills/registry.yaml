@@ -1,0 +1,10 @@
+skills:
+  - name: auto-insurance-knowledge
+    description: "Tipos de cobertura de auto en Argentina, rol de Quintana como broker, aseguradoras con las que trabaja, factores que afectan el precio, y flujo post-llamada de recolección de datos."
+    trigger_hint: "Cuando el lead pregunta sobre coberturas, tipos de seguro, si es obligatorio, qué aseguradoras trabajan, qué diferencia hay entre todo riesgo y terceros, o qué pasa después de la llamada."
+    filler_text: "Dejame buscar esa información..."
+
+  - name: lead-qualification
+    description: "Guía de recolección de datos para cotización de auto: qué datos pedir, por qué, cómo preguntar, orden recomendado, manejo de respuestas incompletas, y señales de lead no interesado."
+    trigger_hint: "Cuando necesitás orientación sobre qué dato recolectar, cómo preguntar por un dato, cómo manejar un 'no sé', o cómo cerrar con un lead que no está interesado."
+    filler_text: "Un momento, consulto..."
