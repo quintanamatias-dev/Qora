@@ -68,8 +68,21 @@ async def capture_data(
 
     capture_config = tool_config["capture_data"]
 
+    # Normalize schema location: support both nested {"parameters": {...}} and flat format.
+    # Resolve a single source block to avoid split-source bugs where required and
+    # properties come from different dicts when a malformed config has both nested
+    # and flat keys.  Use ``is not None`` checks so valid empty values (e.g. [])
+    # are not skipped by truthiness.
+    _params_block = capture_config.get("parameters") if isinstance(capture_config.get("parameters"), dict) else None
+    _source = _params_block if _params_block is not None else capture_config
+
+    _raw_required = _source.get("required")
+    schema_required: list[str] = list(_raw_required) if _raw_required is not None else []
+
+    _raw_properties = _source.get("properties")
+    schema_properties: dict = dict(_raw_properties) if _raw_properties is not None else {}
+
     # Extract required fields from schema (excluding lead_id — always implicit)
-    schema_required: list[str] = list(capture_config.get("required", []))
     required_data_fields = [f for f in schema_required if f != "lead_id"]
 
     # Validate: all required data fields must be present and non-None
@@ -85,30 +98,38 @@ async def capture_data(
         # Same response as not found — no information leakage
         return {"error": "lead_not_found"}
 
-    # Determine which fields to write: only fields that are present in captured_fields
-    # (optional fields are skipped if not provided)
+    # Determine which fields to write: only fields present in captured_fields
+    # AND declared in the schema properties. Hallucinated fields from the LLM
+    # (not in schema) are silently dropped to avoid polluting LeadProfileFact.
     fields_to_write = [
         (field_name, captured_fields[field_name])
         for field_name in captured_fields
-        if field_name != "lead_id" and captured_fields[field_name] is not None
+        if field_name != "lead_id"
+        and captured_fields[field_name] is not None
+        and field_name in schema_properties
     ]
 
     now = _utcnow()
+
+    # Batch-load all existing active captured: facts for this lead in one query
+    # to avoid N+1 selects (one per field).
+    _existing_result = await session.execute(
+        select(LeadProfileFact).where(
+            LeadProfileFact.lead_id == lead_id,
+            LeadProfileFact.fact_key.startswith("captured:"),
+            LeadProfileFact.superseded_at == None,  # noqa: E711
+        )
+    )
+    _existing_facts: dict[str, LeadProfileFact] = {
+        fact.fact_key: fact for fact in _existing_result.scalars().all()
+    }
 
     # Upsert each captured field as a LeadProfileFact with "captured:" prefix
     for field_name, field_value in fields_to_write:
         fact_key = f"captured:{field_name}"
         fact_value = str(field_value)
 
-        # Supersede any existing active row for this key
-        existing_result = await session.execute(
-            select(LeadProfileFact).where(
-                LeadProfileFact.lead_id == lead_id,
-                LeadProfileFact.fact_key == fact_key,
-                LeadProfileFact.superseded_at == None,  # noqa: E711
-            )
-        )
-        existing = existing_result.scalar_one_or_none()
+        existing = _existing_facts.get(fact_key)
 
         if existing is not None:
             if existing.fact_value == fact_value:

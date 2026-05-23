@@ -119,7 +119,7 @@ def build_capture_data_definition(tool_config: dict) -> dict | None:
     if not isinstance(parameters, dict):
         # Fallback: treat the whole capture_config as the parameters block
         # (supports both {"parameters": {...}} and flat schema formats)
-        if isinstance(capture_config, dict) and "type" in capture_config:
+        if isinstance(capture_config, dict) and "type" in capture_config and "properties" in capture_config:
             parameters = capture_config
         else:
             logger.warning(
@@ -142,7 +142,7 @@ def build_capture_data_definition(tool_config: dict) -> dict | None:
             "name": "capture_data",
             "description": description,
             "parameters": {
-                **parameters,
+                "type": parameters.get("type", "object"),
                 "properties": props,
                 "required": required,
             },

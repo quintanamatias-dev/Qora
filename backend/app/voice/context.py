@@ -30,6 +30,26 @@ if TYPE_CHECKING:
     from app.leads.models import Lead
 
 
+def parse_agent_tool_config(agent: "Agent") -> dict | None:
+    """Parse agent.tool_config (JSON TEXT column) into a dict.
+
+    Centralises the parsing logic so webhook.py and context.py never diverge.
+
+    Returns:
+        Parsed dict, or None if the column is absent, empty, or not valid JSON/dict.
+    """
+    raw = getattr(agent, "tool_config", None)
+    if not raw:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # VoiceSessionContext — immutable per-session context
 # ---------------------------------------------------------------------------
@@ -232,6 +252,7 @@ async def build_voice_context(
     # tools_enabled lists. A demo agent seeded with tools_enabled="[]" would otherwise
     # be unable to call load_skill even when a registry.yaml is present (CRITICAL-1 fix).
     tools: list[dict] | None = None
+    agent_tool_config: dict | None = None
     tools_enabled_str = getattr(agent, "tools_enabled", None)
     try:
         from app.tools.registry import build_tool_definitions as _build_tool_definitions
@@ -256,18 +277,7 @@ async def build_voice_context(
 
         # Parse agent's tool_config (JSON TEXT column → dict) for dynamic tool schemas
         # Used by capture_data to get the per-agent parameters schema.
-        _agent_tool_config_raw = getattr(agent, "tool_config", None)
-        agent_tool_config: dict | None = None
-        if _agent_tool_config_raw:
-            if isinstance(_agent_tool_config_raw, dict):
-                agent_tool_config = _agent_tool_config_raw
-            else:
-                try:
-                    parsed_tc = json.loads(_agent_tool_config_raw)
-                    if isinstance(parsed_tc, dict):
-                        agent_tool_config = parsed_tc
-                except (json.JSONDecodeError, TypeError):
-                    pass
+        agent_tool_config = parse_agent_tool_config(agent)
 
         tools = _build_tool_definitions(enabled_names, agent_tool_config=agent_tool_config)
     except ImportError:

@@ -51,7 +51,7 @@ from app.tools.registry import (
     DEFAULT_FILLER,
     build_tool_definitions as _build_tool_definitions,
 )
-from app.voice.context import build_voice_context
+from app.voice.context import build_voice_context, parse_agent_tool_config
 from app.voice.session import session_store
 
 QORA_TOOL_DEFINITIONS = TOOL_DEFINITIONS
@@ -253,6 +253,7 @@ async def _stream_llm_response(
     agent_slug: str | None = None,
     registry_entries: "list | None" = None,
     conv_state: "ConversationState | None" = None,
+    agent_tool_config: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     """Generate SSE chunks from GPT-4o, handling tool calls mid-stream.
 
@@ -346,6 +347,14 @@ async def _stream_llm_response(
                             # before the tool call blocks the stream.
                             await asyncio.sleep(FILLER_PAUSE_SECONDS)
 
+                        # Resolve agent_tool_config: prefer explicit parameter (covers
+                        # the per-turn fallback path where conv_state.context is None),
+                        # then fall back to cached context.
+                        _resolved_tool_config = agent_tool_config or (
+                            getattr(conv_state.context, "agent_tool_config", None)
+                            if conv_state is not None and conv_state.context is not None
+                            else None
+                        )
                         tool_result = await _execute_tool(
                             event.function_name,
                             args,
@@ -353,11 +362,7 @@ async def _stream_llm_response(
                             lead_id=lead_id,
                             agent_slug=agent_slug,
                             registry_entries=registry_entries or [],
-                            agent_tool_config=(
-                                getattr(conv_state.context, "agent_tool_config", None)
-                                if conv_state is not None and conv_state.context is not None
-                                else None
-                            ),
+                            agent_tool_config=_resolved_tool_config,
                         )
 
                         # After a successful load_skill, store the content in conv_state
@@ -759,6 +764,8 @@ async def _process_custom_llm_request(
     client_orm = None
     # Pre-built context for new sessions (set by the NEW SESSION PATH branch below)
     _new_session_context: "VoiceSessionContext | None" = None
+    # Resolved agent_tool_config — set from cached context or per-turn fallback parse
+    _agent_tool_config_resolved: dict | None = None
     # True when build_voice_context was used (not the per-turn render_for_agent fallback)
     _used_voice_context = False
     # agent_slug + registry_entries for load_skill tool routing (Phase 2)
@@ -779,6 +786,7 @@ async def _process_custom_llm_request(
         # Extract skill routing data from context (Phase 2)
         _agent_slug = ctx.agent_slug
         _registry_entries = list(ctx.skill_registry_entries)
+        _agent_tool_config_resolved = ctx.agent_tool_config
 
         # Still need a valid api_key — already retrieved above
         # Validate tenant is accessible (minimal check — context was already built)
@@ -839,6 +847,7 @@ async def _process_custom_llm_request(
                         # Phase 2: extract skill routing data
                         _agent_slug = getattr(agent, "slug", None)
                         _registry_entries = list(lazy_ctx.skill_registry_entries)
+                        _agent_tool_config_resolved = lazy_ctx.agent_tool_config
                     except Exception as exc:
                         structlog.get_logger().warning(
                             "voice_context_lazy_build_failed",
@@ -875,6 +884,7 @@ async def _process_custom_llm_request(
                     # Phase 2: extract skill routing data
                     _agent_slug = getattr(agent, "slug", None)
                     _registry_entries = list(new_ctx.skill_registry_entries)
+                    _agent_tool_config_resolved = new_ctx.agent_tool_config
                 except Exception as exc:
                     structlog.get_logger().warning(
                         "voice_context_new_session_build_failed",
@@ -916,8 +926,20 @@ async def _process_custom_llm_request(
                 )
                 if _tools_enabled_str:
                     try:
-                        enabled_tool_names = json.loads(_tools_enabled_str)
-                        tools = _build_tool_definitions(enabled_tool_names)
+                        from app.agents.schemas import strip_deprecated_tools as _strip_deprecated
+
+                        enabled_tool_names = _strip_deprecated(json.loads(_tools_enabled_str))
+
+                        # Parse agent.tool_config so capture_data gets its dynamic schema
+                        _fallback_tool_config: dict | None = None
+                        if agent is not None:
+                            _fallback_tool_config = parse_agent_tool_config(agent)
+
+                        _agent_tool_config_resolved = _fallback_tool_config
+                        tools = _build_tool_definitions(
+                            enabled_tool_names,
+                            agent_tool_config=_fallback_tool_config,
+                        )
                     except (json.JSONDecodeError, TypeError):
                         tools = None
 
@@ -1060,6 +1082,7 @@ async def _process_custom_llm_request(
                 agent_slug=_agent_slug,
                 registry_entries=_registry_entries,
                 conv_state=conv_state,
+                agent_tool_config=_agent_tool_config_resolved,
             ):
                 yield chunk
         except Exception as exc:
