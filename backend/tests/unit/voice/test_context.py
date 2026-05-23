@@ -11,6 +11,7 @@ Covers spec scenarios:
 
 from __future__ import annotations
 
+import builtins
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -804,3 +805,156 @@ async def test_build_voice_context_excludes_capture_data_when_tool_config_missin
         assert "capture_data" not in tool_names, (
             "capture_data must be excluded when tool_config is NULL"
         )
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_logs_and_continues_when_skills_index_fails():
+    """Skill index loading failure must not block system prompt construction."""
+    from app.voice.context import build_voice_context
+
+    agent = make_agent()
+    client = make_client()
+    mock_db = AsyncMock()
+
+    with patch("app.voice.context.PromptLoader") as MockLoader, patch(
+        "app.voice.context.logger"
+    ) as mock_logger:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="prompt")
+        mock_instance.load_agent_skills = AsyncMock(side_effect=RuntimeError("registry down"))
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=None,
+            db=mock_db,
+            client=client,
+        )
+
+    assert result.system_prompt == "prompt"
+    assert result.skills_index is None
+    mock_logger.warning.assert_any_call(
+        "voice_context_skills_index_load_failed",
+        agent_id=agent.id,
+        agent_name="Aria",
+        agent_slug="aria",
+        client_id="acme",
+        error_type="RuntimeError",
+        error_msg="registry down",
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_logs_and_continues_when_registry_entries_fail():
+    """Registry entry loading failure degrades to an empty allowlist."""
+    from app.voice.context import build_voice_context
+
+    agent = make_agent()
+    client = make_client()
+    mock_db = AsyncMock()
+
+    with patch("app.voice.context.PromptLoader") as MockLoader, patch(
+        "app.voice.context.logger"
+    ) as mock_logger:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="prompt")
+        mock_instance.load_agent_skills = AsyncMock(return_value="## Available Skills")
+        mock_instance.load_skill_registry_entries = AsyncMock(side_effect=OSError("bad yaml"))
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=None,
+            db=mock_db,
+            client=client,
+        )
+
+    assert result.system_prompt == "prompt"
+    assert result.skills_index == "## Available Skills"
+    assert result.skill_registry_entries == ()
+    mock_logger.warning.assert_any_call(
+        "voice_context_skill_registry_entries_load_failed",
+        agent_id=agent.id,
+        agent_name="Aria",
+        agent_slug="aria",
+        client_id="acme",
+        error_type="OSError",
+        error_msg="bad yaml",
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_logs_malformed_tools_enabled_json():
+    """Malformed tools_enabled JSON degrades to no tools with a warning."""
+    from app.voice.context import build_voice_context
+
+    agent = make_agent(tools_enabled="not-json")
+    client = make_client()
+    mock_db = AsyncMock()
+
+    with patch("app.voice.context.PromptLoader") as MockLoader, patch(
+        "app.voice.context.logger"
+    ) as mock_logger:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="prompt")
+        mock_instance.load_agent_skills = AsyncMock(return_value="")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=None,
+            db=mock_db,
+            client=client,
+        )
+
+    assert result.tools is None
+    mock_logger.warning.assert_any_call(
+        "voice_context_tools_enabled_malformed",
+        agent_id=agent.id,
+        agent_name="Aria",
+        agent_slug="aria",
+        client_id="acme",
+        error="invalid_json",
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_logs_tool_helper_import_error():
+    """Tool helper import errors degrade tools and agent_tool_config to None."""
+    from app.voice.context import build_voice_context
+
+    agent = make_agent(tools_enabled='["get_lead_details"]', tool_config={"capture_data": {}})
+    client = make_client()
+    mock_db = AsyncMock()
+    original_import = builtins.__import__
+
+    def import_with_registry_failure(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "app.tools.registry":
+            raise ImportError("registry unavailable")
+        return original_import(name, globals, locals, fromlist, level)
+
+    with patch("app.voice.context.PromptLoader") as MockLoader, patch(
+        "app.voice.context.logger"
+    ) as mock_logger, patch("builtins.__import__", side_effect=import_with_registry_failure):
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="prompt")
+        mock_instance.load_agent_skills = AsyncMock(return_value="")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=None,
+            db=mock_db,
+            client=client,
+        )
+
+    assert result.tools is None
+    assert result.agent_tool_config is None
+    mock_logger.warning.assert_any_call(
+        "voice_context_tool_helpers_import_failed",
+        agent_id=agent.id,
+        agent_name="Aria",
+        agent_slug="aria",
+        client_id="acme",
+        error_type="ImportError",
+        error_msg="registry unavailable",
+    )

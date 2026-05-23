@@ -21,6 +21,8 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import structlog
+
 from app.prompts.loader import PromptLoader
 from app.prompts.skill_loader import SkillRegistryEntry
 
@@ -28,6 +30,18 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from app.tenants.models import Agent, Client
     from app.leads.models import Lead
+
+
+logger = structlog.get_logger()
+
+
+def _agent_log_fields(agent: "Agent") -> dict:
+    return {
+        "agent_id": getattr(agent, "id", None),
+        "agent_name": getattr(agent, "name", None),
+        "agent_slug": getattr(agent, "slug", None),
+        "client_id": getattr(agent, "client_id", None),
+    }
 
 
 def parse_agent_tool_config(agent: "Agent") -> dict | None:
@@ -190,7 +204,16 @@ async def build_voice_context(
 
     # Load skills registry index — returns ## Available Skills block or '' if no registry
     # The old glob-all behavior is REMOVED. No registry.yaml → no skills.
-    _skills_raw = await loader.load_agent_skills(client_id, agent_slug)
+    try:
+        _skills_raw = await loader.load_agent_skills(client_id, agent_slug)
+    except Exception as exc:  # noqa: BLE001 - skills are optional context, not critical path
+        logger.warning(
+            "voice_context_skills_index_load_failed",
+            **_agent_log_fields(agent),
+            error_type=type(exc).__name__,
+            error_msg=str(exc),
+        )
+        _skills_raw = ""
     # Normalize: empty string → None (no block injected into prompt)
     skills_index: str | None = _skills_raw if _skills_raw else None
     # skills_content is always None in registry mode
@@ -198,7 +221,16 @@ async def build_voice_context(
 
     # Load registry entries (raw objects) for load_skill allowlist validation
     # Stored as a tuple (frozen dataclass requires hashable types)
-    _registry_entries_list = await loader.load_skill_registry_entries(client_id, agent_slug)
+    try:
+        _registry_entries_list = await loader.load_skill_registry_entries(client_id, agent_slug)
+    except Exception as exc:  # noqa: BLE001 - registry entries degrade to no load_skill allowlist
+        logger.warning(
+            "voice_context_skill_registry_entries_load_failed",
+            **_agent_log_fields(agent),
+            error_type=type(exc).__name__,
+            error_msg=str(exc),
+        )
+        _registry_entries_list = []
     skill_registry_entries: tuple[SkillRegistryEntry, ...] = tuple(_registry_entries_list)
 
     # Extract misc_notes from lead.extracted_facts
@@ -262,6 +294,11 @@ async def build_voice_context(
             try:
                 enabled_names = json.loads(tools_enabled_str)
             except (json.JSONDecodeError, TypeError):
+                logger.warning(
+                    "voice_context_tools_enabled_malformed",
+                    **_agent_log_fields(agent),
+                    error="invalid_json",
+                )
                 enabled_names = []
 
         # Strip deprecated tool names from DB with deprecation warning (Phase 2).
@@ -280,8 +317,15 @@ async def build_voice_context(
         agent_tool_config = parse_agent_tool_config(agent)
 
         tools = _build_tool_definitions(enabled_names, agent_tool_config=agent_tool_config)
-    except ImportError:
+    except ImportError as exc:
+        logger.warning(
+            "voice_context_tool_helpers_import_failed",
+            **_agent_log_fields(agent),
+            error_type=type(exc).__name__,
+            error_msg=str(exc),
+        )
         tools = None
+        agent_tool_config = None
 
     # TTS config — Agent columns are authoritative; fall back to module defaults when NULL/absent
     tts_speed = getattr(agent, "tts_speed", None)

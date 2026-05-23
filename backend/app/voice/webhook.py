@@ -56,6 +56,11 @@ from app.voice.session import session_store
 
 QORA_TOOL_DEFINITIONS = TOOL_DEFINITIONS
 
+SAFE_CONTEXT_RENDER_FAILURE_PROMPT = (
+    "Sos un asistente de voz. Disculpate brevemente y deci que hay un "
+    "inconveniente tecnico temporal. No inventes detalles ni prometas acciones."
+)
+
 router = APIRouter(prefix="/voice", tags=["voice"])
 
 
@@ -768,6 +773,7 @@ async def _process_custom_llm_request(
     _agent_tool_config_resolved: dict | None = None
     # True when build_voice_context was used (not the per-turn render_for_agent fallback)
     _used_voice_context = False
+    _context_render_failed = False
     # agent_slug + registry_entries for load_skill tool routing (Phase 2)
     _agent_slug: str | None = None
     _registry_entries: "list" = []
@@ -899,6 +905,13 @@ async def _process_custom_llm_request(
             # If context is still not set (lazy build failed, no agent, or new session build
             # failed), use per-turn render_for_agent as fallback
             if not system_content:
+                structlog.get_logger().warning(
+                    "voice_context_per_turn_fallback_used",
+                    client_id=client_id,
+                    conversation_id=conversation_id,
+                    has_agent=agent is not None,
+                    has_conv_state=conv_state is not None,
+                )
                 # Build system prompt inside the DB session block so render() can query
                 # memory (call_history, confirmed_facts) via build_memory_context(db, lead).
                 #
@@ -908,17 +921,30 @@ async def _process_custom_llm_request(
                 # 3. Filesystem prompt.md / JAUMPABLO template
                 #
                 # Use explicit None check so empty string override ("") is respected.
-                if agent is not None:
-                    system_content = await PromptLoader().render_for_agent(
-                        agent, lead, db=db, client=client_orm
+                try:
+                    if agent is not None:
+                        system_content = await PromptLoader().render_for_agent(
+                            agent, lead, db=db, client=client_orm
+                        )
+                    else:
+                        # No Agent yet (pre-migration path) — fall back to client-based rendering
+                        system_content = (
+                            client_orm.system_prompt_override
+                            if client_orm.system_prompt_override is not None
+                            else await PromptLoader().render(client_orm, lead, db=db)
+                        )
+                except Exception as exc:  # noqa: BLE001 - final context fallback must stream safely
+                    structlog.get_logger().warning(
+                        "voice_context_per_turn_fallback_render_failed",
+                        client_id=client_id,
+                        conversation_id=conversation_id,
+                        agent_id=getattr(agent, "id", None),
+                        agent_name=getattr(agent, "name", None),
+                        error_type=type(exc).__name__,
+                        error_msg=str(exc),
                     )
-                else:
-                    # No Agent yet (pre-migration path) — fall back to client-based rendering
-                    system_content = (
-                        client_orm.system_prompt_override
-                        if client_orm.system_prompt_override is not None
-                        else await PromptLoader().render(client_orm, lead, db=db)
-                    )
+                    _context_render_failed = True
+                    system_content = SAFE_CONTEXT_RENDER_FAILURE_PROMPT
 
                 # Parse tools from agent config (Phase 7) or client config (legacy)
                 _tools_enabled_str = (
@@ -941,6 +967,13 @@ async def _process_custom_llm_request(
                             agent_tool_config=_fallback_tool_config,
                         )
                     except (json.JSONDecodeError, TypeError):
+                        structlog.get_logger().warning(
+                            "voice_context_per_turn_tools_enabled_malformed",
+                            client_id=client_id,
+                            conversation_id=conversation_id,
+                            agent_id=getattr(agent, "id", None),
+                            agent_name=getattr(agent, "name", None),
+                        )
                         tools = None
 
                 # Set up model/temp/tokens from agent config
@@ -977,7 +1010,7 @@ async def _process_custom_llm_request(
             # Agent with static system_prompt (no {{variable}} placeholders)
             or (agent is not None and agent.system_prompt and not _agent_has_template_vars)
         )
-        if _has_static_prompt and lead is not None:
+        if _has_static_prompt and lead is not None and not _context_render_failed:
             lead_context = (
                 f"\n[CONTEXTO DEL LEAD]\n"
                 f"Nombre: {lead.name}\n"
