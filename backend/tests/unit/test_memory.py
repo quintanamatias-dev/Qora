@@ -293,13 +293,13 @@ async def test_confirmed_facts_empty_when_extracted_facts_none_or_empty(seeded_d
 
 
 # ---------------------------------------------------------------------------
-# T07 — confirmed_facts fixed order: current_insurance, interest_level, next_action_suggested
+# T07 — confirmed_facts disabled for context hygiene
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_confirmed_facts_fixed_order(seeded_db):
-    """confirmed_facts renders keys in order: current_insurance, interest_level, next_action_suggested."""
+async def test_confirmed_facts_disabled_ignores_extracted_facts(seeded_db):
+    """confirmed_facts stays empty and does not inject extracted_facts."""
     from app.memory import build_memory_context
     from app.leads.service import get_lead
 
@@ -314,22 +314,7 @@ async def test_confirmed_facts_fixed_order(seeded_db):
         }
         ctx = await build_memory_context(sess, lead)
 
-    facts = ctx["confirmed_facts"]
-    pos_insurance = facts.find("Seguro actual: La Caja")
-    pos_interest = facts.find("Nivel de interés: 80/100")
-    pos_action = facts.find("Acción sugerida: enviar_cotizacion")
-
-    assert pos_insurance != -1, "current_insurance missing from confirmed_facts"
-    assert pos_interest != -1, "interest_level missing from confirmed_facts"
-    assert pos_action != -1, "next_action_suggested missing from confirmed_facts"
-
-    # Verify ordering: insurance < interest < action
-    assert (
-        pos_insurance < pos_interest
-    ), "current_insurance should appear before interest_level"
-    assert (
-        pos_interest < pos_action
-    ), "interest_level should appear before next_action_suggested"
+    assert ctx["confirmed_facts"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -841,8 +826,8 @@ async def _insert_interest_history_mem(
 
 
 @pytest.mark.asyncio
-async def test_confirmed_facts_includes_accumulated_profile_facts(seeded_db):
-    """Issue #36 Phase 3: build_memory_context includes accumulated profile facts in confirmed_facts.
+async def test_confirmed_facts_excludes_accumulated_profile_facts(seeded_db):
+    """Context hygiene: build_memory_context no longer injects profile facts.
 
     GIVEN a lead with 3 active 'profile:' facts and 2 active 'pain:' facts
     WHEN build_memory_context(db, lead) is called
@@ -880,19 +865,12 @@ async def test_confirmed_facts_includes_accumulated_profile_facts(seeded_db):
         assert lead is not None
         ctx = await build_memory_context(sess, lead)
 
-    # The confirmed_facts must contain the accumulated facts
-    confirmed = ctx["confirmed_facts"]
-    assert (
-        "married" in confirmed
-    ), f"Expected 'married' in confirmed_facts, got: {confirmed!r}"
-    assert "has 2 children" in confirmed, "Expected 'has 2 children' in confirmed_facts"
-    assert "high premiums" in confirmed, "Expected 'high premiums' in confirmed_facts"
-    assert "no coverage" in confirmed, "Expected 'no coverage' in confirmed_facts"
+    assert ctx["confirmed_facts"] == ""
 
 
 @pytest.mark.asyncio
-async def test_confirmed_facts_token_budget_caps_at_10_per_namespace(seeded_db):
-    """Issue #36 Phase 3: build_memory_context caps accumulated facts at 10 per namespace.
+async def test_confirmed_facts_profile_facts_stay_disabled_even_with_many_rows(seeded_db):
+    """Context hygiene: profile facts do not enter confirmed_facts.
 
     GIVEN a lead with 15 active 'profile:' facts
     WHEN build_memory_context(db, lead) is called
@@ -919,18 +897,7 @@ async def test_confirmed_facts_token_budget_caps_at_10_per_namespace(seeded_db):
         assert lead is not None
         ctx = await build_memory_context(sess, lead)
 
-    confirmed = ctx["confirmed_facts"]
-    # Count how many unique 'fact number X' items appear using exact item matching
-    # We look for items by their exact value; use word-boundary-like check with prefix/suffix
-    count = sum(
-        1
-        for i in range(15)
-        if f"fact number {i}," in confirmed or confirmed.endswith(f"fact number {i}")
-    )
-    assert (
-        count <= 10
-    ), f"Expected at most 10 profile: facts, found {count} in confirmed_facts"
-    assert count >= 1, "Expected at least 1 profile: fact to appear"
+    assert ctx["confirmed_facts"] == ""
 
 
 @pytest.mark.asyncio
@@ -964,12 +931,7 @@ async def test_confirmed_facts_no_fallback_to_extracted_facts_json(seeded_db):
         ctx = await build_memory_context(sess, lead)
 
     confirmed = ctx["confirmed_facts"]
-    # The legacy section (current_insurance from extracted_facts) is still present
-    assert "La Caja" in confirmed, "Legacy scalar facts should still be present"
-    # But there must be no 'Perfil acumulado' / accumulated section if no profile facts exist
-    assert (
-        "Perfil acumulado" not in confirmed
-    ), "Accumulated section must NOT appear when there are no LeadProfileFact rows"
+    assert confirmed == ""
 
 
 @pytest.mark.asyncio
@@ -1018,8 +980,8 @@ async def test_call_history_and_call_number_unchanged_after_profile_facts(seeded
 
 
 @pytest.mark.asyncio
-async def test_confirmed_facts_includes_interest_history_evolution(seeded_db):
-    """CRITICAL 1: build_memory_context includes LeadInterestHistory in confirmed_facts.
+async def test_confirmed_facts_excludes_interest_history_evolution(seeded_db):
+    """Context hygiene: build_memory_context no longer injects interest history.
 
     GIVEN a lead with 3 LeadInterestHistory rows (oldest to newest: 75, 60, 85)
     WHEN build_memory_context(db, lead) is called
@@ -1056,22 +1018,12 @@ async def test_confirmed_facts_includes_interest_history_evolution(seeded_db):
         assert lead is not None
         ctx = await build_memory_context(sess, lead)
 
-    confirmed = ctx["confirmed_facts"]
-    assert (
-        "Evolución de interés:" in confirmed
-    ), f"Expected 'Evolución de interés:' in confirmed_facts, got: {confirmed!r}"
-    assert "75" in confirmed, f"Expected '75' in interest evolution, got: {confirmed!r}"
-    assert "60" in confirmed, f"Expected '60' in interest evolution, got: {confirmed!r}"
-    assert "85" in confirmed, f"Expected '85' in interest evolution, got: {confirmed!r}"
-    # Verify the arrow format exists
-    assert (
-        "→" in confirmed
-    ), f"Expected '→' separator in interest evolution, got: {confirmed!r}"
+    assert ctx["confirmed_facts"] == ""
 
 
 @pytest.mark.asyncio
-async def test_confirmed_facts_interest_history_capped_at_5(seeded_db):
-    """CRITICAL 1 triangulation: Interest history is capped at 5 entries.
+async def test_confirmed_facts_interest_history_stays_disabled_with_many_rows(seeded_db):
+    """Context hygiene: interest history does not enter confirmed_facts.
 
     GIVEN a lead with 8 LeadInterestHistory rows
     WHEN build_memory_context(db, lead) is called
@@ -1098,20 +1050,7 @@ async def test_confirmed_facts_interest_history_capped_at_5(seeded_db):
         assert lead is not None
         ctx = await build_memory_context(sess, lead)
 
-    confirmed = ctx["confirmed_facts"]
-    assert (
-        "Evolución de interés:" in confirmed
-    ), f"Expected 'Evolución de interés:' in confirmed_facts, got: {confirmed!r}"
-    # Find the evolution line and count the arrows
-    for line in confirmed.split("\n"):
-        if "Evolución de interés:" in line:
-            # Count number of data points: N arrows = N+1 values, so count by →
-            arrow_count = line.count("→")
-            assert arrow_count <= 4, (
-                f"Expected at most 4 arrows (5 values) in interest evolution, "
-                f"got {arrow_count + 1} values: {line!r}"
-            )
-            break
+    assert ctx["confirmed_facts"] == ""
 
 
 @pytest.mark.asyncio
@@ -1234,8 +1173,8 @@ def test_render_fact_value_interest_level_dict_extracts_general_score():
 
 
 @pytest.mark.asyncio
-async def test_profile_facts_rendered_grouped_by_category(seeded_db):
-    """Phase 4: profile: rows with JSON fact_value render as '{CategoryLabel}: {fact}'.
+async def test_profile_facts_not_injected_into_confirmed_facts(seeded_db):
+    """Context hygiene: profile rows are not injected into confirmed_facts.
 
     GIVEN two active 'profile:' rows with JSON fact_values:
       - profile:occupation:vendedor → {category: occupation, fact: 'vendedor inmobiliario', ...}
@@ -1285,13 +1224,7 @@ async def test_profile_facts_rendered_grouped_by_category(seeded_db):
         assert lead is not None
         ctx = await build_memory_context(sess, lead)
 
-    confirmed = ctx["confirmed_facts"]
-    assert (
-        "Ocupación: vendedor inmobiliario" in confirmed
-    ), f"Expected 'Ocupación: vendedor inmobiliario' in confirmed_facts, got:\n{confirmed!r}"
-    assert (
-        "Preferencia de contacto: prefiere email" in confirmed
-    ), f"Expected 'Preferencia de contacto: prefiere email' in confirmed_facts, got:\n{confirmed!r}"
+    assert ctx["confirmed_facts"] == ""
 
 
 def test_format_accumulated_profile_renders_structured_facts_by_category():
@@ -1330,8 +1263,8 @@ def test_format_accumulated_profile_renders_structured_facts_by_category():
 
 
 @pytest.mark.asyncio
-async def test_profile_facts_legacy_plain_string_renders_without_error(seeded_db):
-    """Phase 4: Legacy profile: rows with plain string fact_value render without error.
+async def test_profile_facts_legacy_plain_string_not_injected(seeded_db):
+    """Context hygiene: legacy profile rows do not enter confirmed_facts.
 
     GIVEN an active 'profile:' row with fact_value='plain text' (not JSON)
     WHEN build_memory_context(db, lead) is called
@@ -1359,12 +1292,7 @@ async def test_profile_facts_legacy_plain_string_renders_without_error(seeded_db
         # Must not raise any exception
         ctx = await build_memory_context(sess, lead)
 
-    confirmed = ctx["confirmed_facts"]
-    # The raw string value must appear somewhere in confirmed_facts
-    assert "owns a home" in confirmed, (
-        f"Expected legacy plain-string fact_value 'owns a home' in confirmed_facts, "
-        f"got: {confirmed!r}"
-    )
+    assert ctx["confirmed_facts"] == ""
 
 
 @pytest.mark.asyncio
@@ -1426,8 +1354,8 @@ async def _set_lead_extracted_facts(db_module, lead_id: str, facts: dict) -> Non
 
 
 @pytest.mark.asyncio
-async def test_memory_misc_notes_renders_dedicated_section_when_present(seeded_db):
-    """build_memory_context renders --- Notas operativas --- when misc_notes are present.
+async def test_memory_misc_notes_not_in_confirmed_facts_when_present(seeded_db):
+    """Context hygiene: build_memory_context does not inject misc_notes.
 
     GIVEN lead.extracted_facts["misc_notes"] = {"notes": [{"type": "pending_topic", "note": "..."}]}
     WHEN build_memory_context(db, lead) is called
@@ -1458,17 +1386,7 @@ async def test_memory_misc_notes_renders_dedicated_section_when_present(seeded_d
         assert lead is not None
         ctx = await build_memory_context(sess, lead)
 
-    confirmed = ctx["confirmed_facts"]
-    assert (
-        "--- Notas operativas ---" in confirmed
-    ), f"Expected '--- Notas operativas ---' section in confirmed_facts, got:\n{confirmed}"
-    assert (
-        "[pending_topic] Quiere callback el viernes" in confirmed
-    ), f"Expected note text in confirmed_facts, got:\n{confirmed}"
-    # Must NOT appear as a legacy bullet in the facts section
-    assert (
-        "- Notas adicionales:" not in confirmed
-    ), "misc_notes must NOT render as '- Notas adicionales:' (qora-misc-notes spec)"
+    assert ctx["confirmed_facts"] == ""
 
 
 @pytest.mark.asyncio
@@ -1528,8 +1446,8 @@ async def test_memory_misc_notes_section_omitted_when_key_missing(seeded_db):
 
 
 @pytest.mark.asyncio
-async def test_memory_misc_notes_multiple_notes_all_rendered(seeded_db):
-    """build_memory_context renders all notes in the dedicated section with [type] prefix."""
+async def test_memory_misc_notes_multiple_notes_not_in_confirmed_facts(seeded_db):
+    """Context hygiene: misc_notes are not injected through confirmed_facts."""
     from app.memory import build_memory_context
     from app.leads.service import get_lead
 
@@ -1555,16 +1473,12 @@ async def test_memory_misc_notes_multiple_notes_all_rendered(seeded_db):
         assert lead is not None
         ctx = await build_memory_context(sess, lead)
 
-    confirmed = ctx["confirmed_facts"]
-    assert "--- Notas operativas ---" in confirmed
-    assert "[continuity] Tiene un Corolla 2019" in confirmed
-    assert "[caution] Molesto por esperas anteriores" in confirmed
-    assert "[pending_topic] Quiere cotización hogar" in confirmed
+    assert ctx["confirmed_facts"] == ""
 
 
 @pytest.mark.asyncio
-async def test_memory_misc_notes_legacy_string_rendered_gracefully(seeded_db):
-    """Legacy str misc_notes renders as [other] in dedicated section without crashing.
+async def test_memory_misc_notes_legacy_string_not_in_confirmed_facts(seeded_db):
+    """Context hygiene: legacy string misc_notes are not injected through confirmed_facts.
 
     GIVEN lead.extracted_facts["misc_notes"] = "Prefiere contacto por WhatsApp" (legacy str)
     WHEN build_memory_context(db, lead) is called
@@ -1589,13 +1503,7 @@ async def test_memory_misc_notes_legacy_string_rendered_gracefully(seeded_db):
         assert lead is not None
         ctx = await build_memory_context(sess, lead)
 
-    confirmed = ctx["confirmed_facts"]
-    assert (
-        "--- Notas operativas ---" in confirmed
-    ), "Legacy str misc_notes must render dedicated section"
-    assert (
-        "[other] Prefiere contacto por WhatsApp" in confirmed
-    ), f"Legacy str must render as '[other] text'. Got:\n{confirmed}"
+    assert ctx["confirmed_facts"] == ""
 
 
 @pytest.mark.asyncio

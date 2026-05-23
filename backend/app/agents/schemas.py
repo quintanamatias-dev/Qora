@@ -6,6 +6,11 @@ Single-char slugs (all lowercase letters or digits) are also valid.
 tools_enabled validation: must be list[str] containing only keys from
 TOOL_DEFINITIONS in app.tools.registry.
 
+Phase 2 (configurable-agent-tools): register_interest, mark_not_interested, and
+schedule_followup are removed from QORA_TOOL_NAMES. The API schema rejects these
+names on create/update. When loading agents from DB that still have legacy names,
+call strip_deprecated_tools() to remove them with a deprecation warning.
+
 The service layer is responsible for serializing list[str] → JSON string before
 persisting to the DB, and deserializing JSON string → list[str] when returning
 responses.
@@ -13,6 +18,7 @@ responses.
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime
 
@@ -24,11 +30,44 @@ _SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
 
 # Derive known tool names from the canonical TOOL_DEFINITIONS dict.
 # This avoids duplicating tool names — single source of truth in app.tools.registry.
-from app.tools.registry import TOOL_DEFINITIONS as _TOOL_DEFS  # noqa: E402
+from app.tools.registry import TOOL_DEFINITIONS as _TOOL_DEFS, _REMOVED_TOOLS  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 QORA_TOOL_NAMES: frozenset[str] = frozenset(_TOOL_DEFS.keys())
 
 _DEFAULT_TOOLS: list[str] = list(_TOOL_DEFS.keys())
+
+
+def strip_deprecated_tools(tool_names: list[str]) -> list[str]:
+    """Remove deprecated/removed tool names from a tools list with a warning log.
+
+    Used when loading agents from DB that may still have legacy tool names
+    (register_interest, mark_not_interested, schedule_followup) stored in
+    tools_enabled. Removed names are logged as deprecation warnings; the agent
+    continues operating with the remaining valid tools.
+
+    This function does NOT raise — it always returns a (possibly shorter) list.
+    It is NOT used for API input validation (AgentCreate/AgentUpdate still reject
+    unknown names explicitly).
+
+    Args:
+        tool_names: Raw list of tool name strings from DB or config.
+
+    Returns:
+        Filtered list with deprecated names removed.
+    """
+    stripped = []
+    for name in tool_names:
+        if name in _REMOVED_TOOLS:
+            logger.warning(
+                "deprecated_tool_stripped: tool_name=%s — removed in Phase 2; "
+                "use capture_data for data capture",
+                name,
+            )
+        else:
+            stripped.append(name)
+    return stripped
 
 
 def _validate_tools_list(v: list[str] | None) -> list[str] | None:
@@ -64,6 +103,10 @@ class AgentCreate(BaseModel):
     tools_enabled: list[str] = _DEFAULT_TOOLS
     is_default: bool = False
     elevenlabs_agent_id: str | None = None
+    # Per-agent tool configuration (nullable). Stores OpenAI function-calling
+    # parameters schemas keyed by tool name. Required when capture_data is in
+    # tools_enabled; otherwise silently ignored.
+    tool_config: dict | None = None
     # TTS runtime config — per-agent ElevenLabs voice synthesis parameters
     # ElevenLabs Conversational AI valid range: speed=[0.7, 1.2], stability=[0.0, 1.0],
     # similarity_boost=[0.0, 1.0]. Values outside these ranges are rejected with 1008.
@@ -104,6 +147,8 @@ class AgentUpdate(BaseModel):
     max_tokens: int | None = None
     tools_enabled: list[str] = []
     elevenlabs_agent_id: str | None = None
+    # Per-agent tool configuration (optional PATCH field).
+    tool_config: dict | None = None
     # TTS runtime config — optional per-agent overrides
     # ElevenLabs Conversational AI valid range: speed=[0.7, 1.2]
     tts_speed: float | None = Field(default=None, ge=0.7, le=1.2)
@@ -141,6 +186,8 @@ class AgentResponse(BaseModel):
     is_conversation_ready: bool = False
     has_prompt: bool = False
     has_elevenlabs_agent_id: bool = False
+    # Per-agent tool configuration (nullable)
+    tool_config: dict | None = None
     # TTS runtime config — per-agent ElevenLabs voice synthesis parameters
     tts_speed: float = 0.95
     tts_stability: float = 0.4

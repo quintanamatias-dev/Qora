@@ -4,6 +4,10 @@ Used by the Custom LLM webhook to execute tools mid-stream.
 
 Covers: T5.5 tool registry + dispatcher.
 Phase 2: adds load_skill routing.
+Phase 1 (configurable-agent-tools): adds capture_data routing with agent_tool_config.
+Phase 2 (configurable-agent-tools): removes register_interest, mark_not_interested,
+    schedule_followup from _TOOL_REGISTRY. Calls to these names return tool_removed
+    so old agents don't crash — they receive a structured error via the SSE stream.
 """
 
 from __future__ import annotations
@@ -14,27 +18,26 @@ from typing import TYPE_CHECKING
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.leads.service import get_lead
+from app.tools.capture_data import capture_data as _capture_data_handler
 from app.tools.get_lead_details import get_lead_details
 from app.tools.get_lead_history import get_lead_history
 from app.tools.get_lead_pain_points import get_lead_pain_points
 from app.tools.get_lead_profile import get_lead_profile
-from app.tools.mark_not_interested import mark_not_interested
-from app.tools.register_interest import register_interest
-from app.tools.schedule_followup import schedule_followup
 
 if TYPE_CHECKING:
     from app.prompts.skill_loader import SkillRegistryEntry
 
+# Legacy tool names removed in Phase 2 (imported from registry for single source of truth).
+from app.tools.registry import _REMOVED_TOOLS as _LEGACY_REMOVED_TOOLS
 
 # Tool registry: name → handler function
+# Note: capture_data is NOT in this dict — it requires special routing via agent_tool_config
+# Phase 2: register_interest, mark_not_interested, schedule_followup removed.
 _TOOL_REGISTRY = {
     "get_lead_details": get_lead_details,
     "get_lead_profile": get_lead_profile,
     "get_lead_history": get_lead_history,
     "get_lead_pain_points": get_lead_pain_points,
-    "register_interest": register_interest,
-    "mark_not_interested": mark_not_interested,
-    "schedule_followup": schedule_followup,
 }
 
 
@@ -48,6 +51,7 @@ async def dispatch_tool(
     agent_slug: str | None = None,
     registry_entries: "list[SkillRegistryEntry] | None" = None,
     clients_dir: Path | None = None,
+    agent_tool_config: dict | None = None,
 ) -> dict:
     """Route a tool call to the correct handler.
 
@@ -61,10 +65,48 @@ async def dispatch_tool(
         registry_entries: Parsed registry entries for this session — required for
             load_skill validation (allowlist check).
         clients_dir: Override clients root — used in tests via tmp_path.
+        agent_tool_config: Optional per-agent tool config dict (parsed from JSON).
+            Required for capture_data routing — passed to the handler for schema
+            validation. Ignored for all other tool names.
 
     Returns:
         Tool result dict. Always returns a dict — never raises.
     """
+    # --- Phase 2: legacy tools return structured tool_removed error ---
+    if tool_name in _LEGACY_REMOVED_TOOLS:
+        return {
+            "error": "tool_removed",
+            "detail": (
+                f"'{tool_name}' was removed in Phase 2. "
+                "Use capture_data to capture lead data; "
+                "status transitions are now handled by post-call analysis."
+            ),
+        }
+
+    # --- capture_data is handled separately — requires agent_tool_config ---
+    if tool_name == "capture_data":
+        async def _call_capture_data(sess: AsyncSession) -> dict:
+            effective_lead_id = tool_args.get("lead_id") or lead_id or None
+            if not effective_lead_id:
+                return {"error": "lead_not_found"}
+            # Build captured_fields: all tool_args except lead_id
+            captured_fields = {k: v for k, v in tool_args.items() if k != "lead_id"}
+            return await _capture_data_handler(
+                session=sess,
+                lead_id=effective_lead_id,
+                tool_config=agent_tool_config or {},
+                captured_fields=captured_fields,
+                client_id=client_id,
+            )
+
+        if session is not None:
+            return await _call_capture_data(session)
+        else:
+            from app.core.database import get_session
+
+            async with get_session() as new_session:
+                return await _call_capture_data(new_session)
+
     # --- load_skill is handled separately (no DB session needed) ---
     if tool_name == "load_skill":
         from app.tools.skill_loader import handle_load_skill
@@ -131,30 +173,6 @@ async def dispatch_tool(
             return await get_lead_pain_points(
                 session=sess,
                 lead_id=effective_lead_id,
-            )
-        elif tool_name == "register_interest":
-            return await register_interest(
-                session=sess,
-                lead_id=effective_lead_id,
-                car_make=tool_args.get("car_make"),
-                car_model=tool_args.get("car_model"),
-                car_year=tool_args.get("car_year"),
-                current_insurance=tool_args.get("current_insurance"),
-                notes=tool_args.get("notes"),
-            )
-        elif tool_name == "mark_not_interested":
-            return await mark_not_interested(
-                session=sess,
-                lead_id=effective_lead_id,
-                reason=tool_args.get("reason", ""),
-            )
-        elif tool_name == "schedule_followup":
-            return await schedule_followup(
-                session=sess,
-                lead_id=effective_lead_id,
-                followup_date=tool_args.get("followup_date", ""),
-                note=tool_args.get("note"),
-                client_id=client_id,
             )
         else:
             return {"error": f"unknown_tool: {tool_name}"}

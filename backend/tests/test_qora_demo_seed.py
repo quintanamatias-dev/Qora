@@ -318,3 +318,169 @@ class TestQoraDemoTtsSeed:
         assert mock_agent.tts_speed == 1.5, f"Expected 1.5, got {mock_agent.tts_speed}"
         assert mock_agent.tts_stability == 0.6
         assert mock_agent.tts_similarity_boost == 0.9
+
+
+# ---------------------------------------------------------------------------
+# Task 1.7 — Quintana Seguros parity seed/config
+# Spec: Requirement: Quintana Seguros Migration — Zero Behavioral Drift
+# AC-7: Quintana Seguros schema parity test passes
+# ---------------------------------------------------------------------------
+
+
+class TestQuintanaToolConfigParity:
+    """Tests verifying Quintana Seguros capture_data config parity.
+
+    After Phase 1 seed, Quintana's agent must have:
+    - capture_data in tools_enabled (alongside legacy tools — dual-run)
+    - tool_config with a capture_data schema matching old car fields
+    """
+
+    def test_quintana_tool_config_constant_exists(self):
+        """_QUINTANA_TOOL_CONFIG constant must be defined in service.py."""
+        from app.tenants import service
+
+        assert hasattr(service, "_QUINTANA_TOOL_CONFIG"), (
+            "service module must export _QUINTANA_TOOL_CONFIG"
+        )
+
+    def test_quintana_tool_config_has_capture_data_key(self):
+        """_QUINTANA_TOOL_CONFIG must have a 'capture_data' key."""
+        from app.tenants.service import _QUINTANA_TOOL_CONFIG
+        import json
+
+        # It may be a dict or a JSON string (stored as TEXT in DB)
+        if isinstance(_QUINTANA_TOOL_CONFIG, str):
+            config = json.loads(_QUINTANA_TOOL_CONFIG)
+        else:
+            config = _QUINTANA_TOOL_CONFIG
+
+        assert "capture_data" in config, (
+            "_QUINTANA_TOOL_CONFIG must contain 'capture_data' key"
+        )
+
+    def test_quintana_capture_data_schema_has_car_fields(self):
+        """_QUINTANA_TOOL_CONFIG capture_data must cover car_make, car_model, car_year."""
+        from app.tenants.service import _QUINTANA_TOOL_CONFIG
+        import json
+
+        if isinstance(_QUINTANA_TOOL_CONFIG, str):
+            config = json.loads(_QUINTANA_TOOL_CONFIG)
+        else:
+            config = _QUINTANA_TOOL_CONFIG
+
+        capture_config = config["capture_data"]
+        # Get the parameters block (may be nested or flat)
+        params = capture_config.get("parameters", capture_config)
+        props = params.get("properties", {})
+        # Must include car fields that map to the old register_interest behavior
+        car_field_names = set(props.keys())
+        assert any("car_make" in f or "marca" in f for f in car_field_names), (
+            f"Expected car_make or marca in properties. Got: {car_field_names}"
+        )
+        assert any("car_model" in f or "modelo" in f for f in car_field_names), (
+            f"Expected car_model or modelo in properties. Got: {car_field_names}"
+        )
+        assert any("car_year" in f or "anio" in f or "año" in f for f in car_field_names), (
+            f"Expected car_year, anio, or año in properties. Got: {car_field_names}"
+        )
+
+
+class TestQuintanaCaptureParity:
+    """Parity test: capture_data with Quintana schema produces same fact keys as register_interest.
+
+    Spec AC-7: Quintana Seguros schema parity test passes.
+    """
+
+    async def test_capture_data_quintana_parity_writes_expected_facts(self):
+        """capture_data with Quintana schema writes same fact keys as register_interest.
+
+        GIVEN Quintana Seguros schema with car fields
+        WHEN capture_data is called with car data
+        THEN result has status=captured and fields list contains the car fields
+        AND all required car fields are present in the returned fields list
+        """
+        from app.tenants.service import _QUINTANA_TOOL_CONFIG
+        from app.tools.capture_data import capture_data
+        from unittest.mock import AsyncMock, MagicMock, patch
+        import json
+
+        if isinstance(_QUINTANA_TOOL_CONFIG, str):
+            tool_config = json.loads(_QUINTANA_TOOL_CONFIG)
+        else:
+            tool_config = _QUINTANA_TOOL_CONFIG
+
+        capture_cfg = tool_config["capture_data"]
+        params = capture_cfg.get("parameters", capture_cfg)
+        props = params.get("properties", {})
+
+        # Build captured_fields based on actual schema (use first car field names found)
+        field_names = list(props.keys())
+        car_make_field = next((f for f in field_names if "car_make" in f or "marca" in f), None)
+        car_model_field = next((f for f in field_names if "car_model" in f or "modelo" in f), None)
+        car_year_field = next((f for f in field_names if "car_year" in f or "anio" in f or "año" in f), None)
+
+        assert car_make_field, "Must have a car make field"
+        assert car_model_field, "Must have a car model field"
+        assert car_year_field, "Must have a car year field"
+
+        captured_fields = {
+            car_make_field: "Toyota",
+            car_model_field: "Corolla",
+            car_year_field: "2020",
+        }
+
+        # Mock the DB session and lead so we don't need a real DB
+        mock_lead = MagicMock()
+        mock_lead.id = "lead-q-001"
+        mock_lead.client_id = "quintana-seguros"
+
+        # Track session.add calls to verify what facts are written
+        added_objects = []
+        mock_session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None  # no existing fact
+        mock_session.execute.return_value = mock_result
+
+        def track_add(obj):
+            added_objects.append(obj)
+
+        mock_session.add = track_add
+
+        with patch("app.tools.capture_data.get_lead", return_value=mock_lead):
+            result = await capture_data(
+                session=mock_session,
+                lead_id="lead-q-001",
+                tool_config=tool_config,
+                captured_fields=captured_fields,
+                client_id="quintana-seguros",
+            )
+
+        assert result.get("status") == "captured", f"Expected captured, got {result}"
+        captured_result_fields = set(result.get("fields", []))
+
+        # All required car fields must be in the result
+        assert car_make_field in captured_result_fields, (
+            f"Expected {car_make_field} in fields. Got: {captured_result_fields}"
+        )
+        assert car_model_field in captured_result_fields, (
+            f"Expected {car_model_field} in fields. Got: {captured_result_fields}"
+        )
+        assert car_year_field in captured_result_fields, (
+            f"Expected {car_year_field} in fields. Got: {captured_result_fields}"
+        )
+
+        # Verify LeadProfileFact objects were created with correct keys
+        added_fact_keys = {obj.fact_key for obj in added_objects}
+        assert f"captured:{car_make_field}" in added_fact_keys, (
+            f"Expected captured:{car_make_field} in added facts. Got: {added_fact_keys}"
+        )
+        assert f"captured:{car_model_field}" in added_fact_keys, (
+            f"Expected captured:{car_model_field} in added facts. Got: {added_fact_keys}"
+        )
+        assert f"captured:{car_year_field}" in added_fact_keys, (
+            f"Expected captured:{car_year_field} in added facts. Got: {added_fact_keys}"
+        )
+
+        # Verify values
+        make_fact = next(o for o in added_objects if o.fact_key == f"captured:{car_make_field}")
+        assert make_fact.fact_value == "Toyota"

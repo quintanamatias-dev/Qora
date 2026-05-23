@@ -1,14 +1,14 @@
 """QORA Tools — get_lead_details handler.
 
 Returns full lead details for the current call.
-Increments call_count and sets last_called_at.
+NOTE: call_count increment and last_called_at update were MOVED to initiation.py
+(Task 1.6 — configurable-agent-tools). Initiation is the canonical "call started"
+event. Side-effects in a query tool violate least-surprise.
 
 Covers: CAP-4 get_lead_details.
 """
 
 from __future__ import annotations
-
-from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,7 +34,10 @@ async def get_lead_details(
     session: AsyncSession,
     lead_id: str,
 ) -> dict:
-    """Fetch full lead record and increment call counter.
+    """Fetch full lead record (read-only — no side effects).
+
+    Returns the current lead data without modifying any fields.
+    call_count increment and last_called_at are set in initiation.py.
 
     Args:
         session: Active async DB session.
@@ -46,11 +49,6 @@ async def get_lead_details(
     lead = await get_lead(session, lead_id)
     if lead is None:
         return {"error": "lead_not_found"}
-
-    # Increment call_count and update last_called_at
-    lead.call_count = (lead.call_count or 0) + 1
-    lead.last_called_at = datetime.now(timezone.utc)
-    await session.flush()
 
     return {
         "id": lead.id,

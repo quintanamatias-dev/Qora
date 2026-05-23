@@ -12,6 +12,9 @@ Spec refs: AC-1 through AC-7.
 
 from __future__ import annotations
 
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+
 
 # ===========================================================================
 # Task 1.1 — ConversationState.loaded_skills field
@@ -176,10 +179,6 @@ def test_assemble_loaded_skills_appear_after_skills_index():
 # ===========================================================================
 # Task 1.3 — Cached load_skill returns cached content, skips filler/sleep/tool
 # ===========================================================================
-
-
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 
 def _make_conv_state(loaded_skills: dict | None = None):
@@ -604,12 +603,6 @@ async def test_dispatcher_error_strings_are_not_cached(dispatcher_error: str):
 
 def test_filler_strings_end_with_sentence_punctuation():
     """AC-7: All filler strings in webhook.py must end with '.', '!', or '?'."""
-    import re
-    from pathlib import Path
-
-    webhook_path = Path(__file__).resolve().parents[3] / "app" / "voice" / "webhook.py"
-    source = webhook_path.read_text("utf-8")
-
     # Extract string literals that look like filler (quoted Spanish/English phrases)
     # Pattern: any string starting with uppercase or special chars that doesn't end with punctuation
     # We focus on DEFAULT_FILLER and TOOL_FILLER_PHRASES plus any hardcoded strings in webhook.py

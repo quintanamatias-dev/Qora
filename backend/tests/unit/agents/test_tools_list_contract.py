@@ -37,15 +37,22 @@ def test_agent_create_accepts_list_of_tools():
 
 
 def test_agent_create_default_tools_is_list():
-    """AgentCreate.tools_enabled default value must be a list, not a JSON string."""
+    """AgentCreate.tools_enabled default value must be a list, not a JSON string.
+
+    Phase 2: legacy tools removed — default no longer contains register_interest,
+    mark_not_interested, or schedule_followup.
+    """
     from app.agents.schemas import AgentCreate
 
     agent = AgentCreate(slug="def-tools", name="Default Tools", voice_id="v-123")
     assert isinstance(agent.tools_enabled, list)
     assert "get_lead_details" in agent.tools_enabled
-    assert "register_interest" in agent.tools_enabled
-    assert "mark_not_interested" in agent.tools_enabled
-    assert "schedule_followup" in agent.tools_enabled
+    # Phase 2: legacy tools removed from defaults
+    assert "register_interest" not in agent.tools_enabled
+    assert "mark_not_interested" not in agent.tools_enabled
+    assert "schedule_followup" not in agent.tools_enabled
+    # capture_data is in the defaults (Phase 1 addition)
+    assert "capture_data" in agent.tools_enabled
 
 
 def test_agent_create_invalid_tool_in_list_raises_validation_error():
@@ -63,11 +70,14 @@ def test_agent_create_invalid_tool_in_list_raises_validation_error():
 
 
 def test_agent_update_accepts_list_of_tools():
-    """AgentUpdate.tools_enabled must accept list[str]."""
+    """AgentUpdate.tools_enabled must accept list[str].
+
+    Phase 2: register_interest removed; use capture_data or get_lead_details instead.
+    """
     from app.agents.schemas import AgentUpdate
 
-    update = AgentUpdate(tools_enabled=["get_lead_details", "register_interest"])
-    assert update.tools_enabled == ["get_lead_details", "register_interest"]
+    update = AgentUpdate(tools_enabled=["get_lead_details", "capture_data"])
+    assert update.tools_enabled == ["get_lead_details", "capture_data"]
 
 
 def test_agent_update_invalid_tool_in_list_raises_validation_error():
@@ -171,7 +181,10 @@ async def test_post_agent_with_list_tools_returns_201(tools_list_app: AsyncClien
 
 
 async def test_post_agent_with_full_tool_list_returns_201(tools_list_app: AsyncClient):
-    """POST /agents with all tools as a list returns 201 with all tools in response."""
+    """POST /agents with active tools as a list returns 201 with all tools in response.
+
+    Phase 2: legacy tools removed. Test uses the current active tool set.
+    """
     response = await tools_list_app.post(
         "/api/v1/clients/tools-test-client/agents",
         json={
@@ -180,9 +193,9 @@ async def test_post_agent_with_full_tool_list_returns_201(tools_list_app: AsyncC
             "voice_id": "voice-full",
             "tools_enabled": [
                 "get_lead_details",
-                "register_interest",
-                "mark_not_interested",
-                "schedule_followup",
+                "get_lead_profile",
+                "get_lead_history",
+                "capture_data",
             ],
         },
     )
@@ -191,9 +204,9 @@ async def test_post_agent_with_full_tool_list_returns_201(tools_list_app: AsyncC
     assert isinstance(data["tools_enabled"], list)
     assert set(data["tools_enabled"]) == {
         "get_lead_details",
-        "register_interest",
-        "mark_not_interested",
-        "schedule_followup",
+        "get_lead_profile",
+        "get_lead_history",
+        "capture_data",
     }
 
 

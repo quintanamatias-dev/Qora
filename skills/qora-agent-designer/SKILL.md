@@ -24,6 +24,10 @@ This is the CONTENT design skill. For infrastructure (ElevenLabs URLs, DB record
 - Runtime skill files are named `{capability}.agent-skill.md` — never `SKILL.md`.
 - `registry.yaml` is the LAST artifact — only after system-prompt and all skills are finalized.
 - Do not hallucinate client data, product facts, or integration capabilities. If unsure, leave a `[PLACEHOLDER]`.
+- Context hygiene rule: each dynamic datum enters agent context exactly once, through the best channel for that agent.
+- Lead data uses prompt placeholders OR one structured lead context block, never both.
+- Do not use generic `confirmed_facts` blocks. They mix stale facts, notes, profile data, and interest history.
+- `current_insurance` comes from the Lead column only. Post-call corrections must update that column.
 
 ## Decision Gates
 
@@ -37,6 +41,15 @@ This is the CONTENT design skill. For infrastructure (ElevenLabs URLs, DB record
 | What is the cancellation policy? | No | Yes |
 | How does the agent greet? | Yes (workflow) | No |
 | What are the FAQs? | No | Yes |
+
+## Context Hygiene Checklist
+
+- Choose one channel per datum: prompt placeholder, context block, or on-demand skill/tool result.
+- Do not duplicate lead fields between prompt placeholders and `[DATOS DEL LEAD]` / `lead_profile`.
+- Keep dynamic lead data in context or tool results; keep behavior in the system prompt; keep knowledge in runtime skills.
+- Use `misc_notes` only through one explicit channel if the agent needs it.
+- Keep `call_history` limited to the last 3 post-call summaries. Do not inject past transcripts.
+- Do not trim current conversation history unless there is a deliberate memory strategy.
 
 ## Execution Steps
 

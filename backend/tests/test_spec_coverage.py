@@ -227,18 +227,26 @@ async def test_cap3_five_seed_leads_with_required_statuses(db_session):
 # ============================================================================
 
 
-async def test_cap4_get_lead_details_increments_call_count(db_session):
-    """CAP-4: get_lead_details increments call_count and sets last_called_at."""
+async def test_cap4_get_lead_details_returns_lead_data(db_session):
+    """CAP-4: get_lead_details returns full lead data (read-only after Task 1.6 refactor).
+
+    Task 1.6 (configurable-agent-tools): call_count increment moved to initiation.py.
+    get_lead_details is now a pure read — returns current DB values without side effects.
+    """
     from app.tools.get_lead_details import get_lead_details
     from app.leads.service import get_lead
 
     result = await get_lead_details(db_session, lead_id="lead-quintana-001")
     assert "error" not in result
-    assert result["call_count"] == 1
+    assert result["id"] == "lead-quintana-001"
+    assert result["name"] == "Carlos Méndez"
+    # call_count is returned from DB (not incremented by get_lead_details)
+    assert result["call_count"] == 0  # baseline — initiation increments this
 
     lead = await get_lead(db_session, "lead-quintana-001")
-    assert lead.call_count == 1
-    assert lead.last_called_at is not None
+    # get_lead_details must NOT modify call_count or last_called_at
+    assert lead.call_count == 0
+    assert lead.last_called_at is None
 
 
 async def test_cap4_get_lead_details_not_found(db_session):

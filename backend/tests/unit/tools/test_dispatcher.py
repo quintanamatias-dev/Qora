@@ -64,8 +64,12 @@ async def test_dispatcher_routes_get_lead_details(db):
     assert result["id"] == "lead-quintana-001"
 
 
-async def test_dispatcher_routes_mark_not_interested(db):
-    """dispatch_tool routes 'mark_not_interested' to the correct handler."""
+async def test_dispatcher_mark_not_interested_now_returns_tool_removed(db):
+    """Phase 2: mark_not_interested removed — dispatch returns tool_removed error.
+
+    Previously tested that it routed to the handler. Phase 2 removes the legacy tool
+    so old agents that still call it get a tool_removed response (no crash).
+    """
     from app.tools.dispatcher import dispatch_tool
 
     async with db.async_session_factory() as sess:
@@ -80,8 +84,9 @@ async def test_dispatcher_routes_mark_not_interested(db):
             session=sess,
         )
 
-    assert "error" not in result
-    assert result["status"] == "not_interested"
+    assert result.get("error") == "tool_removed", (
+        f"mark_not_interested must return tool_removed post-Phase2, got: {result}"
+    )
 
 
 async def test_dispatcher_returns_error_for_unknown_tool(db):
@@ -141,23 +146,15 @@ async def db_with_scheduler(tmp_path: Path):
     await db_module.close_db()
 
 
-async def test_dispatcher_passes_client_id_to_schedule_followup(db_with_scheduler):
-    """dispatch_tool must pass client_id to schedule_followup so TZ is resolved.
+async def test_dispatcher_schedule_followup_removed_returns_tool_removed(db_with_scheduler):
+    """Phase 2: schedule_followup removed — dispatch returns tool_removed (no crash).
 
-    Without client_id, naive datetimes fall back to UTC instead of client TZ.
-    This verifies the dispatcher actually passes client_id so the TZ is loaded
-    before date parsing — the ScheduledCall's scheduled_at must use client TZ,
-    not UTC fallback.
+    Previously tested TZ pass-through for schedule_followup. Now that the tool is
+    removed in Phase 2, verify that calling it returns a structured tool_removed error
+    instead of routing to the handler. The SSE stream receives the error gracefully.
     """
     from app.tools.dispatcher import dispatch_tool
-    from app.scheduler.models import ScheduledCall
-    from sqlalchemy import select
 
-    # Naive datetime "2026-06-01T11:00" — the two TZ interpretations diverge:
-    # - UTC fallback:      11:00 UTC → 7:00 AM NY (before 9AM window) → clamp to 9AM NY = 13:00 UTC
-    # - America/New_York: 11:00 AM NY → 15:00 UTC (within [9,20) window) → no clamp = 15:00 UTC
-    # If client_id is passed correctly, result must be 15:00 UTC (New York interpretation).
-    # If client_id is NOT passed, result would be 13:00 UTC (UTC fallback + clamp).
     async with db_with_scheduler.async_session_factory() as sess:
         result = await dispatch_tool(
             tool_name="schedule_followup",
@@ -169,22 +166,195 @@ async def test_dispatcher_passes_client_id_to_schedule_followup(db_with_schedule
             lead_id="lead-quintana-003",
             session=sess,
         )
+
+    assert result.get("error") == "tool_removed", (
+        f"schedule_followup must return tool_removed post-Phase2, got: {result}"
+    )
+    assert "detail" in result
+
+
+# ---------------------------------------------------------------------------
+# Task 1.5 — capture_data dispatch with agent_tool_config injection
+# Spec: Dispatcher Injects Agent Config into capture_data Calls
+# ---------------------------------------------------------------------------
+
+
+async def test_dispatcher_routes_capture_data_with_agent_tool_config(db):
+    """dispatch_tool routes 'capture_data' and passes agent_tool_config to handler.
+
+    GIVEN dispatch_tool called with capture_data and valid agent_tool_config
+    WHEN agent tool config has capture_data schema
+    THEN result contains status=captured
+    AND no error is returned
+    """
+    from app.tools.dispatcher import dispatch_tool
+    from app.leads.models import LeadProfileFact
+    from sqlalchemy import select
+
+    tool_config = {
+        "capture_data": {
+            "type": "object",
+            "properties": {
+                "marca": {"type": "string"},
+                "modelo": {"type": "string"},
+            },
+            "required": ["lead_id", "marca", "modelo"],
+        }
+    }
+
+    async with db.async_session_factory() as sess:
+        result = await dispatch_tool(
+            tool_name="capture_data",
+            tool_args={
+                "lead_id": "lead-quintana-001",
+                "marca": "Toyota",
+                "modelo": "Corolla",
+            },
+            client_id="quintana-seguros",
+            lead_id="lead-quintana-001",
+            session=sess,
+            agent_tool_config=tool_config,
+        )
         await sess.commit()
 
     assert "error" not in result, f"Expected success, got: {result}"
+    assert result.get("status") == "captured"
+    assert "marca" in result.get("fields", [])
 
-    # Verify a ScheduledCall was created (scheduler_enabled=True)
-    async with db_with_scheduler.async_session_factory() as sess:
+    # Verify DB write
+    async with db.async_session_factory() as sess:
         rows = await sess.execute(
-            select(ScheduledCall).where(ScheduledCall.lead_id == "lead-quintana-003")
+            select(LeadProfileFact).where(
+                LeadProfileFact.lead_id == "lead-quintana-001",
+                LeadProfileFact.fact_key == "captured:marca",
+                LeadProfileFact.superseded_at == None,  # noqa: E711
+            )
         )
-        sc = rows.scalar_one_or_none()
-        assert sc is not None, "ScheduledCall should have been created"
-        assert sc.scheduled_at is not None
-        # With client_id correctly passed → New York TZ used:
-        # 11:00 AM NY (EDT, UTC-4) = 15:00 UTC → within [9,20) → no clamp → 15:00 UTC
-        assert sc.scheduled_at.hour == 15, (
-            f"Expected scheduled_at 15:00 UTC (11AM New_York → 15 UTC), "
-            f"got {sc.scheduled_at}. "
-            f"If 13:00, client_id was not passed (UTC fallback + clamp)."
+        facts = list(rows.scalars().all())
+    assert len(facts) == 1
+    assert facts[0].fact_value == "Toyota"
+
+
+async def test_dispatcher_capture_data_without_tool_config_returns_error(db):
+    """dispatch_tool with capture_data and no agent_tool_config returns error.
+
+    GIVEN dispatch_tool called with capture_data but agent_tool_config=None
+    WHEN called
+    THEN result contains an error (missing_tool_config or similar)
+    AND no exception is raised
+    """
+    from app.tools.dispatcher import dispatch_tool
+
+    async with db.async_session_factory() as sess:
+        result = await dispatch_tool(
+            tool_name="capture_data",
+            tool_args={"lead_id": "lead-quintana-001", "marca": "Toyota"},
+            client_id="quintana-seguros",
+            lead_id="lead-quintana-001",
+            session=sess,
+            agent_tool_config=None,
         )
+
+    assert "error" in result, f"Expected error, got: {result}"
+
+
+# ---------------------------------------------------------------------------
+# Task 2.3 RED: Legacy tools removed — return tool_removed error
+# Spec: Legacy Tool Modules Removed from Dispatch Registry
+# ---------------------------------------------------------------------------
+
+
+async def test_dispatcher_register_interest_returns_tool_removed(db):
+    """Phase 2: dispatch_tool('register_interest') returns tool_removed error.
+
+    GIVEN Phase 2 is complete and legacy tools removed from _TOOL_REGISTRY
+    WHEN dispatch_tool('register_interest', ...) is called
+    THEN result is {'error': 'tool_removed', 'detail': ...}
+    AND no exception is raised
+    """
+    from app.tools.dispatcher import dispatch_tool
+
+    async with db.async_session_factory() as sess:
+        result = await dispatch_tool(
+            tool_name="register_interest",
+            tool_args={
+                "lead_id": "lead-quintana-001",
+                "car_make": "Toyota",
+                "car_model": "Corolla",
+            },
+            client_id="quintana-seguros",
+            lead_id="lead-quintana-001",
+            session=sess,
+        )
+
+    assert result.get("error") == "tool_removed", (
+        f"register_interest must return tool_removed, got: {result}"
+    )
+    assert "detail" in result
+
+
+async def test_dispatcher_mark_not_interested_returns_tool_removed(db):
+    """Phase 2: dispatch_tool('mark_not_interested') returns tool_removed error.
+
+    GIVEN mark_not_interested removed from _TOOL_REGISTRY
+    WHEN dispatch_tool('mark_not_interested', ...) is called
+    THEN result is {'error': 'tool_removed', 'detail': ...}
+    """
+    from app.tools.dispatcher import dispatch_tool
+
+    async with db.async_session_factory() as sess:
+        result = await dispatch_tool(
+            tool_name="mark_not_interested",
+            tool_args={"lead_id": "lead-quintana-003", "reason": "No interest"},
+            client_id="quintana-seguros",
+            lead_id="lead-quintana-003",
+            session=sess,
+        )
+
+    assert result.get("error") == "tool_removed", (
+        f"mark_not_interested must return tool_removed, got: {result}"
+    )
+    assert "detail" in result
+
+
+async def test_dispatcher_schedule_followup_returns_tool_removed(db):
+    """Phase 2: dispatch_tool('schedule_followup') returns tool_removed error.
+
+    GIVEN schedule_followup removed from _TOOL_REGISTRY
+    WHEN dispatch_tool('schedule_followup', ...) is called
+    THEN result is {'error': 'tool_removed', 'detail': ...}
+    """
+    from app.tools.dispatcher import dispatch_tool
+
+    async with db.async_session_factory() as sess:
+        result = await dispatch_tool(
+            tool_name="schedule_followup",
+            tool_args={"lead_id": "lead-quintana-001", "followup_date": "2026-07-01"},
+            client_id="quintana-seguros",
+            lead_id="lead-quintana-001",
+            session=sess,
+        )
+
+    assert result.get("error") == "tool_removed", (
+        f"schedule_followup must return tool_removed, got: {result}"
+    )
+    assert "detail" in result
+
+
+def test_registry_does_not_contain_legacy_tools():
+    """Phase 2: TOOL_DEFINITIONS must NOT contain register_interest, mark_not_interested,
+    or schedule_followup.
+
+    Spec: _TOOL_REGISTRY MUST NOT contain the three legacy tools post-Phase 2.
+    """
+    from app.tools.registry import TOOL_DEFINITIONS
+
+    assert "register_interest" not in TOOL_DEFINITIONS, (
+        "register_interest must be removed from TOOL_DEFINITIONS in Phase 2"
+    )
+    assert "mark_not_interested" not in TOOL_DEFINITIONS, (
+        "mark_not_interested must be removed from TOOL_DEFINITIONS in Phase 2"
+    )
+    assert "schedule_followup" not in TOOL_DEFINITIONS, (
+        "schedule_followup must be removed from TOOL_DEFINITIONS in Phase 2"
+    )

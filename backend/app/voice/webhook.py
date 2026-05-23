@@ -46,13 +46,20 @@ from app.leads.service import get_lead
 from app.prompts.loader import PromptLoader
 from app.tenants.service import get_client, get_default_agent
 from app.tools.registry import (
-    TOOL_DEFINITIONS as QORA_TOOL_DEFINITIONS,
+    TOOL_DEFINITIONS,
     TOOL_FILLER_PHRASES,
     DEFAULT_FILLER,
     build_tool_definitions as _build_tool_definitions,
 )
-from app.voice.context import build_voice_context
+from app.voice.context import build_voice_context, parse_agent_tool_config
 from app.voice.session import session_store
+
+QORA_TOOL_DEFINITIONS = TOOL_DEFINITIONS
+
+SAFE_CONTEXT_RENDER_FAILURE_PROMPT = (
+    "Sos un asistente de voz. Disculpate brevemente y deci que hay un "
+    "inconveniente tecnico temporal. No inventes detalles ni prometas acciones."
+)
 
 router = APIRouter(prefix="/voice", tags=["voice"])
 
@@ -205,6 +212,7 @@ async def _execute_tool(
     agent_slug: str | None = None,
     registry_entries: list | None = None,
     clients_dir: Any | None = None,
+    agent_tool_config: dict | None = None,
 ) -> dict:
     """Execute a tool by name and return the result dict.
 
@@ -222,6 +230,7 @@ async def _execute_tool(
             agent_slug=agent_slug,
             registry_entries=registry_entries or [],
             clients_dir=clients_dir,
+            agent_tool_config=agent_tool_config,
         )
     except ImportError:
         # Tools module not yet implemented — return safe stub
@@ -249,6 +258,7 @@ async def _stream_llm_response(
     agent_slug: str | None = None,
     registry_entries: "list | None" = None,
     conv_state: "ConversationState | None" = None,
+    agent_tool_config: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     """Generate SSE chunks from GPT-4o, handling tool calls mid-stream.
 
@@ -342,6 +352,14 @@ async def _stream_llm_response(
                             # before the tool call blocks the stream.
                             await asyncio.sleep(FILLER_PAUSE_SECONDS)
 
+                        # Resolve agent_tool_config: prefer explicit parameter (covers
+                        # the per-turn fallback path where conv_state.context is None),
+                        # then fall back to cached context.
+                        _resolved_tool_config = agent_tool_config or (
+                            getattr(conv_state.context, "agent_tool_config", None)
+                            if conv_state is not None and conv_state.context is not None
+                            else None
+                        )
                         tool_result = await _execute_tool(
                             event.function_name,
                             args,
@@ -349,6 +367,7 @@ async def _stream_llm_response(
                             lead_id=lead_id,
                             agent_slug=agent_slug,
                             registry_entries=registry_entries or [],
+                            agent_tool_config=_resolved_tool_config,
                         )
 
                         # After a successful load_skill, store the content in conv_state
@@ -624,7 +643,7 @@ def _assemble_context_system_content(
     Assembly order:
     1. system_prompt (always included)
     2. skills_index (## Available Skills block, when not None/empty)
-    3. misc_notes (when not empty)
+    3. misc_notes (when not empty; single channel for operational notes)
     4. lead_profile (when not empty and skip_lead_profile_in_assembly is False)
     5. Loaded skill blocks (## Loaded Skill: {name} + content, one per entry)
 
@@ -750,8 +769,11 @@ async def _process_custom_llm_request(
     client_orm = None
     # Pre-built context for new sessions (set by the NEW SESSION PATH branch below)
     _new_session_context: "VoiceSessionContext | None" = None
+    # Resolved agent_tool_config — set from cached context or per-turn fallback parse
+    _agent_tool_config_resolved: dict | None = None
     # True when build_voice_context was used (not the per-turn render_for_agent fallback)
     _used_voice_context = False
+    _context_render_failed = False
     # agent_slug + registry_entries for load_skill tool routing (Phase 2)
     _agent_slug: str | None = None
     _registry_entries: "list" = []
@@ -770,6 +792,7 @@ async def _process_custom_llm_request(
         # Extract skill routing data from context (Phase 2)
         _agent_slug = ctx.agent_slug
         _registry_entries = list(ctx.skill_registry_entries)
+        _agent_tool_config_resolved = ctx.agent_tool_config
 
         # Still need a valid api_key — already retrieved above
         # Validate tenant is accessible (minimal check — context was already built)
@@ -830,6 +853,7 @@ async def _process_custom_llm_request(
                         # Phase 2: extract skill routing data
                         _agent_slug = getattr(agent, "slug", None)
                         _registry_entries = list(lazy_ctx.skill_registry_entries)
+                        _agent_tool_config_resolved = lazy_ctx.agent_tool_config
                     except Exception as exc:
                         structlog.get_logger().warning(
                             "voice_context_lazy_build_failed",
@@ -866,6 +890,7 @@ async def _process_custom_llm_request(
                     # Phase 2: extract skill routing data
                     _agent_slug = getattr(agent, "slug", None)
                     _registry_entries = list(new_ctx.skill_registry_entries)
+                    _agent_tool_config_resolved = new_ctx.agent_tool_config
                 except Exception as exc:
                     structlog.get_logger().warning(
                         "voice_context_new_session_build_failed",
@@ -880,8 +905,15 @@ async def _process_custom_llm_request(
             # If context is still not set (lazy build failed, no agent, or new session build
             # failed), use per-turn render_for_agent as fallback
             if not system_content:
+                structlog.get_logger().warning(
+                    "voice_context_per_turn_fallback_used",
+                    client_id=client_id,
+                    conversation_id=conversation_id,
+                    has_agent=agent is not None,
+                    has_conv_state=conv_state is not None,
+                )
                 # Build system prompt inside the DB session block so render() can query
-                # memory (call_history, confirmed_facts) via build_memory_context(db, lead).
+                # memory (call_history, call_number, returning flag) via build_memory_context(db, lead).
                 #
                 # Phase 7 prompt resolution priority:
                 # 1. agent.system_prompt (DB) via render_for_agent()
@@ -889,17 +921,30 @@ async def _process_custom_llm_request(
                 # 3. Filesystem prompt.md / JAUMPABLO template
                 #
                 # Use explicit None check so empty string override ("") is respected.
-                if agent is not None:
-                    system_content = await PromptLoader().render_for_agent(
-                        agent, lead, db=db, client=client_orm
+                try:
+                    if agent is not None:
+                        system_content = await PromptLoader().render_for_agent(
+                            agent, lead, db=db, client=client_orm
+                        )
+                    else:
+                        # No Agent yet (pre-migration path) — fall back to client-based rendering
+                        system_content = (
+                            client_orm.system_prompt_override
+                            if client_orm.system_prompt_override is not None
+                            else await PromptLoader().render(client_orm, lead, db=db)
+                        )
+                except Exception as exc:  # noqa: BLE001 - final context fallback must stream safely
+                    structlog.get_logger().warning(
+                        "voice_context_per_turn_fallback_render_failed",
+                        client_id=client_id,
+                        conversation_id=conversation_id,
+                        agent_id=getattr(agent, "id", None),
+                        agent_name=getattr(agent, "name", None),
+                        error_type=type(exc).__name__,
+                        error_msg=str(exc),
                     )
-                else:
-                    # No Agent yet (pre-migration path) — fall back to client-based rendering
-                    system_content = (
-                        client_orm.system_prompt_override
-                        if client_orm.system_prompt_override is not None
-                        else await PromptLoader().render(client_orm, lead, db=db)
-                    )
+                    _context_render_failed = True
+                    system_content = SAFE_CONTEXT_RENDER_FAILURE_PROMPT
 
                 # Parse tools from agent config (Phase 7) or client config (legacy)
                 _tools_enabled_str = (
@@ -907,9 +952,28 @@ async def _process_custom_llm_request(
                 )
                 if _tools_enabled_str:
                     try:
-                        enabled_tool_names = json.loads(_tools_enabled_str)
-                        tools = _build_tool_definitions(enabled_tool_names)
+                        from app.agents.schemas import strip_deprecated_tools as _strip_deprecated
+
+                        enabled_tool_names = _strip_deprecated(json.loads(_tools_enabled_str))
+
+                        # Parse agent.tool_config so capture_data gets its dynamic schema
+                        _fallback_tool_config: dict | None = None
+                        if agent is not None:
+                            _fallback_tool_config = parse_agent_tool_config(agent)
+
+                        _agent_tool_config_resolved = _fallback_tool_config
+                        tools = _build_tool_definitions(
+                            enabled_tool_names,
+                            agent_tool_config=_fallback_tool_config,
+                        )
                     except (json.JSONDecodeError, TypeError):
+                        structlog.get_logger().warning(
+                            "voice_context_per_turn_tools_enabled_malformed",
+                            client_id=client_id,
+                            conversation_id=conversation_id,
+                            agent_id=getattr(agent, "id", None),
+                            agent_name=getattr(agent, "name", None),
+                        )
                         tools = None
 
                 # Set up model/temp/tokens from agent config
@@ -920,9 +984,8 @@ async def _process_custom_llm_request(
         # client_orm holds the tenant reference; used in per-turn path above
 
     # Build messages with system prompt prepended.
-    # Issue #21: Do NOT append [CONTEXTO DEL LEAD] block on the TEMPLATE path —
-    # the template already includes all lead data via {{lead_name}}, {{car_make}},
-    # {{confirmed_facts}}, etc. Appending it was reinforcing stale values 3x.
+    # Issue #21: Do NOT append [CONTEXTO DEL LEAD] block on a lead-template path —
+    # the template already includes lead data via {{lead_name}}, {{car_make}}, etc.
     #
     # OVERRIDE PATH: When system_prompt_override is set and no Agent exists,
     # the template is NOT rendered, so {{lead_name}}, etc. are never substituted.
@@ -936,17 +999,42 @@ async def _process_custom_llm_request(
     # lead_profile is already assembled inside system_content — no [CONTEXTO DEL LEAD]
     # appending needed. Only append in the per-turn render_for_agent fallback path.
     if not _used_voice_context:
-        # Only apply lead context appending in the per-turn render_for_agent fallback path
-        _agent_has_template_vars = (
-            agent is not None and agent.system_prompt and "{{" in agent.system_prompt
-        )
+        # Only apply lead context appending in the per-turn render_for_agent fallback path.
+        # Filesystem prompts are the effective source of truth; DB prompts are fallback.
+        _agent_has_template_vars = False
+        if agent is not None:
+            from app.voice.context import prompt_uses_lead_placeholders
+
+            _effective_prompt_template = None
+            _agent_client_id = getattr(agent, "client_id", None) or client_id
+            _agent_slug = getattr(agent, "slug", None)
+            if not isinstance(_agent_slug, str) or not _agent_slug.strip():
+                _agent_slug = str(getattr(agent, "name", "agent")).lower().replace(" ", "-")
+            try:
+                _effective_prompt_template = await PromptLoader().load_agent_system_prompt(
+                    _agent_client_id, _agent_slug
+                )
+            except Exception as exc:  # noqa: BLE001 - fallback append should remain best-effort
+                structlog.get_logger().warning(
+                    "voice_context_fallback_effective_prompt_load_failed",
+                    client_id=client_id,
+                    conversation_id=conversation_id,
+                    agent_id=getattr(agent, "id", None),
+                    error_type=type(exc).__name__,
+                    error_msg=str(exc),
+                )
+            if not _effective_prompt_template:
+                _effective_prompt_template = getattr(agent, "system_prompt", None) or ""
+            _agent_has_template_vars = prompt_uses_lead_placeholders(
+                _effective_prompt_template
+            )
         _has_static_prompt = (
             # Legacy client.system_prompt_override (no Agent)
             (agent is None and client_orm is not None and client_orm.system_prompt_override is not None)
             # Agent with static system_prompt (no {{variable}} placeholders)
             or (agent is not None and agent.system_prompt and not _agent_has_template_vars)
         )
-        if _has_static_prompt and lead is not None:
+        if _has_static_prompt and lead is not None and not _context_render_failed:
             lead_context = (
                 f"\n[CONTEXTO DEL LEAD]\n"
                 f"Nombre: {lead.name}\n"
@@ -1051,6 +1139,7 @@ async def _process_custom_llm_request(
                 agent_slug=_agent_slug,
                 registry_entries=_registry_entries,
                 conv_state=conv_state,
+                agent_tool_config=_agent_tool_config_resolved,
             ):
                 yield chunk
         except Exception as exc:

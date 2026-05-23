@@ -586,3 +586,48 @@ async def test_lazy_fallback_path_includes_all_4_components(webhook_app_client):
     assert "María López" in system_content, (
         f"lead_profile missing from lazy fallback system message. Got:\n{system_content!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_per_turn_fallback_render_failure_uses_safe_prompt(webhook_app_client):
+    """A final per-turn render failure must still produce a streamable safe prompt."""
+    http_client, store, settings = webhook_app_client
+
+    captured_messages: list[list[dict]] = []
+
+    async def capturing_stream(**kwargs):
+        captured_messages.append(kwargs.get("messages", []))
+        yield "data: [DONE]\n\n"
+
+    with patch(
+        "app.voice.webhook.build_voice_context",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("context unavailable"),
+    ), patch(
+        "app.voice.webhook.PromptLoader.render_for_agent",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("render unavailable"),
+    ), patch("app.voice.webhook._stream_llm_response", side_effect=capturing_stream):
+        response = await http_client.post(
+            "/api/v1/voice/quintana-seguros/custom-llm/chat/completions",
+            json={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "Hola"}],
+                "stream": True,
+                "elevenlabs_extra_body": {
+                    "client_id": "quintana-seguros",
+                    "lead_id": "lead-quintana-001",
+                    "conversation_id": "fallback-render-failure-conv",
+                },
+            },
+        )
+        _ = response.content
+
+    assert response.status_code == 200
+    assert captured_messages, "_stream_llm_response must have been called"
+    from app.voice.webhook import SAFE_CONTEXT_RENDER_FAILURE_PROMPT
+
+    system_content = _get_system_content(captured_messages[0])
+    assert system_content == SAFE_CONTEXT_RENDER_FAILURE_PROMPT
+    assert "inconveniente tecnico temporal" in system_content
+    assert "No inventes detalles" in system_content

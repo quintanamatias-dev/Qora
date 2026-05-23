@@ -61,6 +61,11 @@ class Agent(Base):
     elevenlabs_agent_id: Mapped[str | None] = mapped_column(
         String, nullable=True, default=None
     )
+    # Per-agent tool configuration — JSON stored as TEXT (nullable).
+    # Used by capture_data to store the OpenAI function-calling parameters schema.
+    # NULL means no configurable tools are configured for this agent.
+    # Example: {"capture_data": {"type": "object", "properties": {...}, "required": [...]}}
+    tool_config: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     # TTS runtime config — per-agent ElevenLabs voice synthesis parameters
     # Defaults match Settings.elevenlabs_speed/stability/similarity_boost
     tts_speed: Mapped[float] = mapped_column(Float, nullable=False, default=0.95)

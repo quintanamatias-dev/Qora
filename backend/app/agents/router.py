@@ -67,6 +67,25 @@ def _deserialize_tools(tools_enabled: str | list | None) -> list[str]:
     return []
 
 
+def _deserialize_tool_config(raw: str | dict | None) -> dict | None:
+    """Deserialize tool_config from DB JSON string to dict.
+
+    The DB stores tool_config as a JSON string (TEXT column, nullable).
+    The API contract returns it as dict | None.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            return parsed
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return None
+
+
 def _tts_field(agent: Agent, field: str, default: float) -> float:
     """Return an agent TTS float column, falling back to *default* only when the
     column is None (missing / not-yet-migrated row).
@@ -107,6 +126,7 @@ def _agent_to_response(agent: Agent) -> AgentResponse:
         tts_speed=_tts_field(agent, "tts_speed", 0.95),
         tts_stability=_tts_field(agent, "tts_stability", 0.4),
         tts_similarity_boost=_tts_field(agent, "tts_similarity_boost", 0.75),
+        tool_config=_deserialize_tool_config(getattr(agent, "tool_config", None)),
     )
 
 
@@ -181,6 +201,7 @@ async def create_agent(
             tts_speed=payload.tts_speed,
             tts_stability=payload.tts_stability,
             tts_similarity_boost=payload.tts_similarity_boost,
+            tool_config=json.dumps(payload.tool_config) if payload.tool_config is not None else None,
         )
     except ValueError as exc:
         msg = str(exc)
@@ -254,6 +275,9 @@ async def update_agent(
         update_data["tools_enabled"], list
     ):
         update_data["tools_enabled"] = json.dumps(update_data["tools_enabled"])
+    # Serialize tool_config dict to JSON string for DB storage
+    if "tool_config" in update_data and isinstance(update_data["tool_config"], dict):
+        update_data["tool_config"] = json.dumps(update_data["tool_config"])
     agent = await tenant_service.update_agent(
         session, agent_id, client_id, **update_data
     )

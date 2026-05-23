@@ -9,6 +9,8 @@ Covers: CAP-2 pre-call lead injection, CAP-6 memory injection.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import structlog
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -124,6 +126,14 @@ async def initiation_webhook(
         if resolved_lead_id:
             lead = await get_lead(session, resolved_lead_id)
 
+            if lead is not None and lead.client_id != resolved_client_id:
+                logger.warning(
+                    "initiation_lead_client_mismatch",
+                    lead_id=lead.id,
+                    client_id=resolved_client_id,
+                )
+                lead = None
+
             if lead is not None:
                 # CAP-6: Block initiation for do_not_call leads BEFORE any call is made
                 if lead.do_not_call:
@@ -152,6 +162,15 @@ async def initiation_webhook(
                 confirmed_facts = memory["confirmed_facts"]
                 is_returning_caller = memory["is_returning_caller"]
                 call_number = memory["call_number"]
+
+                # Task 1.6 (configurable-agent-tools): Increment call_count and set
+                # last_called_at here — initiation is the canonical "call started" event.
+                # Previously done in get_lead_details (violating least-surprise for a
+                # query tool). Incrementing here keeps side-effects with the status
+                # transition and avoids double-counting on retried get_lead_details calls.
+                lead.call_count = (lead.call_count or 0) + 1
+                lead.last_called_at = datetime.now(timezone.utc)
+                await session.flush()
 
                 # Transition lead to 'called' (idempotent if already called)
                 try:

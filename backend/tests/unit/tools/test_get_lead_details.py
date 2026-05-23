@@ -67,23 +67,33 @@ async def test_get_lead_details_returns_full_record(db):
     assert result["status"] == "new"
 
 
-async def test_get_lead_details_increments_call_count(db):
-    """get_lead_details increments call_count and sets last_called_at (CAP-4)."""
+async def test_get_lead_details_returns_call_count_from_lead_record(db):
+    """get_lead_details returns call_count from the DB record (read-only after Task 1.6).
+
+    Task 1.6: call_count increment MOVED to initiation.py.
+    get_lead_details is now a pure read — it returns the current call_count without
+    incrementing it.
+
+    GIVEN lead with call_count=0
+    WHEN get_lead_details is called twice
+    THEN both calls return call_count=0 (not incremented by the tool)
+    """
     from app.tools.get_lead_details import get_lead_details
 
     async with db.async_session_factory() as sess:
-        # First call
-        result = await get_lead_details(sess, lead_id="lead-quintana-001")
-        assert result["call_count"] == 1
-        assert result["last_called_at"] is not None
-
-        # Flush to persist
+        result1 = await get_lead_details(sess, lead_id="lead-quintana-001")
         await sess.commit()
 
     async with db.async_session_factory() as sess:
-        # Second call
         result2 = await get_lead_details(sess, lead_id="lead-quintana-001")
-        assert result2["call_count"] == 2
+
+    # Both calls should return the same call_count (no side effect)
+    assert result1.get("call_count") == 0, (
+        f"get_lead_details must not increment call_count. Got: {result1.get('call_count')}"
+    )
+    assert result2.get("call_count") == 0, (
+        f"Second call should also return 0. Got: {result2.get('call_count')}"
+    )
 
 
 async def test_get_lead_details_not_found_returns_error(db):
@@ -94,3 +104,41 @@ async def test_get_lead_details_not_found_returns_error(db):
         result = await get_lead_details(sess, lead_id="ghost-lead-000")
 
     assert result == {"error": "lead_not_found"}
+
+
+# ---------------------------------------------------------------------------
+# Task 1.6 RED — get_lead_details must NOT increment call_count
+# Design decision: call_count increment belongs in initiation.py (canonical
+# "call started" event). Side-effects in a query tool violate least-surprise.
+# ---------------------------------------------------------------------------
+
+
+async def test_get_lead_details_does_not_increment_call_count(db):
+    """get_lead_details MUST NOT increment call_count after Task 1.6 refactor.
+
+    GIVEN a lead with call_count=0
+    WHEN get_lead_details is called
+    THEN call_count in DB remains 0 (not incremented)
+    AND last_called_at is NOT set
+    """
+    from app.tools.get_lead_details import get_lead_details
+    from app.leads.service import get_lead
+
+    async with db.async_session_factory() as sess:
+        lead_before = await get_lead(sess, "lead-quintana-001")
+        count_before = lead_before.call_count
+
+    async with db.async_session_factory() as sess:
+        await get_lead_details(sess, lead_id="lead-quintana-001")
+        await sess.commit()
+
+    async with db.async_session_factory() as sess:
+        lead_after = await get_lead(sess, "lead-quintana-001")
+
+    assert lead_after.call_count == count_before, (
+        f"get_lead_details must NOT increment call_count. "
+        f"Was {count_before}, now {lead_after.call_count}"
+    )
+    assert lead_after.last_called_at is None, (
+        "get_lead_details must NOT set last_called_at"
+    )

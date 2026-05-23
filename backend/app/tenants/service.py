@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 
@@ -164,6 +165,28 @@ async def update_client(
 # populate agent.system_prompt when no filesystem file existed previously.
 # ---------------------------------------------------------------------------
 
+# Phase 1 (configurable-agent-tools): Quintana capture_data tool_config.
+# Maps old register_interest car fields to capture_data schema.
+# Dual-run: capture_data added alongside legacy register_interest in tools_enabled
+# so both write paths are active during Phase 1 validation.
+# Field names match the LeadProfileFact keys used by the existing car pipeline.
+_QUINTANA_TOOL_CONFIG = {
+    "capture_data": {
+        "description": "Registrás el interés del lead y los datos del vehículo para cotización",
+        "type": "object",
+        "properties": {
+            "car_make": {"type": "string", "description": "Marca del auto"},
+            "car_model": {"type": "string", "description": "Modelo del auto"},
+            "car_year": {"type": "integer", "description": "Año del auto"},
+            "current_insurance": {
+                "type": "string",
+                "description": "Aseguradora actual del cliente (opcional)",
+            },
+        },
+        "required": ["lead_id", "car_make", "car_model", "car_year"],
+    }
+}
+
 _QUINTANA_SYSTEM_PROMPT = """\
 Sos {{agent_name}}, asesor de seguros de {{broker_name}}, una correduría argentina.
 Hablás siempre en español rioplatense con voseo natural. Sos cálido, directo y genuino — como ese vendedor que te cae bien y te convence porque es honesto, no porque te presiona.
@@ -180,21 +203,15 @@ Seguro actual: {{current_insurance}}
 Este es el llamado número {{call_number}} a este lead.
 Lead recurrente: {{is_returning_caller}} (true = ya hablaron antes, false = primer contacto).
 
-{{confirmed_facts}}
-
 {{call_history}}
 Este lead dejó sus datos porque quería una cotización. Te está esperando.
 
 ════════════════════════════════════════════════════
-MEMORIA DE CONVERSACIONES ANTERIORES — PRIORIDAD MÁXIMA
+MEMORIA DE CONVERSACIONES ANTERIORES
 ════════════════════════════════════════════════════
 
-Si la información de {{confirmed_facts}} contradice los DATOS DEL LEAD de arriba
-(por ejemplo, el lead te dijo que su auto es otro modelo o marca), SIEMPRE priorizá
-lo que el lead te dijo directamente — es información más reciente y confiable.
-
-NUNCA repitas datos que el lead ya corrigió. Usá la versión actualizada.
-Si {{confirmed_facts}} está vacío, tomá los DATOS DEL LEAD como referencia.
+Usá solamente {{call_history}} para retomar conversaciones anteriores: recordá objeciones previas, compromisos y próximos pasos ya hablados.
+Los datos actuales del lead son los de DATOS DEL LEAD. Si el lead corrige algo durante la llamada, usá la versión corregida y registrala con la herramienta correspondiente.
 
 ════════════════════════════════════════════════════
 CÓMO MANEJÁS LA CONVERSACIÓN
@@ -336,6 +353,18 @@ async def seed_quintana(session: AsyncSession) -> None:
     AD-2: Non-overwrite guard — only updates agent fields when they are missing or blank
     (None or empty string). Protects runtime edits made via admin UI.
     """
+    # Phase 1 (configurable-agent-tools): tools_enabled includes capture_data for dual-run.
+    # Legacy tools stay alongside capture_data so both write paths are active during
+    # Phase 1 validation. Phase 2 will remove legacy tools.
+    _QUINTANA_TOOLS_ENABLED = json.dumps([
+        "get_lead_details",
+        "register_interest",
+        "mark_not_interested",
+        "schedule_followup",
+        "capture_data",
+    ])
+    _QUINTANA_TOOL_CONFIG_JSON = json.dumps(_QUINTANA_TOOL_CONFIG)
+
     existing = await get_client(session, "quintana-seguros")
     if existing is not None:
         # AD-2: One-time migration guard — populate agent fields only when missing or blank
@@ -347,6 +376,19 @@ async def seed_quintana(session: AsyncSession) -> None:
                 updated = True
             if not agent.knowledge_base:
                 agent.knowledge_base = _QUINTANA_KNOWLEDGE_BASE
+                updated = True
+            # Phase 1: Idempotently add capture_data to tools_enabled and set tool_config
+            # only if tool_config is not yet set (non-overwrite guard).
+            if not agent.tool_config:
+                agent.tool_config = _QUINTANA_TOOL_CONFIG_JSON
+                # Also add capture_data to tools_enabled if not already present
+                try:
+                    current_tools = json.loads(agent.tools_enabled or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    current_tools = []
+                if "capture_data" not in current_tools:
+                    current_tools.append("capture_data")
+                    agent.tools_enabled = json.dumps(current_tools)
                 updated = True
             if updated:
                 await session.flush()
@@ -362,10 +404,15 @@ async def seed_quintana(session: AsyncSession) -> None:
         model="gpt-4o",
         temperature=0.7,
         max_tokens=300,
-        tools_enabled='["get_lead_details","register_interest","mark_not_interested","schedule_followup"]',
+        tools_enabled=_QUINTANA_TOOLS_ENABLED,
         system_prompt_override=_QUINTANA_SYSTEM_PROMPT,
         knowledge_base=_QUINTANA_KNOWLEDGE_BASE,
     )
+    # Set tool_config on the newly created agent
+    new_agent = await get_default_agent(session, "quintana-seguros")
+    if new_agent is not None:
+        new_agent.tool_config = _QUINTANA_TOOL_CONFIG_JSON
+        await session.flush()
     # Note: create_client() auto-creates the default Agent — no separate create_agent() needed.
 
 
@@ -505,6 +552,7 @@ async def create_agent(
     tts_speed: float = 0.95,
     tts_stability: float = 0.4,
     tts_similarity_boost: float = 0.75,
+    tool_config: str | None = None,
 ) -> Agent:
     """Create and persist a new Agent record.
 
@@ -563,6 +611,7 @@ async def create_agent(
         tts_speed=tts_speed,
         tts_stability=tts_stability,
         tts_similarity_boost=tts_similarity_boost,
+        tool_config=tool_config,
     )
     session.add(agent)
     await session.flush()

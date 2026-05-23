@@ -18,8 +18,11 @@ Covers: VSC-1, VSC-2, VSC-3.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+import structlog
 
 from app.prompts.loader import PromptLoader
 from app.prompts.skill_loader import SkillRegistryEntry
@@ -28,6 +31,56 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from app.tenants.models import Agent, Client
     from app.leads.models import Lead
+
+
+logger = structlog.get_logger()
+
+LEAD_TEMPLATE_VARIABLES: frozenset[str] = frozenset(
+    {
+        "lead_name",
+        "car_make",
+        "car_model",
+        "car_year",
+        "current_insurance",
+    }
+)
+
+
+def _agent_log_fields(agent: "Agent") -> dict:
+    return {
+        "agent_id": getattr(agent, "id", None),
+        "agent_name": getattr(agent, "name", None),
+        "agent_slug": getattr(agent, "slug", None),
+        "client_id": getattr(agent, "client_id", None),
+    }
+
+
+def parse_agent_tool_config(agent: "Agent") -> dict | None:
+    """Parse agent.tool_config (JSON TEXT column) into a dict.
+
+    Centralises the parsing logic so webhook.py and context.py never diverge.
+
+    Returns:
+        Parsed dict, or None if the column is absent, empty, or not valid JSON/dict.
+    """
+    raw = getattr(agent, "tool_config", None)
+    if not raw:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def prompt_uses_lead_placeholders(prompt: str | None) -> bool:
+    """Return True when a prompt template already injects lead raw fields."""
+    if not prompt:
+        return False
+    placeholders = set(re.findall(r"\{\{(\w+)\}\}", prompt))
+    return bool(placeholders & LEAD_TEMPLATE_VARIABLES)
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +120,9 @@ class VoiceSessionContext:
     temperature: float
     max_tokens: int
     tools: list[dict] | None
+    # Parsed Agent.tool_config JSON. Required by webhook dispatch so capture_data can
+    # validate runtime arguments against the same per-agent schema used for OpenAI tools.
+    agent_tool_config: dict | None = None
     skip_lead_profile_in_assembly: bool = False
     # TTS runtime config — resolved from Agent columns (Agent-first, defaults as fallback)
     tts_speed: float = 0.95
@@ -167,7 +223,16 @@ async def build_voice_context(
 
     # Load skills registry index — returns ## Available Skills block or '' if no registry
     # The old glob-all behavior is REMOVED. No registry.yaml → no skills.
-    _skills_raw = await loader.load_agent_skills(client_id, agent_slug)
+    try:
+        _skills_raw = await loader.load_agent_skills(client_id, agent_slug)
+    except Exception as exc:  # noqa: BLE001 - skills are optional context, not critical path
+        logger.warning(
+            "voice_context_skills_index_load_failed",
+            **_agent_log_fields(agent),
+            error_type=type(exc).__name__,
+            error_msg=str(exc),
+        )
+        _skills_raw = ""
     # Normalize: empty string → None (no block injected into prompt)
     skills_index: str | None = _skills_raw if _skills_raw else None
     # skills_content is always None in registry mode
@@ -175,11 +240,21 @@ async def build_voice_context(
 
     # Load registry entries (raw objects) for load_skill allowlist validation
     # Stored as a tuple (frozen dataclass requires hashable types)
-    _registry_entries_list = await loader.load_skill_registry_entries(client_id, agent_slug)
+    try:
+        _registry_entries_list = await loader.load_skill_registry_entries(client_id, agent_slug)
+    except Exception as exc:  # noqa: BLE001 - registry entries degrade to no load_skill allowlist
+        logger.warning(
+            "voice_context_skill_registry_entries_load_failed",
+            **_agent_log_fields(agent),
+            error_type=type(exc).__name__,
+            error_msg=str(exc),
+        )
+        _registry_entries_list = []
     skill_registry_entries: tuple[SkillRegistryEntry, ...] = tuple(_registry_entries_list)
 
-    # Extract misc_notes from lead.extracted_facts
-    # misc_notes in DB can be a dict {"notes": [...]} or a plain string
+    # Extract misc_notes from lead.extracted_facts. confirmed_facts no longer
+    # carries misc_notes, so this is the single runtime channel for those notes.
+    # misc_notes in DB can be a dict {"notes": [...]} or a plain string.
     misc_notes = ""
     if lead is not None:
         extracted = getattr(lead, "extracted_facts", None)
@@ -208,11 +283,21 @@ async def build_voice_context(
     # the agent system_prompt has template vars (see _assemble_context_system_content).
     lead_profile = _build_lead_profile_block(lead) if lead is not None else ""
 
-    # Track whether the agent system_prompt uses template vars — if it does, render_for_agent()
-    # already substituted lead data ({{lead_name}}, {{car_make}}, etc.) into system_prompt,
-    # so the lead_profile block must NOT be appended again (Issue #21: would duplicate data).
-    _agent_system_prompt = getattr(agent, "system_prompt", None) or ""
-    _agent_has_template_vars = "{{" in _agent_system_prompt
+    # Track whether the effective prompt template uses lead vars. Filesystem
+    # prompts are canonical; agent.system_prompt is only the legacy fallback.
+    try:
+        effective_prompt_template = await loader.load_agent_system_prompt(client_id, agent_slug)
+    except Exception as exc:  # noqa: BLE001 - duplicate guard should not block calls
+        logger.warning(
+            "voice_context_effective_prompt_load_failed",
+            **_agent_log_fields(agent),
+            error_type=type(exc).__name__,
+            error_msg=str(exc),
+        )
+        effective_prompt_template = None
+    if not effective_prompt_template:
+        effective_prompt_template = getattr(agent, "system_prompt", None) or ""
+    _prompt_uses_lead_placeholders = prompt_uses_lead_placeholders(effective_prompt_template)
 
     # Model config from agent
     model = getattr(agent, "model", "gpt-4o") or "gpt-4o"
@@ -229,6 +314,7 @@ async def build_voice_context(
     # tools_enabled lists. A demo agent seeded with tools_enabled="[]" would otherwise
     # be unable to call load_skill even when a registry.yaml is present (CRITICAL-1 fix).
     tools: list[dict] | None = None
+    agent_tool_config: dict | None = None
     tools_enabled_str = getattr(agent, "tools_enabled", None)
     try:
         from app.tools.registry import build_tool_definitions as _build_tool_definitions
@@ -238,15 +324,38 @@ async def build_voice_context(
             try:
                 enabled_names = json.loads(tools_enabled_str)
             except (json.JSONDecodeError, TypeError):
+                logger.warning(
+                    "voice_context_tools_enabled_malformed",
+                    **_agent_log_fields(agent),
+                    error="invalid_json",
+                )
                 enabled_names = []
+
+        # Strip deprecated tool names from DB with deprecation warning (Phase 2).
+        # Agents that still have register_interest/mark_not_interested/schedule_followup
+        # in their stored tools_enabled continue operating with the remaining tools.
+        from app.agents.schemas import strip_deprecated_tools as _strip_deprecated
+
+        enabled_names = _strip_deprecated(enabled_names)
 
         # Inject load_skill unconditionally when the agent has registry entries
         if skill_registry_entries and "load_skill" not in enabled_names:
             enabled_names = list(enabled_names) + ["load_skill"]
 
-        tools = _build_tool_definitions(enabled_names)
-    except ImportError:
+        # Parse agent's tool_config (JSON TEXT column → dict) for dynamic tool schemas
+        # Used by capture_data to get the per-agent parameters schema.
+        agent_tool_config = parse_agent_tool_config(agent)
+
+        tools = _build_tool_definitions(enabled_names, agent_tool_config=agent_tool_config)
+    except ImportError as exc:
+        logger.warning(
+            "voice_context_tool_helpers_import_failed",
+            **_agent_log_fields(agent),
+            error_type=type(exc).__name__,
+            error_msg=str(exc),
+        )
         tools = None
+        agent_tool_config = None
 
     # TTS config — Agent columns are authoritative; fall back to module defaults when NULL/absent
     tts_speed = getattr(agent, "tts_speed", None)
@@ -268,7 +377,8 @@ async def build_voice_context(
         temperature=temperature,
         max_tokens=max_tokens,
         tools=tools,
-        skip_lead_profile_in_assembly=_agent_has_template_vars,
+        agent_tool_config=agent_tool_config,
+        skip_lead_profile_in_assembly=_prompt_uses_lead_placeholders,
         tts_speed=tts_speed,
         tts_stability=tts_stability,
         tts_similarity_boost=tts_similarity_boost,

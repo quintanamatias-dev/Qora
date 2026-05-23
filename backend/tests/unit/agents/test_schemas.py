@@ -38,27 +38,25 @@ def test_agent_create_minimal_valid():
     assert agent.is_default is False
     assert agent.system_prompt is None
     assert agent.knowledge_base is None
-    # tools_enabled default is a list with all registered tools (Issue #36 adds 3 more)
+    # tools_enabled default is a list with all registered tools
+    # Phase 2: register_interest, mark_not_interested, schedule_followup removed
     assert isinstance(agent.tools_enabled, list)
-    # Must include the original 4 tools
-    expected_original = {
+    # Must include the current active tools
+    expected_active = {
         "get_lead_details",
-        "register_interest",
-        "mark_not_interested",
-        "schedule_followup",
-    }
-    assert expected_original.issubset(
-        set(agent.tools_enabled)
-    ), f"Original tools missing from default: {expected_original - set(agent.tools_enabled)}"
-    # Must also include Issue #36 new tools
-    expected_new = {
         "get_lead_profile",
         "get_lead_history",
         "get_lead_pain_points",
+        "capture_data",
     }
-    assert expected_new.issubset(
+    assert expected_active.issubset(
         set(agent.tools_enabled)
-    ), f"New Issue #36 tools missing from default: {expected_new - set(agent.tools_enabled)}"
+    ), f"Active tools missing from default: {expected_active - set(agent.tools_enabled)}"
+    # Legacy tools must NOT be in the defaults (Phase 2 removal)
+    removed_tools = {"register_interest", "mark_not_interested", "schedule_followup"}
+    assert removed_tools.isdisjoint(
+        set(agent.tools_enabled)
+    ), f"Removed legacy tools still in default: {removed_tools & set(agent.tools_enabled)}"
 
 
 def test_agent_create_custom_values():
@@ -153,17 +151,18 @@ def test_agent_create_invalid_tool_raises_422():
 
 
 def test_agent_create_valid_subset_of_tools():
-    """AgentCreate accepts a valid subset of tool names."""
+    """AgentCreate accepts a valid subset of tool names (Phase 2: legacy tools removed)."""
     from app.agents.schemas import AgentCreate
 
+    # Phase 2: register_interest no longer a valid tool name; use capture_data instead
     agent = AgentCreate(
         slug="test",
         name="Test",
         voice_id="v1",
-        tools_enabled=["get_lead_details", "register_interest"],
+        tools_enabled=["get_lead_details", "capture_data"],
     )
     assert isinstance(agent.tools_enabled, list)
-    assert agent.tools_enabled == ["get_lead_details", "register_interest"]
+    assert agent.tools_enabled == ["get_lead_details", "capture_data"]
 
 
 def test_agent_create_invalid_tool_name_string_raises_422():
@@ -597,3 +596,223 @@ def test_agent_response_includes_tts_fields():
     assert resp.tts_speed == 0.9
     assert resp.tts_stability == 0.5
     assert resp.tts_similarity_boost == 0.8
+
+
+# ---------------------------------------------------------------------------
+# Task 1.1 (NEW) — tool_config field: AgentCreate, AgentUpdate, AgentResponse
+# Spec: Agent Stores Tool Config
+# ---------------------------------------------------------------------------
+
+
+def test_agent_create_tool_config_defaults_to_none():
+    """AgentCreate defaults tool_config to None when not provided."""
+    from app.agents.schemas import AgentCreate
+
+    agent = AgentCreate(slug="main", name="Main", voice_id="v1")
+    assert agent.tool_config is None
+
+
+def test_agent_create_accepts_valid_tool_config():
+    """AgentCreate accepts a valid tool_config dict with capture_data schema."""
+    from app.agents.schemas import AgentCreate
+
+    config = {
+        "capture_data": {
+            "type": "object",
+            "properties": {"marca": {"type": "string"}},
+            "required": ["lead_id", "marca"],
+        }
+    }
+    agent = AgentCreate(
+        slug="main",
+        name="Main",
+        voice_id="v1",
+        tools_enabled=["get_lead_details", "capture_data"],
+        tool_config=config,
+    )
+    assert agent.tool_config == config
+
+
+def test_agent_create_tool_config_extra_unknown_key_is_accepted():
+    """AgentCreate accepts tool_config with an unrecognized key (silently ignored)."""
+    from app.agents.schemas import AgentCreate
+
+    config = {"unknown_key": {"some": "value"}}
+    agent = AgentCreate(
+        slug="main",
+        name="Main",
+        voice_id="v1",
+        tool_config=config,
+    )
+    assert agent.tool_config == config
+
+
+def test_agent_update_tool_config_defaults_to_unset():
+    """AgentUpdate with no fields does not include tool_config in unset dump."""
+    from app.agents.schemas import AgentUpdate
+
+    update = AgentUpdate()
+    data = update.model_dump(exclude_unset=True)
+    assert "tool_config" not in data
+
+
+def test_agent_update_accepts_tool_config():
+    """AgentUpdate accepts tool_config dict."""
+    from app.agents.schemas import AgentUpdate
+
+    config = {"capture_data": {"type": "object", "properties": {}, "required": []}}
+    update = AgentUpdate(tool_config=config)
+    data = update.model_dump(exclude_unset=True)
+    assert data["tool_config"] == config
+
+
+def test_agent_response_tool_config_defaults_to_none():
+    """AgentResponse defaults tool_config to None."""
+    from datetime import datetime, timezone
+    from app.agents.schemas import AgentResponse
+
+    now = datetime.now(timezone.utc)
+    resp = AgentResponse(
+        agent_id="tc-1",
+        client_id="c1",
+        slug="main",
+        name="Main",
+        voice_id="v1",
+        system_prompt=None,
+        knowledge_base=None,
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools_enabled=[],
+        is_active=True,
+        is_default=False,
+        created_at=now,
+    )
+    assert resp.tool_config is None
+
+
+def test_agent_response_includes_tool_config_when_set():
+    """AgentResponse round-trips tool_config value correctly."""
+    from datetime import datetime, timezone
+    from app.agents.schemas import AgentResponse
+
+    now = datetime.now(timezone.utc)
+    config = {
+        "capture_data": {
+            "type": "object",
+            "properties": {"marca": {"type": "string"}},
+            "required": ["lead_id", "marca"],
+        }
+    }
+    resp = AgentResponse(
+        agent_id="tc-2",
+        client_id="c1",
+        slug="main",
+        name="Main",
+        voice_id="v1",
+        system_prompt=None,
+        knowledge_base=None,
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools_enabled=["get_lead_details", "capture_data"],
+        is_active=True,
+        is_default=False,
+        created_at=now,
+        tool_config=config,
+    )
+    assert resp.tool_config == config
+    assert resp.tool_config["capture_data"]["required"] == ["lead_id", "marca"]
+
+
+# ---------------------------------------------------------------------------
+# Task 1.1 (NEW) — capture_data as valid tool name in QORA_TOOL_NAMES
+# Spec: QORA_TOOL_NAMES includes capture_data
+# ---------------------------------------------------------------------------
+
+
+def test_capture_data_is_valid_tool_name():
+    """capture_data is accepted in tools_enabled validation (present in QORA_TOOL_NAMES)."""
+    from app.agents.schemas import AgentCreate, QORA_TOOL_NAMES
+
+    assert "capture_data" in QORA_TOOL_NAMES
+
+    agent = AgentCreate(
+        slug="test",
+        name="Test",
+        voice_id="v1",
+        tools_enabled=["get_lead_details", "capture_data"],
+    )
+    assert "capture_data" in agent.tools_enabled
+
+
+# ---------------------------------------------------------------------------
+# Task 2.4 — Deprecation warnings / auto-strip for legacy tools
+# Spec: Deprecated tool names stripped on agent load with warning logged
+# ---------------------------------------------------------------------------
+
+
+def test_strip_deprecated_tools_removes_legacy_tools():
+    """strip_deprecated_tools removes register_interest, mark_not_interested,
+    schedule_followup from a tools list, returning only valid tools.
+
+    Spec: unknown names stripped with deprecation warning logged; agent continues.
+    """
+    from app.agents.schemas import strip_deprecated_tools
+
+    result = strip_deprecated_tools(
+        ["register_interest", "mark_not_interested", "schedule_followup", "get_lead_details"]
+    )
+    # Legacy tools must be removed
+    assert "register_interest" not in result
+    assert "mark_not_interested" not in result
+    assert "schedule_followup" not in result
+    # Valid tool preserved
+    assert "get_lead_details" in result
+
+
+def test_strip_deprecated_tools_preserves_valid_tools():
+    """strip_deprecated_tools does not remove valid tools (triangulation)."""
+    from app.agents.schemas import strip_deprecated_tools
+
+    result = strip_deprecated_tools(
+        ["get_lead_details", "capture_data", "get_lead_profile"]
+    )
+    assert result == ["get_lead_details", "capture_data", "get_lead_profile"]
+
+
+def test_strip_deprecated_tools_empty_list_returns_empty():
+    """strip_deprecated_tools handles empty list gracefully."""
+    from app.agents.schemas import strip_deprecated_tools
+
+    result = strip_deprecated_tools([])
+    assert result == []
+
+
+def test_strip_deprecated_tools_all_legacy_returns_empty():
+    """strip_deprecated_tools with all-legacy list returns empty list."""
+    from app.agents.schemas import strip_deprecated_tools
+
+    result = strip_deprecated_tools(
+        ["register_interest", "mark_not_interested", "schedule_followup"]
+    )
+    assert result == []
+
+
+def test_legacy_tools_rejected_in_api_create():
+    """AgentCreate API schema rejects legacy tool names (hard validation, not strip).
+
+    Spec: auto-strip is for agent LOAD from DB; API validation still rejects legacy names.
+    """
+    from app.agents.schemas import AgentCreate
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentCreate(
+            slug="test",
+            name="Test",
+            voice_id="v1",
+            tools_enabled=["get_lead_details", "register_interest"],
+        )
+    assert "register_interest" in str(exc_info.value)

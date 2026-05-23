@@ -38,6 +38,22 @@ def make_client(
     return client
 
 
+def make_agent(
+    name: str = "Jaumpablo",
+    client_id: str = "quintana-seguros",
+    slug: str = "jaumpablo",
+    system_prompt: str | None = None,
+) -> MagicMock:
+    """Create a mock Agent object for render_for_agent tests."""
+    agent = MagicMock()
+    agent.name = name
+    agent.client_id = client_id
+    agent.slug = slug
+    agent.system_prompt = system_prompt
+    agent.knowledge_base = None
+    return agent
+
+
 def make_lead(
     name: str = "Carlos Méndez",
     car_make: str = "Toyota",
@@ -589,6 +605,32 @@ async def test_build_variables_with_db_and_lead_populates_real_memory(
     assert result["call_number"] == "3"  # call_count=2 → call_number=3
 
 
+@pytest.mark.asyncio
+async def test_build_variables_confirmed_facts_stays_empty_with_extracted_facts(
+    seeded_db_loader, tmp_path
+):
+    """confirmed_facts is a disabled legacy placeholder, even when facts exist."""
+    from app.prompts.loader import PromptLoader
+    from app.leads.service import get_lead
+
+    loader = PromptLoader(clients_dir=tmp_path)
+    client = make_client()
+
+    assert seeded_db_loader.async_session_factory is not None
+    async with seeded_db_loader.async_session_factory() as sess:
+        lead = await get_lead(sess, "test-lead-loader-001")
+        assert lead is not None
+        lead.extracted_facts = {
+            "current_insurance": "Extracted Seguros",
+            "interest_level": 90,
+            "misc_notes": "Nota que no debe entrar por confirmed_facts",
+        }
+
+        result = await loader._build_variables(client, lead, call_count=1, db=sess)
+
+    assert result["confirmed_facts"] == ""
+
+
 # ---------------------------------------------------------------------------
 # T17 — _build_variables with db=None returns empty memory defaults
 # ---------------------------------------------------------------------------
@@ -968,11 +1010,10 @@ async def test_fallback_call_number_is_1_when_lead_is_none(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_quintana_prompt_contains_memoria_section(seeded_db_loader, tmp_path):
-    """Task 3.1: Quintana prompt.md renders with MEMORIA DE CONVERSACIONES ANTERIORES section.
+    """Quintana prompt renders with MEMORIA DE CONVERSACIONES ANTERIORES section.
 
-    The section must:
-    - Appear AFTER the DATOS DEL LEAD block
-    - Instruct agent to prioritize confirmed_facts over DATOS DEL LEAD
+    The section must appear AFTER the DATOS DEL LEAD block and use call_history,
+    not confirmed_facts.
     """
     from app.prompts.loader import PromptLoader
     from app.leads.service import get_lead
@@ -984,12 +1025,13 @@ async def test_quintana_prompt_contains_memoria_section(seeded_db_loader, tmp_pa
 
     loader = PromptLoader(clients_dir=real_clients_dir)
     client = make_client(client_id="quintana-seguros")
+    agent = make_agent()
 
     assert seeded_db_loader.async_session_factory is not None
     async with seeded_db_loader.async_session_factory() as sess:
         lead = await get_lead(sess, "test-lead-loader-001")
         assert lead is not None
-        result = await loader.render(client, lead, db=sess)
+        result = await loader.render_for_agent(agent, lead, db=sess, client=client)
 
     assert (
         "MEMORIA DE CONVERSACIONES ANTERIORES" in result
@@ -1010,12 +1052,13 @@ async def test_quintana_prompt_memoria_appears_after_datos_del_lead(
 
     loader = PromptLoader(clients_dir=real_clients_dir)
     client = make_client(client_id="quintana-seguros")
+    agent = make_agent()
 
     assert seeded_db_loader.async_session_factory is not None
     async with seeded_db_loader.async_session_factory() as sess:
         lead = await get_lead(sess, "test-lead-loader-001")
         assert lead is not None
-        result = await loader.render(client, lead, db=sess)
+        result = await loader.render_for_agent(agent, lead, db=sess, client=client)
 
     pos_datos = result.find("DATOS DEL LEAD")
     pos_memoria = result.find("MEMORIA DE CONVERSACIONES ANTERIORES")
@@ -1029,10 +1072,10 @@ async def test_quintana_prompt_memoria_appears_after_datos_del_lead(
 
 
 @pytest.mark.asyncio
-async def test_quintana_prompt_memoria_instructs_priority_over_datos_del_lead(
+async def test_quintana_prompt_memoria_uses_call_history_not_confirmed_facts(
     seeded_db_loader, tmp_path
 ):
-    """Task 3.1: MEMORIA section instructs agent to prioritize confirmed_facts."""
+    """MEMORIA section no longer references the disabled confirmed_facts block."""
     from app.prompts.loader import PromptLoader
     from app.leads.service import get_lead
 
@@ -1042,14 +1085,14 @@ async def test_quintana_prompt_memoria_instructs_priority_over_datos_del_lead(
 
     loader = PromptLoader(clients_dir=real_clients_dir)
     client = make_client(client_id="quintana-seguros")
+    agent = make_agent()
 
     assert seeded_db_loader.async_session_factory is not None
     async with seeded_db_loader.async_session_factory() as sess:
         lead = await get_lead(sess, "test-lead-loader-001")
         assert lead is not None
-        result = await loader.render(client, lead, db=sess)
+        result = await loader.render_for_agent(agent, lead, db=sess, client=client)
 
-    # The MEMORIA section must contain instruction to prioritize confirmed_facts
     memoria_start = result.find("MEMORIA DE CONVERSACIONES ANTERIORES")
     fillers_start = result.find("FILLERS")
     memoria_section = (
@@ -1058,15 +1101,8 @@ async def test_quintana_prompt_memoria_instructs_priority_over_datos_del_lead(
         else result[memoria_start:]
     )
 
-    assert (
-        "confirmed_facts" in memoria_section
-        or "prioritiz" in memoria_section.lower()
-        or "confiá" in memoria_section
-        or "prioridad" in memoria_section.lower()
-    ), (
-        f"MEMORIA section must instruct agent to prioritize confirmed_facts. "
-        f"Got: {memoria_section[:300]!r}"
-    )
+    assert "confirmed_facts" not in memoria_section
+    assert "Usá solamente" in memoria_section
 
 
 @pytest.mark.asyncio
@@ -1112,7 +1148,6 @@ async def test_quintana_prompt_memoria_section_present_when_no_facts(
     WHEN confirmed_facts is empty (no prior call data)
     THEN the MEMORIA DE CONVERSACIONES ANTERIORES section is still rendered
     AND confirmed_facts is empty (no bullet lines appear from extracted_facts)
-    AND the section instructs conditional behavior ("Si {{confirmed_facts}} está vacío…")
 
     This proves the MEMORIA section is structural (always present) not conditional.
     """
@@ -1125,6 +1160,7 @@ async def test_quintana_prompt_memoria_section_present_when_no_facts(
 
     loader = PromptLoader(clients_dir=real_clients_dir)
     client = make_client(client_id="quintana-seguros")
+    agent = make_agent()
 
     assert seeded_db_loader.async_session_factory is not None
     async with seeded_db_loader.async_session_factory() as sess:
@@ -1132,7 +1168,7 @@ async def test_quintana_prompt_memoria_section_present_when_no_facts(
         assert lead is not None
         # Ensure no extracted facts — first-time caller
         lead.extracted_facts = None
-        result = await loader.render(client, lead, db=sess)
+        result = await loader.render_for_agent(agent, lead, db=sess, client=client)
 
     # Section MUST be present even without facts
     assert "MEMORIA DE CONVERSACIONES ANTERIORES" in result, (
@@ -1173,6 +1209,7 @@ async def test_quintana_prompt_memoria_section_present_with_empty_dict_facts(
 
     loader = PromptLoader(clients_dir=real_clients_dir)
     client = make_client(client_id="quintana-seguros")
+    agent = make_agent()
 
     assert seeded_db_loader.async_session_factory is not None
     async with seeded_db_loader.async_session_factory() as sess:
@@ -1180,7 +1217,7 @@ async def test_quintana_prompt_memoria_section_present_with_empty_dict_facts(
         assert lead is not None
         # Empty dict — should also produce empty confirmed_facts
         lead.extracted_facts = {}
-        result = await loader.render(client, lead, db=sess)
+        result = await loader.render_for_agent(agent, lead, db=sess, client=client)
 
     # Section MUST be present
     assert (

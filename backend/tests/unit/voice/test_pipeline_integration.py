@@ -372,7 +372,7 @@ async def test_full_tool_flow_load_skill_filler_emitted_with_real_registry():
     THEN the filler_text from the registry ('Dejame buscar esa informacion...')
          is emitted to SSE BEFORE the skill file is read
     """
-    from app.prompts.skill_loader import load_skill_registry, SkillRegistryEntry
+    from app.prompts.skill_loader import load_skill_registry
     from app.ai.llm_streaming import ToolCallDelta, StreamDone
     from app.voice.webhook import _stream_llm_response
 
