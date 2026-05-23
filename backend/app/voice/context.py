@@ -18,6 +18,7 @@ Covers: VSC-1, VSC-2, VSC-3.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -33,6 +34,16 @@ if TYPE_CHECKING:
 
 
 logger = structlog.get_logger()
+
+LEAD_TEMPLATE_VARIABLES: frozenset[str] = frozenset(
+    {
+        "lead_name",
+        "car_make",
+        "car_model",
+        "car_year",
+        "current_insurance",
+    }
+)
 
 
 def _agent_log_fields(agent: "Agent") -> dict:
@@ -62,6 +73,14 @@ def parse_agent_tool_config(agent: "Agent") -> dict | None:
         return parsed if isinstance(parsed, dict) else None
     except (json.JSONDecodeError, TypeError):
         return None
+
+
+def prompt_uses_lead_placeholders(prompt: str | None) -> bool:
+    """Return True when a prompt template already injects lead raw fields."""
+    if not prompt:
+        return False
+    placeholders = set(re.findall(r"\{\{(\w+)\}\}", prompt))
+    return bool(placeholders & LEAD_TEMPLATE_VARIABLES)
 
 
 # ---------------------------------------------------------------------------
@@ -233,8 +252,9 @@ async def build_voice_context(
         _registry_entries_list = []
     skill_registry_entries: tuple[SkillRegistryEntry, ...] = tuple(_registry_entries_list)
 
-    # Extract misc_notes from lead.extracted_facts
-    # misc_notes in DB can be a dict {"notes": [...]} or a plain string
+    # Extract misc_notes from lead.extracted_facts. confirmed_facts no longer
+    # carries misc_notes, so this is the single runtime channel for those notes.
+    # misc_notes in DB can be a dict {"notes": [...]} or a plain string.
     misc_notes = ""
     if lead is not None:
         extracted = getattr(lead, "extracted_facts", None)
@@ -263,11 +283,21 @@ async def build_voice_context(
     # the agent system_prompt has template vars (see _assemble_context_system_content).
     lead_profile = _build_lead_profile_block(lead) if lead is not None else ""
 
-    # Track whether the agent system_prompt uses template vars — if it does, render_for_agent()
-    # already substituted lead data ({{lead_name}}, {{car_make}}, etc.) into system_prompt,
-    # so the lead_profile block must NOT be appended again (Issue #21: would duplicate data).
-    _agent_system_prompt = getattr(agent, "system_prompt", None) or ""
-    _agent_has_template_vars = "{{" in _agent_system_prompt
+    # Track whether the effective prompt template uses lead vars. Filesystem
+    # prompts are canonical; agent.system_prompt is only the legacy fallback.
+    try:
+        effective_prompt_template = await loader.load_agent_system_prompt(client_id, agent_slug)
+    except Exception as exc:  # noqa: BLE001 - duplicate guard should not block calls
+        logger.warning(
+            "voice_context_effective_prompt_load_failed",
+            **_agent_log_fields(agent),
+            error_type=type(exc).__name__,
+            error_msg=str(exc),
+        )
+        effective_prompt_template = None
+    if not effective_prompt_template:
+        effective_prompt_template = getattr(agent, "system_prompt", None) or ""
+    _prompt_uses_lead_placeholders = prompt_uses_lead_placeholders(effective_prompt_template)
 
     # Model config from agent
     model = getattr(agent, "model", "gpt-4o") or "gpt-4o"
@@ -348,7 +378,7 @@ async def build_voice_context(
         max_tokens=max_tokens,
         tools=tools,
         agent_tool_config=agent_tool_config,
-        skip_lead_profile_in_assembly=_agent_has_template_vars,
+        skip_lead_profile_in_assembly=_prompt_uses_lead_placeholders,
         tts_speed=tts_speed,
         tts_stability=tts_stability,
         tts_similarity_boost=tts_similarity_boost,

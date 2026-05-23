@@ -25,7 +25,8 @@ Architecture decision (design.md AD-6):
 CAP-2 (qora-memory-in-prompt):
     ``_build_variables`` is now async and accepts an optional ``db`` parameter.
     When ``db`` and ``lead`` are provided, calls ``build_memory_context`` to
-    inject real call_history, confirmed_facts, is_returning_caller, call_number.
+    inject real call_history, is_returning_caller, call_number. confirmed_facts
+    remains as an empty legacy placeholder.
     Falls back to empty defaults on any exception (structured error log emitted).
 
 Covers: T1.2, T2.2, T2.3, T22, T23.
@@ -233,9 +234,9 @@ class PromptLoader:
            (legacy client fallback, uses agent.name for {{agent_name}})
 
         Knowledge base:
-        - agent.knowledge_base (DB) → used if set (takes precedence over filesystem)
-        - Otherwise: no knowledge injection (filesystem knowledge.md is NOT used
-          when agent.knowledge_base is not set, to avoid stale data)
+        - Agent.knowledge_base is legacy and is not appended automatically.
+        - Filesystem knowledge.md is also not used on the Agent path; runtime
+          knowledge belongs in registry skills loaded on demand.
 
         Args:
             agent: Agent ORM (or mock) with system_prompt, knowledge_base, name, client_id.
@@ -317,17 +318,9 @@ class PromptLoader:
                     db=db,
                 )
 
-        # ------------------------------------------------------------------
-        # Knowledge injection — DB takes precedence, filesystem is skipped
-        # ------------------------------------------------------------------
-        agent_knowledge = getattr(agent, "knowledge_base", None)
-        if agent_knowledge:
-            knowledge = self._truncate_knowledge(
-                agent_knowledge, client_id=getattr(agent, "client_id", "")
-            )
-            prompt_body = f"{prompt_body}\n\n## INFORMACIÓN DE LA EMPRESA\n{knowledge}"
-        # NOTE: We intentionally do NOT load filesystem knowledge.md here.
-        # agent.knowledge_base=None means "no knowledge" for this agent.
+        # NOTE: We intentionally do NOT append Agent.knowledge_base here.
+        # It is a legacy field; runtime knowledge belongs in registry skills
+        # loaded through load_skill, not in every system prompt.
 
         return prompt_body
 
@@ -432,8 +425,9 @@ class PromptLoader:
         any exception, logging ``memory_context_failed``.
 
         Includes memory variables (call_history, confirmed_facts,
-        is_returning_caller, call_number) — real values when db+lead provided,
-        empty defaults otherwise.
+        is_returning_caller, call_number). call_history/is_returning_caller/
+        call_number use real values when db+lead are provided; confirmed_facts
+        is intentionally always empty.
         """
         from app.prompts.insurance_agent import RETURNING_CALLER_CONTEXT
 
@@ -475,7 +469,6 @@ class PromptLoader:
 
                 memory = await build_memory_context(db, lead)
                 call_history = memory["call_history"]
-                confirmed_facts = memory["confirmed_facts"]
                 is_returning_caller_str = str(memory["is_returning_caller"]).lower()
                 call_number_str = str(memory["call_number"])
                 # Update returning_caller_context using real call_number

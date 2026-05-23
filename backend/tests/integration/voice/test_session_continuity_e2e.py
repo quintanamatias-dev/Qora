@@ -315,15 +315,9 @@ async def test_full_memory_cycle_first_call_then_second_call_has_history(
         or "preguntó" in call_history
     ), f"call_history should contain summary content from first call, got: {call_history!r}"
 
-    # confirmed_facts MUST be non-empty (extracted_facts were set)
+    # confirmed_facts is a disabled legacy placeholder; extracted_facts must not leak in.
     confirmed_facts = dv.get("confirmed_facts", "")
-    assert confirmed_facts, (
-        f"Expected non-empty confirmed_facts for second call, got {confirmed_facts!r}. "
-        "initiation.py must format Lead.extracted_facts into confirmed_facts."
-    )
-    assert (
-        "La Caja" in confirmed_facts
-    ), f"confirmed_facts should mention current_insurance='La Caja', got: {confirmed_facts!r}"
+    assert confirmed_facts == ""
 
     # call_number MUST be >= 2
     call_number = dv.get("call_number", 0)

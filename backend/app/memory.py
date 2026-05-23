@@ -14,8 +14,9 @@ merges naturally into the variables dict via ``{**vars, **memory}``.
 Architecture decision (design.md AD-3): Dates are converted to
 America/Argentina/Buenos_Aires timezone before formatting.
 
-Architecture decision (design.md AD-6): confirmed_facts ordering is fixed by
-code (not dict iteration): current_insurance → interest_level → next_action_suggested.
+Context hygiene: confirmed_facts is intentionally empty at runtime. The old
+mixed block duplicated extracted facts, misc_notes, profile facts, and interest
+history; each datum now needs one explicit channel.
 
 Covers: CAP-1 (T01-T13).
 """
@@ -73,7 +74,7 @@ class MemoryContext(TypedDict):
 
     All four fields are required:
     - call_history: multi-line string, one line per session (empty if none).
-    - confirmed_facts: bulleted multi-line string from extracted_facts.
+    - confirmed_facts: legacy placeholder, intentionally empty.
     - is_returning_caller: True iff ≥1 completed session exists.
     - call_number: lead.call_count + 1.
     """
@@ -140,26 +141,10 @@ async def build_memory_context(db: AsyncSession, lead: "Lead") -> MemoryContext:
     sessions = list(sessions_result.scalars().all())
 
     call_history = _format_call_history(sessions, _TZ_BA)
-    extracted = _coerce_extracted_facts(lead.extracted_facts)
-    # Legacy scalar facts from extracted_facts JSON
-    confirmed_facts = _format_confirmed_facts(extracted)
-
-    # qora-misc-notes: Render dedicated '--- Notas operativas ---' section
-    # between confirmed_facts and accumulated profile section.
-    misc_notes_section = _format_misc_notes(extracted)
-    if misc_notes_section:
-        if confirmed_facts:
-            confirmed_facts = confirmed_facts + "\n" + misc_notes_section
-        else:
-            confirmed_facts = misc_notes_section
-
-    # Issue #36: Append accumulated relational profile facts (token-budgeted)
-    accumulated_section = await _format_accumulated_profile(db, lead.id)
-    if accumulated_section:
-        if confirmed_facts:
-            confirmed_facts = confirmed_facts + "\n" + accumulated_section
-        else:
-            confirmed_facts = accumulated_section
+    # Context hygiene: disable the generic mixed confirmed_facts block. It used
+    # to merge extracted_facts, misc_notes, LeadProfileFact rows, and interest
+    # history, which made stale or duplicate context hard to reason about.
+    confirmed_facts = ""
 
     # REQ-1.5: is_returning_caller is True iff ANY completed session exists,
     # regardless of whether it has a summary.

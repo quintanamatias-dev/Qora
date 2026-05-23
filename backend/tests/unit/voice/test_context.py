@@ -345,6 +345,63 @@ async def test_build_voice_context_lead_profile_contains_lead_name():
 
 
 @pytest.mark.asyncio
+async def test_build_voice_context_skips_lead_profile_when_filesystem_prompt_has_lead_placeholders():
+    """Effective filesystem prompt lead placeholders suppress duplicate lead_profile."""
+    from app.voice.context import build_voice_context
+
+    lead = make_lead(name="María López", car_make="Honda", car_model="Civic", car_year=2020)
+    agent = make_agent(system_prompt="Static DB prompt without lead vars")
+    client = make_client()
+    mock_db = AsyncMock()
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="Hola María López")
+        mock_instance.load_agent_skills = AsyncMock(return_value="")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
+        mock_instance.load_agent_system_prompt = AsyncMock(
+            return_value="Hola {{lead_name}}, auto {{car_make}}"
+        )
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=lead,
+            db=mock_db,
+            client=client,
+        )
+
+    assert result.lead_profile
+    assert result.skip_lead_profile_in_assembly is True
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_keeps_misc_notes_as_single_channel():
+    """misc_notes remains available as its own block after confirmed_facts cleanup."""
+    from app.voice.context import build_voice_context
+
+    lead = make_lead(extracted_facts={"misc_notes": "Cliente prefiere WhatsApp"})
+    agent = make_agent(system_prompt="Static DB prompt")
+    client = make_client()
+    mock_db = AsyncMock()
+
+    with patch("app.voice.context.PromptLoader") as MockLoader:
+        mock_instance = MockLoader.return_value
+        mock_instance.render_for_agent = AsyncMock(return_value="prompt")
+        mock_instance.load_agent_skills = AsyncMock(return_value="")
+        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
+        mock_instance.load_agent_system_prompt = AsyncMock(return_value=None)
+
+        result = await build_voice_context(
+            agent=agent,
+            lead=lead,
+            db=mock_db,
+            client=client,
+        )
+
+    assert result.misc_notes == "Cliente prefiere WhatsApp"
+
+
+@pytest.mark.asyncio
 async def test_build_voice_context_no_lead_returns_empty_misc_and_profile():
     """VSC-2 anonymous call: lead=None → misc_notes='' and lead_profile=''.
 

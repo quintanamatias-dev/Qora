@@ -437,14 +437,11 @@ async def test_profile_facts_remove_disappears_from_memory_context(
     assert len(first_rows) == 1, f"Expected fact after call 1, got {len(first_rows)}"
     old_fact_key = first_rows[0].fact_key
 
-    # Verify it appears in memory context after call 1
+    # Verify generic confirmed_facts stays disabled after call 1
     async with profile_integration_db.async_session_factory() as db:
         lead = await get_lead(db, "lead-profile-integration-001")
         ctx = await build_memory_context(db, lead)
-    assert "corredor" in ctx["confirmed_facts"], (
-        "Expected 'corredor' to appear in memory context after call 1. "
-        f"Got: {ctx['confirmed_facts']!r}"
-    )
+    assert ctx["confirmed_facts"] == ""
 
     # Call 2: REMOVE the lifestyle fact
     session_id_2 = await _create_session_with_turns(

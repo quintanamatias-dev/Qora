@@ -3,7 +3,7 @@
 Covers:
 - PromptLoader.render_for_agent() uses agent.system_prompt as DB prompt when set
 - PromptLoader.render_for_agent() falls back to filesystem prompt.md when system_prompt is None/empty
-- PromptLoader.render_for_agent() uses agent.knowledge_base from DB (not filesystem)
+- PromptLoader.render_for_agent() does not append legacy agent.knowledge_base
 - PromptLoader.render_for_agent() uses agent.name for {{agent_name}} template variable
 - PromptLoader.render_for_agent() falls back to JAUMPABLO_PROMPT_TEMPLATE when system_prompt is empty
 - PromptLoader.render_for_agent() uses filesystem system-prompt.md as source of truth, overriding DB
@@ -143,8 +143,8 @@ async def test_render_for_agent_empty_system_prompt_falls_back(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_render_for_agent_uses_db_knowledge_base(tmp_path: Path):
-    """When agent.knowledge_base is set, it is appended to the prompt (not filesystem)."""
+async def test_render_for_agent_does_not_append_legacy_db_knowledge_base(tmp_path: Path):
+    """Agent.knowledge_base is legacy and is not appended automatically."""
     from app.prompts.loader import PromptLoader
 
     agent = make_agent(
@@ -156,8 +156,8 @@ async def test_render_for_agent_uses_db_knowledge_base(tmp_path: Path):
     loader = PromptLoader(clients_dir=tmp_path)
     result = await loader.render_for_agent(agent, lead)
 
-    assert "Coberturas: Auto, Vida, Hogar." in result
-    assert "INFORMACIÓN DE LA EMPRESA" in result
+    assert "Coberturas: Auto, Vida, Hogar." not in result
+    assert "INFORMACIÓN DE LA EMPRESA" not in result
 
 
 @pytest.mark.asyncio
@@ -179,10 +179,10 @@ async def test_render_for_agent_no_knowledge_base_no_section(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_render_for_agent_db_knowledge_takes_precedence_over_filesystem(
+async def test_render_for_agent_ignores_db_and_filesystem_knowledge(
     tmp_path: Path,
 ):
-    """DB knowledge_base takes precedence over filesystem knowledge.md."""
+    """Agent path does not append legacy DB or filesystem knowledge."""
     from app.prompts.loader import PromptLoader
 
     # Create a filesystem knowledge.md that should NOT be used
@@ -195,15 +195,16 @@ async def test_render_for_agent_db_knowledge_takes_precedence_over_filesystem(
     agent = make_agent(
         client_id="test-client",
         system_prompt="Sos agente.",
-        knowledge_base="DB knowledge — should appear.",
+        knowledge_base="DB knowledge — should NOT appear.",
     )
     lead = make_lead()
 
     loader = PromptLoader(clients_dir=tmp_path)
     result = await loader.render_for_agent(agent, lead)
 
-    assert "DB knowledge — should appear." in result
+    assert "DB knowledge — should NOT appear." not in result
     assert "Filesystem knowledge — should NOT appear." not in result
+    assert "INFORMACIÓN DE LA EMPRESA" not in result
 
 
 # ---------------------------------------------------------------------------

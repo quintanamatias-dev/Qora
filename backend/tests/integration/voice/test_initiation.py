@@ -379,12 +379,7 @@ async def test_initiation_response_shape_unchanged_after_refactor(
     ), f"call_history should contain session summary content: {call_history!r}"
 
     confirmed_facts = dv["confirmed_facts"]
-    assert (
-        confirmed_facts
-    ), f"confirmed_facts must be non-empty, got: {confirmed_facts!r}"
-    assert (
-        "La Caja" in confirmed_facts
-    ), f"confirmed_facts should contain 'La Caja' from extracted_facts: {confirmed_facts!r}"
+    assert confirmed_facts == ""
 
     # is_returning_caller should be True (bool) — 2 completed sessions exist
     is_returning = dv["is_returning_caller"]

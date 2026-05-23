@@ -643,7 +643,7 @@ def _assemble_context_system_content(
     Assembly order:
     1. system_prompt (always included)
     2. skills_index (## Available Skills block, when not None/empty)
-    3. misc_notes (when not empty)
+    3. misc_notes (when not empty; single channel for operational notes)
     4. lead_profile (when not empty and skip_lead_profile_in_assembly is False)
     5. Loaded skill blocks (## Loaded Skill: {name} + content, one per entry)
 
@@ -913,7 +913,7 @@ async def _process_custom_llm_request(
                     has_conv_state=conv_state is not None,
                 )
                 # Build system prompt inside the DB session block so render() can query
-                # memory (call_history, confirmed_facts) via build_memory_context(db, lead).
+                # memory (call_history, call_number, returning flag) via build_memory_context(db, lead).
                 #
                 # Phase 7 prompt resolution priority:
                 # 1. agent.system_prompt (DB) via render_for_agent()
@@ -984,9 +984,8 @@ async def _process_custom_llm_request(
         # client_orm holds the tenant reference; used in per-turn path above
 
     # Build messages with system prompt prepended.
-    # Issue #21: Do NOT append [CONTEXTO DEL LEAD] block on the TEMPLATE path —
-    # the template already includes all lead data via {{lead_name}}, {{car_make}},
-    # {{confirmed_facts}}, etc. Appending it was reinforcing stale values 3x.
+    # Issue #21: Do NOT append [CONTEXTO DEL LEAD] block on a lead-template path —
+    # the template already includes lead data via {{lead_name}}, {{car_make}}, etc.
     #
     # OVERRIDE PATH: When system_prompt_override is set and no Agent exists,
     # the template is NOT rendered, so {{lead_name}}, etc. are never substituted.
@@ -1000,10 +999,35 @@ async def _process_custom_llm_request(
     # lead_profile is already assembled inside system_content — no [CONTEXTO DEL LEAD]
     # appending needed. Only append in the per-turn render_for_agent fallback path.
     if not _used_voice_context:
-        # Only apply lead context appending in the per-turn render_for_agent fallback path
-        _agent_has_template_vars = (
-            agent is not None and agent.system_prompt and "{{" in agent.system_prompt
-        )
+        # Only apply lead context appending in the per-turn render_for_agent fallback path.
+        # Filesystem prompts are the effective source of truth; DB prompts are fallback.
+        _agent_has_template_vars = False
+        if agent is not None:
+            from app.voice.context import prompt_uses_lead_placeholders
+
+            _effective_prompt_template = None
+            _agent_client_id = getattr(agent, "client_id", None) or client_id
+            _agent_slug = getattr(agent, "slug", None)
+            if not isinstance(_agent_slug, str) or not _agent_slug.strip():
+                _agent_slug = str(getattr(agent, "name", "agent")).lower().replace(" ", "-")
+            try:
+                _effective_prompt_template = await PromptLoader().load_agent_system_prompt(
+                    _agent_client_id, _agent_slug
+                )
+            except Exception as exc:  # noqa: BLE001 - fallback append should remain best-effort
+                structlog.get_logger().warning(
+                    "voice_context_fallback_effective_prompt_load_failed",
+                    client_id=client_id,
+                    conversation_id=conversation_id,
+                    agent_id=getattr(agent, "id", None),
+                    error_type=type(exc).__name__,
+                    error_msg=str(exc),
+                )
+            if not _effective_prompt_template:
+                _effective_prompt_template = getattr(agent, "system_prompt", None) or ""
+            _agent_has_template_vars = prompt_uses_lead_placeholders(
+                _effective_prompt_template
+            )
         _has_static_prompt = (
             # Legacy client.system_prompt_override (no Agent)
             (agent is None and client_orm is not None and client_orm.system_prompt_override is not None)
