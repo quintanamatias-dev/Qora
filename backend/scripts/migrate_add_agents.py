@@ -61,6 +61,7 @@ async def run_migration(database_url: str) -> None:
                         voice_id TEXT NOT NULL,
                         system_prompt TEXT,
                         knowledge_base TEXT,
+                        tool_config TEXT,
                         model TEXT NOT NULL DEFAULT 'gpt-4o',
                         temperature REAL NOT NULL DEFAULT 0.7,
                         max_tokens INTEGER NOT NULL DEFAULT 300,
@@ -81,6 +82,16 @@ async def run_migration(database_url: str) -> None:
             print(
                 "  [create] agents table + ix_agents_client_id + UNIQUE(client_id, slug)"
             )
+
+        result = await conn.execute(sqlalchemy.text("PRAGMA table_info(agents)"))
+        agent_columns = {row[1] for row in result.fetchall()}
+        if "tool_config" not in agent_columns:
+            await conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE agents ADD COLUMN tool_config TEXT DEFAULT NULL"
+                )
+            )
+            print("  [alter] added agents.tool_config")
 
         # ------------------------------------------------------------------
         # 1b. Ensure UNIQUE index on (client_id, slug) exists regardless of

@@ -126,6 +126,14 @@ async def initiation_webhook(
         if resolved_lead_id:
             lead = await get_lead(session, resolved_lead_id)
 
+            if lead is not None and lead.client_id != resolved_client_id:
+                logger.warning(
+                    "initiation_lead_client_mismatch",
+                    lead_id=lead.id,
+                    client_id=resolved_client_id,
+                )
+                lead = None
+
             if lead is not None:
                 # CAP-6: Block initiation for do_not_call leads BEFORE any call is made
                 if lead.do_not_call:

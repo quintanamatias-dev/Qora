@@ -88,6 +88,15 @@ async def _ensure_startup_schema_compat(db_module) -> None:
                 "startup_schema_compat_added", column="agents.elevenlabs_agent_id"
             )
 
+        if "tool_config" not in agent_columns:
+            await conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE agents "
+                    "ADD COLUMN tool_config TEXT DEFAULT NULL"
+                )
+            )
+            logger.info("startup_schema_compat_added", column="agents.tool_config")
+
         # TTS runtime config columns (unify-qora-agent-runtime-config)
         if "tts_speed" not in agent_columns:
             await conn.execute(
