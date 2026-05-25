@@ -71,6 +71,25 @@ class Agent(Base):
     tts_speed: Mapped[float] = mapped_column(Float, nullable=False, default=0.95)
     tts_stability: Mapped[float] = mapped_column(Float, nullable=False, default=0.4)
     tts_similarity_boost: Mapped[float] = mapped_column(Float, nullable=False, default=0.75)
+    # ElevenLabs soft timeout configuration (sdd/elevenlabs-provisioning)
+    # NULL = use ElevenLabs dashboard defaults — no PATCH is sent.
+    # soft_timeout_use_llm stored as BOOLEAN (SQLAlchemy maps to INTEGER 0/1 in SQLite)
+    soft_timeout_seconds: Mapped[float | None] = mapped_column(
+        Float, nullable=True, default=None
+    )
+    soft_timeout_message: Mapped[str | None] = mapped_column(
+        Text, nullable=True, default=None
+    )
+    soft_timeout_use_llm: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True, default=None
+    )
+    # ElevenLabs sync tracking columns
+    elevenlabs_sync_status: Mapped[str | None] = mapped_column(
+        String, nullable=True, default=None
+    )
+    elevenlabs_last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(

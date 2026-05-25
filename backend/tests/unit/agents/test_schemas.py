@@ -816,3 +816,165 @@ def test_legacy_tools_rejected_in_api_create():
             tools_enabled=["get_lead_details", "register_interest"],
         )
     assert "register_interest" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Task 2.3 (RED) — Soft timeout fields on AgentCreate, AgentUpdate, AgentResponse
+# Spec: sdd/elevenlabs-provisioning — Agent Schemas requirement
+# ---------------------------------------------------------------------------
+
+
+def test_agent_create_soft_timeout_fields_default_to_none():
+    """AgentCreate defaults all soft timeout fields to None when not provided."""
+    from app.agents.schemas import AgentCreate
+
+    agent = AgentCreate(slug="main", name="Main", voice_id="v1")
+
+    assert agent.soft_timeout_seconds is None
+    assert agent.soft_timeout_message is None
+    assert agent.soft_timeout_use_llm is None
+
+
+def test_agent_create_accepts_soft_timeout_fields():
+    """AgentCreate accepts soft_timeout_seconds, message, and use_llm."""
+    from app.agents.schemas import AgentCreate
+
+    agent = AgentCreate(
+        slug="timeout-agent",
+        name="Timeout Agent",
+        voice_id="v1",
+        soft_timeout_seconds=3.0,
+        soft_timeout_message="Mmm, déjame pensar...",
+        soft_timeout_use_llm=False,
+    )
+
+    assert agent.soft_timeout_seconds == 3.0
+    assert agent.soft_timeout_message == "Mmm, déjame pensar..."
+    assert agent.soft_timeout_use_llm is False
+
+
+def test_agent_create_soft_timeout_seconds_range_valid_lower():
+    """AgentCreate accepts soft_timeout_seconds=0.5 (lower bound)."""
+    from app.agents.schemas import AgentCreate
+
+    agent = AgentCreate(slug="t", name="T", voice_id="v1", soft_timeout_seconds=0.5)
+    assert agent.soft_timeout_seconds == 0.5
+
+
+def test_agent_create_soft_timeout_seconds_range_valid_upper():
+    """AgentCreate accepts soft_timeout_seconds=8.0 (upper bound)."""
+    from app.agents.schemas import AgentCreate
+
+    agent = AgentCreate(slug="t", name="T", voice_id="v1", soft_timeout_seconds=8.0)
+    assert agent.soft_timeout_seconds == 8.0
+
+
+def test_agent_create_soft_timeout_seconds_below_min_raises():
+    """AgentCreate rejects soft_timeout_seconds=0.1 (below min 0.5) with 422."""
+    from app.agents.schemas import AgentCreate
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentCreate(slug="t", name="T", voice_id="v1", soft_timeout_seconds=0.1)
+
+    assert "soft_timeout_seconds" in str(exc_info.value)
+
+
+def test_agent_create_soft_timeout_seconds_above_max_raises():
+    """AgentCreate rejects soft_timeout_seconds=9.0 (above max 8.0) with 422."""
+    from app.agents.schemas import AgentCreate
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentCreate(slug="t", name="T", voice_id="v1", soft_timeout_seconds=9.0)
+
+    assert "soft_timeout_seconds" in str(exc_info.value)
+
+
+def test_agent_update_soft_timeout_fields_not_in_unset_dump():
+    """AgentUpdate with no fields does not include soft timeout fields in unset dump."""
+    from app.agents.schemas import AgentUpdate
+
+    update = AgentUpdate()
+    data = update.model_dump(exclude_unset=True)
+
+    assert "soft_timeout_seconds" not in data
+    assert "soft_timeout_message" not in data
+    assert "soft_timeout_use_llm" not in data
+
+
+def test_agent_update_accepts_soft_timeout_fields():
+    """AgentUpdate accepts soft timeout fields as a partial patch."""
+    from app.agents.schemas import AgentUpdate
+
+    update = AgentUpdate(soft_timeout_seconds=5.0, soft_timeout_use_llm=True)
+    data = update.model_dump(exclude_unset=True)
+
+    assert data["soft_timeout_seconds"] == 5.0
+    assert data["soft_timeout_use_llm"] is True
+    assert "soft_timeout_message" not in data
+
+
+def test_agent_response_includes_soft_timeout_and_sync_fields():
+    """AgentResponse includes all 5 new fields: soft timeout fields + sync status/timestamp."""
+    from datetime import datetime, timezone
+    from app.agents.schemas import AgentResponse
+
+    now = datetime.now(timezone.utc)
+    resp = AgentResponse(
+        agent_id="st-1",
+        client_id="c1",
+        slug="main",
+        name="Main",
+        voice_id="v1",
+        system_prompt=None,
+        knowledge_base=None,
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools_enabled=[],
+        is_active=True,
+        is_default=False,
+        created_at=now,
+        soft_timeout_seconds=3.0,
+        soft_timeout_message="Mmm...",
+        soft_timeout_use_llm=False,
+        elevenlabs_sync_status="synced",
+        elevenlabs_last_synced_at=now,
+    )
+
+    assert resp.soft_timeout_seconds == 3.0
+    assert resp.soft_timeout_message == "Mmm..."
+    assert resp.soft_timeout_use_llm is False
+    assert resp.elevenlabs_sync_status == "synced"
+    assert resp.elevenlabs_last_synced_at == now
+
+
+def test_agent_response_soft_timeout_fields_default_to_none():
+    """AgentResponse defaults all 5 soft timeout / sync fields to None when not provided."""
+    from datetime import datetime, timezone
+    from app.agents.schemas import AgentResponse
+
+    now = datetime.now(timezone.utc)
+    resp = AgentResponse(
+        agent_id="st-2",
+        client_id="c1",
+        slug="main",
+        name="Main",
+        voice_id="v1",
+        system_prompt=None,
+        knowledge_base=None,
+        model="gpt-4o",
+        temperature=0.7,
+        max_tokens=300,
+        tools_enabled=[],
+        is_active=True,
+        is_default=False,
+        created_at=now,
+    )
+
+    assert resp.soft_timeout_seconds is None
+    assert resp.soft_timeout_message is None
+    assert resp.soft_timeout_use_llm is None
+    assert resp.elevenlabs_sync_status is None
+    assert resp.elevenlabs_last_synced_at is None

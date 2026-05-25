@@ -230,3 +230,81 @@ async def test_startup_compat_does_not_touch_existing_tts_values(tmp_path: Path)
     assert row[0] == 1.2, f"tts_speed must remain 1.2, got {row[0]}"
     assert row[1] == 0.5, f"tts_stability must remain 0.5, got {row[1]}"
     assert row[2] == 0.8, f"tts_similarity_boost must remain 0.8, got {row[2]}"
+
+
+# ---------------------------------------------------------------------------
+# Task 2.5 (RED) — ElevenLabs soft timeout columns
+# Spec: sdd/elevenlabs-provisioning — DDL Migration requirement
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_startup_compat_adds_soft_timeout_columns(old_agents_db):
+    """_ensure_startup_schema_compat() adds the 5 new ElevenLabs soft timeout columns.
+
+    GIVEN an existing agents table WITHOUT soft timeout columns (old_agents_db fixture)
+    WHEN _ensure_startup_schema_compat() is called
+    THEN all 5 columns MUST be added: soft_timeout_seconds, soft_timeout_message,
+         soft_timeout_use_llm, elevenlabs_sync_status, elevenlabs_last_synced_at
+    """
+    import sqlalchemy
+    from app.main import _ensure_startup_schema_compat
+
+    fake_module = _FakeDbModule(old_agents_db)
+    await _ensure_startup_schema_compat(fake_module)
+
+    async with old_agents_db.begin() as conn:
+        result = await conn.execute(sqlalchemy.text("PRAGMA table_info(agents)"))
+        columns = {row[1] for row in result.fetchall()}
+
+    assert "soft_timeout_seconds" in columns, f"soft_timeout_seconds not added. Got: {columns}"
+    assert "soft_timeout_message" in columns, f"soft_timeout_message not added. Got: {columns}"
+    assert "soft_timeout_use_llm" in columns, f"soft_timeout_use_llm not added. Got: {columns}"
+    assert "elevenlabs_sync_status" in columns, f"elevenlabs_sync_status not added. Got: {columns}"
+    assert "elevenlabs_last_synced_at" in columns, f"elevenlabs_last_synced_at not added. Got: {columns}"
+
+
+@pytest.mark.asyncio
+async def test_startup_compat_soft_timeout_columns_default_to_null(old_agents_db):
+    """Existing rows get NULL defaults for the new soft timeout columns.
+
+    GIVEN an existing agent row (test-id-1 from fixture)
+    WHEN _ensure_startup_schema_compat() runs and adds soft timeout columns
+    THEN the existing row must have NULL for all 5 new columns
+    """
+    import sqlalchemy
+    from app.main import _ensure_startup_schema_compat
+
+    fake_module = _FakeDbModule(old_agents_db)
+    await _ensure_startup_schema_compat(fake_module)
+
+    async with old_agents_db.begin() as conn:
+        result = await conn.execute(sqlalchemy.text(
+            "SELECT soft_timeout_seconds, soft_timeout_message, soft_timeout_use_llm, "
+            "elevenlabs_sync_status, elevenlabs_last_synced_at "
+            "FROM agents WHERE id='test-id-1'"
+        ))
+        row = result.fetchone()
+
+    assert row is not None
+    # All new columns must default to NULL
+    assert row[0] is None, f"soft_timeout_seconds must be NULL, got {row[0]}"
+    assert row[1] is None, f"soft_timeout_message must be NULL, got {row[1]}"
+    assert row[2] is None, f"soft_timeout_use_llm must be NULL, got {row[2]}"
+    assert row[3] is None, f"elevenlabs_sync_status must be NULL, got {row[3]}"
+    assert row[4] is None, f"elevenlabs_last_synced_at must be NULL, got {row[4]}"
+
+
+@pytest.mark.asyncio
+async def test_startup_compat_soft_timeout_idempotent(old_agents_db):
+    """Running _ensure_startup_schema_compat() twice does NOT raise for soft timeout columns.
+
+    Idempotent behavior: second run must be a no-op (columns already exist).
+    """
+    from app.main import _ensure_startup_schema_compat
+
+    fake_module = _FakeDbModule(old_agents_db)
+
+    await _ensure_startup_schema_compat(fake_module)
+    # Second run must not raise
+    await _ensure_startup_schema_compat(fake_module)

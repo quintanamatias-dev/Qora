@@ -22,7 +22,7 @@ import logging
 import re
 from datetime import datetime
 
-from pydantic import BaseModel, field_validator, Field
+from pydantic import BaseModel, field_validator, Field, model_validator
 
 # Slug must be all lowercase alphanumeric + hyphens, no leading/trailing hyphen.
 # Allows single alphanumeric chars (e.g. "a", "1").
@@ -113,6 +113,11 @@ class AgentCreate(BaseModel):
     tts_speed: float = Field(default=0.95, ge=0.7, le=1.2)
     tts_stability: float = Field(default=0.4, ge=0.0, le=1.0)
     tts_similarity_boost: float = Field(default=0.75, ge=0.0, le=1.0)
+    # ElevenLabs soft timeout config (sdd/elevenlabs-provisioning)
+    # NULL = use ElevenLabs dashboard defaults. Range [0.5, 8.0] seconds.
+    soft_timeout_seconds: float | None = Field(default=None, ge=0.5, le=8.0)
+    soft_timeout_message: str | None = None
+    soft_timeout_use_llm: bool | None = None
 
     @field_validator("slug")
     @classmethod
@@ -154,6 +159,10 @@ class AgentUpdate(BaseModel):
     tts_speed: float | None = Field(default=None, ge=0.7, le=1.2)
     tts_stability: float | None = Field(default=None, ge=0.0, le=1.0)
     tts_similarity_boost: float | None = Field(default=None, ge=0.0, le=1.0)
+    # ElevenLabs soft timeout config (sdd/elevenlabs-provisioning)
+    soft_timeout_seconds: float | None = Field(default=None, ge=0.5, le=8.0)
+    soft_timeout_message: str | None = None
+    soft_timeout_use_llm: bool | None = None
 
     @field_validator("tools_enabled")
     @classmethod
@@ -192,5 +201,24 @@ class AgentResponse(BaseModel):
     tts_speed: float = 0.95
     tts_stability: float = 0.4
     tts_similarity_boost: float = 0.75
+    # ElevenLabs soft timeout config + sync status (sdd/elevenlabs-provisioning)
+    soft_timeout_seconds: float | None = None
+    soft_timeout_message: str | None = None
+    soft_timeout_use_llm: bool | None = None
+    elevenlabs_sync_status: str | None = None
+    elevenlabs_last_synced_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+
+class SyncStatusResponse(BaseModel):
+    """Response body for POST .../sync-elevenlabs.
+
+    sync_status: outcome of the sync attempt — 'synced', 'skipped', or 'error'
+    synced_at:   ISO timestamp when synced; null if skipped or error
+    error_detail: human-readable error string; null when sync_status != 'error'
+    """
+
+    sync_status: str
+    synced_at: datetime | None = None
+    error_detail: str | None = None

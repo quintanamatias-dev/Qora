@@ -553,6 +553,9 @@ async def create_agent(
     tts_stability: float = 0.4,
     tts_similarity_boost: float = 0.75,
     tool_config: str | None = None,
+    soft_timeout_seconds: float | None = None,
+    soft_timeout_message: str | None = None,
+    soft_timeout_use_llm: bool | None = None,
 ) -> Agent:
     """Create and persist a new Agent record.
 
@@ -612,6 +615,9 @@ async def create_agent(
         tts_stability=tts_stability,
         tts_similarity_boost=tts_similarity_boost,
         tool_config=tool_config,
+        soft_timeout_seconds=soft_timeout_seconds,
+        soft_timeout_message=soft_timeout_message,
+        soft_timeout_use_llm=soft_timeout_use_llm,
     )
     session.add(agent)
     await session.flush()
