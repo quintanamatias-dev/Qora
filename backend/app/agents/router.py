@@ -1,22 +1,26 @@
 """QORA Agents — CRUD router nested under /api/v1/clients/{client_id}/agents/.
 
 Endpoints:
-    GET    /api/v1/clients/{client_id}/agents/                  — List agents (200 / 404)
-    POST   /api/v1/clients/{client_id}/agents/                  — Create agent (201 / 404 / 409 / 422)
-    GET    /api/v1/clients/{client_id}/agents/{agent_id}        — Get single agent (200 / 404)
-    PATCH  /api/v1/clients/{client_id}/agents/{agent_id}        — Partial update (200 / 404)
-    POST   /api/v1/clients/{client_id}/agents/{agent_id}/deactivate    — Soft delete (200 / 404 / 409)
-    POST   /api/v1/clients/{client_id}/agents/{agent_id}/make-default  — Atomic default swap (200 / 404 / 409)
+    GET    /api/v1/clients/{client_id}/agents/                              — List agents (200 / 404)
+    POST   /api/v1/clients/{client_id}/agents/                              — Create agent (201 / 404 / 409 / 422)
+    GET    /api/v1/clients/{client_id}/agents/{agent_id}                    — Get single agent (200 / 404)
+    PATCH  /api/v1/clients/{client_id}/agents/{agent_id}                    — Partial update (200 / 404)
+    POST   /api/v1/clients/{client_id}/agents/{agent_id}/deactivate         — Soft delete (200 / 404 / 409)
+    POST   /api/v1/clients/{client_id}/agents/{agent_id}/make-default       — Atomic default swap (200 / 404 / 409)
+    POST   /api/v1/clients/{client_id}/agents/{agent_id}/sync-elevenlabs    — Manual EL re-sync (200 / 404)
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.schemas import AgentCreate, AgentResponse, AgentUpdate
+from app.agents.schemas import AgentCreate, AgentResponse, AgentUpdate, SyncStatusResponse
+from app.elevenlabs.service import sync_to_elevenlabs
 from app.tenants.models import Agent, Client
 import app.tenants.service as tenant_service
 
@@ -127,6 +131,42 @@ def _agent_to_response(agent: Agent) -> AgentResponse:
         tts_stability=_tts_field(agent, "tts_stability", 0.4),
         tts_similarity_boost=_tts_field(agent, "tts_similarity_boost", 0.75),
         tool_config=_deserialize_tool_config(getattr(agent, "tool_config", None)),
+        # ElevenLabs soft timeout + sync status (sdd/elevenlabs-provisioning)
+        soft_timeout_seconds=getattr(agent, "soft_timeout_seconds", None),
+        soft_timeout_message=getattr(agent, "soft_timeout_message", None),
+        soft_timeout_use_llm=getattr(agent, "soft_timeout_use_llm", None),
+        elevenlabs_sync_status=getattr(agent, "elevenlabs_sync_status", None),
+        elevenlabs_last_synced_at=getattr(agent, "elevenlabs_last_synced_at", None),
+    )
+
+
+_SOFT_TIMEOUT_FIELDS = frozenset({
+    "soft_timeout_seconds",
+    "soft_timeout_message",
+    "soft_timeout_use_llm",
+})
+
+
+def _should_trigger_sync(agent: Agent, changed_fields: set[str] | None = None) -> bool:
+    """Return True if an ElevenLabs sync should be triggered.
+
+    Conditions (both must be true):
+    1. Agent has elevenlabs_agent_id bound
+    2. At least one soft-timeout field is set (not all None), OR changed_fields
+       includes a soft-timeout field (for update path)
+    """
+    if not getattr(agent, "elevenlabs_agent_id", None):
+        return False
+
+    if changed_fields is not None:
+        # Update path: only trigger if a soft-timeout field was actually changed
+        return bool(changed_fields & _SOFT_TIMEOUT_FIELDS)
+
+    # Create path: trigger if any soft-timeout field is non-None
+    return (
+        agent.soft_timeout_seconds is not None
+        or agent.soft_timeout_message is not None
+        or agent.soft_timeout_use_llm is not None
     )
 
 
@@ -170,6 +210,7 @@ async def list_agents(
 async def create_agent(
     client_id: str,
     payload: AgentCreate,
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
 ) -> AgentResponse:
     """Create a new agent for a client.
@@ -202,6 +243,9 @@ async def create_agent(
             tts_stability=payload.tts_stability,
             tts_similarity_boost=payload.tts_similarity_boost,
             tool_config=json.dumps(payload.tool_config) if payload.tool_config is not None else None,
+            soft_timeout_seconds=payload.soft_timeout_seconds,
+            soft_timeout_message=payload.soft_timeout_message,
+            soft_timeout_use_llm=payload.soft_timeout_use_llm,
         )
     except ValueError as exc:
         msg = str(exc)
@@ -218,7 +262,69 @@ async def create_agent(
 
     await session.commit()
     await session.refresh(agent)
+
+    # Fire-and-forget ElevenLabs sync when conditions are met
+    if _should_trigger_sync(agent):
+        settings = request.app.state.settings
+        asyncio.create_task(sync_to_elevenlabs(agent_id=agent.id, settings=settings))
+
     return _agent_to_response(agent)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/clients/{client_id}/agents/{agent_id}/sync-elevenlabs
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{agent_id}/sync-elevenlabs", response_model=SyncStatusResponse)
+async def sync_agent_to_elevenlabs(
+    client_id: str,
+    agent_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+) -> SyncStatusResponse:
+    """Manually trigger a synchronous ElevenLabs re-sync for an agent.
+
+    Awaits the sync result (not fire-and-forget) and returns the outcome.
+    Updates elevenlabs_sync_status and elevenlabs_last_synced_at in DB.
+
+    Returns:
+        200: SyncStatusResponse with sync_status, synced_at, error_detail.
+        404: If client or agent does not exist.
+    """
+    from datetime import datetime, timezone
+
+    await _require_client(session, client_id)
+
+    agent = await tenant_service.get_agent(session, agent_id)
+    if agent is None or agent.client_id != client_id:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "agent not found", "agent_id": agent_id},
+        )
+
+    settings = request.app.state.settings
+    from app.elevenlabs.service import ElevenLabsService
+
+    service = ElevenLabsService(settings=settings)
+    result = await service.sync_soft_timeout(agent)
+
+    synced_at = None
+    if result.outcome == "synced":
+        synced_at = datetime.now(tz=timezone.utc)
+        agent.elevenlabs_sync_status = "synced"
+        agent.elevenlabs_last_synced_at = synced_at
+        await session.commit()
+    elif result.outcome == "error":
+        agent.elevenlabs_sync_status = "error"
+        await session.commit()
+    # "skipped" → no DB update
+
+    return SyncStatusResponse(
+        sync_status=result.outcome,
+        synced_at=synced_at,
+        error_detail=result.error_detail,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +365,7 @@ async def update_agent(
     client_id: str,
     agent_id: str,
     payload: AgentUpdate,
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
 ) -> AgentResponse:
     """Partially update an agent. Only provided fields are updated.
@@ -270,6 +377,9 @@ async def update_agent(
     await _require_client(session, client_id)
 
     update_data = payload.model_dump(exclude_unset=True)
+    # Track which fields are being changed (for sync trigger decision)
+    changed_fields = set(update_data.keys())
+
     # Serialize tools_enabled list to JSON string for DB storage
     if "tools_enabled" in update_data and isinstance(
         update_data["tools_enabled"], list
@@ -289,6 +399,12 @@ async def update_agent(
 
     await session.commit()
     await session.refresh(agent)
+
+    # Fire-and-forget ElevenLabs sync when conditions are met
+    if _should_trigger_sync(agent, changed_fields=changed_fields):
+        settings = request.app.state.settings
+        asyncio.create_task(sync_to_elevenlabs(agent_id=agent.id, settings=settings))
+
     return _agent_to_response(agent)
 
 

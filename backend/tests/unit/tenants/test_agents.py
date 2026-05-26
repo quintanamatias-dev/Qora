@@ -548,3 +548,78 @@ async def test_same_slug_different_clients_is_allowed(session: AsyncSession):
     assert agent_1.slug == "advisor"
     assert agent_2.slug == "advisor"
     assert agent_1.client_id != agent_2.client_id
+
+
+# ---------------------------------------------------------------------------
+# Task 2.1 (RED) — ElevenLabs soft timeout columns on Agent model
+# Spec: sdd/elevenlabs-provisioning — Agent Model Soft Timeout Columns requirement
+# ---------------------------------------------------------------------------
+
+
+async def test_agent_model_has_soft_timeout_columns():
+    """Agent model exposes the 5 new nullable ElevenLabs soft timeout columns.
+
+    Spec: soft_timeout_seconds, soft_timeout_message, soft_timeout_use_llm,
+          elevenlabs_sync_status, elevenlabs_last_synced_at — all nullable, DEFAULT NULL.
+    """
+    from app.tenants.models import Agent
+
+    col_names = {c.name for c in Agent.__table__.columns}
+    expected_new_cols = {
+        "soft_timeout_seconds",
+        "soft_timeout_message",
+        "soft_timeout_use_llm",
+        "elevenlabs_sync_status",
+        "elevenlabs_last_synced_at",
+    }
+    assert expected_new_cols.issubset(col_names), (
+        f"Missing soft timeout columns: {expected_new_cols - col_names}"
+    )
+
+
+async def test_agent_soft_timeout_columns_default_to_none(session: AsyncSession):
+    """New soft timeout columns default to None on agent creation.
+
+    Spec: NULL values = 'use ElevenLabs dashboard defaults' — no PATCH is sent.
+    Existing agents with all new columns NULL must behave identically to before.
+    """
+    from app.tenants.service import create_agent
+
+    await _make_client(session, "broker-soft-timeout")
+
+    agent = await create_agent(
+        session,
+        client_id="broker-soft-timeout",
+        slug="default-timeouts",
+        name="Default Timeouts Agent",
+        voice_id="voice-x1",
+    )
+
+    assert agent.soft_timeout_seconds is None
+    assert agent.soft_timeout_message is None
+    assert agent.soft_timeout_use_llm is None
+    assert agent.elevenlabs_sync_status is None
+    assert agent.elevenlabs_last_synced_at is None
+
+
+async def test_agent_soft_timeout_columns_nullable_type():
+    """Soft timeout columns are nullable (no NOT NULL constraint).
+
+    Triangulation: verify Python type annotations allow None for all 5 columns.
+    """
+    from app.tenants.models import Agent
+    import inspect
+
+    # Each column must be nullable (nullable=True in SQLAlchemy)
+    col_map = {c.name: c for c in Agent.__table__.columns}
+    for col_name in [
+        "soft_timeout_seconds",
+        "soft_timeout_message",
+        "soft_timeout_use_llm",
+        "elevenlabs_sync_status",
+        "elevenlabs_last_synced_at",
+    ]:
+        col = col_map[col_name]
+        assert col.nullable is True, (
+            f"Column {col_name!r} must be nullable, got nullable={col.nullable}"
+        )

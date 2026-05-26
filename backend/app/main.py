@@ -127,6 +127,62 @@ async def _ensure_startup_schema_compat(db_module) -> None:
                 "startup_schema_compat_added", column="agents.tts_similarity_boost"
             )
 
+        # ElevenLabs soft timeout columns (sdd/elevenlabs-provisioning)
+        if "soft_timeout_seconds" not in agent_columns:
+            await conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE agents "
+                    "ADD COLUMN soft_timeout_seconds REAL DEFAULT NULL"
+                )
+            )
+            logger.info(
+                "startup_schema_compat_added", column="agents.soft_timeout_seconds"
+            )
+
+        if "soft_timeout_message" not in agent_columns:
+            await conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE agents "
+                    "ADD COLUMN soft_timeout_message TEXT DEFAULT NULL"
+                )
+            )
+            logger.info(
+                "startup_schema_compat_added", column="agents.soft_timeout_message"
+            )
+
+        if "soft_timeout_use_llm" not in agent_columns:
+            await conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE agents "
+                    "ADD COLUMN soft_timeout_use_llm INTEGER DEFAULT NULL"
+                )
+            )
+            logger.info(
+                "startup_schema_compat_added", column="agents.soft_timeout_use_llm"
+            )
+
+        if "elevenlabs_sync_status" not in agent_columns:
+            await conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE agents "
+                    "ADD COLUMN elevenlabs_sync_status TEXT DEFAULT NULL"
+                )
+            )
+            logger.info(
+                "startup_schema_compat_added", column="agents.elevenlabs_sync_status"
+            )
+
+        if "elevenlabs_last_synced_at" not in agent_columns:
+            await conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE agents "
+                    "ADD COLUMN elevenlabs_last_synced_at DATETIME DEFAULT NULL"
+                )
+            )
+            logger.info(
+                "startup_schema_compat_added", column="agents.elevenlabs_last_synced_at"
+            )
+
 
 # ---------------------------------------------------------------------------
 # Request logging middleware
