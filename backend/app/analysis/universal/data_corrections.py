@@ -276,7 +276,7 @@ async def analyze(transcript: str, client: AsyncOpenAI) -> str:
 # ---------------------------------------------------------------------------
 
 _PIPELINE_SYSTEM_PROMPT = """\
-You are an expert at detecting personal data corrections from insurance sales call transcripts.
+You are an expert at detecting personal data corrections from sales call transcripts.
 
 GOAL: Identify any field corrections the lead explicitly stated during the call.
 Supported fields: {field_list}
@@ -292,6 +292,19 @@ RULES:
 - `evidence` MUST be a verbatim quote or close paraphrase from the transcript.
 - `confidence` is your certainty that this is a real correction (0.0–1.0).
 - Return an empty corrections list if no explicit corrections were made.
+
+CAR MAKE vs CAR MODEL — CRITICAL DISTINCTION:
+- `car_make` is the BRAND/MANUFACTURER (e.g. Volkswagen, Toyota, Ford, Chevrolet, Fiat, Renault).
+- `car_model` is the SPECIFIC MODEL within that brand (e.g. Polo, Corolla, Ranger, Cruze, Cronos).
+- When the lead says a single word like "Polo", "Corolla", "Cruze", "Cronos", "Hilux", "Ranger",
+  "Gol", "Onix", "Tracker", "Argo", "Duster", "Sandero", "Kicks" — that is a MODEL, not a make.
+- If the lead says only a model name and car_make is null, infer the correct make from the model.
+  Common examples: Polo/Gol/Vento/Amarok → Volkswagen, Corolla/Hilux/Etios → Toyota,
+  Cruze/Onix/Tracker → Chevrolet, Cronos/Argo/Toro → Fiat, Ranger/EcoSport/Ka → Ford,
+  Sandero/Duster/Kwid → Renault, 208/2008/308 → Peugeot.
+- If car_model is null but car_make contains a model name (misclassification), correct BOTH fields:
+  set car_model to the model name and car_make to the correct brand.
+- NEVER put a model name in car_make or a brand name in car_model.
 """
 
 
