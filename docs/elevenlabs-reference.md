@@ -121,7 +121,39 @@ Campos nuevos relevantes:
 }
 ```
 
-Message types adicionales existen para tool calls, vad/turn events y lifecycle events (verificar nombres exactos por versión de API antes de depender de ellos en UI).
+### Eventos adicionales servidor → cliente (desde investigación API 2026-05-26)
+
+Además de los básicos, la API WebSocket soporta estos event types:
+
+| Evento | Descripción |
+|--------|-------------|
+| `conversation_initiation_metadata` | Metadata del agent al conectar. |
+| `asr_initiation_metadata` | Config de ASR negociada. |
+| `tentative_user_transcript` | Transcripción parcial mientras el usuario habla. |
+| `agent_response_correction` | Corrección de una respuesta anterior. |
+| `agent_response_complete` | Señal de respuesta completa (solo si `turn_timeout` está deshabilitado). |
+| `client_tool_call` | Solicitud de tool call del lado del cliente. |
+| `mcp_tool_call` | Tool call via MCP server. |
+| `mcp_connection_status` | Estado de conexión MCP. |
+| `agent_tool_request` / `agent_tool_response` | Server-side tool execution events. |
+| `vad_score` | Score de Voice Activity Detection en tiempo real. |
+| `guardrail_triggered` | Guardrail violado (solo si termina la conversación). |
+| `dtmf_request` | Solicitud DTMF (phone). |
+| `client_error` | Error del lado del cliente. |
+
+### Eventos adicionales cliente → servidor
+
+| Evento | Descripción |
+|--------|-------------|
+| `user_message` | Enviar texto como input del usuario (modo text). |
+| `user_activity` | Reset del turn timeout sin afectar contenido. |
+| `client_tool_result` | Respuesta obligatoria a `client_tool_call`. |
+
+**Gotchas:**
+- `audio` no se envía por WebRTC; el audio va por LiveKit en ese modo.
+- `agent_tool_response_full_payload` puede exponer datos sensibles y trunca a 64 KB.
+- `agent_response_complete` solo se dispara cuando `turn_timeout` está deshabilitado y hay que habilitarlo explícitamente.
+- `guardrail_triggered` solo se dispara para violaciones que terminan la conversación, no para retries exitosos.
 
 ## Conversation Flow API
 
@@ -150,12 +182,17 @@ Configuración de turnos confirmada:
 | `conversation_config.turn.soft_timeout_config.message` | string | Mensaje fijo para mantener presencia. |
 | `conversation_config.turn.soft_timeout_config.use_llm_generated_message` | boolean | Si `true`, el LLM genera el mensaje. |
 | `conversation_config.turn.turn_eagerness` | `patient`, `normal`, `eager` | Ajusta cuán rápido responde el agente. |
+| `conversation_config.turn.initial_wait_time` | seconds | Espera inicial antes de detectar turno. |
+| `conversation_config.turn.silence_end_call_timeout` | seconds | Timeout de silencio para terminar llamada. |
+| `conversation_config.turn.spelling_patience` | `auto`, `off` | Paciencia para deletreo (ej. emails). |
+| `conversation_config.turn.speculative_turn` | boolean | Reduce latencia percibida, puede aumentar costo LLM. |
+| `conversation_config.turn.retranscribe_on_turn_timeout` | boolean | Re-transcribe audio acumulado; deshabilita silence discount billing. |
 
 En Qora, `backend/app/elevenlabs/service.py` ya implementa sync parcial de `soft_timeout_config` con modelos en `backend/app/elevenlabs/models.py`.
 
 ## Background Music API
 
-`background_music` está confirmado y funcionando en producción.
+`background_music` está confirmado y funcionando en producción. **Nota**: este campo no aparece en la documentación pública OpenAPI de ElevenLabs (verificado 2026-05-26), pero existe en las respuestas reales del API y funciona correctamente. Tratar como campo real pero under-documented.
 
 ```json
 {
@@ -440,6 +477,44 @@ Header: xi-api-key: {key}
 Devuelve: `{ "signed_url": "wss://api.elevenlabs.io/v1/convai/conversation?agent_id=...&token=..." }`
 
 Usar `signedUrl` en lugar de `agentId` fuerza WebSocket.
+
+## Deprecaciones y breaking changes
+
+| Campo/Feature | Estado | Reemplazo | Deadline |
+|---------------|--------|-----------|----------|
+| `conversation_config.agent.prompt.tools` | **Deprecated** | `prompt.tool_ids` + `prompt.built_in_tools` | GET sin `tools` desde 2025-07-15; POST/PATCH rechazado desde 2025-07-23 |
+| `supports_inbound` / `supports_outbound` (phone) | Deprecated | Será removido | No especificado |
+| `ConvAIWebhooks.send_audio` | Deprecated | `webhooks.events` | No especificado |
+| `force_pre_tool_speech` | Deprecated | `pre_tool_speech` | No especificado |
+| `enable_versioning` | Deprecated | Todos los agents son versionados automáticamente | Ya activo |
+
+**Política de breaking changes de ElevenLabs**:
+- Agregar campos a respuestas NO es breaking — los clientes deben ignorar campos desconocidos.
+- Remover campos o cambiar estructura SÍ es breaking.
+- Agregar parámetros opcionales NO es breaking; agregar requeridos SÍ.
+
+## Guardrails (Alpha)
+
+Guardrails está en alpha — puede tener breaking changes.
+
+Tipos: Focus, Prompt injection, Content, Custom.
+
+Config path: `platform_settings.guardrails`
+
+- Streaming mode: sin espera extra pero puede dejar pasar algo de audio antes de bloquear.
+- Blocking mode: ~200-500ms adicionales, soporta retry.
+- Custom guardrails tienen costo adicional por evaluación por respuesta.
+
+## TTS Models actuales
+
+| Model | Notas |
+|-------|-------|
+| `eleven_turbo_v2` | Turbo v2, inglés optimizado. |
+| `eleven_turbo_v2_5` | Turbo v2.5. |
+| `eleven_flash_v2` | Flash v2, baja latencia. |
+| `eleven_flash_v2_5` | Flash v2.5. |
+| `eleven_multilingual_v2` | Multilingüe v2. |
+| `eleven_v3_conversational` | **Nuevo** — emotional delivery, 70+ idiomas, expressive tags (`[laughs]`, `[whispers]`, `[sighs]`, `[slow]`, `[excited]`). |
 
 ## Links oficiales
 
