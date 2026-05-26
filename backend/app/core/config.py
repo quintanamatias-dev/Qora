@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # QORA defaults
     # ------------------------------------------------------------------
-    default_broker_name: str = "Quintana Seguros"
+    default_company_name: str = "Quintana Seguros"
     default_agent_name: str = "Jaumpablo"
 
     model_config = {

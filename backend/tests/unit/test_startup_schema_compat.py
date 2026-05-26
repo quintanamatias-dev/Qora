@@ -42,7 +42,7 @@ async def old_agents_db(tmp_path: Path):
             CREATE TABLE IF NOT EXISTS clients (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
-                broker_name TEXT NOT NULL,
+
                 analysis_language TEXT NOT NULL DEFAULT 'Spanish',
                 created_at TEXT NOT NULL
             )
@@ -181,7 +181,7 @@ async def test_startup_compat_does_not_touch_existing_tts_values(tmp_path: Path)
             CREATE TABLE clients (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
-                broker_name TEXT NOT NULL,
+
                 analysis_language TEXT NOT NULL DEFAULT 'Spanish',
                 created_at TEXT NOT NULL
             )

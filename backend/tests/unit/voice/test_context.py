@@ -72,12 +72,12 @@ def make_lead(
 
 def make_client(
     id: str = "acme",
-    broker_name: str = "Acme Seguros",
+    name: str = "Acme Seguros",
     agent_name: str = "Aria",
 ) -> MagicMock:
     client = MagicMock()
     client.id = id
-    client.broker_name = broker_name
+    client.name = name
     client.agent_name = agent_name
     return client
 

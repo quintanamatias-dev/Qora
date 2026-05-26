@@ -126,8 +126,7 @@ async def test_create_session_no_default_agent_raises(tmp_path: Path):
         await create_client(
             sess,
             id="no-agent-client",
-            name="No Agent Client",
-            broker_name="No Agent",
+            name="No Agent",
             agent_name="Ghost",
             voice_id="v-ghost",
         )

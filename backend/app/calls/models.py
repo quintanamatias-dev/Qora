@@ -64,6 +64,7 @@ class CallSession(Base):
     closed_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     total_user_turns: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_agent_turns: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # DEPRECATED: use call_analyses table instead. Kept for backward compat reads.
     extracted_facts: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # Session reconciliation (Issue #22) — nullable String (no FK; SQLite limitation)
     merged_into_session_id: Mapped[str | None] = mapped_column(

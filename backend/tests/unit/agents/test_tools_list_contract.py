@@ -141,7 +141,6 @@ async def tools_list_app(tmp_path: Path):
             session,
             id="tools-test-client",
             name="Tools Test Client SA",
-            broker_name="Tools Test Client SA",
             agent_name="ToolsAgent",
             voice_id="voice-tools",
         )

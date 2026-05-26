@@ -37,7 +37,7 @@ async def test_agents_migration_ddl_has_unique_constraint_on_client_slug(
                 CREATE TABLE IF NOT EXISTS clients (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL UNIQUE,
-                    broker_name TEXT NOT NULL,
+
                     agent_name TEXT NOT NULL DEFAULT 'Agent',
                     voice_id TEXT NOT NULL,
                     is_active BOOLEAN NOT NULL DEFAULT 1,
@@ -118,7 +118,7 @@ async def test_agents_migration_enforces_unique_via_insert(tmp_path: Path):
                 CREATE TABLE IF NOT EXISTS clients (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL UNIQUE,
-                    broker_name TEXT NOT NULL,
+
                     agent_name TEXT NOT NULL DEFAULT 'Agent',
                     voice_id TEXT NOT NULL,
                     is_active BOOLEAN NOT NULL DEFAULT 1,
@@ -135,7 +135,7 @@ async def test_agents_migration_enforces_unique_via_insert(tmp_path: Path):
         )
         await conn.execute(
             sqlalchemy.text(
-                "INSERT INTO clients (id, name, broker_name, voice_id) "
+                "INSERT INTO clients (id, name, name, voice_id) "
                 "VALUES ('test-client', 'Test Client', 'Test SA', 'v-test')"
             )
         )
@@ -538,7 +538,7 @@ async def test_agents_migration_repairs_missing_unique_index_on_rerun(tmp_path: 
                 CREATE TABLE IF NOT EXISTS clients (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL UNIQUE,
-                    broker_name TEXT NOT NULL,
+
                     agent_name TEXT NOT NULL DEFAULT 'Agent',
                     voice_id TEXT NOT NULL,
                     is_active BOOLEAN NOT NULL DEFAULT 1,

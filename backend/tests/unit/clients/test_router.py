@@ -102,7 +102,7 @@ async def test_create_client_returns_201(clients_app: AsyncClient):
         "/api/v1/clients",
         json={
             "client_id": "new-broker",
-            "broker_name": "New Broker SA",
+            "name": "New Broker SA",
             "agent_name": "Ana",
             "voice_id": "abc123",
         },
@@ -110,7 +110,7 @@ async def test_create_client_returns_201(clients_app: AsyncClient):
     assert response.status_code == 201
     data = response.json()
     assert data["client_id"] == "new-broker"
-    assert data["broker_name"] == "New Broker SA"
+    assert data["name"] == "New Broker SA"
     assert data["agent_name"] == "Ana"
     assert data["voice_id"] == "abc123"
     assert data["is_active"] is True
@@ -123,7 +123,7 @@ async def test_create_client_default_agent_name(clients_app: AsyncClient):
         "/api/v1/clients",
         json={
             "client_id": "default-agent-test",
-            "broker_name": "Test Broker",
+            "name": "Test Broker",
             "voice_id": "voice-abc",
         },
     )
@@ -138,7 +138,7 @@ async def test_create_client_duplicate_returns_409(clients_app_seeded: AsyncClie
         "/api/v1/clients",
         json={
             "client_id": "quintana-seguros",
-            "broker_name": "Quintana Seguros",
+            "name": "Quintana Seguros",
             "voice_id": "pNInz6obpgDQGcFmaJgB",
         },
     )
@@ -153,7 +153,7 @@ async def test_create_client_invalid_slug_uppercase_returns_422(
         "/api/v1/clients",
         json={
             "client_id": "New-Broker",
-            "broker_name": "New Broker",
+            "name": "New Broker",
             "voice_id": "abc",
         },
     )
@@ -168,7 +168,7 @@ async def test_create_client_invalid_slug_special_chars_returns_422(
         "/api/v1/clients",
         json={
             "client_id": "new broker!",
-            "broker_name": "New Broker",
+            "name": "New Broker",
             "voice_id": "abc",
         },
     )
@@ -183,7 +183,7 @@ async def test_create_client_invalid_slug_leading_hyphen_returns_422(
         "/api/v1/clients",
         json={
             "client_id": "-bad-slug",
-            "broker_name": "Bad Slug",
+            "name": "Bad Slug",
             "voice_id": "abc",
         },
     )
@@ -198,7 +198,7 @@ async def test_create_client_invalid_slug_trailing_hyphen_returns_422(
         "/api/v1/clients",
         json={
             "client_id": "bad-slug-",
-            "broker_name": "Bad Slug",
+            "name": "Bad Slug",
             "voice_id": "abc",
         },
     )
@@ -211,7 +211,7 @@ async def test_create_client_is_retrievable(clients_app: AsyncClient):
         "/api/v1/clients",
         json={
             "client_id": "test-retrievable",
-            "broker_name": "Test Retrievable",
+            "name": "Test Retrievable",
             "voice_id": "v123",
         },
     )
@@ -238,7 +238,7 @@ async def test_list_clients_returns_active_clients(clients_app: AsyncClient):
     for slug in ("broker-alpha", "broker-beta"):
         await clients_app.post(
             "/api/v1/clients",
-            json={"client_id": slug, "broker_name": slug.title(), "voice_id": "v1"},
+            json={"client_id": slug, "name": slug.title(), "voice_id": "v1"},
         )
 
     response = await clients_app.get("/api/v1/clients")
@@ -256,7 +256,7 @@ async def test_list_clients_excludes_soft_deleted(clients_app: AsyncClient):
     for slug in ("keep-me", "delete-me"):
         await clients_app.post(
             "/api/v1/clients",
-            json={"client_id": slug, "broker_name": slug.title(), "voice_id": "v1"},
+            json={"client_id": slug, "name": slug.title(), "voice_id": "v1"},
         )
 
     # Soft-delete one
@@ -281,7 +281,7 @@ async def test_get_client_returns_200(clients_app_seeded: AsyncClient):
     assert response.status_code == 200
     data = response.json()
     assert data["client_id"] == "quintana-seguros"
-    assert data["broker_name"] == "Quintana Seguros"
+    assert data["name"] == "Quintana Seguros"
     assert "is_active" in data
     assert "created_at" in data
 
@@ -299,7 +299,7 @@ async def test_get_client_response_shape(clients_app_seeded: AsyncClient):
     data = response.json()
     expected_fields = [
         "client_id",
-        "broker_name",
+        "name",
         "agent_name",
         "voice_id",
         "is_active",
@@ -323,18 +323,18 @@ async def test_patch_client_updates_agent_name(clients_app_seeded: AsyncClient):
     assert response.status_code == 200
     data = response.json()
     assert data["agent_name"] == "JuanPablo"
-    # broker_name unchanged
-    assert data["broker_name"] == "Quintana Seguros"
+    # name unchanged
+    assert data["name"] == "Quintana Seguros"
 
 
-async def test_patch_client_updates_broker_name(clients_app_seeded: AsyncClient):
-    """PATCH /clients/{id} with broker_name updates only that field."""
+async def test_patch_client_updates_name(clients_app_seeded: AsyncClient):
+    """PATCH /clients/{id} with name updates only that field."""
     response = await clients_app_seeded.patch(
         "/api/v1/clients/quintana-seguros",
-        json={"broker_name": "Nueva Aseguradora"},
+        json={"name": "Nueva Aseguradora"},
     )
     assert response.status_code == 200
-    assert response.json()["broker_name"] == "Nueva Aseguradora"
+    assert response.json()["name"] == "Nueva Aseguradora"
 
 
 async def test_patch_client_not_found_returns_404(clients_app: AsyncClient):
@@ -365,7 +365,7 @@ async def test_delete_client_soft_deletes(clients_app: AsyncClient):
     # Create a client first
     await clients_app.post(
         "/api/v1/clients",
-        json={"client_id": "to-delete", "broker_name": "To Delete", "voice_id": "v1"},
+        json={"client_id": "to-delete", "name": "To Delete", "voice_id": "v1"},
     )
 
     response = await clients_app.delete("/api/v1/clients/to-delete")
@@ -459,7 +459,7 @@ async def test_create_client_response_includes_scheduler_fields(
         "/api/v1/clients",
         json={
             "client_id": "sched-broker",
-            "broker_name": "Sched Broker SA",
+            "name": "Sched Broker SA",
             "voice_id": "v1",
         },
     )
@@ -503,7 +503,7 @@ async def test_delete_does_not_remove_db_record(clients_app: AsyncClient):
         "/api/v1/clients",
         json={
             "client_id": "soft-delete-check",
-            "broker_name": "Soft Delete Test",
+            "name": "Soft Delete Test",
             "voice_id": "v1",
         },
     )
@@ -536,7 +536,7 @@ async def test_create_client_bootstraps_default_agent(clients_app: AsyncClient):
         "/api/v1/clients",
         json={
             "client_id": "agent-bootstrap-test",
-            "broker_name": "Bootstrap Test",
+            "name": "Bootstrap Test",
             "voice_id": "v-bootstrap",
         },
     )
@@ -565,7 +565,7 @@ async def test_create_client_duplicate_via_service_returns_409(
         "/api/v1/clients",
         json={
             "client_id": "quintana-seguros",
-            "broker_name": "Quintana Seguros Dup",
+            "name": "Quintana Seguros Dup",
             "voice_id": "v1",
         },
     )
@@ -590,7 +590,7 @@ async def test_create_client_with_custom_scheduler_fields(clients_app: AsyncClie
         "/api/v1/clients",
         json={
             "client_id": "sched-custom",
-            "broker_name": "Sched Custom",
+            "name": "Sched Custom",
             "voice_id": "v1",
             "scheduler_enabled": True,
             "scheduler_max_attempts": 5,
@@ -616,7 +616,7 @@ async def test_create_client_scheduler_defaults_when_omitted(clients_app: AsyncC
         "/api/v1/clients",
         json={
             "client_id": "sched-defaults",
-            "broker_name": "Sched Defaults",
+            "name": "Sched Defaults",
             "voice_id": "v1",
         },
     )
@@ -635,18 +635,18 @@ async def test_create_client_scheduler_defaults_when_omitted(clients_app: AsyncC
 async def test_create_client_without_client_id_auto_generates_slug(
     clients_app: AsyncClient,
 ):
-    """POST /clients without client_id auto-generates slug from broker_name.
+    """POST /clients without client_id auto-generates slug from name.
 
     'Qora Demo' → 'qora-demo'
     """
     response = await clients_app.post(
         "/api/v1/clients",
-        json={"broker_name": "Qora Demo"},
+        json={"name": "Qora Demo"},
     )
     assert response.status_code == 201
     data = response.json()
     assert data["client_id"] == "qora-demo"
-    assert data["broker_name"] == "Qora Demo"
+    assert data["name"] == "Qora Demo"
     assert data["is_active"] is True
 
 
@@ -656,7 +656,7 @@ async def test_create_client_explicit_client_id_backward_compatible(
     """POST /clients with explicit client_id still uses that value (backward compat)."""
     response = await clients_app.post(
         "/api/v1/clients",
-        json={"broker_name": "Acme Corp", "client_id": "my-custom-id"},
+        json={"name": "Acme Corp", "client_id": "my-custom-id"},
     )
     assert response.status_code == 201
     data = response.json()
@@ -666,22 +666,22 @@ async def test_create_client_explicit_client_id_backward_compatible(
 async def test_create_client_slug_collision_appends_suffix(
     clients_app: AsyncClient,
 ):
-    """POST /clients with broker_name collision yields slug with -2 suffix.
+    """POST /clients with slug collision yields slug with -2 suffix.
 
-    First 'Qora Demo' → 'qora-demo'. Second 'Qora Demo' → 'qora-demo-2'.
+    First 'Qora Demo' → 'qora-demo'. Second distinct name slugifies to 'qora-demo-2'.
     """
     # First: creates qora-demo
     r1 = await clients_app.post(
         "/api/v1/clients",
-        json={"broker_name": "Qora Demo"},
+        json={"name": "Qora Demo"},
     )
     assert r1.status_code == 201
     assert r1.json()["client_id"] == "qora-demo"
 
-    # Second: qora-demo exists, should get qora-demo-2
+    # Second: generated slug collides, but name stays unique.
     r2 = await clients_app.post(
         "/api/v1/clients",
-        json={"broker_name": "Qora Demo"},
+        json={"name": "Qora-Demo"},
     )
     assert r2.status_code == 201
     assert r2.json()["client_id"] == "qora-demo-2"
@@ -692,36 +692,33 @@ async def test_create_client_multiple_collisions_increment_suffix(
 ):
     """POST /clients with double collision yields -3 suffix.
 
-    qora-demo and qora-demo-2 exist → third request yields qora-demo-3.
+    Existing slugs qora-demo and qora-demo-2 → third request yields qora-demo-3.
     """
-    for _ in range(2):
-        await clients_app.post(
-            "/api/v1/clients",
-            json={"broker_name": "Qora Demo"},
-        )
+    await clients_app.post("/api/v1/clients", json={"name": "Qora Demo"})
+    await clients_app.post("/api/v1/clients", json={"name": "Qora-Demo"})
 
     r3 = await clients_app.post(
         "/api/v1/clients",
-        json={"broker_name": "Qora Demo"},
+        json={"name": "Qora_Demo"},
     )
     assert r3.status_code == 201
     assert r3.json()["client_id"] == "qora-demo-3"
 
 
-async def test_create_client_broker_name_with_special_chars_slugified(
+async def test_create_client_name_with_special_chars_slugified(
     clients_app: AsyncClient,
 ):
-    """POST /clients with special chars in broker_name generates ASCII-only slug.
+    """POST /clients with special chars in name generates ASCII-only slug.
 
     'Acme Corp!' → 'acme-corp'
     Triangulation: different input → different but valid slug (not empty, no special chars).
     """
     response = await clients_app.post(
         "/api/v1/clients",
-        json={"broker_name": "Acme Corp!"},
+        json={"name": "Acme Corp!"},
     )
     assert response.status_code == 201
     data = response.json()
     assert data["client_id"] == "acme-corp"
-    # broker_name preserved as-is in response
-    assert data["broker_name"] == "Acme Corp!"
+    # name preserved as-is in response
+    assert data["name"] == "Acme Corp!"

@@ -3,7 +3,7 @@
 Covers:
 1. (Removed) XSS tests for admin.html — migrated to React in Issue #29.
 2. WARNING — ClientCreate missing validate_hour_window (start < end).
-3. WARNING — POST /api/v1/clients duplicate broker_name (Client.name unique) → 409.
+3. WARNING — POST /api/v1/clients duplicate name (Client.name unique) → 409.
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ async def test_create_client_inverted_hour_window_returns_422(
         "/api/v1/clients",
         json={
             "client_id": "hour-window-test",
-            "broker_name": "Hour Window Test",
+            "name": "Hour Window Test",
             "voice_id": "v1",
             "scheduler_allowed_hours_start": 22,
             "scheduler_allowed_hours_end": 10,
@@ -86,7 +86,7 @@ def test_client_create_schema_rejects_inverted_window_directly():
     with pytest.raises(ValidationError) as exc_info:
         ClientCreate(
             client_id="test-client",
-            broker_name="Test",
+            name="Test",
             voice_id="v1",
             scheduler_allowed_hours_start=22,
             scheduler_allowed_hours_end=10,
@@ -107,7 +107,7 @@ async def test_create_client_valid_hour_window_returns_201(clients_app: AsyncCli
         "/api/v1/clients",
         json={
             "client_id": "valid-hour-window",
-            "broker_name": "Valid Hour Window",
+            "name": "Valid Hour Window",
             "voice_id": "v1",
             "scheduler_allowed_hours_start": 8,
             "scheduler_allowed_hours_end": 18,
@@ -127,7 +127,7 @@ def test_client_create_schema_equal_hours_rejected():
     with pytest.raises(ValidationError):
         ClientCreate(
             client_id="test-equal",
-            broker_name="Test Equal",
+            name="Test Equal",
             voice_id="v1",
             scheduler_allowed_hours_start=10,
             scheduler_allowed_hours_end=10,
@@ -135,16 +135,16 @@ def test_client_create_schema_equal_hours_rejected():
 
 
 # ---------------------------------------------------------------------------
-# Issue 3 — Duplicate broker_name (Client.name unique) → 409 not 500
+# Issue 3 — Duplicate name (Client.name unique) → 409 not 500
 # ---------------------------------------------------------------------------
 
 
-async def test_create_two_clients_same_broker_name_returns_409(
+async def test_create_two_clients_same_name_returns_409(
     clients_app: AsyncClient,
 ):
-    """POST /api/v1/clients with duplicate broker_name (same Client.name) → 409.
+    """POST /api/v1/clients with duplicate name (same Client.name) → 409.
 
-    Client.name has unique=True in DB. Creating two clients with same broker_name
+    Client.name has unique=True in DB. Creating two clients with same name
     but different client_id triggers IntegrityError → must return 409, not 500.
     """
     # First client succeeds
@@ -152,7 +152,7 @@ async def test_create_two_clients_same_broker_name_returns_409(
         "/api/v1/clients",
         json={
             "client_id": "broker-alpha",
-            "broker_name": "Duplicate Broker",
+            "name": "Duplicate Broker",
             "voice_id": "v1",
         },
     )
@@ -160,31 +160,31 @@ async def test_create_two_clients_same_broker_name_returns_409(
         r1.status_code == 201
     ), f"First client creation must succeed. Got {r1.status_code}."
 
-    # Second client with same broker_name but different client_id → 409
+    # Second client with same name but different client_id → 409
     r2 = await clients_app.post(
         "/api/v1/clients",
         json={
             "client_id": "broker-beta",
-            "broker_name": "Duplicate Broker",  # same broker_name → same Client.name
+            "name": "Duplicate Broker",  # same name → same Client.name
             "voice_id": "v1",
         },
     )
     assert r2.status_code == 409, (
-        f"POST /clients with duplicate broker_name must return 409 (not 500 IntegrityError). "
+        f"POST /clients with duplicate name must return 409 (not 500 IntegrityError). "
         f"Got {r2.status_code}. Router must catch IntegrityError from Client.name unique constraint."
     )
 
 
 # Triangulation: different broker names succeed independently
-async def test_create_two_clients_different_broker_names_succeed(
+async def test_create_two_clients_different_names_succeed(
     clients_app: AsyncClient,
 ):
-    """POST /api/v1/clients with distinct broker_names → both 201."""
+    """POST /api/v1/clients with distinct names → both 201."""
     r1 = await clients_app.post(
         "/api/v1/clients",
         json={
             "client_id": "unique-alpha",
-            "broker_name": "Alpha Broker",
+            "name": "Alpha Broker",
             "voice_id": "v1",
         },
     )
@@ -192,7 +192,7 @@ async def test_create_two_clients_different_broker_names_succeed(
         "/api/v1/clients",
         json={
             "client_id": "unique-beta",
-            "broker_name": "Beta Broker",
+            "name": "Beta Broker",
             "voice_id": "v1",
         },
     )

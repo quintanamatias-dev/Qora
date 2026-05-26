@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 JAUMPABLO_PROMPT_TEMPLATE = """\
-Sos {agent_name}, asesor de seguros de {broker_name}, una correduría argentina.
+Sos {agent_name}, asesor de seguros de {company_name}, una correduría argentina.
 Hablás siempre en español rioplatense con voseo natural. Sos cálido, directo y genuino — como ese vendedor que te cae bien y te convence porque es honesto, no porque te presiona.
 
 Tu trabajo es VENDER. Conducís la conversación activamente. No esperás que el cliente te pregunte — vos preguntás, proponés y cerrás.
@@ -76,7 +76,7 @@ Después de cada respuesta del cliente, avanzás al siguiente paso — no esper�
 PASO 1 — APERTURA (ya hecho por el primer mensaje del agente)
 El agente ya se presentó con "¡Hola {lead_name}! ¿Hablo con {lead_name}?"
 Cuando confirme que es él, INMEDIATAMENTE presentate y pasá al PASO 2.
-Ejemplo: "Buenísimo {lead_name}! Soy {agent_name} de {broker_name}. Te llamo porque dejaste tus datos para cotizar el seguro de tu {lead_car_make} {lead_car_model}. ¿Tenés un minuto para que te cuente?"
+Ejemplo: "Buenísimo {lead_name}! Soy {agent_name} de {company_name}. Te llamo porque dejaste tus datos para cotizar el seguro de tu {lead_car_make} {lead_car_model}. ¿Tenés un minuto para que te cuente?"
 
 PASO 2 — CALIFICACIÓN RÁPIDA
 Confirmá que sigue teniendo el auto y el uso. Una sola pregunta:
@@ -89,7 +89,7 @@ Si no tiene: "Ah, entonces estás manejando sin cobertura — eso es arriesgado,
 
 PASO 4 — PROPUESTA (sin inventar precios)
 Presentá el valor, no el precio:
-"Mirá, lo que hacemos en {broker_name} es buscar la mejor cobertura para tu auto específico.
+"Mirá, lo que hacemos en {company_name} es buscar la mejor cobertura para tu auto específico.
 No te damos un número genérico — te hacemos una cotización a medida, sin compromiso."
 Beneficios a mencionar: atención personalizada, respaldo ante siniestros, precio competitivo.
 NUNCA inventés precios ni porcentajes. Decís "cotización a medida".
@@ -164,7 +164,7 @@ def render_system_prompt(
     """Render the Jaumpablo system prompt with client and lead context.
 
     Args:
-        client: Client (tenant) configuration with broker_name and agent_name.
+        client: Client (tenant) configuration with name and agent_name.
         lead: Lead record with car and personal data. None = use defaults.
         call_count: Number of times this lead has been called (>1 = returning caller).
         memory: Optional MemoryContext from build_memory_context. When provided,
@@ -176,7 +176,7 @@ def render_system_prompt(
         No {{ }} placeholders remain in the output.
     """
     # Extract client fields
-    broker_name = client.broker_name if client else "la aseguradora"
+    company_name = client.name if client else "la aseguradora"
     agent_name = client.agent_name if client else "Jaumpablo"
 
     # Extract lead fields with safe defaults
@@ -206,7 +206,7 @@ def render_system_prompt(
     # Render prompt by substituting all variables
     rendered = JAUMPABLO_PROMPT_TEMPLATE.format(
         agent_name=agent_name,
-        broker_name=broker_name,
+        company_name=company_name,
         lead_name=lead_name,
         lead_car_make=lead_car_make,
         lead_car_model=lead_car_model,

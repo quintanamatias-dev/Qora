@@ -28,7 +28,6 @@ async def _create_base_schema(conn) -> None:
             CREATE TABLE IF NOT EXISTS clients (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
-                broker_name TEXT NOT NULL,
                 agent_name TEXT NOT NULL DEFAULT 'Jaumpablo',
                 voice_id TEXT NOT NULL,
                 is_active BOOLEAN NOT NULL DEFAULT 1,
@@ -100,13 +99,13 @@ async def _seed_client(
     """Insert a minimal client row."""
     await conn.execute(
         sqlalchemy.text(
-            "INSERT INTO clients (id, name, broker_name, agent_name, voice_id) "
-            "VALUES (:id, :name, :broker_name, :agent_name, :voice_id)"
+            "INSERT INTO clients (id, name, name, agent_name, voice_id) "
+            "VALUES (:id, :name, :name, :agent_name, :voice_id)"
         ),
         {
             "id": client_id,
             "name": name,
-            "broker_name": name,
+            "name": name,
             "agent_name": agent_name,
             "voice_id": "pNInz6obpgDQGcFmaJgB",
         },

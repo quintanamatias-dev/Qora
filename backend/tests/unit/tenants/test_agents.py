@@ -55,8 +55,7 @@ async def _make_client(session: AsyncSession, client_id: str = "test-broker") ->
     return await create_client(
         session,
         id=client_id,
-        name=f"Test Broker {client_id}",
-        broker_name="Test Broker SA",
+        name=f"{client_id} SA",
         agent_name="TestAgent",
         voice_id="voice-abc123",
     )

@@ -300,6 +300,7 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
         async with db.begin_nested():
             cs.total_user_turns = user_turns
             cs.total_agent_turns = agent_turns
+            # DEPRECATED: cs.extracted_facts — use call_analyses table instead
             cs.extracted_facts = {
                 "_analysis_status": "failed",
                 "_analysis_error": error_msg,
@@ -338,7 +339,8 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
                 corrections_axis=_corrections_axis,
             )
 
-        # Set extracted_facts AFTER merge so data_corrections is the updated list-of-dicts
+        # DEPRECATED: cs.extracted_facts — use call_analyses table instead.
+        # Kept for backward compat with any code that reads CallSession.extracted_facts.
         cs.extracted_facts = facts
 
         # ★ NEW: Dual-write to CallAnalysis (analysis v2 — same savepoint, atomic)

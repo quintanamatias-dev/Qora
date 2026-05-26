@@ -203,7 +203,7 @@ async def build_voice_context(
         agent: Agent ORM instance with system_prompt, model, etc.
         lead: Optional Lead ORM instance (None for anonymous calls).
         db: AsyncSession for memory context queries.
-        client: Client ORM instance for broker_name etc.
+        client: Client ORM instance for company name etc.
 
     Returns:
         Frozen VoiceSessionContext with all fields populated.

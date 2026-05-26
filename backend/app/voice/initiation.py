@@ -226,7 +226,9 @@ async def initiation_webhook(
                 "current_insurance": current_insurance,
                 "lead_status": lead_status,
                 "lead_notes": lead_notes,
-                "broker_name": client.broker_name,
+                "company_name": client.name,
+                # DEPRECATED: use company_name instead.
+                "broker_name": client.name,
                 "agent_name": resolved_agent_name,
                 # Underscore-wrapped names required by the ElevenLabs agent template.
                 # The agent's first message is: ¡Hola! ¿Hablo con {{_lead_name_}}?
@@ -235,7 +237,9 @@ async def initiation_webhook(
                 "_car_model_": car_model,
                 "_car_year_": car_year,
                 "_current_insurance_": current_insurance,
-                "_broker_name_": client.broker_name,
+                "_company_name_": client.name,
+                # DEPRECATED: use _company_name_ instead.
+                "_broker_name_": client.name,
                 "_agent_name_": resolved_agent_name,
                 # CAP-6: Memory injection variables
                 "call_history": call_history,

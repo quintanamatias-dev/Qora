@@ -486,8 +486,7 @@ async def test_end_reconciliation_does_not_steal_other_tenant_session(
         await create_client(
             sess,
             id="other-client",
-            name="Other Corp",
-            broker_name="OC",
+            name="OC",
             agent_name="Bot",
             voice_id="pNInz6obpgDQGcFmaJgB",
         )

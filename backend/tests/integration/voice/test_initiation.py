@@ -130,7 +130,7 @@ async def test_initiation_returns_empty_strings_for_unknown_lead(
 
 
 async def test_initiation_includes_broker_and_agent_name(app_client: AsyncClient):
-    """dynamic_variables includes broker_name and agent_name from client config."""
+    """dynamic_variables includes name and agent_name from client config."""
     response = await app_client.post(
         "/api/v1/voice/initiation",
         json={
@@ -144,9 +144,9 @@ async def test_initiation_includes_broker_and_agent_name(app_client: AsyncClient
     assert response.status_code == 200
     dv = response.json()["dynamic_variables"]
 
-    assert "broker_name" in dv
+    assert "company_name" in dv
     assert "agent_name" in dv
-    assert dv["broker_name"] == "Quintana Seguros"
+    assert dv["company_name"] == "Quintana Seguros"
     assert dv["agent_name"] == "Jaumpablo"
 
 
@@ -364,7 +364,7 @@ async def test_initiation_response_shape_unchanged_after_refactor(
     assert "current_insurance" in dv
     assert "lead_status" in dv
     assert "lead_notes" in dv
-    assert "broker_name" in dv
+    assert "company_name" in dv
     assert "agent_name" in dv
 
     # --- Correct memory values ---

@@ -44,8 +44,7 @@ async def two_tenant_app(tmp_path: Path):
 
         alpha = Client(
             id="alpha-client",
-            name="Alpha Client",
-            broker_name="Alpha Broker",
+            name="Alpha Broker",
             agent_name="AgentAlpha",
             voice_id="v-alpha",
             is_active=True,
@@ -53,8 +52,7 @@ async def two_tenant_app(tmp_path: Path):
         )
         beta = Client(
             id="beta-client",
-            name="Beta Client",
-            broker_name="Beta Broker",
+            name="Beta Broker",
             agent_name="AgentBeta",
             voice_id="v-beta",
             is_active=True,
@@ -116,8 +114,7 @@ async def hours_app(tmp_path: Path):
 
         c = Client(
             id="hours-client",
-            name="Hours Client",
-            broker_name="Hours Broker",
+            name="Hours Broker",
             agent_name="AgentH",
             voice_id="v-h",
             is_active=True,
@@ -174,8 +171,7 @@ async def followup_app(tmp_path: Path):
 
         c = Client(
             id="fu-client",
-            name="Followup Client",
-            broker_name="Followup Broker",
+            name="Followup Broker",
             agent_name="AgentFU",
             voice_id="v-fu",
             is_active=True,

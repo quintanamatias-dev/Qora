@@ -29,7 +29,7 @@ const mockApiFetch = vi.mocked(clientModule.apiFetch)
 
 const mockClient: Client = {
   client_id: 'demo-client',
-  broker_name: 'Demo Broker',
+  name: 'Demo Broker',
   agent_name: 'Demo Agent',
   voice_id: 'voice-1',
   is_active: true,
@@ -61,7 +61,7 @@ describe('fetchClient', () => {
     const result = await fetchClient('demo-client')
 
     expect(result.client_id).toBe('demo-client')
-    expect(result.broker_name).toBe('Demo Broker')
+    expect(result.name).toBe('Demo Broker')
     expect(result.is_active).toBe(true)
   })
 

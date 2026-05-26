@@ -365,7 +365,7 @@ async def test_cap6_correct_tenant_config_loaded(db_session):
 
     client = await get_client(db_session, "quintana-seguros")
     assert client is not None
-    assert client.broker_name == "Quintana Seguros"
+    assert client.name == "Quintana Seguros"
     assert client.agent_name == "Jaumpablo"
     assert client.voice_id is not None
 
@@ -380,7 +380,6 @@ async def test_cap6_cross_tenant_isolation(db_session):
         db_session,
         id="acme-insurance",
         name="Acme Insurance",
-        broker_name="Acme Insurance",
         agent_name="AcmeAgent",
         voice_id="acme-voice-id",
     )
@@ -542,7 +541,7 @@ def test_cap8_prompt_variables_injected():
     from app.prompts.insurance_agent import render_system_prompt
 
     client = MagicMock()
-    client.broker_name = "Quintana Seguros"
+    client.name = "Quintana Seguros"
     client.agent_name = "Jaumpablo"
 
     lead = MagicMock()
@@ -564,7 +563,7 @@ def test_cap8_prompt_voseo_enforced():
     from app.prompts.insurance_agent import render_system_prompt
 
     client = MagicMock()
-    client.broker_name = "Q"
+    client.name = "Q"
     client.agent_name = "J"
 
     prompt = render_system_prompt(client, lead=None)
@@ -577,7 +576,7 @@ def test_cap8_prompt_tool_rules():
     from app.prompts.insurance_agent import render_system_prompt
 
     client = MagicMock()
-    client.broker_name = "Q"
+    client.name = "Q"
     client.agent_name = "J"
 
     prompt = render_system_prompt(client, lead=None)
@@ -594,7 +593,7 @@ def test_cap8_prompt_conversation_flow_phases():
     from app.prompts.insurance_agent import render_system_prompt
 
     client = MagicMock()
-    client.broker_name = "Q"
+    client.name = "Q"
     client.agent_name = "J"
     lead = MagicMock()
     lead.name = "María"
@@ -618,7 +617,7 @@ def test_cap8_no_unfilled_template_variables():
     from app.prompts.insurance_agent import render_system_prompt
 
     client = MagicMock()
-    client.broker_name = "Quintana Seguros"
+    client.name = "Quintana Seguros"
     client.agent_name = "Jaumpablo"
     lead = MagicMock()
     lead.name = "Carlos"
@@ -637,7 +636,7 @@ def test_cap8_interest_confirmed_tool_fires():
     from app.prompts.insurance_agent import render_system_prompt
 
     client = MagicMock()
-    client.broker_name = "Q"
+    client.name = "Q"
     client.agent_name = "J"
 
     prompt = render_system_prompt(client, lead=None)
@@ -654,7 +653,7 @@ def test_cap8_rejection_handled_gracefully():
     from app.prompts.insurance_agent import render_system_prompt
 
     client = MagicMock()
-    client.broker_name = "Q"
+    client.name = "Q"
     client.agent_name = "J"
 
     prompt = render_system_prompt(client, lead=None)

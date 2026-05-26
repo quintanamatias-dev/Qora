@@ -51,7 +51,7 @@ def make_agent(
 def make_client(id: str = "acme") -> MagicMock:
     client = MagicMock()
     client.id = id
-    client.broker_name = "Acme Seguros"
+    client.name = "Acme Seguros"
     client.agent_name = "Aria"
     return client
 

@@ -104,7 +104,7 @@ const mockTranscript: SessionTranscript = {
 
 const mockClient: Client = {
   client_id: 'demo-client',
-  broker_name: 'Demo Broker',
+  name: 'Demo Broker',
   agent_name: 'Demo Agent',
   voice_id: 'voice-1',
   is_active: true,
@@ -252,7 +252,7 @@ describe('useClient', () => {
     function Comp() {
       const { data, isLoading } = useClient('demo-client')
       if (isLoading) return <span>loading</span>
-      return <span data-testid="broker">{data?.broker_name}</span>
+      return <span data-testid="broker">{data?.name}</span>
     }
 
     render(<Wrapper><Comp /></Wrapper>)
@@ -261,12 +261,12 @@ describe('useClient', () => {
   })
 
   it('calls fetchClient with different clientId (acme-motors)', async () => {
-    vi.mocked(clientsApi.fetchClient).mockResolvedValue({ ...mockClient, client_id: 'acme-motors', broker_name: 'Acme Broker' })
+    vi.mocked(clientsApi.fetchClient).mockResolvedValue({ ...mockClient, client_id: 'acme-motors', name: 'Acme Broker' })
 
     function Comp() {
       const { data, isLoading } = useClient('acme-motors')
       if (isLoading) return <span>loading</span>
-      return <span data-testid="broker">{data?.broker_name}</span>
+      return <span data-testid="broker">{data?.name}</span>
     }
 
     render(<Wrapper><Comp /></Wrapper>)

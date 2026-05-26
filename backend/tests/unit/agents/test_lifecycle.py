@@ -65,7 +65,7 @@ async def test_full_admin_lifecycle(lifecycle_app: AsyncClient):
         f"{base_url}/clients",
         json={
             "client_id": "lifecycle-broker",
-            "broker_name": "Lifecycle Broker SA",
+            "name": "Lifecycle Broker SA",
             "agent_name": "LifeAgent",
             "voice_id": "voice-lifecycle",
         },

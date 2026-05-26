@@ -152,7 +152,6 @@ async def test_list_leads_scoped_to_client(
         seeded_session,
         id="other-broker",
         name="Other Broker SA",
-        broker_name="Other Broker SA",
         agent_name="OtherAgent",
         voice_id="other-voice",
     )
