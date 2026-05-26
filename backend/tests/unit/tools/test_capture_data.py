@@ -75,7 +75,6 @@ async def db_two_clients(tmp_path: Path):
             sess,
             id="other-client",
             name="Other Client SA",
-            broker_name="Other Client SA",
             agent_name="OtherAgent",
             voice_id="v-other",
         )

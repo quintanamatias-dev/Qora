@@ -65,7 +65,7 @@ def _client_to_response(client: Client, agent_count: int = 0) -> ClientResponse:
     """Map a Client ORM object to a ClientResponse schema."""
     return ClientResponse(
         client_id=client.id,
-        broker_name=client.broker_name,
+        name=client.name,
         agent_name=client.agent_name,
         voice_id=client.voice_id,
         is_active=client.is_active,
@@ -98,14 +98,14 @@ async def create_client(
     construct Client() directly).
 
     When `client_id` is omitted, a URL-safe slug is auto-generated from
-    `broker_name`. Collisions are resolved by appending `-2`, `-3`, etc.
+    `name`. Collisions are resolved by appending `-2`, `-3`, etc.
 
     Returns:
         201: ClientResponse with the created client.
         409: If explicit client_id already exists.
         422: If slug validation fails (handled by Pydantic).
     """
-    # Resolve client_id: use explicit value or auto-generate from broker_name
+    # Resolve client_id: use explicit value or auto-generate from name
     if payload.client_id is not None:
         resolved_id = payload.client_id
         # Check for duplicate on explicit id
@@ -117,25 +117,18 @@ async def create_client(
             )
     else:
         # Auto-generate slug with collision dedup
-        base_slug = _slugify_client_id(payload.broker_name)
+        base_slug = _slugify_client_id(payload.name)
         resolved_id = base_slug
         suffix = 2
         while await session.get(Client, resolved_id) is not None:
             resolved_id = f"{base_slug}-{suffix}"
             suffix += 1
 
-    # When client_id was auto-generated, use the resolved slug as `name` to satisfy
-    # the unique constraint on clients.name. Explicit client_id keeps broker_name as name.
-    resolved_name = (
-        payload.broker_name if payload.client_id is not None else resolved_id
-    )
-
     try:
         client = await tenant_service.create_client(
             session,
             id=resolved_id,
-            name=resolved_name,
-            broker_name=payload.broker_name,
+            name=payload.name,
             agent_name=payload.agent_name,
             voice_id=payload.voice_id,
             system_prompt_override=payload.system_prompt_override,
@@ -154,7 +147,7 @@ async def create_client(
             status_code=409,
             detail={
                 "error": "client name already exists",
-                "broker_name": payload.broker_name,
+                "name": payload.name,
             },
         )
     await session.refresh(client)

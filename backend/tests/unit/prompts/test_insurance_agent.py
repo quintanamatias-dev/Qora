@@ -2,7 +2,7 @@
 
 Tests verify:
 - render_system_prompt(client, lead) returns string with all variables filled
-- broker_name injected correctly
+- name injected correctly
 - agent_name injected correctly
 - lead name and car data injected
 - call_count > 1 triggers returning caller context
@@ -24,12 +24,12 @@ from unittest.mock import MagicMock
 
 
 def make_client(
-    broker_name: str = "Quintana Seguros",
+    name: str = "Quintana Seguros",
     agent_name: str = "Jaumpablo",
 ) -> MagicMock:
     """Create a mock Client object."""
     client = MagicMock()
-    client.broker_name = broker_name
+    client.name = name
     client.agent_name = agent_name
     return client
 
@@ -67,11 +67,11 @@ def test_render_returns_string():
     assert len(result) > 100
 
 
-def test_broker_name_injected():
-    """broker_name is correctly substituted in the prompt."""
+def test_name_injected():
+    """name is correctly substituted in the prompt."""
     from app.prompts.insurance_agent import render_system_prompt
 
-    client = make_client(broker_name="Acme Seguros")
+    client = make_client(name="Acme Seguros")
     lead = make_lead()
     result = render_system_prompt(client, lead)
     assert "Acme Seguros" in result
@@ -260,7 +260,7 @@ def test_quintana_specific_prompt_content():
     """Quintana Seguros prompt references insurance context."""
     from app.prompts.insurance_agent import render_system_prompt
 
-    client = make_client(broker_name="Quintana Seguros")
+    client = make_client(name="Quintana Seguros")
     lead = make_lead()
     result = render_system_prompt(client, lead)
     lower = result.lower()

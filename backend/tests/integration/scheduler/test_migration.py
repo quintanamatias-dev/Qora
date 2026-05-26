@@ -34,7 +34,7 @@ async def test_migration_creates_scheduled_calls_table(tmp_db_url: str):
                 CREATE TABLE IF NOT EXISTS clients (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL UNIQUE,
-                    broker_name TEXT NOT NULL,
+
                     agent_name TEXT NOT NULL DEFAULT 'Jaumpablo',
                     voice_id TEXT NOT NULL,
                     is_active BOOLEAN NOT NULL DEFAULT 1,
@@ -99,7 +99,7 @@ async def test_migration_adds_scheduler_columns_to_clients(tmp_db_url: str):
                 CREATE TABLE IF NOT EXISTS clients (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL UNIQUE,
-                    broker_name TEXT NOT NULL,
+
                     agent_name TEXT NOT NULL DEFAULT 'Jaumpablo',
                     voice_id TEXT NOT NULL,
                     is_active BOOLEAN NOT NULL DEFAULT 1,
@@ -179,7 +179,7 @@ async def test_migration_composite_index_on_existing_table(tmp_path: Path):
                 CREATE TABLE IF NOT EXISTS clients (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL UNIQUE,
-                    broker_name TEXT NOT NULL,
+
                     agent_name TEXT NOT NULL DEFAULT 'Jaumpablo',
                     voice_id TEXT NOT NULL,
                     is_active BOOLEAN NOT NULL DEFAULT 1,
@@ -269,7 +269,7 @@ async def test_migration_is_idempotent(tmp_db_url: str):
                 CREATE TABLE IF NOT EXISTS clients (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL UNIQUE,
-                    broker_name TEXT NOT NULL,
+
                     agent_name TEXT NOT NULL DEFAULT 'Jaumpablo',
                     voice_id TEXT NOT NULL,
                     is_active BOOLEAN NOT NULL DEFAULT 1,

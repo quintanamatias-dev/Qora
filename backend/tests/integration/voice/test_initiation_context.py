@@ -179,7 +179,7 @@ async def test_initiation_dynamic_variables_unchanged_with_conversation_id(
     assert "current_insurance" in dv
     assert "lead_status" in dv
     assert "lead_notes" in dv
-    assert "broker_name" in dv
+    assert "company_name" in dv
     assert "agent_name" in dv
     assert "call_history" in dv
     assert "confirmed_facts" in dv

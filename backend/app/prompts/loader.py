@@ -61,16 +61,16 @@ _DEFAULT_CLIENTS_DIR = Path(__file__).resolve().parents[2] / "clients"
 
 
 # ---------------------------------------------------------------------------
-# Agent → Client adapter for backward-compatible rendering
+# Agent → Client adapter for rendering
 # ---------------------------------------------------------------------------
 
 
 class _AgentClientAdapter:
     """Thin adapter that makes an Agent look like a Client for prompt rendering.
 
-    The original render() and render_system_prompt() functions accept a Client
-    object and read: id, broker_name, agent_name.  This adapter exposes those
-    attributes using Agent data so existing rendering logic works unchanged.
+    The render() and render_system_prompt() functions accept a Client object
+    and read: id, name, agent_name. This adapter exposes those attributes using
+    Agent data so existing rendering logic works unchanged.
     """
 
     def __init__(self, agent: "Agent", client: "Client | None" = None) -> None:
@@ -82,9 +82,9 @@ class _AgentClientAdapter:
         return getattr(self._agent, "client_id", None) or "unknown"
 
     @property
-    def broker_name(self) -> str:
+    def name(self) -> str:
         if self._client is not None:
-            return getattr(self._client, "broker_name", "")
+            return getattr(self._client, "name", "")
         return ""
 
     @property
@@ -243,8 +243,8 @@ class PromptLoader:
             lead: Optional lead ORM instance.
             call_count: How many times the lead has been called.
             db: Optional async DB session for memory context.
-            client: Optional Client ORM — used for broker_name in template rendering.
-                    If None, broker_name defaults to empty string.
+            client: Optional Client ORM — used for company_name in template rendering.
+                    If None, company_name defaults to empty string.
 
         Returns:
             Fully rendered system prompt string.
@@ -346,7 +346,7 @@ class PromptLoader:
            append under ``## INFORMACIÓN DE LA EMPRESA``.
 
         Args:
-            client: Client (tenant) ORM instance with ``id``, ``broker_name``,
+            client: Client (tenant) ORM instance with ``id``, ``name``,
                 and ``agent_name``.
             lead: Optional lead ORM instance.  ``None`` uses safe defaults.
             call_count: Number of times the lead has been called (>1 = returning
@@ -431,7 +431,7 @@ class PromptLoader:
         """
         from app.prompts.insurance_agent import RETURNING_CALLER_CONTEXT
 
-        broker_name = client.broker_name if client else "la aseguradora"
+        company_name = client.name if client else "la aseguradora"
         agent_name = client.agent_name if client else "Jaumpablo"
 
         if lead is not None:
@@ -487,7 +487,7 @@ class PromptLoader:
 
         return {
             "lead_name": lead_name,
-            "broker_name": broker_name,
+            "company_name": company_name,
             "agent_name": agent_name,
             "car_make": car_make,
             "car_model": car_model,

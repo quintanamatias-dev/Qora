@@ -116,7 +116,6 @@ class Client(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
-    broker_name: Mapped[str] = mapped_column(String, nullable=False)
     agent_name: Mapped[str] = mapped_column(String, nullable=False, default="Jaumpablo")
     voice_id: Mapped[str] = mapped_column(String, nullable=False)
     system_prompt_override: Mapped[str | None] = mapped_column(

@@ -52,14 +52,13 @@ async def test_create_client_persists_record(session: AsyncSession):
         session,
         id="test-broker",
         name="Test Broker SA",
-        broker_name="Test Broker SA",
         agent_name="TestAgent",
         voice_id="voice-abc123",
     )
 
     assert client.id == "test-broker"
     assert client.name == "Test Broker SA"
-    assert client.broker_name == "Test Broker SA"
+    assert client.name == "Test Broker SA"
     assert client.agent_name == "TestAgent"
     assert client.voice_id == "voice-abc123"
     assert client.is_active is True
@@ -92,7 +91,6 @@ async def test_get_client_by_name_finds_existing(session: AsyncSession):
         session,
         id="broker-xyz",
         name="Broker XYZ",
-        broker_name="Broker XYZ",
         agent_name="Agent",
         voice_id="v1",
     )
@@ -122,8 +120,7 @@ async def test_update_client_changes_fields(session: AsyncSession):
     await create_client(
         session,
         id="updatable",
-        name="Before Update",
-        broker_name="Old Broker",
+        name="Old Broker",
         agent_name="OldAgent",
         voice_id="old-voice",
     )
@@ -131,20 +128,18 @@ async def test_update_client_changes_fields(session: AsyncSession):
     updated = await update_client(
         session,
         client_id="updatable",
-        name="After Update",
-        broker_name="New Broker",
+        name="New Broker",
     )
 
     assert updated is not None
-    assert updated.name == "After Update"
-    assert updated.broker_name == "New Broker"
+    assert updated.name == "New Broker"
     # Unchanged field must stay the same
     assert updated.agent_name == "OldAgent"
 
     # Verify persistence (re-fetch)
     fetched = await get_client(session, "updatable")
     assert fetched is not None
-    assert fetched.name == "After Update"
+    assert fetched.name == "New Broker"
 
 
 async def test_update_client_returns_none_for_missing(session: AsyncSession):
@@ -168,7 +163,7 @@ async def test_seed_quintana_creates_client(session: AsyncSession):
 
     client = await get_client(session, "quintana-seguros")
     assert client is not None
-    assert client.broker_name == "Quintana Seguros"
+    assert client.name == "Quintana Seguros"
     assert client.agent_name == "Jaumpablo"
     assert client.voice_id == "pNInz6obpgDQGcFmaJgB"
 
@@ -202,7 +197,6 @@ async def test_list_agents_for_client_returns_all_agents(session: AsyncSession):
         session,
         id="list-test",
         name="List Test",
-        broker_name="List Test",
         agent_name="Agent1",
         voice_id="v1",
     )
@@ -240,8 +234,7 @@ async def test_list_agents_for_client_returns_empty_for_no_agents(
 
     bare_client = Client(
         id="bare-client",
-        name="Bare Client",
-        broker_name="Bare",
+        name="Bare",
         agent_name="X",
         voice_id="v0",
     )
@@ -261,16 +254,14 @@ async def test_list_agents_for_client_isolation(session: AsyncSession):
     await create_client(
         session,
         id="client-a",
-        name="Client A",
-        broker_name="A",
+        name="A",
         agent_name="AgentA",
         voice_id="va",
     )
     await create_client(
         session,
         id="client-b",
-        name="Client B",
-        broker_name="B",
+        name="B",
         agent_name="AgentB",
         voice_id="vb",
     )
@@ -297,8 +288,7 @@ async def test_list_agents_for_client_excludes_inactive_by_default(
     await create_client(
         session,
         id="inactive-test",
-        name="Inactive Test",
-        broker_name="Inactive",
+        name="Inactive",
         agent_name="DefaultAgent",
         voice_id="v1",
     )
@@ -340,8 +330,7 @@ async def test_update_agent_changes_specified_fields(session: AsyncSession):
     await create_client(
         session,
         id="update-agent-test",
-        name="Update Agent Test",
-        broker_name="Update",
+        name="Update",
         agent_name="OriginalAgent",
         voice_id="v-original",
     )
@@ -376,16 +365,14 @@ async def test_update_agent_rejects_cross_client_lookup(session: AsyncSession):
     await create_client(
         session,
         id="client-x",
-        name="Client X",
-        broker_name="X",
+        name="X",
         agent_name="AgentX",
         voice_id="vx",
     )
     await create_client(
         session,
         id="client-y",
-        name="Client Y",
-        broker_name="Y",
+        name="Y",
         agent_name="AgentY",
         voice_id="vy",
     )
@@ -416,8 +403,7 @@ async def test_deactivate_non_default_agent_succeeds(session: AsyncSession):
     await create_client(
         session,
         id="deact-test",
-        name="Deactivate Test",
-        broker_name="Deact",
+        name="Deact",
         agent_name="DefaultAgent",
         voice_id="v1",
     )
@@ -447,8 +433,7 @@ async def test_deactivate_sole_active_default_raises_guard(session: AsyncSession
     await create_client(
         session,
         id="sole-default-test",
-        name="Sole Default Test",
-        broker_name="Sole",
+        name="Sole",
         agent_name="OnlyAgent",
         voice_id="v1",
     )
@@ -480,8 +465,7 @@ async def test_set_default_agent_swaps_atomically(session: AsyncSession):
     await create_client(
         session,
         id="swap-test",
-        name="Swap Test",
-        broker_name="Swap",
+        name="Swap",
         agent_name="AgentA",
         voice_id="va",
     )
@@ -521,8 +505,7 @@ async def test_set_default_agent_idempotent(session: AsyncSession):
     await create_client(
         session,
         id="idempotent-default",
-        name="Idempotent Default",
-        broker_name="Idem",
+        name="Idem",
         agent_name="Agent",
         voice_id="v1",
     )
@@ -547,8 +530,7 @@ async def test_set_default_agent_inactive_target_raises(session: AsyncSession):
     await create_client(
         session,
         id="inactive-default-test",
-        name="Inactive Default Test",
-        broker_name="InactDef",
+        name="InactDef",
         agent_name="Active",
         voice_id="v1",
     )
@@ -594,7 +576,7 @@ async def test_seed_qora_demo_creates_client_and_agent(session: AsyncSession):
 
     client = await get_client(session, "qora-demo")
     assert client is not None
-    assert client.broker_name == "Qora Demo"  # exact expected broker name
+    assert client.name == "Qora Demo"  # exact expected broker name
 
     agent_result = await session.execute(
         select(Agent).where(

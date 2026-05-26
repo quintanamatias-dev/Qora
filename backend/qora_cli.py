@@ -2,7 +2,7 @@
 """QORA CLI — management commands for the call center platform.
 
 Usage:
-    python qora_cli.py create-client --id quintana-seguros --broker-name "Quintana Seguros"
+    python qora_cli.py create-client --id quintana-seguros --name "Quintana Seguros"
     python qora_cli.py list-clients
 """
 
@@ -47,7 +47,7 @@ def cli():
     required=True,
     help="Client slug ID (e.g. quintana-seguros). Lowercase letters, digits, hyphens only.",
 )
-@click.option("--broker-name", required=True, help="Broker/company display name.")
+@click.option("--name", "company_name", required=True, help="Client/company display name.")
 @click.option(
     "--agent-name", default="Jaumpablo", show_default=True, help="Agent name."
 )
@@ -57,7 +57,7 @@ def cli():
     show_default=True,
     help="ElevenLabs voice ID.",
 )
-def create_client(client_id: str, broker_name: str, agent_name: str, voice_id: str):
+def create_client(client_id: str, company_name: str, agent_name: str, voice_id: str):
     """Create a new client with directory structure and DB record.
 
     This command is idempotent:
@@ -93,8 +93,8 @@ def create_client(client_id: str, broker_name: str, agent_name: str, voice_id: s
         else:
             # Write a minimal prompt inline if template is missing
             prompt_path.write_text(
-                f"# {agent_name} — Agente de {broker_name}\n\n"
-                f"Sos {agent_name}, un asesor de {broker_name}.\n\n"
+                f"# {agent_name} — Agente de {company_name}\n\n"
+                f"Sos {agent_name}, un asesor de {company_name}.\n\n"
                 "Estás hablando con {{lead_name}}.\n\n"
                 "[Personalizar este template]\n",
                 encoding="utf-8",
@@ -109,21 +109,21 @@ def create_client(client_id: str, broker_name: str, agent_name: str, voice_id: s
         click.echo("  ~ knowledge.md already exists — skipping")
     else:
         knowledge_path.write_text(
-            f"# Información de {broker_name}\n\n"
+            f"# Información de {company_name}\n\n"
             "[Agregar aquí información relevante sobre la empresa, productos, precios, FAQs, etc.]\n",
             encoding="utf-8",
         )
         click.echo("  ✓ Created knowledge.md (placeholder)")
 
     # 5. Insert DB record (idempotent — skip if exists)
-    asyncio.run(_upsert_client_db(client_id, broker_name, agent_name, voice_id))
+    asyncio.run(_upsert_client_db(client_id, company_name, agent_name, voice_id))
 
     click.echo(f"\n[QORA] ✓ Client {client_id!r} ready.")
 
 
 async def _upsert_client_db(
     client_id: str,
-    broker_name: str,
+    company_name: str,
     agent_name: str,
     voice_id: str,
 ) -> None:
@@ -155,8 +155,7 @@ async def _upsert_client_db(
             await svc_create_client(
                 session,
                 id=client_id,
-                name=broker_name,
-                broker_name=broker_name,
+                name=company_name,
                 agent_name=agent_name,
                 voice_id=voice_id,
                 is_active=True,
@@ -202,11 +201,11 @@ async def _list_clients_db() -> None:
                 click.echo("No clients found.")
                 return
 
-            click.echo(f"{'ID':<30} {'BROKER':<30} {'AGENT':<20} {'ACTIVE'}")
+            click.echo(f"{'ID':<30} {'NAME':<30} {'AGENT':<20} {'ACTIVE'}")
             click.echo("-" * 85)
             for c in clients:
                 click.echo(
-                    f"{c.id:<30} {c.broker_name:<30} {c.agent_name:<20} {c.is_active}"
+                    f"{c.id:<30} {c.name:<30} {c.agent_name:<20} {c.is_active}"
                 )
     finally:
         await db_module.close_db()

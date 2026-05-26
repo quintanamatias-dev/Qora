@@ -75,7 +75,6 @@ async def agents_app(tmp_path: Path):
             session,
             id="test-client",
             name="Test Client SA",
-            broker_name="Test Client SA",
             agent_name="Test Client Agent",
             voice_id="voice-default",
         )

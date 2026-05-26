@@ -704,8 +704,7 @@ async def test_agent_stats_cross_client_isolation(analytics_service_db):
         await create_client(
             sess,
             id="other-client",
-            name="Other Corp",
-            broker_name="OC",
+            name="OC",
             agent_name="Bot",
             voice_id="pNInz6obpgDQGcFmaJgB",
         )

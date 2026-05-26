@@ -222,7 +222,7 @@ export interface CallMetricsResponse {
 
 export interface Client {
   client_id: string
-  broker_name: string
+  name: string
   agent_name: string
   voice_id: string
   is_active: boolean
@@ -232,12 +232,12 @@ export interface Client {
 
 export interface CreateClientPayload {
   client_id: string
-  broker_name: string
+  name: string
   agent_name: string
 }
 
 export interface UpdateClientPayload {
-  broker_name?: string
+  name?: string
   agent_name?: string
   voice_id?: string
 }

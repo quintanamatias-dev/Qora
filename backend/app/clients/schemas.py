@@ -115,10 +115,8 @@ class _SchedulerValidatorMixin(BaseModel):
 class ClientCreate(_SchedulerValidatorMixin):
     """Request body for POST /api/v1/clients."""
 
-    client_id: str | None = (
-        None  # Optional: auto-generated from broker_name when omitted
-    )
-    broker_name: str
+    client_id: str | None = None  # Optional: auto-generated from name when omitted
+    name: str
     agent_name: str = "Jaumpablo"
     voice_id: str = (
         "pNInz6obpgDQGcFmaJgB"  # ElevenLabs Adam voice (default, configure per-agent)
@@ -153,7 +151,7 @@ class ClientUpdate(_SchedulerValidatorMixin):
     All fields are optional. client_id is NOT updatable.
     """
 
-    broker_name: str | None = None
+    name: str | None = None
     agent_name: str | None = None
     voice_id: str | None = None
     system_prompt_override: str | None = None
@@ -171,7 +169,7 @@ class ClientResponse(BaseModel):
     """Response shape for all client endpoints."""
 
     client_id: str
-    broker_name: str
+    name: str
     agent_name: str
     voice_id: str
     is_active: bool

@@ -47,7 +47,6 @@ async def agents_app(tmp_path: Path):
             session,
             id="test-client",
             name="Test Client SA",
-            broker_name="Test Client SA",
             agent_name="Test Client Agent",
             voice_id="voice-default",
         )
@@ -164,7 +163,7 @@ async def test_list_clients_includes_agent_count(clients_app: AsyncClient):
         "/api/v1/clients",
         json={
             "client_id": "count-test-broker",
-            "broker_name": "Count Test Broker SA",
+            "name": "Count Test Broker SA",
             "voice_id": "v-count",
         },
     )
@@ -190,7 +189,7 @@ async def test_get_client_includes_agent_count(clients_app: AsyncClient):
         "/api/v1/clients",
         json={
             "client_id": "count-get-broker",
-            "broker_name": "Count Get Broker",
+            "name": "Count Get Broker",
             "voice_id": "v-count-get",
         },
     )
@@ -229,8 +228,7 @@ async def test_bootstrap_agent_name_with_special_chars_produces_valid_slug(
     await create_client(
         db_session,
         id="special-chars-client",
-        name="Special Chars Client",
-        broker_name="Special Chars SA",
+        name="Special Chars SA",
         agent_name="My Agent (2.0)!",
         voice_id="v-special",
     )
@@ -253,8 +251,7 @@ async def test_bootstrap_simple_agent_name_produces_correct_slug(db_session):
     await create_client(
         db_session,
         id="simple-slug-client",
-        name="Simple Slug Client",
-        broker_name="Simple SA",
+        name="Simple SA",
         agent_name="Jaumpablo",
         voice_id="v-simple",
     )
@@ -327,7 +324,7 @@ async def test_create_client_invalid_timezone_returns_422(clients_app: AsyncClie
         "/api/v1/clients",
         json={
             "client_id": "tz-invalid-test",
-            "broker_name": "TZ Invalid",
+            "name": "TZ Invalid",
             "voice_id": "v-tz",
             "scheduler_timezone": "Invalid/Zone",
         },
@@ -345,7 +342,7 @@ async def test_create_client_valid_timezone_returns_201(clients_app: AsyncClient
         "/api/v1/clients",
         json={
             "client_id": "tz-valid-test",
-            "broker_name": "TZ Valid",
+            "name": "TZ Valid",
             "voice_id": "v-tz-valid",
             "scheduler_timezone": "Europe/Madrid",
         },
@@ -360,7 +357,7 @@ async def test_create_client_invalid_max_attempts_returns_422(clients_app: Async
         "/api/v1/clients",
         json={
             "client_id": "attempts-invalid",
-            "broker_name": "Attempts Invalid",
+            "name": "Attempts Invalid",
             "voice_id": "v1",
             "scheduler_max_attempts": 0,
         },
@@ -376,7 +373,7 @@ async def test_create_client_invalid_cooldown_returns_422(clients_app: AsyncClie
         "/api/v1/clients",
         json={
             "client_id": "cooldown-invalid",
-            "broker_name": "Cooldown Invalid",
+            "name": "Cooldown Invalid",
             "voice_id": "v1",
             "scheduler_cooldown_minutes": -1,
         },
@@ -392,7 +389,7 @@ async def test_create_client_invalid_hour_range_returns_422(clients_app: AsyncCl
         "/api/v1/clients",
         json={
             "client_id": "hour-invalid",
-            "broker_name": "Hour Invalid",
+            "name": "Hour Invalid",
             "voice_id": "v1",
             "scheduler_allowed_hours_start": 25,
         },
@@ -410,7 +407,7 @@ async def test_create_client_invalid_retry_outcomes_returns_422(
         "/api/v1/clients",
         json={
             "client_id": "retry-invalid",
-            "broker_name": "Retry Invalid",
+            "name": "Retry Invalid",
             "voice_id": "v1",
             "scheduler_retry_on_outcomes": "not-json",
         },

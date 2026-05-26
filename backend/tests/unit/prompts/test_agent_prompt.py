@@ -92,15 +92,15 @@ async def test_render_for_agent_uses_agent_name_in_template_variable(tmp_path: P
     client_dir = tmp_path / "test-client"
     client_dir.mkdir()
     prompt_file = client_dir / "prompt.md"
-    prompt_file.write_text("Hola, soy {{agent_name}} y te llamo de {{broker_name}}.")
+    prompt_file.write_text("Hola, soy {{agent_name}} y te llamo de {{company_name}}.")
 
     agent = make_agent(name="Valentina", system_prompt=None)
     lead = make_lead()
 
-    # We need a client object for broker_name
+    # We need a client object for name
     client = MagicMock()
     client.id = "test-client"
-    client.broker_name = "Propiedades del Sur"
+    client.name = "Propiedades del Sur"
 
     loader = PromptLoader(clients_dir=tmp_path)
     result = await loader.render_for_agent(agent, lead, client=client)
@@ -323,7 +323,7 @@ async def test_render_for_agent_filesystem_prompt_is_rendered_as_template(
 ):
     """Filesystem system-prompt.md supports {{variable}} template substitution.
 
-    Variables like {{agent_name}}, {{lead_name}}, {{broker_name}} are substituted
+    Variables like {{agent_name}}, {{lead_name}}, {{company_name}} are substituted
     just like any other template when the filesystem prompt is used.
     """
     from app.prompts.loader import PromptLoader

@@ -136,7 +136,7 @@
     let isPlaying = false;
     let pollInterval = null;
     let isMuted = false;
-    let currentClientData = {};  // holds the selected client's broker_name, agent_name, etc.
+    let currentClientData = {};  // holds the selected client's name, agent_name, etc.
     let currentSessionId = null;  // ElevenLabs conversation_id for the active session
     let currentAgentConfig = null;  // holds the selected agent's TTS config, or null if not available
     let clientAgents = [];  // all active agents for the selected client
@@ -164,8 +164,8 @@
         clients.forEach(c => {
           const opt = document.createElement('option');
           opt.value = c.client_id;
-          opt.textContent = c.broker_name || c.name;
-          opt.dataset.brokerName = c.broker_name || '';
+          opt.textContent = c.name;
+          opt.dataset.companyName = c.name || '';
           opt.dataset.agentName = c.agent_name || '';
           select.appendChild(opt);
         });
@@ -293,7 +293,7 @@
 
       // Update cached client data from option dataset
       currentClientData = {
-        broker_name: selectedOpt ? selectedOpt.dataset.brokerName || '' : '',
+        name: selectedOpt ? selectedOpt.dataset.companyName || '' : '',
         agent_name:  selectedOpt ? selectedOpt.dataset.agentName  || '' : '',
       };
 
@@ -516,8 +516,12 @@
           car_year:            String(lead.car_year   || ''),
           _current_insurance_: lead.current_insurance || 'no tiene',
           current_insurance:   lead.current_insurance || 'no tiene',
-          _broker_name_:       currentClientData.broker_name || '',
-          broker_name:         currentClientData.broker_name || '',
+          _company_name_:      currentClientData.name || '',
+          company_name:        currentClientData.name || '',
+          // DEPRECATED: use company_name instead.
+          _broker_name_:       currentClientData.name || '',
+          // DEPRECATED: use company_name instead.
+          broker_name:         currentClientData.name || '',
           _agent_name_:        currentClientData.agent_name  || '',
           agent_name:          currentClientData.agent_name  || '',
           notes:               lead.notes            || '',

@@ -143,7 +143,7 @@ const transcriptFixture: SessionTranscript = {
 const clientsFixture: Client[] = [
   {
     client_id: 'demo-client',
-    broker_name: 'Demo Broker',
+    name: 'Demo Broker',
     agent_name: 'Jaumpablo',
     voice_id: 'voice-001',
     is_active: true,
@@ -152,7 +152,7 @@ const clientsFixture: Client[] = [
   },
   {
     client_id: 'acme-motors',
-    broker_name: 'Acme Motors',
+    name: 'Acme Motors',
     agent_name: 'Jaumpablo',
     voice_id: 'voice-002',
     is_active: true,
@@ -161,7 +161,7 @@ const clientsFixture: Client[] = [
   },
   {
     client_id: 'old-client',
-    broker_name: 'Old Corp',
+    name: 'Old Corp',
     agent_name: 'Jaumpablo',
     voice_id: 'voice-003',
     is_active: false,
@@ -243,7 +243,7 @@ export const handlers = [
     const body = await request.json() as Partial<Client>
     const newClient: Client = {
       client_id: body.client_id ?? 'new-client',
-      broker_name: body.broker_name ?? 'New Broker',
+      name: body.name ?? 'New Broker',
       agent_name: body.agent_name ?? 'Jaumpablo',
       voice_id: '',
       is_active: true,

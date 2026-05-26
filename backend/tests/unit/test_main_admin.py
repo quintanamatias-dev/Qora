@@ -45,7 +45,6 @@ async def full_app(tmp_path: Path):
             session,
             id="admin-test-client",
             name="Admin Test Client",
-            broker_name="Admin Test Client",
             agent_name="AdminAgent",
             voice_id="voice-admin",
         )

@@ -53,8 +53,7 @@ async def test_get_default_agent_ignores_inactive_agent(session: AsyncSession):
     await create_client(
         session,
         id="broker-inactive-agent",
-        name="Broker Inactive Agent",
-        broker_name="Test SA",
+        name="Test SA",
         agent_name="OldAgent",
         voice_id="v-inactive",
     )
@@ -87,8 +86,7 @@ async def test_get_default_agent_returns_active_default_among_inactive(
     await create_client(
         session,
         id="broker-mixed-active",
-        name="Broker Mixed Active",
-        broker_name="Test SA",
+        name="Test SA",
         agent_name="Agent",
         voice_id="v-mixed",
     )
@@ -169,8 +167,7 @@ async def test_create_client_bootstraps_default_agent(session: AsyncSession):
     await create_client(
         session,
         id="new-broker-auto-agent",
-        name="New Broker Auto Agent",
-        broker_name="New Broker SA",
+        name="New Broker SA",
         agent_name="AutoAgent",
         voice_id="v-auto-agent",
     )
@@ -194,8 +191,7 @@ async def test_create_client_default_agent_has_correct_config(session: AsyncSess
     await create_client(
         session,
         id="config-test-broker",
-        name="Config Test Broker",
-        broker_name="Config Broker SA",
+        name="Config Broker SA",
         agent_name="ConfigAgent",
         voice_id="v-config",
         model="gpt-4o-mini",

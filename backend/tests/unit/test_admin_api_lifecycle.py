@@ -38,8 +38,7 @@ async def admin_app(tmp_path: Path):
         await create_client(
             session,
             id="lifecycle-client",
-            name="Lifecycle Client SA",
-            broker_name="Lifecycle Broker",
+            name="Lifecycle Broker",
             agent_name="LifecycleAgent",
             voice_id="voice-lifecycle",
         )

@@ -299,7 +299,7 @@ export function AgentsPanel() {
             <option value="">— Choose a client —</option>
             {activeClients.map((client) => (
               <option key={client.client_id} value={client.client_id}>
-                {client.broker_name} ({client.client_id})
+                {client.name} ({client.client_id})
               </option>
             ))}
           </Select>

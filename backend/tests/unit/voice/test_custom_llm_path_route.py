@@ -147,8 +147,7 @@ async def app_client_with_inactive(tmp_path: Path):
         await create_client(
             sess,
             id="inactive-tenant",
-            name="Inactive Tenant Corp",
-            broker_name="Inactive Corp",
+            name="Inactive Corp",
             agent_name="Bot",
             voice_id="pNInz6obpgDQGcFmaJgB",
             is_active=False,
@@ -498,8 +497,7 @@ async def two_tenant_app_client(tmp_path: Path):
         await create_client(
             sess,
             id="test-tenant-b",
-            name="test-tenant-b",
-            broker_name="Test Broker B",
+            name="Test Broker B",
             agent_name="TestAgent",
             voice_id="v-test-b",
         )

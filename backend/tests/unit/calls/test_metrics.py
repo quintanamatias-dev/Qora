@@ -230,8 +230,7 @@ async def test_get_call_metrics_client_isolation(seeded_db, tmp_path):
         await create_client(
             sess,
             id="other-client",
-            name="Other Corp",
-            broker_name="OC",
+            name="OC",
             agent_name="Bot",
             voice_id="pNInz6obpgDQGcFmaJgB",
         )
@@ -370,8 +369,7 @@ async def test_metrics_endpoint_all_filters_passed(seeded_db, app_client):
         await create_client(
             sess,
             id="other-client-metrics",
-            name="Other Corp Metrics",
-            broker_name="OCM",
+            name="OCM",
             agent_name="Bot",
             voice_id="pNInz6obpgDQGcFmaJgB",
         )

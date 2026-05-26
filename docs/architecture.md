@@ -145,7 +145,7 @@ The core of QORA. Receives OpenAI-compatible POST requests from ElevenLabs and:
 
 `PromptLoader().render_for_agent(agent, lead, db, client)` renders the system prompt with:
 - Filesystem-first resolution: `backend/clients/{client_id}/agents/{agent_slug}/system-prompt.md` → DB `agent.system_prompt` → legacy client prompt → hardcoded template
-- Template variable substitution: `broker_name`, `agent_name`, `lead_name`, `car_make`, `car_model`, `car_year`, `current_insurance`, `call_history`, `confirmed_facts`
+- Template variable substitution: `company_name`, `agent_name`, `lead_name`, `car_make`, `car_model`, `car_year`, `current_insurance`, `call_history`, `confirmed_facts`
 - Returning-caller context injected via `build_memory_context(db, lead)` (see `docs/memory-system.md`)
 - Skills index injected via `build_skills_index()` (see `docs/skills-system.md`)
 
@@ -179,7 +179,7 @@ Background tick (`scheduler_tick()`) runs every minute and dispatches pending `S
 
 | Table | Purpose |
 |-------|---------|
-| `clients` | Tenant config (broker_name, voice_id, scheduler settings, analysis_language) |
+| `clients` | Tenant config (name, voice_id, scheduler settings, analysis_language) |
 | `agents` | Per-client AI agents (model, temperature, voice_id, tts tuning, elevenlabs_agent_id) |
 | `leads` | Lead CRM (name, phone, car, insurance, status, call_count, interest_level, extracted_facts) |
 | `call_sessions` | Call records (started_at, ended_at, duration, summary, extracted_facts) |

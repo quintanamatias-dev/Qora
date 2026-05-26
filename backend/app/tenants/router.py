@@ -41,7 +41,6 @@ async def get_tenant(
     return {
         "id": client.id,
         "name": client.name,
-        "broker_name": client.broker_name,
         "agent_name": client.agent_name,
         "voice_id": client.voice_id,
         "model": client.model,

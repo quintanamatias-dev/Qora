@@ -55,13 +55,13 @@ export function ClientsPanel() {
   // Create form state
   const [createForm, setCreateForm] = useState({
     client_id: '',
-    broker_name: '',
+    name: '',
     agent_name: 'Jaumpablo',
   })
 
   // Edit form state
   const [editForm, setEditForm] = useState({
-    broker_name: '',
+    name: '',
     agent_name: '',
     voice_id: '',
   })
@@ -74,18 +74,18 @@ export function ClientsPanel() {
 
   function handleCreateSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!createForm.client_id.trim() || !createForm.broker_name.trim()) return
+    if (!createForm.client_id.trim() || !createForm.name.trim()) return
 
     createClientMutation.mutate(
       {
         client_id: createForm.client_id.trim(),
-        broker_name: createForm.broker_name.trim(),
+        name: createForm.name.trim(),
         agent_name: createForm.agent_name.trim() || 'Jaumpablo',
       },
       {
         onSuccess: () => {
           showToast('Client created successfully', 'success')
-          setCreateForm({ client_id: '', broker_name: '', agent_name: 'Jaumpablo' })
+          setCreateForm({ client_id: '', name: '', agent_name: 'Jaumpablo' })
         },
         onError: (err) => {
           showToast(`Error creating client: ${err.message}`, 'error')
@@ -99,7 +99,7 @@ export function ClientsPanel() {
   function handleEditClick(client: Client) {
     setEditingClient(client)
     setEditForm({
-      broker_name: client.broker_name,
+      name: client.name,
       agent_name: client.agent_name,
       voice_id: client.voice_id,
     })
@@ -117,7 +117,7 @@ export function ClientsPanel() {
       {
         clientId: editingClient.client_id,
         payload: {
-          broker_name: editForm.broker_name || undefined,
+          name: editForm.name || undefined,
           agent_name: editForm.agent_name || undefined,
           voice_id: editForm.voice_id || undefined,
         },
@@ -174,11 +174,11 @@ export function ClientsPanel() {
               onChange={(e) => setCreateForm((f) => ({ ...f, client_id: e.target.value }))}
               required
             />
-            <Input
-              label="Broker Name"
+              <Input
+              label="Name"
               placeholder="Acme Motors"
-              value={createForm.broker_name}
-              onChange={(e) => setCreateForm((f) => ({ ...f, broker_name: e.target.value }))}
+              value={createForm.name}
+              onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))}
               required
             />
             <Input
@@ -213,9 +213,9 @@ export function ClientsPanel() {
           <form onSubmit={handleEditSubmit} className="space-y-4">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <Input
-                label="Broker Name"
-                value={editForm.broker_name}
-                onChange={(e) => setEditForm((f) => ({ ...f, broker_name: e.target.value }))}
+                label="Name"
+                value={editForm.name}
+                onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
               />
               <Input
                 label="Agent Name"
@@ -284,7 +284,7 @@ export function ClientsPanel() {
             <TableHeader>
               <TableRow>
                 <TableHead>ID</TableHead>
-                <TableHead>Broker</TableHead>
+                <TableHead>Name</TableHead>
                 <TableHead>Agent</TableHead>
                 <TableHead>Agents</TableHead>
                 <TableHead>Status</TableHead>
@@ -297,7 +297,7 @@ export function ClientsPanel() {
                   <TableCell>
                     <code className="font-mono text-xs text-primary">{client.client_id}</code>
                   </TableCell>
-                  <TableCell>{client.broker_name}</TableCell>
+                  <TableCell>{client.name}</TableCell>
                   <TableCell>{client.agent_name}</TableCell>
                   <TableCell>
                     {client.agent_count !== undefined ? client.agent_count : '—'}

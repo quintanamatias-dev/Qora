@@ -525,12 +525,12 @@ Returns per-agent call statistics for the period.
 
 Create a new client (tenant). Automatically bootstraps a default `Agent` for the new client.
 
-When `client_id` is omitted, a URL-safe slug is auto-generated from `broker_name` (e.g. `"Acme Corp"` → `"acme-corp"`). Collisions are resolved by appending `-2`, `-3`, etc.
+When `client_id` is omitted, a URL-safe slug is auto-generated from `name` (e.g. `"Acme Corp"` → `"acme-corp"`). Collisions are resolved by appending `-2`, `-3`, etc.
 
-**Request body** (only `broker_name` is required):
+**Request body** (only `name` is required):
 ```json
 {
-  "broker_name": "Acme Corp",
+  "name": "Acme Corp",
   "client_id": "acme-corp",
   "agent_name": "Sofia",
   "voice_id": "voice_xxxx",
@@ -547,7 +547,7 @@ When `client_id` is omitted, a URL-safe slug is auto-generated from `broker_name
 
 **Response 201**: `ClientResponse` object.
 
-**Response 409**: `client_id` or `broker_name` already exists.
+**Response 409**: `client_id` or `name` already exists.
 
 ---
 
@@ -560,7 +560,7 @@ List all active clients (where `is_active=True`).
 [
   {
     "client_id": "quintana-seguros",
-    "broker_name": "Quintana Seguros",
+    "name": "Quintana Seguros",
     "agent_name": "Jaumpablo",
     "voice_id": "voice_xxxx",
     "is_active": true,
@@ -596,7 +596,7 @@ Partially update a client. Only provided fields are updated. `client_id` is NOT 
 **Request body** (all fields optional):
 ```json
 {
-  "broker_name": "Acme Corp Renovado",
+  "name": "Acme Corp Renovado",
   "agent_name": "Sofia",
   "voice_id": "new_voice_id",
   "scheduler_enabled": false,
@@ -636,7 +636,7 @@ Read-only backward-compatibility alias for `GET /api/v1/clients/{client_id}`. Re
 {
   "id": "quintana-seguros",
   "name": "Quintana Seguros",
-  "broker_name": "Quintana",
+  "name": "Quintana",
   "agent_name": "Nico",
   "voice_id": "...",
   "model": "gpt-4o",

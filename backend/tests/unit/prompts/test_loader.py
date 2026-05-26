@@ -26,14 +26,14 @@ from pydantic import SecretStr
 
 
 def make_client(
-    broker_name: str = "Quintana Seguros",
+    name: str = "Quintana Seguros",
     agent_name: str = "Jaumpablo",
     client_id: str = "quintana-seguros",
 ) -> MagicMock:
     """Create a mock Client object."""
     client = MagicMock()
     client.id = client_id
-    client.broker_name = broker_name
+    client.name = name
     client.agent_name = agent_name
     return client
 
@@ -180,7 +180,7 @@ async def test_render_no_unfilled_placeholders(tmp_path: Path):
     client_dir.mkdir()
     prompt_file = client_dir / "prompt.md"
     prompt_file.write_text(
-        "Hola {{lead_name}}, soy {{agent_name}} de {{broker_name}}.\n"
+        "Hola {{lead_name}}, soy {{agent_name}} de {{company_name}}.\n"
         "Auto: {{car_make}} {{car_model}} {{car_year}}.\n"
         "Seguro: {{current_insurance}}."
     )
@@ -213,15 +213,15 @@ async def test_render_injects_lead_name(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_render_injects_broker_and_agent_name(tmp_path: Path):
-    """render substitutes {{broker_name}} and {{agent_name}}."""
+    """render substitutes {{company_name}} and {{agent_name}}."""
     from app.prompts.loader import PromptLoader
 
     client_dir = tmp_path / "my-client"
     client_dir.mkdir()
-    (client_dir / "prompt.md").write_text("{{agent_name}} de {{broker_name}}.")
+    (client_dir / "prompt.md").write_text("{{agent_name}} de {{company_name}}.")
 
     loader = PromptLoader(clients_dir=tmp_path)
-    client = make_client(client_id="my-client", broker_name="Acme", agent_name="Sofía")
+    client = make_client(client_id="my-client", name="Acme", agent_name="Sofía")
     result = await loader.render(client, lead=None)
 
     assert "Sofía" in result
@@ -563,7 +563,7 @@ async def test_build_variables_is_async_and_returns_dict(tmp_path: Path):
     assert "call_number" in result
     # Also existing keys
     assert "lead_name" in result
-    assert "broker_name" in result
+    assert "company_name" in result
     assert "agent_name" in result
 
 

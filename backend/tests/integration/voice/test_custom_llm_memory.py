@@ -451,8 +451,7 @@ async def override_app_client(tmp_path: Path):
         await create_client(
             sess,
             id="override-client",
-            name="Override Client",
-            broker_name="Override Brokers",
+            name="Override Brokers",
             agent_name="Agente Test",
             voice_id="test-voice-id",
             system_prompt_override="Sos un agente de prueba. Vendé seguros.",
