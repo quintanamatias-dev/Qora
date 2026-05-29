@@ -477,6 +477,49 @@ def test_validate_age_non_numeric() -> None:
     assert ok is False
 
 
+def test_validate_age_with_unit_suffix() -> None:
+    """Bug #93: '30 años' must parse to a valid age, not be dropped."""
+    from app.analysis.universal.data_corrections import _validate_age
+
+    ok, err = _validate_age("30 años")
+    assert ok is True
+    assert err is None
+
+
+def test_validate_age_with_approx() -> None:
+    """'30 aprox' must parse — extract the embedded integer."""
+    from app.analysis.universal.data_corrections import _validate_age
+
+    ok, _ = _validate_age("30 aprox")
+    assert ok is True
+
+
+def test_validate_age_word_returns_false() -> None:
+    """No digits ('treinta') → reject gracefully, never crash."""
+    from app.analysis.universal.data_corrections import _validate_age
+
+    ok, err = _validate_age("treinta")
+    assert ok is False
+    assert err is not None
+
+
+def test_validate_age_embedded_out_of_range() -> None:
+    """'200 años' extracts 200 → still rejected for being out of range."""
+    from app.analysis.universal.data_corrections import _validate_age
+
+    ok, err = _validate_age("200 años")
+    assert ok is False
+    assert err is not None
+
+
+def test_validate_car_year_with_suffix() -> None:
+    """Same latent bug as age — '2019 aprox' must parse."""
+    from app.analysis.universal.data_corrections import _validate_car_year
+
+    ok, _ = _validate_car_year("2019 aprox")
+    assert ok is True
+
+
 # ---------------------------------------------------------------------------
 # 2.3  Unknown-field rejection and type coercion
 # ---------------------------------------------------------------------------
@@ -514,6 +557,21 @@ def test_coerce_invalid_int_raises_value_error() -> None:
 
     with pytest.raises((ValueError, TypeError)):
         coerce_value("not-a-number", "int")
+
+
+def test_coerce_int_extracts_from_text() -> None:
+    """Bug #93: coercion must extract the int from '30 años'."""
+    from app.analysis.universal.data_corrections import coerce_value
+
+    assert coerce_value("30 años", "int") == 30
+
+
+def test_coerce_int_no_digits_raises() -> None:
+    """coerce_value for int with no digits ('treinta') raises ValueError."""
+    from app.analysis.universal.data_corrections import coerce_value
+
+    with pytest.raises(ValueError):
+        coerce_value("treinta", "int")
 
 
 # ---------------------------------------------------------------------------

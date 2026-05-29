@@ -82,12 +82,22 @@ def _validate_phone(value: str) -> tuple[bool, str | None]:
     return False, f"Phone '{value}' has fewer than 10 digits (got {len(digits)})"
 
 
+def _extract_int(value: str) -> int | None:
+    """Extract the first integer from free text like '30 años' or '2019 aprox'.
+
+    Returns None if no digit sequence is present (e.g. 'treinta'). Never raises.
+    """
+    if value is None:
+        return None
+    match = re.search(r"-?\d+", str(value))
+    return int(match.group()) if match else None
+
+
 def _validate_car_year(value: str) -> tuple[bool, str | None]:
-    """Car year: integer in range 1900–2030."""
-    try:
-        year = int(value)
-    except (ValueError, TypeError):
-        return False, f"Car year '{value}' is not a valid integer"
+    """Car year: integer in range 1900–2030, extracted from free text."""
+    year = _extract_int(value)
+    if year is None:
+        return False, f"Car year '{value}' has no parseable number"
     if year < 1900:
         return False, f"Car year {year} is before 1900"
     if year > 2030:
@@ -113,11 +123,10 @@ def _validate_email(value: str) -> tuple[bool, str | None]:
 
 
 def _validate_age(value: str) -> tuple[bool, str | None]:
-    """Age: integer in range 1–120."""
-    try:
-        age = int(value)
-    except (ValueError, TypeError):
-        return False, f"Age '{value}' is not a valid integer"
+    """Age: integer in range 1–120, extracted from free text like '30 años'."""
+    age = _extract_int(value)
+    if age is None:
+        return False, f"Age '{value}' has no parseable number"
     if age < 1:
         return False, f"Age {age} is less than 1"
     if age > 120:
@@ -144,7 +153,10 @@ def coerce_value(value: str, type_: str) -> int | float | str:
         ValueError: If coercion fails.
     """
     if type_ == "int":
-        return int(value)
+        parsed = _extract_int(value)
+        if parsed is None:
+            raise ValueError(f"cannot extract int from {value!r}")
+        return parsed
     if type_ == "float":
         return float(value)
     return str(value)
