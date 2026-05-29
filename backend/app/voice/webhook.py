@@ -383,8 +383,22 @@ async def _stream_llm_response(
                         ):
                             conv_state.loaded_skills[_skill_name_for_cache] = tool_result
 
-                    # Persist tool_call and tool_result turns BEFORE follow-up LLM call
+                    # Persist tool_call and tool_result turns BEFORE follow-up LLM call.
+                    #
+                    # Issue #94: load_skill's tool_result is the FULL skill markdown.
+                    # Persisting it verbatim pollutes the transcript (shows as a giant
+                    # turn) and confuses the post-call analysis pipeline. For load_skill
+                    # we persist a minimal marker ("Skill <name> cargada") instead of the
+                    # raw content. The skill is still injected into the LLM context via
+                    # the follow-up `tool` message below — only the transcript record is
+                    # trimmed. Other tools keep their full result for traceability.
                     if session_id:
+                        if event.function_name == "load_skill":
+                            _persisted_tool_result = (
+                                f"Skill {_skill_name_for_cache or 'desconocida'} cargada"
+                            )
+                        else:
+                            _persisted_tool_result = json.dumps(tool_result)
                         try:
                             async with db_session() as db:
                                 await add_transcript_turn(
@@ -399,7 +413,7 @@ async def _stream_llm_response(
                                     db,
                                     session_id,
                                     "tool_result",
-                                    json.dumps(tool_result),
+                                    _persisted_tool_result,
                                 )
                         except Exception as exc:  # noqa: BLE001
                             structlog.get_logger().warning(

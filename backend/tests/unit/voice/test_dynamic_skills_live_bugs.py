@@ -630,3 +630,134 @@ def test_filler_strings_end_with_sentence_punctuation():
         + "\n\nAll filler strings must end with sentence-ending punctuation "
         "so TTS engines generate a natural pause."
     )
+
+
+# ===========================================================================
+# Issue #94 — load_skill must NOT pollute the transcript with raw skill markdown
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_load_skill_persists_minimal_marker_not_markdown():
+    """Issue #94: the tool_result transcript turn for load_skill is a minimal marker.
+
+    The full skill markdown must NOT be persisted as a transcript turn — it pollutes
+    the transcript and confuses the post-call analysis pipeline.
+    """
+    from app.voice.webhook import _stream_llm_response
+    from app.ai.llm_streaming import OpenAIStreamingClient, ToolCallDelta, StreamDone, ContentDelta
+    import json
+
+    skill_md = "# Auto Insurance Knowledge\n\nLots of detailed markdown here."
+    conv_state = _make_conv_state(loaded_skills={})
+
+    tool_event = ToolCallDelta(
+        tool_call_id="call-001",
+        function_name="load_skill",
+        function_args=json.dumps({"skill_name": "auto-insurance-knowledge"}),
+    )
+
+    call_count = [0]
+
+    async def switching_stream(**kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            yield tool_event
+            yield StreamDone()
+        else:
+            yield ContentDelta(text="Listo.")
+            yield StreamDone()
+
+    mock_client = MagicMock(spec=OpenAIStreamingClient)
+    mock_client.stream_events = switching_stream
+
+    persisted: list[tuple[str, str]] = []
+
+    async def _spy_add_turn(db, session_id, role, content, *args, **kwargs):
+        persisted.append((role, content))
+
+    with patch("app.voice.webhook._execute_tool", new=AsyncMock(return_value=skill_md)), \
+         patch("app.voice.webhook.add_transcript_turn", new=AsyncMock(side_effect=_spy_add_turn)), \
+         patch("app.voice.webhook.db_session"), \
+         patch("app.voice.webhook.asyncio.sleep", new_callable=AsyncMock):
+        async for _ in _stream_llm_response(
+            client=mock_client,
+            messages=[{"role": "user", "content": "que cubre?"}],
+            tools=None,
+            temperature=0.7,
+            max_tokens=300,
+            client_id="quintana-seguros",
+            lead_id="lead-001",
+            session_id="sess-001",
+            conversation_id="conv-001",
+            agent_slug="jaumpablo",
+            registry_entries=[],
+            conv_state=conv_state,
+        ):
+            pass
+
+    tool_result_turns = [c for (r, c) in persisted if r == "tool_result"]
+    assert tool_result_turns, "a tool_result turn must still be persisted"
+    assert tool_result_turns[0] == "Skill auto-insurance-knowledge cargada"
+    assert "Lots of detailed markdown here" not in tool_result_turns[0]
+
+
+@pytest.mark.asyncio
+async def test_load_skill_full_content_still_reaches_llm_context():
+    """Issue #94: trimming the transcript must NOT strip the skill from LLM context.
+
+    The full markdown must still reach the follow-up LLM call via the `tool` message.
+    """
+    from app.voice.webhook import _stream_llm_response
+    from app.ai.llm_streaming import OpenAIStreamingClient, ToolCallDelta, StreamDone, ContentDelta
+    import json
+
+    skill_md = "# Auto Insurance Knowledge\n\nLots of detailed markdown here."
+    conv_state = _make_conv_state(loaded_skills={})
+
+    tool_event = ToolCallDelta(
+        tool_call_id="call-001",
+        function_name="load_skill",
+        function_args=json.dumps({"skill_name": "auto-insurance-knowledge"}),
+    )
+
+    captured = {}
+    call_count = [0]
+
+    async def switching_stream(**kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            yield tool_event
+            yield StreamDone()
+        else:
+            captured["messages"] = kwargs.get("messages")
+            yield ContentDelta(text="Listo.")
+            yield StreamDone()
+
+    mock_client = MagicMock(spec=OpenAIStreamingClient)
+    mock_client.stream_events = switching_stream
+
+    with patch("app.voice.webhook._execute_tool", new=AsyncMock(return_value=skill_md)), \
+         patch("app.voice.webhook.add_transcript_turn", new=AsyncMock()), \
+         patch("app.voice.webhook.db_session"), \
+         patch("app.voice.webhook.asyncio.sleep", new_callable=AsyncMock):
+        async for _ in _stream_llm_response(
+            client=mock_client,
+            messages=[{"role": "user", "content": "que cubre?"}],
+            tools=None,
+            temperature=0.7,
+            max_tokens=300,
+            client_id="quintana-seguros",
+            lead_id="lead-001",
+            session_id="sess-001",
+            conversation_id="conv-001",
+            agent_slug="jaumpablo",
+            registry_entries=[],
+            conv_state=conv_state,
+        ):
+            pass
+
+    followup = captured.get("messages") or []
+    tool_msg = next((m for m in followup if m.get("role") == "tool"), None)
+    assert tool_msg is not None, "follow-up must include a tool message with the skill"
+    assert "Lots of detailed markdown here" in tool_msg["content"]
