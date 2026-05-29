@@ -57,12 +57,14 @@ field_mappings:
     target: "Poliza_Actual"
     type: string
 
-  # Quintana's Airtable has a single free-text "Obser" (observations) column for
-  # car info. The FieldMapper writes one value per target, so mapping both
-  # car_make and car_model to "Obser" would make car_model silently overwrite
-  # car_make. We map only car_make here to avoid silent data loss; car_model can
-  # be folded in once the schema gains a dedicated column or the mapper supports
-  # composite targets.
   - source: car_make
-    target: "Obser"
+    target: "Marca_Auto"
+    type: string
+
+  - source: car_model
+    target: "Modelo_Auto"
+    type: string
+
+  - source: car_year
+    target: "Año_Auto"
     type: string
