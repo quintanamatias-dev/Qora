@@ -19,7 +19,7 @@ Per-client declarative mapping from Qora lead fields to external CRM field names
 | FM-3 | System MUST resolve credentials from env vars via `credentials_key`; the resolved secret MUST NOT be stored in any config object or log | MUST |
 | FM-4 | System MUST silently skip CRM sync for clients that have no `crm.yaml` | MUST |
 | FM-5 | System MUST coerce or reject field values that do not match declared CRM field types at mapping time | MUST |
-| FM-6 | System SHOULD support arbitrary key-value `field_map` entries so new CRM fields require only config changes | SHOULD |
+| FM-6 | System SHOULD support arbitrary field mapping entries (`field_mappings`, with `field_map` accepted as a compatibility alias) so new CRM fields require only config changes | SHOULD |
 
 #### Scenario: Valid config loaded
 

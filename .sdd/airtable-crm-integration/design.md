@@ -81,7 +81,7 @@ class CRMConfig(BaseModel):
     base_id: str
     table_id: str
     api_key_env: str     # env var NAME, never the value
-    match_field: str = "phone"
+    match_field: str     # required explicit matching field, usually "phone"
     field_mappings: list[CRMFieldDef]
 
 # crm.yaml schema (Quintana example)

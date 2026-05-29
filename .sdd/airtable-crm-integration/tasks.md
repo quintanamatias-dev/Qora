@@ -28,10 +28,10 @@ Chain strategy: stacked-to-main
 
 ## Phase 1: Config and Mapping TDD
 
-- [ ] 1.1 RED: Add `backend/tests/unit/integrations/test_crm_config.py` for valid `crm.yaml`, missing file skip, missing `match_field`, missing env; run `cd backend && pytest tests/unit/integrations/test_crm_config.py`.
-- [ ] 1.2 GREEN: Create `backend/app/integrations/crm_config.py` validating `adapter`, `base_id`, `table_id`, `match_field`, `credentials_key`; never persist/log secret values.
-- [ ] 1.3 RED: Add `backend/tests/unit/integrations/test_field_mapping.py` for string/integer/boolean/date/phone coercion, required fields, arbitrary `field_map`; run targeted pytest.
-- [ ] 1.4 GREEN/REFACTOR: Create `backend/app/integrations/field_mapping.py` and `backend/app/integrations/__init__.py`; normalize phone to E.164 and keep mapping pure/no IO.
+- [x] 1.1 RED: Add `backend/tests/unit/integrations/test_crm_config.py` for valid `crm.yaml`, missing file skip, missing `match_field`, missing env; run `cd backend && pytest tests/unit/integrations/test_crm_config.py`.
+- [x] 1.2 GREEN: Create `backend/app/integrations/crm_config.py` validating `adapter`, `base_id`, `table_id`, `match_field`, `credentials_key`; never persist/log secret values.
+- [x] 1.3 RED: Add `backend/tests/unit/integrations/test_field_mapping.py` for string/integer/boolean/date/phone coercion, required fields, arbitrary `field_mappings` / `field_map` alias; run targeted pytest.
+- [x] 1.4 GREEN/REFACTOR: Create `backend/app/integrations/field_mapping.py` and `backend/app/integrations/__init__.py`; normalize phone to E.164 and keep mapping pure/no IO.
 
 ## Phase 2: Airtable Adapter and Sync Service TDD
 
