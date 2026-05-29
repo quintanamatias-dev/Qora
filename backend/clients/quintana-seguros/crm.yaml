@@ -1,71 +1,68 @@
-# Quintana Seguros — Airtable CRM integration config (sandbox)
+# Quintana Seguros — Airtable CRM integration config
 #
 # IMPORTANT: This file is committed to version control.
 # It must NOT contain any secret values. The api_key_env field references
 # the NAME of an environment variable that holds the real Airtable PAT.
 #
-# Production setup:
+# Setup:
 #   1. Set QUINTANA_AIRTABLE_API_KEY in the server/staging .env to a real
-#      Airtable Personal Access Token scoped to the sandbox base.
-#   2. Update base_id and table_id to point at the real Airtable base.
-#   3. Point api_key_env at the production secret env var name when ready.
+#      Airtable Personal Access Token scoped to the base below.
 #
 # Rollback: rename or delete this file. Zero code changes needed.
 
 provider: airtable
 
-# Sandbox Airtable base — replace with real IDs before production rollout.
-base_id: appSANDBOXXXXXXXXXX
-table_id: tblLEADSSANDBOXXXXX
+# Real Airtable base + leads table.
+base_id: appw59LRBdv95UPpB
+table_id: tblsWumwwfeoqkWid
 
 # Name of the environment variable that holds the Airtable Personal Access Token.
 # The secret value itself is NEVER stored here.
 api_key_env: QUINTANA_AIRTABLE_API_KEY
 
-# Matching field: leads are upserted by their normalised E.164 phone number.
-match_field: phone
+# Matching field: leads are upserted by their unique Qora lead_id.
+# Airtable has a numeric `lead_id` field that is unique per lead, so it is a
+# safer idempotency key than phone (which can be shared / reformatted).
+match_field: lead_id
 
 # Field mappings: Qora lead fields → Airtable column names.
+# Only fields Qora produces today are mapped. Airtable-automation fields
+# (Creada, Last_Update, Fecha_*) and Meta campaign fields come from n8n, not Qora.
+# singleSelect fields (Status, etc.) are mapped as string — batch_upsert accepts
+# string values for them.
 # Add or remove entries here; no code changes required (FM-6).
 field_mappings:
-  - source: name
-    target: "Nombre"
-    type: string
+  - source: id
+    target: "lead_id"
+    type: integer
     required: true
+
+  - source: name
+    target: "Nombre Completo"
+    type: string
 
   - source: phone
     target: "Teléfono"
     type: phone
-    required: true
 
   - source: email
-    target: "Email"
+    target: "Correo electrónico"
     type: string
-
-  - source: interest_level
-    target: "Nivel de Interés"
-    type: integer
 
   - source: status
-    target: "Estado"
+    target: "Status"
     type: string
-
-  - source: summary_last_call
-    target: "Resumen Última Llamada"
-    type: string
-
-  - source: car_make
-    target: "Marca del Auto"
-    type: string
-
-  - source: car_model
-    target: "Modelo del Auto"
-    type: string
-
-  - source: car_year
-    target: "Año del Auto"
-    type: integer
 
   - source: current_insurance
-    target: "Seguro Actual"
+    target: "Poliza_Actual"
+    type: string
+
+  # Quintana's Airtable has a single free-text "Obser" (observations) column for
+  # car info. The FieldMapper writes one value per target, so mapping both
+  # car_make and car_model to "Obser" would make car_model silently overwrite
+  # car_make. We map only car_make here to avoid silent data loss; car_model can
+  # be folded in once the schema gains a dedicated column or the mapper supports
+  # composite targets.
+  - source: car_make
+    target: "Obser"
     type: string

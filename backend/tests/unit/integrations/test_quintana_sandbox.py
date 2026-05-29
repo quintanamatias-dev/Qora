@@ -100,8 +100,9 @@ def test_quintana_crm_config_required_fields(monkeypatch):
     assert config.table_id and config.table_id.startswith("tbl"), (
         f"table_id must start with 'tbl', got {config.table_id!r}"
     )
-    assert config.match_field == "phone", (
-        f"match_field must be 'phone' for Quintana, got {config.match_field!r}"
+    assert config.match_field == "lead_id", (
+        f"match_field must be 'lead_id' for Quintana (unique per Qora lead), "
+        f"got {config.match_field!r}"
     )
     assert config.api_key_env == "QUINTANA_AIRTABLE_API_KEY", (
         f"api_key_env must be 'QUINTANA_AIRTABLE_API_KEY', got {config.api_key_env!r}"
