@@ -35,10 +35,10 @@ Chain strategy: stacked-to-main
 
 ## Phase 2: Airtable Adapter and Sync Service TDD
 
-- [ ] 2.1 RED: Add `backend/tests/unit/integrations/test_airtable_adapter.py` for upsert success, create/update idempotency contract, 429 retry, 3-failure structured log; run targeted pytest.
-- [ ] 2.2 GREEN: Create `backend/app/integrations/crm_port.py`, `backend/app/integrations/adapters/__init__.py`, and `backend/app/integrations/adapters/airtable.py` using mocked `pyairtable` only in tests.
-- [ ] 2.3 RED: Add `backend/tests/integration/integrations/test_crm_sync_service.py` for DB lead → config → mapped upsert, missing `crm.yaml` no-op, credential failure isolation; run targeted pytest.
-- [ ] 2.4 GREEN/REFACTOR: Create `backend/app/integrations/crm_sync_service.py` with async `sync_lead(client_id, lead_id)`, adapter factory limited to `app/integrations/adapters/`, and no Airtable reads in active call path.
+- [x] 2.1 RED: Add `backend/tests/unit/integrations/test_airtable_adapter.py` for upsert success, create/update idempotency contract, 429 retry, 3-failure structured log; run targeted pytest.
+- [x] 2.2 GREEN: Create `backend/app/integrations/crm_port.py`, `backend/app/integrations/adapters/__init__.py`, and `backend/app/integrations/adapters/airtable.py` using mocked `pyairtable` only in tests.
+- [x] 2.3 RED: Add `backend/tests/integration/integrations/test_crm_sync_service.py` for DB lead → config → mapped upsert, missing `crm.yaml` no-op, credential failure isolation; run targeted pytest.
+- [x] 2.4 GREEN/REFACTOR: Create `backend/app/integrations/crm_sync_service.py` with async `sync_lead(client_id, lead_id)`, adapter factory limited to `app/integrations/adapters/`, and no Airtable reads in active call path.
 
 ## Phase 3: Summarizer Hook and Quintana Sandbox TDD
 
