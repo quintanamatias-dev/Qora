@@ -3989,3 +3989,268 @@ def test_apply_status_new_lead_returns_none():
     assert result is None, (
         "'new' status (not 'called') must prevent transition"
     )
+
+
+# ===========================================================================
+# Phase 3 — Task 3.1: _schedule_crm_sync hook in summarizer
+#
+# Spec: CS-1  — CRM sync triggered ONLY after savepoint commits successfully
+#       CS-2  — Fire-and-forget: must NOT block summarizer response
+#       CS-5  — CRM failures must not propagate to summarizer
+#       FM-4  — Client with no crm.yaml → no sync, no error
+#
+# All tests patch `app.integrations.crm_sync_service.sync_lead` so no real
+# Airtable calls are ever made (CS-7: no live reads in call path).
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_schedule_crm_sync_called_after_savepoint_success(
+    seeded_db, monkeypatch
+):
+    """_schedule_crm_sync fires asyncio.create_task after savepoint commits.
+
+    Spec CS-1: sync is triggered only after a successful savepoint commit.
+    Spec CS-2: create_task is fire-and-forget — summarizer does not await it.
+
+    We verify that crm_sync_service.sync_lead is scheduled exactly once when
+    the summarizer completes a successful savepoint.
+    """
+    from unittest.mock import AsyncMock, patch, MagicMock
+    from app.summarizer import _schedule_crm_sync
+
+    mock_sync = AsyncMock(return_value=None)
+
+    captured_tasks: list = []
+
+    def fake_create_task(coro, **kwargs):
+        captured_tasks.append(coro)
+        # Close the captured coroutine so it is not reported as "never awaited"
+        # (we intentionally do not schedule it — fire-and-forget is verified
+        # by the create_task call itself).
+        coro.close()
+        # Return a dummy task-like object (not actually scheduled)
+        task = MagicMock()
+        return task
+
+    with patch("app.integrations.crm_sync_service.sync_lead", mock_sync):
+        with patch("asyncio.create_task", side_effect=fake_create_task):
+            # _schedule_crm_sync must call asyncio.create_task with a coroutine
+            # that wraps sync_lead — not await sync_lead directly.
+            await _schedule_crm_sync(
+                client_id="quintana-seguros",
+                lead_id="test-lead-sum-001",
+                db=MagicMock(),
+            )
+
+    assert len(captured_tasks) == 1, (
+        "_schedule_crm_sync must schedule exactly one asyncio task (fire-and-forget)"
+    )
+    # The coroutine must not have been awaited here — mock_sync not called yet
+    assert mock_sync.await_count == 0, (
+        "sync_lead must NOT be awaited inside _schedule_crm_sync — fire-and-forget only"
+    )
+
+
+@pytest.mark.asyncio
+async def test_schedule_crm_sync_not_called_on_savepoint_failure(
+    seeded_db, monkeypatch
+):
+    """_schedule_crm_sync is NOT invoked when the savepoint raises.
+
+    Spec CS-1: CRM sync is triggered ONLY after a successful savepoint commit.
+    If the savepoint fails (exception before or during commit), the hook must
+    not be scheduled at all.
+    """
+    from unittest.mock import AsyncMock, patch, MagicMock
+    import app.summarizer as summarizer_module
+
+    schedule_calls: list = []
+
+    async def fake_schedule(client_id: str, lead_id: str, db) -> None:
+        schedule_calls.append((client_id, lead_id))
+
+    with patch.object(summarizer_module, "_schedule_crm_sync", fake_schedule):
+        # The savepoint block is inside _run_summarizer. We simulate a GPT
+        # failure (which triggers the failure savepoint path, not the success
+        # savepoint path). _schedule_crm_sync must NOT be called in either
+        # the GPT-failure path or if the savepoint itself raises.
+        with patch.object(
+            summarizer_module, "_call_gpt_summarize", side_effect=RuntimeError("GPT fail")
+        ):
+            with patch.object(
+                summarizer_module, "_upsert_call_analysis_failed", new_callable=AsyncMock
+            ):
+                assert seeded_db.async_session_factory is not None
+                async with seeded_db.async_session_factory() as sess:
+                    # Create a session with turns so GPT path is reached
+                    from app.calls.service import create_session, add_transcript_turn
+
+                    cs = await create_session(
+                        sess,
+                        client_id="quintana-seguros",
+                        lead_id="test-lead-sum-001",
+                    )
+                    cs.status = "completed"
+                    await add_transcript_turn(
+                        sess, cs.id, "user", "hola"
+                    )
+                    await sess.commit()
+                    session_id = cs.id
+
+                async with seeded_db.async_session_factory() as sess:
+                    await summarizer_module.generate_summary_and_facts(session_id, sess)
+
+    assert schedule_calls == [], (
+        "_schedule_crm_sync must NOT be called when savepoint does not commit successfully"
+    )
+
+
+@pytest.mark.asyncio
+async def test_schedule_crm_sync_noop_without_crm_config(monkeypatch):
+    """_schedule_crm_sync is a no-op when crm.yaml is missing for the client.
+
+    Spec FM-4: no crm.yaml → sync silently skipped; no error or exception raised.
+    Spec CS-5: CRM failures must not propagate.
+
+    Verifies that _schedule_crm_sync itself handles a missing-config client
+    without raising, and delegates to sync_lead which itself will no-op.
+    """
+    from unittest.mock import AsyncMock, patch, MagicMock
+    from app.summarizer import _schedule_crm_sync
+
+    # sync_lead no-ops when crm.yaml is missing — we simulate this with a
+    # simple AsyncMock (the real crm_sync_service already handles this).
+    mock_sync = AsyncMock(return_value=None)
+
+    captured_tasks: list = []
+
+    def fake_create_task(coro, **kwargs):
+        captured_tasks.append(coro)
+        coro.close()
+        return MagicMock()
+
+    with patch("app.integrations.crm_sync_service.sync_lead", mock_sync):
+        with patch("asyncio.create_task", side_effect=fake_create_task):
+            # Client "no-crm-client" has no crm.yaml — must NOT raise
+            await _schedule_crm_sync(
+                client_id="no-crm-client",
+                lead_id="some-lead-id",
+                db=MagicMock(),
+            )
+
+    # A task should still be scheduled — sync_lead handles the no-op internally.
+    # _schedule_crm_sync is a generic dispatcher; it doesn't pre-check crm.yaml.
+    assert len(captured_tasks) == 1, (
+        "_schedule_crm_sync must schedule a task even for clients without crm.yaml "
+        "(sync_lead handles the no-op internally)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_schedule_crm_sync_crm_failure_does_not_affect_summarizer(
+    seeded_db, monkeypatch
+):
+    """CRM sync failure is swallowed — summarizer result is unaffected.
+
+    Spec CS-5: After 3 failed attempts, system logs and stops; must NOT raise
+    to the summarizer caller.
+
+    We inject a sync_lead that raises an exception and verify the summarizer
+    does not propagate it. Unlike the older version of this test, we exercise
+    the REAL _schedule_crm_sync (not a stub): we patch crm_sync_service.sync_lead
+    to raise, capture the scheduled background coroutine, then run it explicitly
+    to prove the real _run_crm_sync_in_background helper swallows the failure.
+    """
+    from unittest.mock import AsyncMock, patch
+    import app.summarizer as summarizer_module
+
+    # sync_lead raises — the real background helper must catch and swallow it.
+    sync_lead_mock = AsyncMock(side_effect=RuntimeError("CRM exploded"))
+
+    # Wrap the REAL background helper so we capture the scheduled task and can
+    # await it after the summarizer returns. This exercises the real
+    # _schedule_crm_sync (fire-and-forget create_task) AND the real
+    # _run_crm_sync_in_background exception handling end-to-end.
+    real_bg = summarizer_module._run_crm_sync_in_background
+    scheduled_tasks: list = []
+
+    async def capturing_bg(client_id: str, lead_id: str) -> None:
+        # Delegate to the real helper (which opens its own session and calls
+        # the raising sync_lead). Recording happens via the closure list.
+        await real_bg(client_id, lead_id)
+
+    def tracking_create_task(coro, **kwargs):
+        # Use the real loop; track the task so we can await completion.
+        import asyncio as _aio
+
+        task = _aio.ensure_future(coro)
+        scheduled_tasks.append(task)
+        return task
+
+    with patch("app.integrations.crm_sync_service.sync_lead", sync_lead_mock):
+        with patch.object(
+            summarizer_module, "_run_crm_sync_in_background", capturing_bg
+        ):
+            with patch.object(
+                summarizer_module,
+                "_call_gpt_summarize",
+                new_callable=AsyncMock,
+                return_value=("Summary text", {}),
+            ):
+                with patch.object(
+                    summarizer_module, "_merge_facts_into_lead", new_callable=AsyncMock
+                ):
+                    with patch.object(
+                        summarizer_module,
+                        "_upsert_call_analysis",
+                        new_callable=AsyncMock,
+                    ):
+                        with patch.object(
+                            summarizer_module,
+                            "_auto_schedule_if_needed",
+                            new_callable=AsyncMock,
+                        ):
+                            assert seeded_db.async_session_factory is not None
+                            async with seeded_db.async_session_factory() as sess:
+                                from app.calls.service import (
+                                    create_session,
+                                    add_transcript_turn,
+                                )
+
+                                cs = await create_session(
+                                    sess,
+                                    client_id="quintana-seguros",
+                                    lead_id="test-lead-sum-001",
+                                )
+                                cs.status = "completed"
+                                await add_transcript_turn(sess, cs.id, "user", "hola")
+                                await sess.commit()
+                                session_id = cs.id
+
+                            async with seeded_db.async_session_factory() as sess:
+                                with patch.object(
+                                    summarizer_module.asyncio,
+                                    "create_task",
+                                    side_effect=tracking_create_task,
+                                ):
+                                    # Must NOT raise even though sync_lead raises.
+                                    await summarizer_module.generate_summary_and_facts(
+                                        session_id, sess
+                                    )
+
+            # The real _schedule_crm_sync scheduled exactly one fire-and-forget task.
+            assert len(scheduled_tasks) == 1, (
+                "_schedule_crm_sync must schedule exactly one fire-and-forget task"
+            )
+
+            # Await the background task: _run_crm_sync_in_background opens its own
+            # session and calls the (raising) sync_lead. It MUST swallow the
+            # RuntimeError — awaiting it here must not raise.
+            await scheduled_tasks[0]
+
+    # sync_lead was actually invoked by the real background helper and raised;
+    # the helper caught it (no propagation above).
+    assert sync_lead_mock.await_count == 1, (
+        "_run_crm_sync_in_background must invoke sync_lead in its own session"
+    )

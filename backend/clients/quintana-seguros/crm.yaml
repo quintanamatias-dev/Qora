@@ -1,0 +1,71 @@
+# Quintana Seguros — Airtable CRM integration config (sandbox)
+#
+# IMPORTANT: This file is committed to version control.
+# It must NOT contain any secret values. The api_key_env field references
+# the NAME of an environment variable that holds the real Airtable PAT.
+#
+# Production setup:
+#   1. Set QUINTANA_AIRTABLE_API_KEY in the server/staging .env to a real
+#      Airtable Personal Access Token scoped to the sandbox base.
+#   2. Update base_id and table_id to point at the real Airtable base.
+#   3. Point api_key_env at the production secret env var name when ready.
+#
+# Rollback: rename or delete this file. Zero code changes needed.
+
+provider: airtable
+
+# Sandbox Airtable base — replace with real IDs before production rollout.
+base_id: appSANDBOXXXXXXXXXX
+table_id: tblLEADSSANDBOXXXXX
+
+# Name of the environment variable that holds the Airtable Personal Access Token.
+# The secret value itself is NEVER stored here.
+api_key_env: QUINTANA_AIRTABLE_API_KEY
+
+# Matching field: leads are upserted by their normalised E.164 phone number.
+match_field: phone
+
+# Field mappings: Qora lead fields → Airtable column names.
+# Add or remove entries here; no code changes required (FM-6).
+field_mappings:
+  - source: name
+    target: "Nombre"
+    type: string
+    required: true
+
+  - source: phone
+    target: "Teléfono"
+    type: phone
+    required: true
+
+  - source: email
+    target: "Email"
+    type: string
+
+  - source: interest_level
+    target: "Nivel de Interés"
+    type: integer
+
+  - source: status
+    target: "Estado"
+    type: string
+
+  - source: summary_last_call
+    target: "Resumen Última Llamada"
+    type: string
+
+  - source: car_make
+    target: "Marca del Auto"
+    type: string
+
+  - source: car_model
+    target: "Modelo del Auto"
+    type: string
+
+  - source: car_year
+    target: "Año del Auto"
+    type: integer
+
+  - source: current_insurance
+    target: "Seguro Actual"
+    type: string

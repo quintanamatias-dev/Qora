@@ -42,9 +42,9 @@ Chain strategy: stacked-to-main
 
 ## Phase 3: Summarizer Hook and Quintana Sandbox TDD
 
-- [ ] 3.1 RED: Extend `backend/tests/unit/test_summarizer.py` for `_schedule_crm_sync` called only after savepoint commit and never on savepoint failure; run `cd backend && pytest tests/unit/test_summarizer.py`.
-- [ ] 3.2 GREEN: Modify `backend/app/summarizer.py` to fire-and-forget `asyncio.create_task(sync_lead(...))`, swallowing/logging CRM failures without affecting summarizer output.
-- [ ] 3.3 RED/GREEN: Add `backend/clients/quintana-seguros/crm.yaml` and config test coverage proving no Quintana-specific logic exists in `backend/app/integrations/`; run integration/unit targeted pytest.
+- [x] 3.1 RED: Extend `backend/tests/unit/test_summarizer.py` for `_schedule_crm_sync` called only after savepoint commit and never on savepoint failure; run `cd backend && pytest tests/unit/test_summarizer.py`.
+- [x] 3.2 GREEN: Modify `backend/app/summarizer.py` to fire-and-forget `asyncio.create_task(sync_lead(...))`, swallowing/logging CRM failures without affecting summarizer output.
+- [x] 3.3 RED/GREEN: Add `backend/clients/quintana-seguros/crm.yaml` and config test coverage proving no Quintana-specific logic exists in `backend/app/integrations/`; run integration/unit targeted pytest.
 
 ## Phase 4: Verification and Cleanup
 

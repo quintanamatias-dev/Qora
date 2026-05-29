@@ -350,6 +350,16 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
         if cs.lead_id and cs.client_id:
             await _auto_schedule_if_needed(db, cs, facts)
 
+    # Fire-and-forget CRM sync hook (Phase 3 — airtable-crm-integration).
+    # Only dispatched after the savepoint commits successfully (CS-1).
+    # _schedule_crm_sync handles config-missing no-op internally (FM-4).
+    if cs.lead_id and cs.client_id:
+        await _schedule_crm_sync(
+            client_id=cs.client_id,
+            lead_id=cs.lead_id,
+            db=db,
+        )
+
     logger.info(
         "summarizer_complete",
         session_id=session_id,
@@ -958,6 +968,76 @@ async def _auto_schedule_if_needed(
             "auto_schedule_failed",
             session_id=cs.id,
             lead_id=cs.lead_id,
+            error=str(exc),
+        )
+
+
+async def _schedule_crm_sync(
+    client_id: str,
+    lead_id: str,
+    db: AsyncSession,
+) -> None:
+    """Dispatch an optional fire-and-forget CRM sync task after savepoint commits.
+
+    This is a generic post-call integration hook — it knows nothing about
+    Airtable or any specific CRM adapter. Provider-specific behaviour lives
+    inside ``app/integrations/adapters/``.
+
+    Behaviour:
+    - Schedules a background coroutine that opens its OWN DB session and runs
+      ``crm_sync_service.sync_lead`` (CS-2). The caller's ``db`` session is NOT
+      forwarded to the task — it would be closed by the time the fire-and-forget
+      task runs, causing ``sync_lead`` to fail with a closed-session error.
+      This mirrors ``_summarize_in_background`` in app/calls/service.py.
+    - If the client has no ``crm.yaml``, sync_lead returns silently (FM-4).
+    - If the CRM sync task fails internally it logs and swallows the error (CS-5).
+    - This function itself must NEVER raise — any unexpected error is caught here.
+
+    Args:
+        client_id: Client slug used to locate the client's ``crm.yaml``.
+        lead_id: UUID of the lead to push to the CRM.
+        db: Active async DB session of the caller. Intentionally NOT passed to the
+            background task — kept in the signature for backward-compat. The task
+            opens its own independent session.
+    """
+    try:
+        asyncio.create_task(_run_crm_sync_in_background(client_id, lead_id))
+    except Exception as exc:
+        logger.warning(
+            "crm_sync_dispatch_failed",
+            client_id=client_id,
+            lead_id=lead_id,
+            error=str(exc),
+        )
+
+
+async def _run_crm_sync_in_background(client_id: str, lead_id: str) -> None:
+    """Background task: run CRM sync in an independent DB session.
+
+    Opens a fresh ``get_session()`` so the fire-and-forget CRM push does not
+    depend on the caller's session, which is closed once the summarizer's
+    request context unwinds. Any failure is logged and swallowed — the CRM is a
+    downstream mirror only and must never affect the post-call analysis (CS-5).
+
+    Args:
+        client_id: Client slug used to locate the client's ``crm.yaml``.
+        lead_id: UUID of the lead to push to the CRM.
+    """
+    from app.core.database import get_session
+    from app.integrations import crm_sync_service
+
+    try:
+        async with get_session() as db:
+            await crm_sync_service.sync_lead(
+                client_id=client_id,
+                lead_id=lead_id,
+                db_session=db,
+            )
+    except Exception as exc:
+        logger.warning(
+            "crm_sync_background_failed",
+            client_id=client_id,
+            lead_id=lead_id,
             error=str(exc),
         )
 

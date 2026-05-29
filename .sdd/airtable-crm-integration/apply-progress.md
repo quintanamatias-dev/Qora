@@ -3,7 +3,7 @@
 **Change**: airtable-crm-integration
 **Mode**: Strict TDD
 **Chain strategy**: stacked-to-main
-**Batches completed**: 2 of 3
+**Batches completed**: 3 of 3
 
 ---
 
@@ -23,11 +23,15 @@
 - [x] 2.4 GREEN/REFACTOR: `backend/app/integrations/crm_sync_service.py` — async `sync_lead(client_id, lead_id, db_session)`, full error isolation, _lead_to_dict() pure helper
 - [x] 2.5 REVIEW FIX (judgment-day): resolved 8 confirmed review issues on the Work Unit 2 diff — see "Review Fixes (PR 2)" below
 
-## Pending Tasks (PR 3)
+## Completed Tasks (PR 3 — Summarizer Hook + Quintana Sandbox)
 
-- [ ] 3.1 RED: Extend `tests/unit/test_summarizer.py` for `_schedule_crm_sync`
-- [ ] 3.2 GREEN: Modify `backend/app/summarizer.py`
-- [ ] 3.3 RED/GREEN: `backend/clients/quintana-seguros/crm.yaml` + config test coverage
+- [x] 3.1 RED: Extended `backend/tests/unit/test_summarizer.py` — 4 new tests covering:
+  - `_schedule_crm_sync` schedules exactly one asyncio task (fire-and-forget, CS-1/CS-2)
+  - `_schedule_crm_sync` NOT called when savepoint fails (CS-1)
+  - `_schedule_crm_sync` no-op when crm.yaml missing (FM-4) — delegates to sync_lead
+  - CRM task failure does not affect summarizer output (CS-5)
+- [x] 3.2 GREEN: Modified `backend/app/summarizer.py` — added `_schedule_crm_sync()` generic dispatcher + wired after savepoint in `_run_summarizer()`
+- [x] 3.3 RED/GREEN: Created `backend/clients/quintana-seguros/crm.yaml` sandbox config + `backend/tests/unit/integrations/test_quintana_sandbox.py` — 6 tests proving no Quintana-specific logic in `app/integrations/`, file existence, valid load, required fields, no hardcoded secrets, env-var-name-only api_key_env
 
 ## Pending Tasks (PR 4 / verification)
 
@@ -49,21 +53,27 @@
 | 2.2 | `tests/unit/integrations/test_airtable_adapter.py` | Unit | N/A (new files) | ✅ Written first (modules didn't exist) | ✅ 12/12 passed | ✅ Covered by test_airtable_adapter.py | ✅ make_adapter factory; base_id at construction time; _get_table patchable |
 | 2.3 | `tests/integration/integrations/test_crm_sync_service.py` | Integration | N/A (new files) | ✅ Written (7 tests referencing non-existent module) | ✅ 7/7 passed after fixture fix (Client.voice_id required) | ✅ Success path, match_field propagation, no-crm.yaml noop, unknown lead noop, credential error isolation, adapter error isolation, write-only | ✅ _seed_test_client() helper for DB setup |
 | 2.4 | `tests/integration/integrations/test_crm_sync_service.py` | Integration | N/A (new files) | ✅ Written first (module didn't exist) | ✅ 7/7 passed | ✅ Covered by test_crm_sync_service.py | ✅ _lead_to_dict() extracted as pure helper; error handlers explicit and non-re-raising |
+| 3.1 | `tests/unit/test_summarizer.py` | Unit | ✅ 70/70 pre-existing tests passing | ✅ 4 tests written referencing non-existent `_schedule_crm_sync` — all 4 FAILED (ImportError / AttributeError) | ✅ 4/4 passed after GREEN implementation; full suite 74/74 | ✅ 2 test cases per behavior: (a) schedule called / (b) not called on failure; (a) no-op client / (b) crm-configured client | ✅ Implementation already clean; function docstring explains generic-dispatcher role |
+| 3.2 | `tests/unit/test_summarizer.py` | Unit | ✅ 70/70 baseline confirmed before modifying summarizer.py | ✅ Tests written first (GREEN target was 4 failing tests) | ✅ 74/74 full summarizer suite green | ✅ Covered by 4 test scenarios in task 3.1 | ✅ Lazy import inside function; no top-level coupling to crm_sync_service |
+| 3.3 | `tests/unit/integrations/test_quintana_sandbox.py` | Unit | N/A (new test file) | ✅ 4/6 tests FAILED (crm.yaml missing); 1 passed (no-quintana-in-integrations); 1 skipped | ✅ 6/6 passed after crm.yaml created | ✅ Triangulated: existence check, full load, required fields (6 assertions), no-secret, env-var-name format, no-quintana-in-code | ✅ crm.yaml uses only safe sandbox placeholders and env var names |
 
 ## Test Summary
 
 - **Total tests written (PR 1)**: 43 (unit integrations)
 - **Total tests written (PR 2)**: 19 (12 unit adapter + 7 integration sync service)
-- **Cumulative new tests**: 62
+- **Total tests written (PR 3)**: 10 (4 summarizer hook + 6 Quintana sandbox)
+- **Cumulative new tests**: 72
 - **Baseline before PR 1**: 1831 tests passing
 - **After PR 1**: 1874 tests (43 new)
-- **After PR 2**: 1893 tests (19 new) — full suite confirmed
+- **After PR 2**: 1897 tests (19 new + 4 review-fix tests; full suite confirmed)
+- **After PR 3**: 1907 tests (10 new) — full suite confirmed: `1907 passed, 0 failures`
 - **Regressions**: 0
-- **Layers used**: Unit (55), Integration (7)
-- **Approval tests** (refactoring): None — no refactoring tasks in PR 1 or PR 2
+- **Layers used**: Unit (65), Integration (7)
+- **Approval tests** (refactoring): None — no refactoring tasks in any PR
 - **Pure functions created (PR 1)**: `normalize_phone_e164`, `_coerce_string`, `_coerce_integer`, `_coerce_boolean`, `_coerce_date`, `_coerce_phone`, `FieldMapper.map`
 - **Pure functions created (PR 2)**: `_compute_backoff`, `_lead_to_dict`
-- **Discoveries**: Client model requires `voice_id` (NOT NULL) — integration tests must use `create_client()` service, not bare `Client()` ORM constructor.
+- **Pure functions created (PR 3)**: None — `_schedule_crm_sync` is a dispatcher (schedules async task; no pure logic to extract)
+- **Discoveries (PR 3)**: `asyncio.create_task` cannot be patched inside an async context using simple monkeypatch — must use `unittest.mock.patch("asyncio.create_task", ...)` directly. The fire-and-forget pattern means the coroutine is not awaited inside `_schedule_crm_sync`; tests verify `mock_sync.await_count == 0` to confirm this.
 
 ---
 
@@ -103,6 +113,15 @@
 | `backend/tests/unit/integrations/test_airtable_adapter.py` | Modified | Rewrote upsert tests for batch_upsert; no-read-API enforcement; pyairtable-style retry test |
 | `backend/tests/integration/integrations/test_crm_sync_service.py` | Modified | Added cross-client mismatch, matching-client control, factory-error isolation tests |
 
+### PR 3 Files
+| File | Action | Description |
+|------|--------|-------------|
+| `backend/app/summarizer.py` | Modified | Added `_schedule_crm_sync()` generic dispatcher function; wired call after savepoint in `_run_summarizer()` |
+| `backend/clients/quintana-seguros/crm.yaml` | Created | Quintana sandbox CRM config — sandbox base_id/table_id placeholders; `api_key_env: QUINTANA_AIRTABLE_API_KEY`; 10 field mappings |
+| `backend/tests/unit/test_summarizer.py` | Modified | Added 4 TDD tests for `_schedule_crm_sync` hook behavior (CS-1, CS-2, FM-4, CS-5) |
+| `backend/tests/unit/integrations/test_quintana_sandbox.py` | Created | 6 structural tests: crm.yaml exists, loads valid, required fields, no secrets, no quintana-in-integrations, env-var-name format |
+| `.sdd/airtable-crm-integration/tasks.md` | Modified | Marked tasks 3.1–3.3 as [x] complete |
+
 ---
 
 ## Review Fixes (PR 2 — judgment-day surgical pass)
@@ -141,19 +160,24 @@ Eight confirmed review issues on the uncommitted Work Unit 2 diff (adapter + syn
 3. **AirtableUpsertError raised (not swallowed) in adapter**: The adapter raises `AirtableUpsertError` after exhaustion (CS-5 says the caller must not propagate). `crm_sync_service` catches it. This matches the layering principle: adapter knows about retry failures; sync service knows about isolation.
 4. **Non-retryable 4xx errors fail immediately**: Design says "retry on transient failure with exponential backoff + jitter, up to 3 attempts" (CS-4). 429/5xx = retryable; 4xx (403, 422) = non-retryable per RFC semantics. Added explicit fast-fail for non-retryable status codes.
 
+### PR 3
+1. **`_schedule_crm_sync` is `async def`**: The function uses lazy import (`from app.integrations import crm_sync_service`) inside its body to avoid circular import risk. An `async def` with no `await` is slightly unusual but consistent with `_auto_schedule_if_needed` pattern and allows future `await` use if needed. Fire-and-forget is achieved via `asyncio.create_task()`, not by awaiting the coroutine.
+2. **`_schedule_crm_sync` does NOT check crm.yaml before scheduling**: Design says "generic dispatcher". The no-op behavior is entirely inside `sync_lead()` (returns if no config). This keeps the summarizer decoupled from any CRM config knowledge — the hook schedules unconditionally, `sync_lead` handles the no-op.
+
 ---
 
 ## Workload / PR Boundary
 
 - **PR 1 (done)**: Config + field mapping foundation — ~180 lines prod + ~290 lines tests = ~470 lines
-- **PR 2 (this batch)**: Airtable adapter + sync service — ~185 lines prod + ~220 lines tests = ~405 lines
+- **PR 2 (done)**: Airtable adapter + sync service — ~185 lines prod + ~220 lines tests = ~405 lines + judgment-day fixes
+- **PR 3 (this batch)**: Summarizer hook + Quintana sandbox — ~50 lines prod + ~200 lines tests = ~250 lines (well within 400-line budget)
 - **Mode**: Chained PR slice (stacked-to-main)
-- **Current work unit**: Unit 2 — Airtable adapter + sync service
-- **Boundary**: PR 2 depends on PR 1 (crm_config.py, field_mapping.py). No summarizer changes. No Quintana crm.yaml. No live Airtable reads.
-- **Chain**: PR 3 targets this PR's branch (or main after merge); introduces summarizer hook + Quintana sandbox crm.yaml
+- **Current work unit**: Unit 3 — Summarizer hook + Quintana sandbox crm.yaml
+- **Boundary**: PR 3 depends on PR 2 (crm_sync_service.sync_lead). No admin UI. No live Airtable reads. No production credentials.
+- **Chain**: This is the final implementation PR. PR 4 = verification pass (tasks 4.1–4.2).
 
 ---
 
 ## Status
 
-8/14 tasks complete (PR 1 + PR 2 done) + PR 2 review fixes applied (8/8 confirmed issues resolved). Full suite: 1897 passed, 0 regressions. Ready for PR 2 re-review. PR 3 batch (tasks 3.1–3.3) can begin after orchestrator approves this slice.
+11/14 tasks complete (PR 1 + PR 2 + PR 3 done). Full suite: **1907 passed, 0 regressions**. PR 3 batch is ready for orchestrator review. Tasks 4.1–4.2 (verification/cleanup pass) remain — these can run in the verify phase or as a final cleanup before handoff.
