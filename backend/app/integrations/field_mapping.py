@@ -162,15 +162,27 @@ class FieldMapper:
 
     Example:
         field_defs = config.field_mappings
-        mapper = FieldMapper(field_defs)
+        mapper = FieldMapper(field_defs, status_mapping=config.status_mapping)
         crm_payload = mapper.map(lead_data)
     """
 
-    def __init__(self, field_defs: list[CRMFieldDef]) -> None:
+    def __init__(
+        self,
+        field_defs: list[CRMFieldDef],
+        *,
+        status_mapping: dict[str, str] | None = None,
+    ) -> None:
         self._field_defs = field_defs
+        # Optional map: Qora internal status string → CRM singleSelect label.
+        # Applied only when the source field is "status".
+        self._status_mapping: dict[str, str] = status_mapping or {}
 
     def map(self, lead_data: dict[str, Any]) -> dict[str, Any]:
         """Transform lead_data dict into a CRM-ready payload.
+
+        For the "status" source field, applies status_mapping translation when
+        the mapping is configured and the Qora status is present in the map.
+        If the Qora status is absent from the map, the raw value is used.
 
         Args:
             lead_data: Flat dict of lead fields (e.g. from Lead model or dict).
@@ -198,6 +210,11 @@ class FieldMapper:
                     )
                 # Optional — silently omit
                 continue
+
+            # Apply status_mapping translation for the "status" field.
+            # Falls back to raw value when mapping is absent or status not mapped.
+            if source == "status" and self._status_mapping:
+                value = self._status_mapping.get(str(value), value)
 
             coercer = _COERCERS.get(field_type)
             if coercer is None:

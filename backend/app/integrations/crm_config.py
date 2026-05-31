@@ -62,6 +62,10 @@ class CRMConfig(BaseModel):
     api_key_env: str       # env var NAME (e.g. "QUINTANA_AIRTABLE_API_KEY")
     match_field: str
     field_mappings: list[CRMFieldDef] = Field(default_factory=list)
+    # Optional status translation map: Qora status → CRM singleSelect label.
+    # When present and the source field is "status", the mapper translates the value.
+    # If a Qora status is absent from this map, the raw value is used as fallback.
+    status_mapping: dict[str, str] | None = None
 
     model_config = {"extra": "ignore"}
 

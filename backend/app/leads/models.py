@@ -32,14 +32,15 @@ class LeadStatus(str, enum.Enum):
     """Valid states for a lead in the QORA state machine.
 
     Transitions:
-        new → called → interested
+        new → called → quoted (all fields present for quoting)
+                     → follow_up (positive but missing data)
                      → not_interested
-                     → follow_up
         follow_up → called
     """
 
     NEW = "new"
     CALLED = "called"
+    QUOTED = "quoted"
     INTERESTED = "interested"
     NOT_INTERESTED = "not_interested"
     FOLLOW_UP = "follow_up"
@@ -49,11 +50,13 @@ class LeadStatus(str, enum.Enum):
 VALID_TRANSITIONS: dict[LeadStatus, set[LeadStatus]] = {
     LeadStatus.NEW: {LeadStatus.CALLED},
     LeadStatus.CALLED: {
+        LeadStatus.QUOTED,
         LeadStatus.INTERESTED,
         LeadStatus.NOT_INTERESTED,
         LeadStatus.FOLLOW_UP,
     },
     LeadStatus.FOLLOW_UP: {LeadStatus.CALLED},
+    LeadStatus.QUOTED: set(),
     LeadStatus.INTERESTED: set(),
     LeadStatus.NOT_INTERESTED: set(),
 }
@@ -87,7 +90,10 @@ class Lead(Base):
     car_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     current_insurance: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(
-        Enum(*[s.value for s in LeadStatus], name="lead_status"),
+        Enum(
+            *[s.value for s in LeadStatus],
+            name="lead_status",
+        ),
         nullable=False,
         default=LeadStatus.NEW.value,
     )
@@ -105,6 +111,7 @@ class Lead(Base):
     # qora-data-corrections: new correctable fields
     email: Mapped[str | None] = mapped_column(String, nullable=True)
     age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    zona: Mapped[str | None] = mapped_column(String, nullable=True)
     # Phase 2 additions (CAP-5)
     summary_last_call: Mapped[str | None] = mapped_column(Text, nullable=True)
     objections_heard: Mapped[list | None] = mapped_column(JSON, nullable=True)

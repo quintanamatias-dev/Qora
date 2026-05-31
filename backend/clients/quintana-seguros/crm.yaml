@@ -25,11 +25,22 @@ api_key_env: QUINTANA_AIRTABLE_API_KEY
 # safer idempotency key than phone (which can be shared / reformatted).
 match_field: lead_id
 
+# Status mapping: Qora internal status → Airtable singleSelect value.
+# Values MUST match exactly the singleSelect choices in the Airtable table
+# (case-sensitive, with accents). If a Qora status is absent from this map,
+# the raw Qora value is used as fallback.
+status_mapping:
+  new: "Nuevo!"
+  called: "Contactado (en espera)"
+  quoted: "Cotizado"
+  interested: "COMPRÓ"
+  not_interested: "Perdido"
+  follow_up: "Recontactar"
+
 # Field mappings: Qora lead fields → Airtable column names.
 # Only fields Qora produces today are mapped. Airtable-automation fields
 # (Creada, Last_Update, Fecha_*) and Meta campaign fields come from n8n, not Qora.
-# singleSelect fields (Status, etc.) are mapped as string — batch_upsert accepts
-# string values for them.
+# singleSelect fields (Status, etc.) are translated via status_mapping above.
 # Add or remove entries here; no code changes required (FM-6).
 field_mappings:
   - source: id
@@ -67,4 +78,12 @@ field_mappings:
 
   - source: car_year
     target: "Año_Auto"
+    type: string
+
+  - source: age
+    target: "Edad"
+    type: integer
+
+  - source: zona
+    target: "Zona"
     type: string

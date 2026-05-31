@@ -3813,11 +3813,13 @@ async def test_summarizer_misc_notes_coerces_legacy_string_from_extracted_facts(
 # ===========================================================================
 
 
-def test_apply_status_positive_outcome_transitions_to_interested():
-    """close_lead + completed_positive → lead status transitions to 'interested'.
+def test_apply_status_positive_outcome_transitions_to_follow_up_without_lead():
+    """close_lead + completed_positive without lead → 'follow_up'.
 
-    Spec: Analysis pipeline transitions status to 'interested' when
-    action='close_lead' + outcome='completed_positive'.
+    Spec (quote-ready-status): close_lead + completed_positive transitions to:
+      - 'quoted' when is_quote_ready(lead) is True
+      - 'follow_up' when lead=None or is_quote_ready(lead) is False
+    When no lead is provided (backward-compat), treat as not quote-ready → 'follow_up'.
     Only applied when current lead status == 'called'.
     """
     from app.summarizer import apply_status_from_next_action
@@ -3829,8 +3831,8 @@ def test_apply_status_positive_outcome_transitions_to_interested():
             "outcome": {"classification": "completed_positive"},
         },
     )
-    assert result == "interested", (
-        "close_lead + completed_positive from 'called' must transition to 'interested'"
+    assert result == "follow_up", (
+        "close_lead + completed_positive from 'called' without lead must transition to 'follow_up'"
     )
 
 

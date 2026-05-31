@@ -427,6 +427,8 @@ class TestQuintanaCaptureParity:
             car_make_field: "Toyota",
             car_model_field: "Corolla",
             car_year_field: "2020",
+            "age": 35,
+            "zona": "Palermo",
         }
 
         # Mock the DB session and lead so we don't need a real DB

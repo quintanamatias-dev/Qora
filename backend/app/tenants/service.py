@@ -179,8 +179,16 @@ _QUINTANA_TOOL_CONFIG = {
                 "type": "string",
                 "description": "Aseguradora actual del cliente (opcional)",
             },
+            "age": {
+                "type": "integer",
+                "description": "Edad del titular de la póliza",
+            },
+            "zona": {
+                "type": "string",
+                "description": "Zona donde vive el titular (barrio/localidad)",
+            },
         },
-        "required": ["lead_id", "car_make", "car_model", "car_year"],
+        "required": ["lead_id", "car_make", "car_model", "car_year", "age", "zona"],
     }
 }
 

@@ -54,12 +54,40 @@ from app.leads.models import Lead, LeadInterestHistory, LeadProfileFact
 logger = structlog.get_logger(__name__)
 
 # Terminal states from which no further status transitions are allowed.
-_TERMINAL_STATUSES: frozenset[str] = frozenset({"interested", "not_interested"})
+_TERMINAL_STATUSES: frozenset[str] = frozenset({"quoted", "interested", "not_interested"})
 
 # Negative close_lead outcome classifications → not_interested
 _NEGATIVE_CLASSIFICATIONS: frozenset[str] = frozenset(
     {"completed_negative", "do_not_contact", "hostile"}
 )
+
+
+# ---------------------------------------------------------------------------
+# Pure helper: is a lead ready for insurance quoting?
+# ---------------------------------------------------------------------------
+
+
+def is_quote_ready(lead: "Any") -> bool:
+    """Return True if a lead has all required fields for insurance quoting.
+
+    This is a pure function — no DB access, no side effects.
+    All five fields must be non-None and truthy.
+
+    Args:
+        lead: Lead ORM instance (or any object with the required attributes).
+
+    Returns:
+        True if car_make, car_model, car_year, age, and zona are all set.
+    """
+    return all(
+        [
+            lead.car_make,
+            lead.car_model,
+            lead.car_year,
+            lead.age,
+            lead.zona,
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +98,7 @@ _NEGATIVE_CLASSIFICATIONS: frozenset[str] = frozenset(
 def apply_status_from_next_action(
     current_status: str,
     next_action_result: dict | None,
+    lead: "Any | None" = None,
 ) -> str | None:
     """Map next_action_result to a target lead status.
 
@@ -79,10 +108,12 @@ def apply_status_from_next_action(
 
     Rules (spec: lead-status-lifecycle):
     - Only applies when current_status == "called".
-    - Terminal states (interested, not_interested) → None (no transition).
+    - Terminal states (quoted, interested, not_interested) → None (no transition).
     - "new" / any other non-called state → None.
     - action == "close_lead":
-        - outcome.classification == "completed_positive" → "interested"
+        - outcome.classification == "completed_positive":
+            - is_quote_ready(lead) → "quoted"
+            - else → "follow_up"
         - outcome.classification in {completed_negative, do_not_contact, hostile} → "not_interested"
     - action in {"follow_up", "schedule_call"} → "follow_up"
     - action in {"retry_call", "human_review"} → None
@@ -91,6 +122,8 @@ def apply_status_from_next_action(
     Args:
         current_status: Lead.status value (string).
         next_action_result: Dict with "action" key (and optional "outcome" sub-dict).
+        lead: Optional Lead ORM instance used to check is_quote_ready(). When None,
+              treated as not quote-ready (follow_up for positive outcomes).
 
     Returns:
         Target status string or None.
@@ -109,7 +142,9 @@ def apply_status_from_next_action(
             outcome.get("classification") if isinstance(outcome, dict) else None
         )
         if classification == "completed_positive":
-            return "interested"
+            if lead is not None and is_quote_ready(lead):
+                return "quoted"
+            return "follow_up"
         if classification in _NEGATIVE_CLASSIFICATIONS:
             return "not_interested"
         return None
@@ -879,10 +914,12 @@ async def _merge_facts_into_lead(
     # configurable-agent-tools Phase 2: apply status transitions from next_action_result.
     # Only transitions when lead.status == "called"; terminal states are guarded in
     # apply_status_from_next_action (returns None → no transition attempted).
+    # quote-ready-status: pass lead to enable is_quote_ready check inside the function.
     _next_action_result_for_status = facts.get("next_action_result")
     _target_status = apply_status_from_next_action(
         current_status=lead.status,
         next_action_result=_next_action_result_for_status,
+        lead=lead,
     )
     if _target_status is not None:
         from app.leads.service import transition_lead_status as _transition

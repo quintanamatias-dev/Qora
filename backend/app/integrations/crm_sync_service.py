@@ -111,7 +111,7 @@ async def sync_lead(
 
         # 4. Map lead fields → CRM payload (pure; no IO)
         lead_data = _lead_to_dict(lead)
-        mapper = FieldMapper(config.field_mappings)
+        mapper = FieldMapper(config.field_mappings, status_mapping=config.status_mapping)
         try:
             payload = mapper.map(lead_data)
         except MappingError as exc:
@@ -182,6 +182,7 @@ def _lead_to_dict(lead: Any) -> dict[str, Any]:
         "current_insurance": lead.current_insurance,
         "email": lead.email,
         "age": lead.age,
+        "zona": lead.zona,
         "summary_last_call": lead.summary_last_call,
         "interest_level": lead.interest_level,
         "do_not_call": lead.do_not_call,
