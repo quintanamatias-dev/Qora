@@ -161,6 +161,20 @@ async def _ensure_startup_schema_compat(db_module) -> None:
                 "startup_schema_compat_added", column="agents.soft_timeout_use_llm"
             )
 
+        # leads table — zona column (quote-ready-status)
+        result_leads = await conn.execute(
+            sqlalchemy.text("PRAGMA table_info(leads)")
+        )
+        lead_columns = {row[1] for row in result_leads.fetchall()}
+
+        if lead_columns and "zona" not in lead_columns:
+            await conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE leads ADD COLUMN zona TEXT DEFAULT NULL"
+                )
+            )
+            logger.info("startup_schema_compat_added", column="leads.zona")
+
         if "elevenlabs_sync_status" not in agent_columns:
             await conn.execute(
                 sqlalchemy.text(
