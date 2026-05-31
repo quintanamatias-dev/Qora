@@ -37,6 +37,17 @@ status_mapping:
   not_interested: "Perdido"
   follow_up: "Recontactar"
 
+# Reverse status mapping: Airtable singleSelect value → Qora internal status.
+# Used during import (Airtable → Qora) to translate CRM status values back.
+# If an Airtable status is absent from this map, the raw value is stored.
+import_status_mapping:
+  "Nuevo!": new
+  "Contactado (en espera)": called
+  "Cotizado": quoted
+  "COMPRÓ": interested
+  "Perdido": not_interested
+  "Recontactar": follow_up
+
 # Field mappings: Qora lead fields → Airtable column names.
 # Only fields Qora produces today are mapped. Airtable-automation fields
 # (Creada, Last_Update, Fecha_*) and Meta campaign fields come from n8n, not Qora.

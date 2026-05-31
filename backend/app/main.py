@@ -175,6 +175,14 @@ async def _ensure_startup_schema_compat(db_module) -> None:
             )
             logger.info("startup_schema_compat_added", column="leads.zona")
 
+        if lead_columns and "external_crm_id" not in lead_columns:
+            await conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE leads ADD COLUMN external_crm_id TEXT DEFAULT NULL"
+                )
+            )
+            logger.info("startup_schema_compat_added", column="leads.external_crm_id")
+
         if "elevenlabs_sync_status" not in agent_columns:
             await conn.execute(
                 sqlalchemy.text(
@@ -410,6 +418,7 @@ from app.voice.initiation import router as initiation_router  # noqa: E402
 from app.voice.webhook import router as webhook_router  # noqa: E402
 from app.scheduler.router import router as scheduler_router  # noqa: E402
 from app.analytics.router import router as analytics_router  # noqa: E402
+from app.integrations.crm_router import router as crm_router  # noqa: E402
 
 api_v1_router.include_router(clients_router)  # /api/v1/clients — full CRUD
 api_v1_router.include_router(
@@ -422,6 +431,7 @@ api_v1_router.include_router(initiation_router)
 api_v1_router.include_router(webhook_router)
 api_v1_router.include_router(scheduler_router)  # /api/v1/scheduler — Phase 6
 api_v1_router.include_router(analytics_router)  # /api/v1/analytics — Issue #37
+api_v1_router.include_router(crm_router)  # /api/v1/clients/{client_id}/crm/import
 
 app.include_router(api_v1_router)
 

@@ -66,6 +66,10 @@ class CRMConfig(BaseModel):
     # When present and the source field is "status", the mapper translates the value.
     # If a Qora status is absent from this map, the raw value is used as fallback.
     status_mapping: dict[str, str] | None = None
+    # Optional reverse status map: CRM singleSelect label → Qora internal status.
+    # Used during import (Airtable → Qora) to translate CRM status values back.
+    # When absent, the raw CRM status value is stored on the lead.
+    import_status_mapping: dict[str, str] | None = None
 
     model_config = {"extra": "ignore"}
 

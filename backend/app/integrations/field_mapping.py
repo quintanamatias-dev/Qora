@@ -164,6 +164,9 @@ class FieldMapper:
         field_defs = config.field_mappings
         mapper = FieldMapper(field_defs, status_mapping=config.status_mapping)
         crm_payload = mapper.map(lead_data)
+        # For import (reverse) direction:
+        mapper = FieldMapper(field_defs, import_status_mapping=config.import_status_mapping)
+        qora_data = mapper.reverse_map(airtable_record_fields)
     """
 
     def __init__(
@@ -171,11 +174,15 @@ class FieldMapper:
         field_defs: list[CRMFieldDef],
         *,
         status_mapping: dict[str, str] | None = None,
+        import_status_mapping: dict[str, str] | None = None,
     ) -> None:
         self._field_defs = field_defs
         # Optional map: Qora internal status string → CRM singleSelect label.
         # Applied only when the source field is "status".
         self._status_mapping: dict[str, str] = status_mapping or {}
+        # Optional map: CRM singleSelect label → Qora internal status string.
+        # Used for the import (reverse) direction only.
+        self._import_status_mapping: dict[str, str] = import_status_mapping or {}
 
     def map(self, lead_data: dict[str, Any]) -> dict[str, Any]:
         """Transform lead_data dict into a CRM-ready payload.
@@ -225,3 +232,42 @@ class FieldMapper:
                 payload[target] = coercer(source, value)
 
         return payload
+
+    def reverse_map(self, airtable_fields: dict[str, Any]) -> dict[str, Any]:
+        """Transform an Airtable record's fields dict into a Qora lead data dict.
+
+        Reverses the field_mappings: for each (source, target) pair, maps
+        airtable_fields[target] → result[source] (i.e. Airtable column → Qora field).
+
+        Rules:
+        - Airtable fields not present in the mapping are silently ignored.
+        - Airtable fields absent from the record are silently skipped.
+        - For the "status" source field, applies import_status_mapping when configured.
+          Falls back to the raw Airtable value if not in the map.
+        - Phone and other types are passed through as-is (Airtable already stores them
+          in the correct format, or coercion is not needed for import).
+
+        Args:
+            airtable_fields: The ``fields`` dict from an Airtable record.
+
+        Returns:
+            Dict keyed by Qora source field names with values from Airtable.
+        """
+        result: dict[str, Any] = {}
+
+        # Build a lookup: CRM target name → Qora source name
+        target_to_source = {fd.target: fd.source for fd in self._field_defs}
+
+        for airtable_key, value in airtable_fields.items():
+            qora_field = target_to_source.get(airtable_key)
+            if qora_field is None:
+                # No mapping for this Airtable column — ignore
+                continue
+
+            # Apply reverse status mapping for the "status" field
+            if qora_field == "status" and self._import_status_mapping:
+                value = self._import_status_mapping.get(str(value), value)
+
+            result[qora_field] = value
+
+        return result

@@ -80,12 +80,16 @@ class AirtableUpsertError(Exception):
 
 
 class AirtableAdapter(CRMPort):
-    """Write-only CRM adapter backed by Airtable.
+    """CRM adapter backed by Airtable.
 
     Implements CRMPort.upsert_record() with:
     - Field-based match for idempotent upserts (no duplicate creation)
     - Exponential backoff + jitter for 429/5xx transient errors
     - Structured error logging after all retries exhausted
+
+    Also exposes fetch_records() for the import (pull) direction:
+    - READ operation — NOT used in the live call path
+    - Wraps pyairtable Table.all() in asyncio.to_thread to avoid blocking
 
     Usage (via crm_sync_service — never instantiated directly from call path):
         adapter = AirtableAdapter(api_key=config.resolve_api_key())
@@ -94,6 +98,8 @@ class AirtableAdapter(CRMPort):
             payload=mapped_payload,
             match_field=config.match_field,
         )
+        # For import:
+        records = await adapter.fetch_records(table_id=config.table_id)
     """
 
     def __init__(self, api_key: str, base_id: str = "") -> None:
@@ -220,6 +226,42 @@ class AirtableAdapter(CRMPort):
             f"Airtable upsert failed after {_MAX_ATTEMPTS} retries on table {table_id!r}: "
             f"{last_error}"
         ) from last_error
+
+    async def fetch_records(
+        self,
+        table_id: str,
+        *,
+        filter_formula: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch all records from an Airtable table.
+
+        This is a READ operation used only for the import (pull) direction.
+        NOT used during live calls (CS-7 write-only constraint applies to call path).
+
+        Wraps pyairtable Table.all() in asyncio.to_thread so the async event
+        loop is never blocked by the synchronous HTTP request underneath pyairtable.
+
+        Args:
+            table_id: Airtable table ID (e.g. "tblYYYYYYYYYYYYYY").
+            filter_formula: Optional Airtable formula string to filter records
+                (e.g. "{Status}='Nuevo!'"). When None, all records are fetched.
+
+        Returns:
+            List of Airtable record dicts, each with 'id', 'createdTime', 'fields'.
+
+        Raises:
+            Any pyairtable/requests exception on HTTP failure (caller handles retry).
+        """
+        table = self._get_table(table_id)
+
+        if filter_formula is not None:
+            records = await asyncio.to_thread(
+                table.all, formula=filter_formula
+            )
+        else:
+            records = await asyncio.to_thread(table.all)
+
+        return records
 
     async def _do_upsert(
         self,

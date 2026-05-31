@@ -122,6 +122,9 @@ class Lead(Base):
     next_action_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Generic external CRM record ID for bidirectional sync (e.g. Airtable recXXX).
+    # Nullable: set only for leads imported from or synced to an external CRM.
+    external_crm_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Lead id={self.id!r} name={self.name!r} status={self.status!r}>"
