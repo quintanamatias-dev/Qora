@@ -27,8 +27,15 @@ from __future__ import annotations
 import asyncio
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI, Request, Response
+
+# Load ALL .env variables into os.environ so per-client credentials
+# (e.g. QUINTANA_AIRTABLE_API_KEY) are available via os.environ.get().
+# pydantic-settings only reads its own declared fields; this covers the rest.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
