@@ -17,6 +17,7 @@ Project skills are for developing this codebase. They are not product features a
 | `skill-creator` | Create or update project developer skills with the Gentleman Skills conventions | [`skills/skill-creator/SKILL.md`](skills/skill-creator/SKILL.md) |
 | `qora-client-agent-setup` | Create/configure isolated Qora clients, agents, ElevenLabs URLs, and demo verification | [`skills/qora-client-agent-setup/SKILL.md`](skills/qora-client-agent-setup/SKILL.md) |
 | `qora-agent-designer` | Design the content of a Qora voice agent: system-prompt.md, runtime skills, and registry.yaml | [`skills/qora-agent-designer/SKILL.md`](skills/qora-agent-designer/SKILL.md) |
+| `elevenlabs-config` | Modify ElevenLabs voice agent configuration: TTS model, speed, stability, soft timeout, first message, agent sync | [`skills/elevenlabs-config/SKILL.md`](skills/elevenlabs-config/SKILL.md) |
 
 ## Product Agent Skills
 
