@@ -190,6 +190,15 @@ async def _ensure_startup_schema_compat(db_module) -> None:
             )
             logger.info("startup_schema_compat_added", column="leads.external_crm_id")
 
+        if "tts_model" not in agent_columns:
+            await conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE agents "
+                    "ADD COLUMN tts_model TEXT NOT NULL DEFAULT 'eleven_flash_v2_5'"
+                )
+            )
+            logger.info("startup_schema_compat_added", column="agents.tts_model")
+
         if "elevenlabs_sync_status" not in agent_columns:
             await conn.execute(
                 sqlalchemy.text(

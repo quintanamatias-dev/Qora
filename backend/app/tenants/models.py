@@ -71,6 +71,10 @@ class Agent(Base):
     tts_speed: Mapped[float] = mapped_column(Float, nullable=False, default=0.95)
     tts_stability: Mapped[float] = mapped_column(Float, nullable=False, default=0.4)
     tts_similarity_boost: Mapped[float] = mapped_column(Float, nullable=False, default=0.75)
+    # ElevenLabs TTS model — determines voice synthesis capabilities.
+    # "eleven_flash_v2_5" (default): low-latency, supports speed/stability/similarity_boost.
+    # "eleven_v3_conversational": expressive tags ([laughs], [slow], etc.), NO speed/stability/similarity_boost.
+    tts_model: Mapped[str] = mapped_column(String, nullable=False, default="eleven_flash_v2_5")
     # ElevenLabs soft timeout configuration (sdd/elevenlabs-provisioning)
     # NULL = use ElevenLabs dashboard defaults — no PATCH is sent.
     # soft_timeout_use_llm stored as BOOLEAN (SQLAlchemy maps to INTEGER 0/1 in SQLite)

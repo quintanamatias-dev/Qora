@@ -130,6 +130,7 @@ def _agent_to_response(agent: Agent) -> AgentResponse:
         tts_speed=_tts_field(agent, "tts_speed", 0.95),
         tts_stability=_tts_field(agent, "tts_stability", 0.4),
         tts_similarity_boost=_tts_field(agent, "tts_similarity_boost", 0.75),
+        tts_model=getattr(agent, "tts_model", "eleven_flash_v2_5") or "eleven_flash_v2_5",
         tool_config=_deserialize_tool_config(getattr(agent, "tool_config", None)),
         # ElevenLabs soft timeout + sync status (sdd/elevenlabs-provisioning)
         soft_timeout_seconds=getattr(agent, "soft_timeout_seconds", None),
@@ -242,6 +243,7 @@ async def create_agent(
             tts_speed=payload.tts_speed,
             tts_stability=payload.tts_stability,
             tts_similarity_boost=payload.tts_similarity_boost,
+            tts_model=payload.tts_model,
             tool_config=json.dumps(payload.tool_config) if payload.tool_config is not None else None,
             soft_timeout_seconds=payload.soft_timeout_seconds,
             soft_timeout_message=payload.soft_timeout_message,

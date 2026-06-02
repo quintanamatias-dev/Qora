@@ -113,6 +113,7 @@ class AgentCreate(BaseModel):
     tts_speed: float = Field(default=0.95, ge=0.7, le=1.2)
     tts_stability: float = Field(default=0.4, ge=0.0, le=1.0)
     tts_similarity_boost: float = Field(default=0.75, ge=0.0, le=1.0)
+    tts_model: str = "eleven_flash_v2_5"
     # ElevenLabs soft timeout config (sdd/elevenlabs-provisioning)
     # NULL = use ElevenLabs dashboard defaults. Range [0.5, 8.0] seconds.
     soft_timeout_seconds: float | None = Field(default=None, ge=0.5, le=8.0)
@@ -159,6 +160,7 @@ class AgentUpdate(BaseModel):
     tts_speed: float | None = Field(default=None, ge=0.7, le=1.2)
     tts_stability: float | None = Field(default=None, ge=0.0, le=1.0)
     tts_similarity_boost: float | None = Field(default=None, ge=0.0, le=1.0)
+    tts_model: str | None = None
     # ElevenLabs soft timeout config (sdd/elevenlabs-provisioning)
     soft_timeout_seconds: float | None = Field(default=None, ge=0.5, le=8.0)
     soft_timeout_message: str | None = None
@@ -201,6 +203,7 @@ class AgentResponse(BaseModel):
     tts_speed: float = 0.95
     tts_stability: float = 0.4
     tts_similarity_boost: float = 0.75
+    tts_model: str = "eleven_flash_v2_5"
     # ElevenLabs soft timeout config + sync status (sdd/elevenlabs-provisioning)
     soft_timeout_seconds: float | None = None
     soft_timeout_message: str | None = None

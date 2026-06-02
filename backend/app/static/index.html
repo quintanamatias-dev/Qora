@@ -484,7 +484,13 @@
       // [tts] Per-agent speed/stability/similarity_boost override — loaded from Agent API.
       // If EL closes the WS with 1008, we reconnect without the TTS override (see openWebSocket).
       // If currentAgentConfig is null (agent had no TTS values), skip the override entirely.
-      const sendTts = !skipTtsOverride && currentAgentConfig != null;
+      // v3 conversational model does NOT support speed/stability/similarity_boost overrides.
+      // Only send TTS override for flash models.
+      const isV3 = currentAgentConfig && currentAgentConfig.tts_model === 'eleven_v3_conversational';
+      const sendTts = !skipTtsOverride && currentAgentConfig != null && !isV3;
+      if (isV3) {
+        console.log('[tts] v3 conversational detected — skipping speed/stability/similarity_boost override');
+      }
       const ttsOverride = sendTts ? {
         tts: {
           speed:            currentAgentConfig.tts_speed,

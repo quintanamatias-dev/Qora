@@ -128,6 +128,7 @@ class VoiceSessionContext:
     tts_speed: float = 0.95
     tts_stability: float = 0.4
     tts_similarity_boost: float = 0.75
+    tts_model: str = "eleven_flash_v2_5"
     # Registry-based skills index — NEW in Phase 1 (dynamic-agent-skills)
     skills_index: str | None = None
     # Registry entries stored as tuple (frozen dataclass requires hashable types)
@@ -367,6 +368,9 @@ async def build_voice_context(
     tts_similarity_boost = getattr(agent, "tts_similarity_boost", None)
     if tts_similarity_boost is None:
         tts_similarity_boost = 0.75
+    tts_model = getattr(agent, "tts_model", None)
+    if tts_model is None:
+        tts_model = "eleven_flash_v2_5"
 
     return VoiceSessionContext(
         system_prompt=system_prompt,
@@ -382,6 +386,7 @@ async def build_voice_context(
         tts_speed=tts_speed,
         tts_stability=tts_stability,
         tts_similarity_boost=tts_similarity_boost,
+        tts_model=tts_model,
         skills_index=skills_index,
         skill_registry_entries=skill_registry_entries,
         agent_slug=agent_slug,
