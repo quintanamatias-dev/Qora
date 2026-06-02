@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -75,6 +76,12 @@ async def init_db(settings) -> None:
 
     async with engine.begin() as conn:  # type: ignore[union-attr]
         await conn.run_sync(Base.metadata.create_all)
+
+    # Enable WAL mode for concurrent read/write support and set busy timeout
+    async with engine.connect() as raw_conn:  # type: ignore[union-attr]
+        await raw_conn.execute(text("PRAGMA journal_mode=WAL"))
+        await raw_conn.execute(text("PRAGMA busy_timeout=5000"))
+        await raw_conn.commit()
 
 
 async def close_db() -> None:
