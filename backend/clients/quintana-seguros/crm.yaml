@@ -20,10 +20,13 @@ table_id: tblsWumwwfeoqkWid
 # The secret value itself is NEVER stored here.
 api_key_env: QUINTANA_AIRTABLE_API_KEY
 
-# Matching field: leads are upserted by their unique Qora lead_id.
-# Airtable has a numeric `lead_id` field that is unique per lead, so it is a
-# safer idempotency key than phone (which can be shared / reformatted).
-match_field: lead_id
+# Matching field: leads are upserted by email.
+# Airtable's lead_id is a numeric field populated by Meta — it does NOT match
+# Qora's internal UUID. Email is the shared unique identifier that Airtable
+# supports for upsert (phone type is not supported for merge-on).
+# TODO: when import stores the numeric Meta lead_id in a Qora field, switch
+# back to match_field: lead_id for stronger idempotency.
+match_field: "Correo electrónico"
 
 # Status mapping: Qora internal status → Airtable singleSelect value.
 # Values MUST match exactly the singleSelect choices in the Airtable table
@@ -54,10 +57,9 @@ import_status_mapping:
 # singleSelect fields (Status, etc.) are translated via status_mapping above.
 # Add or remove entries here; no code changes required (FM-6).
 field_mappings:
-  - source: id
-    target: "lead_id"
-    type: integer
-    required: true
+  # NOTE: lead_id in Airtable is a numeric field populated by Meta.
+  # Qora's internal id is a UUID and must NOT be pushed to that field.
+  # When Qora gets a numeric external_lead_id field, add the mapping back.
 
   - source: name
     target: "Nombre Completo"

@@ -20,7 +20,7 @@ from app.calls.models import CallAnalysis, CallSession, TranscriptTurn
 # Constants
 # ---------------------------------------------------------------------------
 
-RECONCILIATION_WINDOW_SECONDS = 120
+RECONCILIATION_WINDOW_SECONDS = 600
 
 
 # ---------------------------------------------------------------------------
