@@ -137,16 +137,16 @@ async def test_merge_finds_two_siblings_within_window(seeded_db):
 
 
 async def test_merge_excludes_session_outside_window(seeded_db):
-    """Sessions started >120s before completed session are NOT merged."""
+    """Sessions started >RECONCILIATION_WINDOW_SECONDS before completed session are NOT merged."""
     from app.calls.service import _merge_sibling_sessions
 
     now = datetime.now(timezone.utc)
     assert seeded_db.async_session_factory is not None
     async with seeded_db.async_session_factory() as sess:
         completed = _make_session(status="completed", started_at=now)
-        # 200 seconds before — outside the ±120s window
+        # 700 seconds before — outside the ±600s window
         outside = _make_session(
-            status="abandoned", started_at=now - timedelta(seconds=200)
+            status="abandoned", started_at=now - timedelta(seconds=700)
         )
         sess.add_all([completed, outside])
         await sess.flush()

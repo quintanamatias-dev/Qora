@@ -763,6 +763,13 @@ async def _process_custom_llm_request(
             # Reuse the existing session — all subsequent turns of this call join it
             conversation_id = existing.conversation_id
             conv_state = existing
+            # Problem 1 fix (session-id-and-crm-match): backfill real EL conv_id.
+            # When the initiation webhook cached this session with a real EL conversation_id
+            # (not a demo-* fallback), promote it to persisted_conversation_id so the
+            # CallSession DB record is stored with it — not NULL.
+            # demo-* IDs are internal fallbacks and must NOT be written to the DB column.
+            if not existing.conversation_id.startswith("demo-"):
+                persisted_conversation_id = existing.conversation_id
         else:
             # First turn of a new call — generate ONE stable ID for this session
             conversation_id = f"demo-{uuid.uuid4().hex[:12]}"
@@ -1070,8 +1077,41 @@ async def _process_custom_llm_request(
     # Create or reuse session ID
     # Keyed by (client_id, conversation_id) to prevent cross-tenant state leakage
     session_id: str | None = None
-    if conversation_id and conv_state:
+    if conversation_id and conv_state and conv_state.session_id:
+        # Existing session with a real DB-backed session_id — reuse it.
         session_id = conv_state.session_id
+    elif conversation_id and conv_state and not conv_state.session_id:
+        # conv_state exists (from initiation/find_by_client_lead) but has NO DB session yet.
+        # Backfill: create the DB record now so persisted_conversation_id is written.
+        # This is the path where initiation cached the EL conv_id in session_store but
+        # create_session was never called at initiation time.
+        coerced_lead_id = lead_id or None
+        _agent_id_for_session = agent.id if agent is not None else None
+        try:
+            async with db_session() as db:
+                new_session = await create_session(
+                    db,
+                    client_id=client_id,
+                    lead_id=coerced_lead_id,
+                    elevenlabs_conversation_id=persisted_conversation_id,
+                    agent_id=_agent_id_for_session,
+                )
+        except ValueError as exc:
+            structlog.get_logger().error(
+                "webhook_backfill_create_session_failed",
+                client_id=client_id,
+                error=str(exc),
+            )
+            new_session = None
+
+        if new_session is not None:
+            new_session_id = (
+                str(new_session.id) if hasattr(new_session, "id") else str(new_session)
+            )
+            # Update the existing conv_state with the new real session_id
+            conv_state.session_id = new_session_id
+            session_id = new_session_id
+        # else: session creation failed — session_id remains None (graceful degradation)
     elif conversation_id and not conv_state:
         # Browser flow: initiation was not called, create DB session + store entry now
         # Use persisted_conversation_id (NULL when absent/empty) for DB — CAP-3 REQ-3.3

@@ -444,13 +444,13 @@ async def test_end_does_not_double_increment_call_count(
 
 
 async def test_end_reconciliation_expired_window_rejects(seeded_db, app_client):
-    """Initiated session older than 120s MUST NOT be reconciled → 404."""
+    """Initiated session older than RECONCILIATION_WINDOW_SECONDS MUST NOT be reconciled → 404."""
     await _create_initiated_session(
         seeded_db,
         client_id="quintana-seguros",
         lead_id="test-lead-end-001",
         elevenlabs_conversation_id=None,
-        started_at=datetime.now(timezone.utc) - timedelta(seconds=200),
+        started_at=datetime.now(timezone.utc) - timedelta(seconds=700),
     )
 
     response = await app_client.post(
@@ -464,7 +464,7 @@ async def test_end_reconciliation_expired_window_rejects(seeded_db, app_client):
 
     assert (
         response.status_code == 404
-    ), f"Expected 404 for expired session (200s old, window=120s), got {response.status_code}"
+    ), f"Expected 404 for expired session (700s old, window=600s), got {response.status_code}"
 
 
 # ---------------------------------------------------------------------------
@@ -622,6 +622,83 @@ async def test_end_reconciliation_picks_most_recent(seeded_db, app_client):
         assert (
             cs_older.status == "initiated"
         ), f"Older session must remain 'initiated', got {cs_older.status!r}"
+
+
+# ---------------------------------------------------------------------------
+# T11b — RED: Reconciliation picks session with highest turn_count
+# ---------------------------------------------------------------------------
+
+
+async def test_end_reconciliation_picks_highest_turn_count(seeded_db, app_client):
+    """When two initiated sessions exist, the one with highest total turns is reconciled.
+
+    Spec: 'Multiple sessions for same lead — highest turn_count matched'.
+    The session with more total (user + agent) turns is chosen regardless of age.
+    """
+    import uuid
+    from app.calls.models import CallSession
+
+    now = datetime.now(timezone.utc)
+
+    # Session A: older but has 5 turns
+    assert seeded_db.async_session_factory is not None
+    async with seeded_db.async_session_factory() as sess:
+        session_a = CallSession(
+            id=str(uuid.uuid4()),
+            client_id="quintana-seguros",
+            lead_id="test-lead-end-001",
+            status="initiated",
+            started_at=now - timedelta(seconds=120),
+            total_user_turns=3,
+            total_agent_turns=2,
+        )
+        # Session B: newer but has only 1 turn
+        session_b = CallSession(
+            id=str(uuid.uuid4()),
+            client_id="quintana-seguros",
+            lead_id="test-lead-end-001",
+            status="initiated",
+            started_at=now - timedelta(seconds=30),
+            total_user_turns=1,
+            total_agent_turns=0,
+        )
+        sess.add_all([session_a, session_b])
+        await sess.commit()
+        session_a_id = session_a.id
+        session_b_id = session_b.id
+
+    response = await app_client.post(
+        "/api/v1/calls/conv_highest_turns/end",
+        json={
+            "reason": "user_hangup",
+            "client_id": "quintana-seguros",
+            "lead_id": "test-lead-end-001",
+        },
+    )
+
+    assert (
+        response.status_code == 200
+    ), f"Expected 200, got {response.status_code}: {response.json()}"
+    data = response.json()
+
+    # Session A (5 turns) must be reconciled — not session B (1 turn)
+    assert (
+        data["id"] == session_a_id
+    ), (
+        f"Expected session_a (5 turns) to be reconciled, got {data['id']!r}. "
+        f"session_a={session_a_id!r}, session_b={session_b_id!r}"
+    )
+
+    # Session B must remain initiated
+    assert seeded_db.async_session_factory is not None
+    async with seeded_db.async_session_factory() as sess:
+        result = await sess.execute(
+            select(CallSession).where(CallSession.id == session_b_id)
+        )
+        cs_b = result.scalar_one()
+        assert cs_b.status == "initiated", (
+            f"Session B must remain 'initiated', got {cs_b.status!r}"
+        )
 
 
 # ---------------------------------------------------------------------------

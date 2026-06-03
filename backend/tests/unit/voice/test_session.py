@@ -323,3 +323,155 @@ def test_find_by_client_lead_cross_tenant_isolation():
     assert found is None, (
         "find_by_client_lead must NOT return sessions belonging to a different tenant"
     )
+
+
+# ---------------------------------------------------------------------------
+# session-id-and-crm-match: Rapid reconnect / race scenario
+# Spec: sdd/session-id-and-crm-match
+# When a lead reconnects quickly, creating a second session while the first
+# is still active, the store must handle both as separate DB records and
+# find_by_client_lead must return the newer (more active) one.
+# TTL cleanup must not remove the new session while the old one is stale.
+# ---------------------------------------------------------------------------
+
+
+def test_reconnect_creates_separate_db_records_in_store():
+    """Rapid reconnect: second session is a distinct entry in the store.
+
+    GIVEN session #1 exists for (client_id, lead_id) with conversation_id='conv-first'
+    WHEN the lead reconnects and session #2 is created with conversation_id='conv-second'
+    THEN both entries exist in the store (separate DB records, different conv IDs)
+    AND session_count() is 2
+    """
+    from app.voice.session import SessionStore
+
+    store = SessionStore()
+
+    # First session — established during the first call
+    store.create(
+        conversation_id="conv-first",
+        client_id="acme",
+        lead_id="lead-reconnect",
+        session_id="sess-db-001",
+    )
+
+    # Rapid reconnect — second call arrives before the first expires
+    store.create(
+        conversation_id="conv-second",
+        client_id="acme",
+        lead_id="lead-reconnect",
+        session_id="sess-db-002",
+    )
+
+    # Both sessions coexist as separate store entries
+    assert store.session_count() == 2, (
+        "Both sessions must coexist in the store as separate entries"
+    )
+
+    # Each session is directly retrievable by its own conv_id
+    first = store.get(("acme", "conv-first"))
+    second = store.get(("acme", "conv-second"))
+
+    assert first is not None and first.session_id == "sess-db-001", (
+        "First session must remain intact with its original session_id"
+    )
+    assert second is not None and second.session_id == "sess-db-002", (
+        "Second session must be independently stored with its own session_id"
+    )
+
+
+def test_reconnect_find_by_client_lead_returns_newer_session():
+    """Rapid reconnect: find_by_client_lead returns the newer session (higher turn_count / started_at).
+
+    GIVEN session #1 and session #2 both exist for the same (client_id, lead_id)
+    AND session #2 has a higher turn_count than session #1
+    WHEN find_by_client_lead is called
+    THEN session #2 is returned (most recently active wins)
+    """
+    import time as time_mod
+    from app.voice.session import SessionStore
+
+    store = SessionStore()
+
+    state_first = store.create(
+        conversation_id="conv-stale",
+        client_id="acme",
+        lead_id="lead-reconnect",
+        session_id="sess-stale",
+    )
+    # Simulate the first session having some turns but started earlier
+    state_first.turn_count = 1
+    state_first.started_at = time_mod.monotonic() - 30
+
+    state_second = store.create(
+        conversation_id="conv-fresh",
+        client_id="acme",
+        lead_id="lead-reconnect",
+        session_id="sess-fresh",
+    )
+    # The new session has had more turns (the lead is actively talking)
+    state_second.turn_count = 3
+    state_second.started_at = time_mod.monotonic() - 2
+
+    found = store.find_by_client_lead("acme", "lead-reconnect")
+
+    assert found is state_second, (
+        "find_by_client_lead must return session #2 (higher turn_count) "
+        f"when a reconnect produces a newer session. Got: {found!r}"
+    )
+    assert found.session_id == "sess-fresh"
+
+
+def test_reconnect_ttl_expires_stale_session_keeps_new_one():
+    """Rapid reconnect: TTL cleanup removes the stale first session but preserves the new one.
+
+    GIVEN session #1 started > TTL seconds ago (stale)
+    AND session #2 started recently (within TTL)
+    WHEN cleanup_expired(ttl_seconds=10) is called
+    THEN session #1 is removed
+    AND session #2 is still in the store
+    AND find_by_client_lead still returns session #2
+    """
+    import time as time_mod
+    from app.voice.session import SessionStore
+
+    store = SessionStore()
+
+    state_stale = store.create(
+        conversation_id="conv-stale-ttl",
+        client_id="acme",
+        lead_id="lead-reconnect-ttl",
+        session_id="sess-stale-ttl",
+    )
+    # Force the stale session to appear old
+    state_stale.started_at = time_mod.monotonic() - 60  # 60 seconds ago (> 10s TTL)
+
+    store.create(
+        conversation_id="conv-new-ttl",
+        client_id="acme",
+        lead_id="lead-reconnect-ttl",
+        session_id="sess-new-ttl",
+    )
+    # The new session was just created — started_at is current (default from field_factory)
+
+    removed = store.cleanup_expired(ttl_seconds=10)
+
+    assert removed == 1, (
+        f"Exactly 1 stale session must be removed by TTL cleanup, got {removed}"
+    )
+    assert store.session_count() == 1, (
+        "Only the new session must remain after TTL cleanup"
+    )
+    assert store.get(("acme", "conv-stale-ttl")) is None, (
+        "Stale session must be gone after cleanup"
+    )
+    assert store.get(("acme", "conv-new-ttl")) is not None, (
+        "New session must survive TTL cleanup"
+    )
+
+    # find_by_client_lead must still work correctly after cleanup
+    found = store.find_by_client_lead("acme", "lead-reconnect-ttl")
+    assert found is not None
+    assert found.session_id == "sess-new-ttl", (
+        "After TTL cleanup, find_by_client_lead must return the surviving new session"
+    )

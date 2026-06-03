@@ -455,6 +455,9 @@ async def _reconcile_session(
         seconds=RECONCILIATION_WINDOW_SECONDS
     )
 
+    # Order by highest total turn count first (spec: "most active session").
+    # Falls back to most recent started_at when turn counts are equal.
+    total_turns = CallSession.total_user_turns + CallSession.total_agent_turns
     result = await session.execute(
         select(CallSession)
         .where(CallSession.client_id == client_id)
@@ -462,7 +465,7 @@ async def _reconcile_session(
         .where(CallSession.status == "initiated")
         .where(CallSession.elevenlabs_conversation_id.is_(None))
         .where(CallSession.started_at >= cutoff)
-        .order_by(CallSession.started_at.desc())
+        .order_by(total_turns.desc(), CallSession.started_at.desc())
         .limit(1)
     )
     cs = result.scalar_one_or_none()
