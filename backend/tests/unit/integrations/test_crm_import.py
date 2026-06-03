@@ -12,7 +12,6 @@ All external I/O (Airtable calls, DB) is mocked. No live network.
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -219,7 +218,7 @@ class TestAirtableAdapterFetchRecords:
         with patch.object(adapter, "_get_table", return_value=mock_table) as mock_get:
             with patch("app.integrations.adapters.airtable.adapter.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
                 mock_to_thread.return_value = []
-                result = await adapter.fetch_records(table_id="tblTEST456")
+                await adapter.fetch_records(table_id="tblTEST456")
 
         mock_get.assert_called_once_with("tblTEST456")
         mock_to_thread.assert_called_once()

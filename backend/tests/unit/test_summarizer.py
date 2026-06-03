@@ -4064,7 +4064,7 @@ async def test_schedule_crm_sync_not_called_on_savepoint_failure(
     If the savepoint fails (exception before or during commit), the hook must
     not be scheduled at all.
     """
-    from unittest.mock import AsyncMock, patch, MagicMock
+    from unittest.mock import AsyncMock, patch
     import app.summarizer as summarizer_module
 
     schedule_calls: list = []

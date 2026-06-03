@@ -294,8 +294,6 @@ async def sync_agent_to_elevenlabs(
         200: SyncStatusResponse with sync_status, synced_at, error_detail.
         404: If client or agent does not exist.
     """
-    from datetime import datetime, timezone
-
     await _require_client(session, client_id)
 
     agent = await tenant_service.get_agent(session, agent_id)

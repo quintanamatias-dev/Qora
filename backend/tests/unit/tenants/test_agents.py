@@ -607,7 +607,6 @@ async def test_agent_soft_timeout_columns_nullable_type():
     Triangulation: verify Python type annotations allow None for all 5 columns.
     """
     from app.tenants.models import Agent
-    import inspect
 
     # Each column must be nullable (nullable=True in SQLAlchemy)
     col_map = {c.name: c for c in Agent.__table__.columns}

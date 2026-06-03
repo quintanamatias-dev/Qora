@@ -99,12 +99,11 @@ async def _seed_client(
     """Insert a minimal client row."""
     await conn.execute(
         sqlalchemy.text(
-            "INSERT INTO clients (id, name, name, agent_name, voice_id) "
-            "VALUES (:id, :name, :name, :agent_name, :voice_id)"
+            "INSERT INTO clients (id, name, agent_name, voice_id) "
+            "VALUES (:id, :name, :agent_name, :voice_id)"
         ),
         {
             "id": client_id,
-            "name": name,
             "name": name,
             "agent_name": agent_name,
             "voice_id": "pNInz6obpgDQGcFmaJgB",

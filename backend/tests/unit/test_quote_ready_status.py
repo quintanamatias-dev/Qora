@@ -10,9 +10,6 @@ Covers:
 """
 from __future__ import annotations
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # Task 1: zona column on Lead model
 # ---------------------------------------------------------------------------
@@ -21,9 +18,6 @@ import pytest
 def test_lead_model_has_zona_column():
     """Lead model must expose a `zona` attribute (String, nullable)."""
     from app.leads.models import Lead
-
-    # Verify the mapped_column exists by inspecting SQLAlchemy column info
-    from sqlalchemy import inspect as sa_inspect
     from sqlalchemy.orm import class_mapper
 
     mapper = class_mapper(Lead)
@@ -34,7 +28,6 @@ def test_lead_model_has_zona_column():
 def test_lead_zona_is_nullable():
     """Lead.zona column must be nullable=True."""
     from app.leads.models import Lead
-    from sqlalchemy import inspect as sa_inspect
     from sqlalchemy.orm import class_mapper
 
     mapper = class_mapper(Lead)

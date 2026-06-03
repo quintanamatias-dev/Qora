@@ -22,7 +22,7 @@ import logging
 import re
 from datetime import datetime
 
-from pydantic import BaseModel, field_validator, Field, model_validator
+from pydantic import BaseModel, field_validator, Field
 
 # Slug must be all lowercase alphanumeric + hyphens, no leading/trailing hyphen.
 # Allows single alphanumeric chars (e.g. "a", "1").

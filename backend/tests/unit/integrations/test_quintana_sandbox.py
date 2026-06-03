@@ -13,8 +13,6 @@ All credential references use env var NAMES only; no real secrets are present.
 
 from __future__ import annotations
 
-import inspect
-import os
 from pathlib import Path
 
 import pytest

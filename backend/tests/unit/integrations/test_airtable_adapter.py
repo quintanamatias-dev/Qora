@@ -17,9 +17,8 @@ Test layer: Unit (AsyncMock on pyairtable methods — no network).
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -29,7 +28,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def _make_adapter(api_key: str = "pat_test_key") -> "AirtableAdapter":
+def _make_adapter(api_key: str = "pat_test_key"):
     """Construct an AirtableAdapter without live credentials."""
     from app.integrations.adapters.airtable import AirtableAdapter
 

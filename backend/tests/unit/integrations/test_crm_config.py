@@ -13,7 +13,6 @@ Test layer: Unit (tmp_path YAML fixtures, monkeypatch env — no IO to real FS).
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
