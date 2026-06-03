@@ -18,6 +18,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import select
+
 from app.integrations.adapters.airtable import AirtableUpsertError, make_adapter
 from app.integrations.crm_config import (
     CRMConfigLoader,
@@ -121,6 +123,86 @@ async def sync_lead(
             )
             return
 
+        # 4b. Safety check: if the configured match_field is absent from the payload,
+        # the upsert has no safe match key and could create duplicate Airtable records.
+        # This happens when a lead has no external_lead_id (manually created lead) but
+        # crm.yaml uses match_field="lead_id".
+        #
+        # Fallback strategy (spec: session-id-and-crm-match):
+        # 1. Try the field that maps from 'external_crm_id' — if present and non-null.
+        # 2. Try the field that maps from 'email' — if present and non-null.
+        # 3. Skip with warning if no fallback resolves.
+        if config.match_field not in payload or payload.get(config.match_field) is None:
+            # Build a source→target lookup for fallback candidates
+            _source_to_target: dict[str, str] = {
+                fm.source: fm.target for fm in config.field_mappings
+            }
+            _fallback_match_field: str | None = None
+
+            for _fallback_source in ("external_crm_id", "email"):
+                _candidate_target = _source_to_target.get(_fallback_source)
+                if (
+                    _candidate_target is not None
+                    and payload.get(_candidate_target) is not None
+                ):
+                    _fallback_match_field = _candidate_target
+                    break
+
+            if _fallback_match_field is None:
+                logger.warning(
+                    "CRM sync skipped: match_field absent from mapped payload and no "
+                    "fallback available (tried external_crm_id, email) — "
+                    "lead has no usable match key for upsert",
+                    extra={
+                        "client_id": client_id,
+                        "lead_id": lead_id,
+                        "match_field": config.match_field,
+                        "external_lead_id": lead.external_lead_id,
+                        "external_crm_id": lead.external_crm_id,
+                    },
+                )
+                return
+
+            logger.info(
+                "CRM sync: primary match_field absent; using fallback match_field",
+                extra={
+                    "client_id": client_id,
+                    "lead_id": lead_id,
+                    "primary_match_field": config.match_field,
+                    "fallback_match_field": _fallback_match_field,
+                },
+            )
+            # Override match_field for the upsert below
+            config = config.model_copy(update={"match_field": _fallback_match_field})
+
+        # 4c. Duplicate external_lead_id detection (spec: session-id-and-crm-match).
+        # Before pushing, check if another lead in the same client has the same
+        # external_lead_id. If so, log a warning but do NOT skip the upsert — the
+        # downstream CRM may handle deduplication; crashing or skipping could cause
+        # data loss for one of the duplicates.
+        if lead.external_lead_id is not None:
+            from app.leads.models import Lead as LeadModel
+
+            dup_result = await db_session.execute(
+                select(LeadModel.id)
+                .where(LeadModel.client_id == client_id)
+                .where(LeadModel.external_lead_id == lead.external_lead_id)
+                .where(LeadModel.id != lead.id)
+                .limit(1)
+            )
+            duplicate_id = dup_result.scalar_one_or_none()
+            if duplicate_id is not None:
+                logger.warning(
+                    "CRM sync: duplicate external_lead_id detected — another lead "
+                    "shares the same external_lead_id; proceeding with upsert anyway",
+                    extra={
+                        "client_id": client_id,
+                        "lead_id": lead_id,
+                        "duplicate_lead_id": str(duplicate_id),
+                        "external_lead_id": lead.external_lead_id,
+                    },
+                )
+
         # 5. Construct adapter (CS-9: factory lives in adapters/ only)
         adapter = make_adapter(config.provider, api_key=api_key, base_id=config.base_id)
 
@@ -188,4 +270,6 @@ def _lead_to_dict(lead: Any) -> dict[str, Any]:
         "do_not_call": lead.do_not_call,
         "next_action": lead.next_action,
         "call_count": lead.call_count,
+        "external_lead_id": lead.external_lead_id,
+        "external_crm_id": lead.external_crm_id,
     }

@@ -24,7 +24,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import pytest_asyncio
 import yaml
 
 
@@ -580,3 +579,412 @@ async def test_sync_lead_does_not_call_airtable_read_methods(
     # If the spec object were to expose get/find/list methods and they were called,
     # the mock.spec would allow the attribute but the call would be tracked.
     # We assert the adapter interface stays write-only at this integration level.
+
+
+# ---------------------------------------------------------------------------
+# Spec: Lead without external_lead_id falls back gracefully (no crash, logs warning)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sync_lead_null_external_lead_id_skips_gracefully(
+    db_session, tmp_path: Path, monkeypatch
+):
+    """Spec: Lead with external_lead_id=NULL must not crash CRM sync.
+
+    GIVEN a Lead with external_lead_id = NULL (manually created lead)
+    WHEN sync_lead() runs with match_field=lead_id
+    THEN no upsert is attempted (no crash)
+    AND the function returns without raising
+    AND a warning is logged indicating the lead was skipped.
+    """
+    from app.integrations.crm_sync_service import sync_lead
+    from app.leads.service import create_lead
+
+    # Seed tenant + lead without external_lead_id
+    await _seed_test_client(db_session, "test-client-fallback", "Fallback Client")
+    lead = await create_lead(
+        db_session,
+        client_id="test-client-fallback",
+        name="Lead Sin ID",
+        phone="+541155509",
+    )
+    # external_lead_id is None by default (not set at creation)
+    assert lead.external_lead_id is None
+
+    await db_session.flush()
+
+    # crm.yaml with match_field=lead_id (the config that requires external_lead_id)
+    monkeypatch.setenv("TEST_CRM_API_KEY_FB", "pat_test_fallback")
+    client_dir = tmp_path / "clients" / "test-client-fallback"
+    crm_data = {
+        "provider": "airtable",
+        "base_id": "appFALLBACKBASE",
+        "table_id": "tblFALLBACKTBL",
+        "api_key_env": "TEST_CRM_API_KEY_FB",
+        "match_field": "lead_id",
+        "field_mappings": [
+            {"source": "external_lead_id", "target": "lead_id", "type": "integer"},
+            {"source": "name", "target": "Nombre", "type": "string"},
+            {"source": "phone", "target": "Teléfono", "type": "phone"},
+        ],
+    }
+    _write_crm_yaml(client_dir, crm_data)
+
+    from app.integrations.crm_config import CRMConfigLoader
+
+    real_config = CRMConfigLoader.load(
+        "test-client-fallback", clients_root=tmp_path / "clients"
+    )
+
+    mock_adapter = MagicMock()
+    mock_adapter.upsert_record = AsyncMock(return_value="recSHOULDNOTBECALLED")
+
+    with patch(
+        "app.integrations.crm_sync_service.CRMConfigLoader.load",
+        return_value=real_config,
+    ), patch(
+        "app.integrations.crm_sync_service.make_adapter",
+        return_value=mock_adapter,
+    ):
+        # Must not raise
+        await sync_lead(
+            client_id="test-client-fallback",
+            lead_id=lead.id,
+            db_session=db_session,
+        )
+
+    # upsert must NOT be called — null lead_id means no safe match key
+    mock_adapter.upsert_record.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Spec: Lead without external_lead_id falls back to external_crm_id
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sync_lead_null_external_lead_id_falls_back_to_external_crm_id(
+    db_session, tmp_path: Path, monkeypatch
+):
+    """Spec: Lead with external_lead_id=NULL but external_crm_id set → fallback uses external_crm_id.
+
+    GIVEN a Lead with external_lead_id = NULL and external_crm_id = 'recABC123'
+    AND crm.yaml has match_field='lead_id' (primary)
+    AND crm.yaml field_mappings include external_crm_id → 'CRM ID'
+    WHEN sync_lead() runs
+    THEN upsert IS called using 'CRM ID' as match_field (not lead_id)
+    AND the payload contains the external_crm_id value.
+    """
+    from app.integrations.crm_sync_service import sync_lead
+    from app.leads.service import create_lead
+
+    await _seed_test_client(db_session, "test-client-crm-fallback", "CRM Fallback Client")
+    lead = await create_lead(
+        db_session,
+        client_id="test-client-crm-fallback",
+        name="Lead Con CRM ID",
+        phone="+541155510",
+    )
+    # Set external_crm_id but NOT external_lead_id
+    lead.external_crm_id = "recABC123"
+    lead.external_lead_id = None
+    await db_session.flush()
+
+    monkeypatch.setenv("TEST_CRM_API_KEY_CRM", "pat_test_crm_fallback")
+    client_dir = tmp_path / "clients" / "test-client-crm-fallback"
+    crm_data = {
+        "provider": "airtable",
+        "base_id": "appCRMFALLBACKBASE",
+        "table_id": "tblCRMFALLBACKTBL",
+        "api_key_env": "TEST_CRM_API_KEY_CRM",
+        "match_field": "lead_id",
+        "field_mappings": [
+            {"source": "external_lead_id", "target": "lead_id", "type": "integer"},
+            {"source": "external_crm_id", "target": "CRM ID", "type": "string"},
+            {"source": "name", "target": "Nombre", "type": "string"},
+            {"source": "phone", "target": "Teléfono", "type": "phone"},
+        ],
+    }
+    _write_crm_yaml(client_dir, crm_data)
+
+    from app.integrations.crm_config import CRMConfigLoader
+
+    real_config = CRMConfigLoader.load(
+        "test-client-crm-fallback", clients_root=tmp_path / "clients"
+    )
+
+    mock_adapter = MagicMock()
+    mock_adapter.upsert_record = AsyncMock(return_value="recCRMFALLBACK001")
+
+    with patch(
+        "app.integrations.crm_sync_service.CRMConfigLoader.load",
+        return_value=real_config,
+    ), patch(
+        "app.integrations.crm_sync_service.make_adapter",
+        return_value=mock_adapter,
+    ):
+        await sync_lead(
+            client_id="test-client-crm-fallback",
+            lead_id=lead.id,
+            db_session=db_session,
+        )
+
+    # upsert MUST be called — fallback to external_crm_id
+    mock_adapter.upsert_record.assert_called_once()
+    call_kwargs = mock_adapter.upsert_record.call_args
+    assert call_kwargs.kwargs["match_field"] == "CRM ID", (
+        f"match_field must fall back to 'CRM ID' (external_crm_id target); "
+        f"got {call_kwargs.kwargs['match_field']!r}"
+    )
+    assert call_kwargs.kwargs["payload"]["CRM ID"] == "recABC123", (
+        f"payload must contain CRM ID = 'recABC123'; got {call_kwargs.kwargs['payload']}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_sync_lead_null_external_lead_id_and_crm_id_falls_back_to_email(
+    db_session, tmp_path: Path, monkeypatch
+):
+    """Spec: Lead with both external_lead_id=NULL and external_crm_id=NULL → fallback to email.
+
+    GIVEN a Lead with external_lead_id = NULL, external_crm_id = NULL, email = 'test@example.com'
+    AND crm.yaml has match_field='lead_id' (primary)
+    AND crm.yaml field_mappings include email → 'Email'
+    WHEN sync_lead() runs
+    THEN upsert IS called using 'Email' as match_field
+    AND the payload contains the email value.
+    """
+    from app.integrations.crm_sync_service import sync_lead
+    from app.leads.service import create_lead
+
+    await _seed_test_client(db_session, "test-client-email-fallback", "Email Fallback Client")
+    lead = await create_lead(
+        db_session,
+        client_id="test-client-email-fallback",
+        name="Lead Con Email",
+        phone="+541155511",
+    )
+    lead.external_crm_id = None
+    lead.external_lead_id = None
+    lead.email = "test@example.com"
+    await db_session.flush()
+
+    monkeypatch.setenv("TEST_CRM_API_KEY_EMAIL", "pat_test_email_fallback")
+    client_dir = tmp_path / "clients" / "test-client-email-fallback"
+    crm_data = {
+        "provider": "airtable",
+        "base_id": "appEMAILFALLBACKBASE",
+        "table_id": "tblEMAILFALLBACKTBL",
+        "api_key_env": "TEST_CRM_API_KEY_EMAIL",
+        "match_field": "lead_id",
+        "field_mappings": [
+            {"source": "external_lead_id", "target": "lead_id", "type": "integer"},
+            {"source": "external_crm_id", "target": "CRM ID", "type": "string"},
+            {"source": "email", "target": "Email", "type": "string"},
+            {"source": "name", "target": "Nombre", "type": "string"},
+            {"source": "phone", "target": "Teléfono", "type": "phone"},
+        ],
+    }
+    _write_crm_yaml(client_dir, crm_data)
+
+    from app.integrations.crm_config import CRMConfigLoader
+
+    real_config = CRMConfigLoader.load(
+        "test-client-email-fallback", clients_root=tmp_path / "clients"
+    )
+
+    mock_adapter = MagicMock()
+    mock_adapter.upsert_record = AsyncMock(return_value="recEMAILFALLBACK001")
+
+    with patch(
+        "app.integrations.crm_sync_service.CRMConfigLoader.load",
+        return_value=real_config,
+    ), patch(
+        "app.integrations.crm_sync_service.make_adapter",
+        return_value=mock_adapter,
+    ):
+        await sync_lead(
+            client_id="test-client-email-fallback",
+            lead_id=lead.id,
+            db_session=db_session,
+        )
+
+    # upsert MUST be called — fallback to email
+    mock_adapter.upsert_record.assert_called_once()
+    call_kwargs = mock_adapter.upsert_record.call_args
+    assert call_kwargs.kwargs["match_field"] == "Email", (
+        f"match_field must fall back to 'Email' (email target); "
+        f"got {call_kwargs.kwargs['match_field']!r}"
+    )
+    assert call_kwargs.kwargs["payload"]["Email"] == "test@example.com", (
+        f"payload must contain Email = 'test@example.com'; got {call_kwargs.kwargs['payload']}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_sync_lead_all_fallbacks_null_skips_with_warning(
+    db_session, tmp_path: Path, monkeypatch
+):
+    """Spec: Lead with external_lead_id=NULL, external_crm_id=NULL, email=NULL → skip with warning.
+
+    GIVEN a Lead with no external_lead_id, no external_crm_id, no email
+    WHEN sync_lead() runs
+    THEN upsert is NOT called
+    AND the function returns without raising
+    AND a warning is logged.
+    """
+    from app.integrations.crm_sync_service import sync_lead
+    from app.leads.service import create_lead
+
+    await _seed_test_client(db_session, "test-client-no-ids", "No IDs Client")
+    lead = await create_lead(
+        db_session,
+        client_id="test-client-no-ids",
+        name="Lead Sin IDs",
+        phone="+541155512",
+    )
+    lead.external_crm_id = None
+    lead.external_lead_id = None
+    # email defaults to None
+    assert lead.email is None
+    await db_session.flush()
+
+    monkeypatch.setenv("TEST_CRM_API_KEY_NOIDS", "pat_test_noids")
+    client_dir = tmp_path / "clients" / "test-client-no-ids"
+    crm_data = {
+        "provider": "airtable",
+        "base_id": "appNOIDSBASE",
+        "table_id": "tblNOIDSTBL",
+        "api_key_env": "TEST_CRM_API_KEY_NOIDS",
+        "match_field": "lead_id",
+        "field_mappings": [
+            {"source": "external_lead_id", "target": "lead_id", "type": "integer"},
+            {"source": "external_crm_id", "target": "CRM ID", "type": "string"},
+            {"source": "email", "target": "Email", "type": "string"},
+            {"source": "name", "target": "Nombre", "type": "string"},
+            {"source": "phone", "target": "Teléfono", "type": "phone"},
+        ],
+    }
+    _write_crm_yaml(client_dir, crm_data)
+
+    from app.integrations.crm_config import CRMConfigLoader
+
+    real_config = CRMConfigLoader.load(
+        "test-client-no-ids", clients_root=tmp_path / "clients"
+    )
+
+    mock_adapter = MagicMock()
+    mock_adapter.upsert_record = AsyncMock(return_value="recSHOULDNOTBECALLED")
+
+    with patch(
+        "app.integrations.crm_sync_service.CRMConfigLoader.load",
+        return_value=real_config,
+    ), patch(
+        "app.integrations.crm_sync_service.make_adapter",
+        return_value=mock_adapter,
+    ):
+        # Must not raise
+        await sync_lead(
+            client_id="test-client-no-ids",
+            lead_id=lead.id,
+            db_session=db_session,
+        )
+
+    # No fallback available — upsert must NOT be called
+    mock_adapter.upsert_record.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Spec: Duplicate external_lead_id detection during CRM sync
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sync_lead_duplicate_external_lead_id_logs_warning_but_still_pushes(
+    db_session, tmp_path: Path, monkeypatch
+):
+    """Spec: CRM sync detects duplicate external_lead_id, logs warning, still upserts.
+
+    GIVEN two leads share the same external_lead_id (e.g. due to bad import data)
+    WHEN sync_lead() is called for one of them
+    THEN a warning is logged about the duplicate
+    AND the upsert IS still called (do NOT crash or skip)
+    AND the pushed lead's data is sent to the CRM.
+    """
+    from app.integrations.crm_sync_service import sync_lead
+    from app.leads.service import create_lead
+
+    await _seed_test_client(db_session, "test-client-dup", "Dup Detection Client")
+
+    # Create two leads with the same external_lead_id
+    lead_a = await create_lead(
+        db_session,
+        client_id="test-client-dup",
+        name="Lead A Duplicate",
+        phone="+541155520",
+    )
+    lead_a.external_lead_id = 99999
+
+    lead_b = await create_lead(
+        db_session,
+        client_id="test-client-dup",
+        name="Lead B Duplicate",
+        phone="+541155521",
+    )
+    lead_b.external_lead_id = 99999  # same as lead_a — duplicate!
+    await db_session.flush()
+
+    monkeypatch.setenv("TEST_CRM_API_KEY_DUP", "pat_test_dup")
+    client_dir = tmp_path / "clients" / "test-client-dup"
+    crm_data = {
+        "provider": "airtable",
+        "base_id": "appDUPBASE",
+        "table_id": "tblDUPTBL",
+        "api_key_env": "TEST_CRM_API_KEY_DUP",
+        "match_field": "lead_id",
+        "field_mappings": [
+            {"source": "external_lead_id", "target": "lead_id", "type": "integer"},
+            {"source": "name", "target": "Nombre", "type": "string"},
+            {"source": "phone", "target": "Teléfono", "type": "phone"},
+        ],
+    }
+    _write_crm_yaml(client_dir, crm_data)
+
+    from app.integrations.crm_config import CRMConfigLoader
+
+    real_config = CRMConfigLoader.load(
+        "test-client-dup", clients_root=tmp_path / "clients"
+    )
+
+    mock_adapter = MagicMock()
+    mock_adapter.upsert_record = AsyncMock(return_value="recDUP001")
+
+    with patch(
+        "app.integrations.crm_sync_service.CRMConfigLoader.load",
+        return_value=real_config,
+    ), patch(
+        "app.integrations.crm_sync_service.make_adapter",
+        return_value=mock_adapter,
+    ), patch("app.integrations.crm_sync_service.logger") as mock_logger:
+        await sync_lead(
+            client_id="test-client-dup",
+            lead_id=lead_a.id,
+            db_session=db_session,
+        )
+        # Warning MUST be logged about the duplicate
+        warning_calls = [
+            call for call in mock_logger.warning.call_args_list
+            if "duplicate" in str(call).lower()
+        ]
+        assert warning_calls, (
+            "sync_lead must log a warning about duplicate external_lead_id; "
+            f"warning calls: {mock_logger.warning.call_args_list}"
+        )
+
+    # Upsert MUST still be called — duplicate is a warning, not a block
+    mock_adapter.upsert_record.assert_called_once()
+    call_kwargs = mock_adapter.upsert_record.call_args
+    assert call_kwargs.kwargs["payload"]["lead_id"] == 99999, (
+        f"payload must contain lead_id = 99999; got {call_kwargs.kwargs['payload']}"
+    )

@@ -36,13 +36,13 @@ from fastapi import APIRouter, FastAPI, Request, Response
 # (e.g. QUINTANA_AIRTABLE_API_KEY) are available via os.environ.get().
 # pydantic-settings only reads its own declared fields; this covers the rest.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
-from fastapi.responses import RedirectResponse
-from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint  # noqa: E402
+from starlette.staticfiles import StaticFiles  # noqa: E402
 
-from app.core.config import Settings
-from app.core.logging import setup_logging, get_logger
+from app.core.config import Settings  # noqa: E402
+from app.core.logging import setup_logging, get_logger  # noqa: E402
 
 logger = get_logger(__name__)
 
@@ -189,6 +189,14 @@ async def _ensure_startup_schema_compat(db_module) -> None:
                 )
             )
             logger.info("startup_schema_compat_added", column="leads.external_crm_id")
+
+        if lead_columns and "external_lead_id" not in lead_columns:
+            await conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE leads ADD COLUMN external_lead_id INTEGER DEFAULT NULL"
+                )
+            )
+            logger.info("startup_schema_compat_added", column="leads.external_lead_id")
 
         if "tts_model" not in agent_columns:
             await conn.execute(

@@ -308,3 +308,156 @@ async def test_startup_compat_soft_timeout_idempotent(old_agents_db):
     await _ensure_startup_schema_compat(fake_module)
     # Second run must not raise
     await _ensure_startup_schema_compat(fake_module)
+
+
+# ---------------------------------------------------------------------------
+# session-id-and-crm-match — external_lead_id column migration
+# Spec: sdd/session-id-and-crm-match/spec
+# Requirement: leads table gets external_lead_id INTEGER DEFAULT NULL column
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def old_leads_db(tmp_path: Path):
+    """Create DB with leads table missing external_lead_id (simulates pre-migration DB).
+
+    Includes clients table (required FK) and agents table (required by schema compat).
+    Returns an async engine pointing at the isolated DB.
+    """
+    import sqlalchemy
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/old_leads.db"
+    engine = create_async_engine(db_url, echo=False)
+
+    async with engine.begin() as conn:
+        # clients table — required by _ensure_startup_schema_compat PRAGMA checks
+        await conn.execute(sqlalchemy.text("""
+            CREATE TABLE clients (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                analysis_language TEXT NOT NULL DEFAULT 'Spanish',
+                created_at TEXT NOT NULL
+            )
+        """))
+        # agents table — required by _ensure_startup_schema_compat PRAGMA checks
+        await conn.execute(sqlalchemy.text("""
+            CREATE TABLE agents (
+                id TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                slug TEXT NOT NULL,
+                name TEXT NOT NULL,
+                voice_id TEXT NOT NULL,
+                system_prompt TEXT,
+                knowledge_base TEXT,
+                model TEXT NOT NULL DEFAULT 'gpt-4o',
+                temperature REAL NOT NULL DEFAULT 0.7,
+                max_tokens INTEGER NOT NULL DEFAULT 300,
+                tools_enabled TEXT NOT NULL DEFAULT '[]',
+                elevenlabs_agent_id TEXT,
+                tts_speed REAL NOT NULL DEFAULT 0.95,
+                tts_stability REAL NOT NULL DEFAULT 0.4,
+                tts_similarity_boost REAL NOT NULL DEFAULT 0.75,
+                soft_timeout_seconds REAL DEFAULT NULL,
+                soft_timeout_message TEXT DEFAULT NULL,
+                soft_timeout_use_llm INTEGER DEFAULT NULL,
+                tts_model TEXT NOT NULL DEFAULT 'eleven_flash_v2_5',
+                elevenlabs_sync_status TEXT DEFAULT NULL,
+                elevenlabs_last_synced_at DATETIME DEFAULT NULL,
+                tool_config TEXT DEFAULT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+        """))
+        # leads table WITHOUT external_lead_id (old DB, pre-migration)
+        await conn.execute(sqlalchemy.text("""
+            CREATE TABLE leads (
+                id TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                phone TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'new',
+                call_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                zona TEXT DEFAULT NULL,
+                external_crm_id TEXT DEFAULT NULL
+            )
+        """))
+        # Insert a test row so we can verify the column gets backfilled
+        await conn.execute(sqlalchemy.text("""
+            INSERT INTO leads (id, client_id, name, phone, status, call_count, created_at, updated_at)
+            VALUES ('lead-compat-1', 'client-a', 'Ana Perez', '+54911111', 'new', 0,
+                    '2024-01-01T00:00:00', '2024-01-01T00:00:00')
+        """))
+
+    yield engine
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_startup_compat_adds_external_lead_id_to_existing_leads_table(old_leads_db):
+    """_ensure_startup_schema_compat() adds external_lead_id when absent from leads.
+
+    GIVEN a leads table WITHOUT external_lead_id (old DB)
+    WHEN _ensure_startup_schema_compat() is called
+    THEN external_lead_id MUST be present in the leads table schema
+    """
+    import sqlalchemy
+    from app.main import _ensure_startup_schema_compat
+
+    fake_module = _FakeDbModule(old_leads_db)
+    await _ensure_startup_schema_compat(fake_module)
+
+    async with old_leads_db.begin() as conn:
+        result = await conn.execute(sqlalchemy.text("PRAGMA table_info(leads)"))
+        columns = {row[1] for row in result.fetchall()}
+
+    assert "external_lead_id" in columns, (
+        f"external_lead_id not added to leads table. Got columns: {columns}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_startup_compat_external_lead_id_defaults_to_null(old_leads_db):
+    """Existing lead rows get NULL for external_lead_id after migration.
+
+    GIVEN an existing lead row in the old leads table (no external_lead_id column)
+    WHEN _ensure_startup_schema_compat() runs
+    THEN the existing row MUST have external_lead_id = NULL (not missing, not an error)
+    """
+    import sqlalchemy
+    from app.main import _ensure_startup_schema_compat
+
+    fake_module = _FakeDbModule(old_leads_db)
+    await _ensure_startup_schema_compat(fake_module)
+
+    async with old_leads_db.begin() as conn:
+        result = await conn.execute(sqlalchemy.text(
+            "SELECT external_lead_id FROM leads WHERE id='lead-compat-1'"
+        ))
+        row = result.fetchone()
+
+    assert row is not None, "Test lead row must exist after migration"
+    assert row[0] is None, (
+        f"external_lead_id must default to NULL for existing rows, got {row[0]!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_startup_compat_external_lead_id_idempotent(old_leads_db):
+    """Running _ensure_startup_schema_compat() twice is idempotent for external_lead_id.
+
+    GIVEN the migration has been applied
+    WHEN _ensure_startup_schema_compat() is called a second time
+    THEN no exception is raised (column already exists — IF NOT EXISTS logic)
+    """
+    from app.main import _ensure_startup_schema_compat
+
+    fake_module = _FakeDbModule(old_leads_db)
+
+    await _ensure_startup_schema_compat(fake_module)
+    # Second run must not raise
+    await _ensure_startup_schema_compat(fake_module)

@@ -218,8 +218,22 @@ async def import_leads_from_crm(
 
         try:
             if existing is not None:
-                # 4d. Update existing lead
-                _update_lead_from_qora_data(existing, qora_data, airtable_id)
+                # 4d. Update existing lead — check for duplicate external_lead_id
+                eid_holder_id: str | None = None
+                incoming_eid = qora_data.get("external_lead_id")
+                if incoming_eid is not None:
+                    eid_holder = await _find_lead_by_external_lead_id(
+                        db_session, client_id, incoming_eid
+                    )
+                    if eid_holder is not None and eid_holder.id != existing.id:
+                        eid_holder_id = eid_holder.id
+
+                _update_lead_from_qora_data(
+                    existing,
+                    qora_data,
+                    airtable_id,
+                    existing_external_lead_id_holder=eid_holder_id,
+                )
                 result.updated += 1
                 logger.info(
                     "crm_import_lead_updated",
@@ -279,10 +293,29 @@ async def _find_lead_by_phone(
     return result.scalar_one_or_none()
 
 
+async def _find_lead_by_external_lead_id(
+    db_session: AsyncSession,
+    client_id: str,
+    external_lead_id: int,
+) -> Lead | None:
+    """Look up a lead by (client_id, external_lead_id) — returns first match or None.
+
+    Used to detect duplicate external_lead_id during import.
+    """
+    result = await db_session.execute(
+        select(Lead).where(
+            Lead.client_id == client_id,
+            Lead.external_lead_id == external_lead_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 def _update_lead_from_qora_data(
     lead: Lead,
     qora_data: dict[str, Any],
     airtable_id: str,
+    existing_external_lead_id_holder: str | None = None,
 ) -> None:
     """Update mutable fields on an existing Lead from imported Qora data dict.
 
@@ -294,6 +327,14 @@ def _update_lead_from_qora_data(
     current Qora status per _STATUS_ORDER (forward-only). If the current status
     is equal or already ahead, the status is left unchanged to avoid regressing
     leads that have progressed in Qora.
+
+    Args:
+        lead: The Lead ORM object to update.
+        qora_data: Reverse-mapped fields from the Airtable record.
+        airtable_id: Airtable record ID (stored as external_crm_id).
+        existing_external_lead_id_holder: If another lead already holds the
+            same external_lead_id value from qora_data, pass that lead's ID
+            here so a warning is logged. The update still proceeds.
     """
     if "name" in qora_data:
         lead.name = qora_data["name"]
@@ -313,6 +354,24 @@ def _update_lead_from_qora_data(
         lead.car_year = qora_data["car_year"]
     if "status" in qora_data:
         _apply_status_if_ahead(lead, qora_data["status"])
+    if "external_lead_id" in qora_data:
+        incoming_eid = qora_data["external_lead_id"]
+        if (
+            incoming_eid is not None
+            and existing_external_lead_id_holder is not None
+            and existing_external_lead_id_holder != lead.id
+        ):
+            logger.warning(
+                "crm_import_duplicate_external_lead_id: two leads share the same "
+                "external_lead_id; proceeding with update but data may be ambiguous",
+                extra={
+                    "external_lead_id": incoming_eid,
+                    "target_lead_id": lead.id,
+                    "conflicting_lead_id": existing_external_lead_id_holder,
+                    "airtable_id": airtable_id,
+                },
+            )
+        lead.external_lead_id = incoming_eid
     # Always store the Airtable record ID
     lead.external_crm_id = airtable_id
 
@@ -373,4 +432,5 @@ def _create_lead_from_qora_data(
         car_year=qora_data.get("car_year"),
         status=status,
         external_crm_id=airtable_id,
+        external_lead_id=qora_data.get("external_lead_id"),
     )

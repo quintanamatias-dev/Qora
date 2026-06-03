@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 import yaml
 
 
@@ -216,6 +215,8 @@ class _FakeLead:
         self.do_not_call = kwargs.get("do_not_call", False)
         self.next_action = kwargs.get("next_action")
         self.call_count = kwargs.get("call_count", 0)
+        self.external_lead_id = kwargs.get("external_lead_id")
+        self.external_crm_id = kwargs.get("external_crm_id")
 
 
 def test_lead_to_dict_includes_zona():

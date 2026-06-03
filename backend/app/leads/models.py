@@ -125,6 +125,10 @@ class Lead(Base):
     # Generic external CRM record ID for bidirectional sync (e.g. Airtable recXXX).
     # Nullable: set only for leads imported from or synced to an external CRM.
     external_crm_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Numeric external lead ID from upstream source (e.g. Meta/Facebook numeric lead ID).
+    # Distinct from external_crm_id (Airtable recXXX string). Nullable: only set when
+    # the upstream CRM provides a numeric identifier.
+    external_lead_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Lead id={self.id!r} name={self.name!r} status={self.status!r}>"
