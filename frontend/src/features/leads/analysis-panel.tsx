@@ -20,8 +20,8 @@ import type { DetectedInterests, ProblemAxis, PainPoint } from '@/api/types'
 const URGENCY_STYLES: Record<string, string> = {
   high: 'text-error',
   medium: 'text-warning',
-  low: 'text-on-surface-variant',
-  unknown: 'text-on-surface-variant',
+  low: 'text-ink-3',
+  unknown: 'text-ink-3',
 }
 
 // Category display labels
@@ -68,7 +68,7 @@ function hasProblem(problem: ProblemAxis | null | undefined): boolean {
 
 function Chip({ label }: { label: string }) {
   return (
-    <span className="inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-surface-container text-on-surface-variant border border-outline/20">
+    <span className="inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-mist text-ink-3 border border-line">
       {label}
     </span>
   )
@@ -79,7 +79,7 @@ function CategoryBadge({ category }: { category: string }) {
   return (
     <span
       data-testid="pain-point-category"
-      className="inline-flex items-center px-1.5 py-0.5 text-xs rounded bg-surface-container-high text-on-surface-variant"
+      className="inline-flex items-center px-1.5 py-0.5 text-xs rounded bg-mist text-ink-3"
     >
       {label}
     </span>
@@ -94,25 +94,25 @@ function PainPointItem({ point }: { point: PainPoint }) {
         {point.is_primary && (
           <span
             data-testid="pain-point-primary"
-            className="inline-flex items-center px-1.5 py-0.5 text-xs rounded bg-primary/10 text-primary font-medium"
+            className="inline-flex items-center px-1.5 py-0.5 text-xs rounded bg-teal-faint text-teal font-medium"
           >
             Principal
           </span>
         )}
         <span
           data-testid="pain-point-urgency"
-          className={['text-xs font-medium uppercase', URGENCY_STYLES[point.urgency] ?? 'text-on-surface-variant'].join(' ')}
+          className={['text-xs font-medium uppercase', URGENCY_STYLES[point.urgency] ?? 'text-ink-3'].join(' ')}
         >
           {point.urgency}
         </span>
       </div>
-      <p data-testid="pain-point-description" className="text-sm text-on-surface">
+      <p data-testid="pain-point-description" className="text-sm text-ink">
         {point.description}
       </p>
       {point.evidence && (
         <p
           data-testid="pain-point-evidence"
-          className="text-xs text-on-surface-variant italic border-l-2 border-outline/20 pl-2"
+          className="text-xs text-ink-3 italic border-l-2 border-line-2 pl-2"
         >
           "{point.evidence}"
         </p>
@@ -146,7 +146,7 @@ export function AnalysisPanel({ interests, problem }: AnalysisPanelProps) {
       {/* Detected Interests chips */}
       {showInterests && interests && (
         <div data-testid="analysis-interests" className="space-y-1.5">
-          <p className="text-xs text-on-surface-variant uppercase tracking-wider">
+          <p className="text-xs text-ink-3 uppercase tracking-wider">
             Detected Interests
           </p>
           <div className="flex flex-wrap gap-1.5">
@@ -166,10 +166,10 @@ export function AnalysisPanel({ interests, problem }: AnalysisPanelProps) {
       {/* Identified Problem card */}
       {showProblem && problem && (
         <div data-testid="analysis-problem" className="space-y-1.5">
-          <p className="text-xs text-on-surface-variant uppercase tracking-wider">
+          <p className="text-xs text-ink-3 uppercase tracking-wider">
             Identified Problem
           </p>
-          <div className="bg-surface-container-low rounded-md p-3">
+          <div className="bg-paper border border-line rounded-md p-3">
             <ul className="space-y-3">
               {sortedPains.map((point, idx) => (
                 <PainPointItem key={`${point.category}-${idx}`} point={point} />

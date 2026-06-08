@@ -15,14 +15,14 @@ interface AgentStatsSectionProps {
 export function AgentStatsSection({ data }: AgentStatsSectionProps) {
   return (
     <div className="space-y-3">
-      <h2 className="text-lg font-semibold text-on-surface">Agent Stats</h2>
+      <h2 className="text-lg font-semibold text-ink">Agent Stats</h2>
       {data.agents.length === 0 ? (
-        <p className="text-sm text-on-surface-variant">No agent data for this period.</p>
+        <p className="text-sm text-ink-3">No agent data for this period.</p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-border text-on-surface-variant">
+              <tr className="border-b border-line text-ink-3">
                 <th className="text-left py-2 px-3 font-medium">Agent</th>
                 <th className="text-right py-2 px-3 font-medium">Calls</th>
                 <th className="text-right py-2 px-3 font-medium">Conversion</th>
@@ -32,15 +32,15 @@ export function AgentStatsSection({ data }: AgentStatsSectionProps) {
               {data.agents.map((agent) => (
                 <tr
                   key={agent.agent_id}
-                  className="border-b border-border/50 hover:bg-surface-container-low"
+                  className="border-b border-line/50 hover:bg-pearl/50"
                 >
-                  <td className="py-2 px-3 text-on-surface font-medium">
+                  <td className="py-2 px-3 text-ink font-medium">
                     {agent.agent_name ?? agent.agent_id}
                   </td>
-                  <td className="py-2 px-3 text-right text-on-surface">
+                  <td className="py-2 px-3 text-right text-ink">
                     {agent.total_calls}
                   </td>
-                  <td className="py-2 px-3 text-right text-on-surface">
+                  <td className="py-2 px-3 text-right text-ink">
                     {agent.conversion_rate !== null
                       ? `${(agent.conversion_rate * 100).toFixed(1)}%`
                       : 'N/A'}

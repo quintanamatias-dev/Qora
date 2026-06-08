@@ -11,24 +11,24 @@ import { Outlet } from 'react-router'
 
 export function AdminLayout() {
   return (
-    <div className="min-h-screen bg-background">
-      {/* Admin header — compact, QORA + badge style matching old static admin */}
+    <div className="min-h-screen bg-pearl">
+      {/* Admin header — compact, Qora brand + Admin badge */}
       <header
         data-testid="admin-header"
-        className="sticky top-0 z-40 bg-surface-container-low border-b border-outline-variant/30 flex items-center px-6 py-3.5 gap-3"
+        className="sticky top-0 z-40 bg-paper border-b border-line flex items-center px-6 py-3.5 gap-3"
       >
-        <span className="font-display text-sm font-bold text-on-surface tracking-tight">
-          QORA
+        <span className="font-display text-sm font-medium text-teal tracking-tight">
+          Qora
         </span>
-        <span className="text-[0.65rem] font-medium uppercase tracking-[0.07em] text-on-surface-variant bg-surface-container border border-outline-variant/40 px-2 py-0.5 rounded-sm">
+        <span className="text-[0.65rem] font-mono font-medium uppercase tracking-[0.07em] text-ink-3 bg-mist border border-line px-2 py-0.5 rounded-full">
           Admin
         </span>
         <span className="sr-only">Internal management panel</span>
       </header>
 
-      {/* Page content — max-width constrained, matching old admin feel */}
-      <main className="min-h-full bg-background">
-        <div className="max-w-4xl mx-auto px-6 py-6">
+      {/* Page content — full-width with comfortable horizontal padding */}
+      <main className="min-h-full bg-pearl">
+        <div className="px-8 py-6">
           <Outlet />
         </div>
       </main>

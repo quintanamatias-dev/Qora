@@ -55,8 +55,8 @@ export function LeadDetailPage() {
   if (leadLoading) {
     return (
       <div data-testid="lead-loading" className="space-y-4">
-        <div className="h-8 bg-surface-container-low rounded-sm animate-pulse w-1/3" />
-        <div className="h-32 bg-surface-container-low rounded-sm animate-pulse" />
+        <div className="h-8 bg-mist rounded-md animate-pulse w-1/3" />
+        <div className="h-32 bg-mist rounded-md animate-pulse" />
       </div>
     )
   }
@@ -69,11 +69,11 @@ export function LeadDetailPage() {
         role="alert"
         className="p-8 text-center space-y-4"
       >
-        <p className="text-on-surface font-medium">Lead not found</p>
+        <p className="text-ink font-medium">Lead not found</p>
         <button
           type="button"
           onClick={() => navigate(`/app/${clientId}/leads`)}
-          className="text-primary text-sm hover:underline"
+          className="text-teal text-sm hover:underline"
         >
           ← Back to leads
         </button>
@@ -87,19 +87,19 @@ export function LeadDetailPage() {
       <button
         type="button"
         onClick={() => navigate(`/app/${clientId}/leads`)}
-        className="text-sm text-on-surface-variant hover:text-on-surface transition-colors"
+        className="text-sm text-ink-3 hover:text-ink transition-colors"
       >
         ← Leads
       </button>
 
       {/* Lead header card */}
-      <div className="bg-surface-container-low rounded-lg p-6 space-y-4">
+      <div className="bg-paper border border-line rounded-lg p-6 space-y-4">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="font-display text-2xl font-bold text-on-surface">
+            <h1 className="font-display text-2xl font-medium text-ink">
               {lead.name}
             </h1>
-            <p className="text-on-surface-variant mt-0.5">{lead.phone}</p>
+            <p className="text-ink-3 mt-0.5">{lead.phone}</p>
           </div>
           <Badge status={lead.status as LeadStatus}>
             {lead.status.replace('_', ' ')}
@@ -108,19 +108,19 @@ export function LeadDetailPage() {
 
         <div className="grid grid-cols-2 gap-4 text-sm">
           <div>
-            <p className="text-on-surface-variant text-xs uppercase tracking-wider mb-1">
+            <p className="text-ink-3 text-xs uppercase tracking-wider mb-1">
               Interest Level
             </p>
-            <p className="text-on-surface font-medium">
+            <p className="text-ink font-medium">
               {formatInterestLevel(lead.interest_level)}
             </p>
           </div>
 
           <div>
-            <p className="text-on-surface-variant text-xs uppercase tracking-wider mb-1">
+            <p className="text-ink-3 text-xs uppercase tracking-wider mb-1">
               Next Action
             </p>
-            <p className="text-on-surface font-medium">
+            <p className="text-ink font-medium">
               {lead.next_action ?? '—'}
             </p>
           </div>
@@ -133,10 +133,10 @@ export function LeadDetailPage() {
         </div>
 
         <div>
-          <p className="text-on-surface-variant text-xs uppercase tracking-wider mb-1">
+          <p className="text-ink-3 text-xs uppercase tracking-wider mb-1">
             Last Call Summary
           </p>
-          <p className="text-on-surface text-sm">
+          <p className="text-ink text-sm">
             {lead.summary_last_call ?? 'No summary yet'}
           </p>
         </div>
@@ -152,14 +152,14 @@ export function LeadDetailPage() {
 
       {/* Call History section */}
       <section>
-        <h2 className="text-lg font-semibold text-on-surface mb-4">
+        <h2 className="text-lg font-semibold text-ink mb-4">
           Call History
         </h2>
 
         {/* Sessions loading spinner — only in history section */}
         {sessionsLoading ? (
           <div className="py-4 text-center">
-            <span className="text-on-surface-variant text-sm animate-pulse">
+            <span className="text-ink-3 text-sm animate-pulse">
               Loading calls…
             </span>
           </div>
@@ -169,7 +169,7 @@ export function LeadDetailPage() {
             role="alert"
             className="py-4 text-center"
           >
-            <p className="text-on-surface-variant text-sm">
+            <p className="text-ink-3 text-sm">
               Unable to load call history. Please try again.
             </p>
           </div>

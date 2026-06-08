@@ -35,7 +35,7 @@ export function CallDetailPage() {
       <button
         type="button"
         onClick={() => navigate(-1)}
-        className="text-sm text-on-surface-variant hover:text-on-surface transition-colors"
+        className="text-sm text-ink-3 hover:text-ink transition-colors"
       >
         ← Back
       </button>
@@ -43,10 +43,10 @@ export function CallDetailPage() {
       {/* Page header */}
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="font-display text-xl font-bold text-on-surface">
+          <h1 className="font-display text-xl font-medium text-ink">
             Call Detail
           </h1>
-          <p className="text-xs text-on-surface-variant mt-0.5 font-mono">
+          <p className="text-xs text-ink-3 mt-0.5 font-mono">
             {resolvedSessionId}
           </p>
         </div>
@@ -69,15 +69,15 @@ export function CallDetailPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Transcript column */}
         <section>
-          <h2 className="text-base font-semibold text-on-surface mb-3">Transcript</h2>
-          <div className="bg-surface-container-lowest rounded-md border border-outline/10 max-h-[700px] overflow-y-auto">
+          <h2 className="text-base font-semibold text-ink mb-3">Transcript</h2>
+          <div className="bg-mist rounded-md border border-line max-h-[700px] overflow-y-auto">
             <TranscriptViewer sessionId={resolvedSessionId} />
           </div>
         </section>
 
         {/* Analysis column */}
         <section>
-          <h2 className="text-base font-semibold text-on-surface mb-3">Analysis</h2>
+          <h2 className="text-base font-semibold text-ink mb-3">Analysis</h2>
           <CallAnalysisPanel analysis={analysis} isLoading={isLoading} />
         </section>
       </div>

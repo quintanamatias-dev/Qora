@@ -161,9 +161,9 @@ export function ClientsPanel() {
       {/* Create Client form */}
       <Card>
         <div className="flex items-center justify-between mb-4">
-          <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-on-surface-variant">
-            New Client
-          </p>
+            <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-ink-3">
+              New Client
+            </p>
         </div>
         <form onSubmit={handleCreateSubmit} className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -203,12 +203,12 @@ export function ClientsPanel() {
 
       {/* Edit Client inline panel */}
       {editingClient && (
-        <Card stripe>
+        <Card className="border-teal-line bg-teal-faint/40">
           <div className="mb-4">
-            <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-on-surface-variant">
+            <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-ink-3">
               Edit Client
             </p>
-            <code className="text-primary font-mono text-xs mt-0.5 block">{editingClient.client_id}</code>
+            <code className="text-teal font-mono text-xs mt-0.5 block">{editingClient.client_id}</code>
           </div>
           <form onSubmit={handleEditSubmit} className="space-y-4">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -247,13 +247,13 @@ export function ClientsPanel() {
 
       {/* Clients table */}
       <Card>
-        <div className="flex items-center justify-between mb-4">
-          <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-on-surface-variant">
+          <div className="flex items-center justify-between mb-4">
+          <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-ink-3">
             All Clients
           </p>
           <div className="flex items-center gap-3">
-            <span className="text-[0.75rem] text-on-surface-variant">
-              Voice config: <strong className="text-on-surface">Agents &amp; Voice Config</strong> tab
+            <span className="text-[0.75rem] text-ink-3">
+              Voice config: <strong className="text-ink">Agents &amp; Voice Config</strong> tab
             </span>
           </div>
         </div>
@@ -261,21 +261,21 @@ export function ClientsPanel() {
         {isLoading && (
           <div data-testid="clients-loading" className="space-y-2">
             {[...Array(3)].map((_, i) => (
-              <div key={i} className="h-10 bg-surface-container rounded-sm animate-pulse" />
+              <div key={i} className="h-10 bg-mist rounded-md animate-pulse" />
             ))}
           </div>
         )}
 
         {isError && (
           <div data-testid="clients-error" role="alert" className="py-8 text-center">
-            <p className="text-on-surface font-medium">Unable to load clients. Please try again.</p>
+            <p className="text-ink font-medium">Unable to load clients. Please try again.</p>
           </div>
         )}
 
         {!isLoading && !isError && clients && clients.length === 0 && (
           <div data-testid="clients-empty" className="py-8 text-center">
-            <p className="text-on-surface font-medium">No clients found</p>
-            <p className="text-on-surface-variant text-sm mt-1">Create the first client above.</p>
+            <p className="text-ink font-medium">No clients found</p>
+            <p className="text-ink-3 text-sm mt-1">Create the first client above.</p>
           </div>
         )}
 
@@ -295,7 +295,7 @@ export function ClientsPanel() {
               {clients.map((client) => (
                 <TableRow key={client.client_id}>
                   <TableCell>
-                    <code className="font-mono text-xs text-primary">{client.client_id}</code>
+                    <code className="font-mono text-xs text-teal">{client.client_id}</code>
                   </TableCell>
                   <TableCell>{client.name}</TableCell>
                   <TableCell>{client.agent_name}</TableCell>

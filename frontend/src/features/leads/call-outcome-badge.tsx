@@ -31,14 +31,14 @@ export const OUTCOME_LABELS: Record<OutcomeClassification, string> = {
 }
 
 export const OUTCOME_STYLES: Record<OutcomeClassification, string> = {
-  no_answer: 'bg-surface-bright/60 text-on-surface-variant',
+  no_answer: 'bg-mist text-ink-3',
   busy: 'bg-warning/20 text-warning',
-  callback_requested: 'bg-secondary/20 text-secondary',
-  completed_positive: 'bg-primary/20 text-primary',
-  completed_neutral: 'bg-surface-bright/60 text-on-surface-variant',
+  callback_requested: 'bg-mist text-ink-2',
+  completed_positive: 'bg-teal-faint text-teal',
+  completed_neutral: 'bg-mist text-ink-3',
   completed_negative: 'bg-error/10 text-error',
   do_not_contact: 'bg-error/20 text-error',
-  wrong_number: 'bg-surface-bright/60 text-on-surface-variant',
+  wrong_number: 'bg-mist text-ink-3',
   hostile: 'bg-error/20 text-error',
   confused: 'bg-warning/20 text-warning',
   technical_issue: 'bg-warning/10 text-warning',
@@ -61,7 +61,7 @@ export function CallOutcomeBadge({ outcome }: CallOutcomeBadgeProps) {
   if (!outcome) return null
 
   const label = OUTCOME_LABELS[outcome.classification] ?? outcome.classification
-  const style = OUTCOME_STYLES[outcome.classification] ?? 'bg-surface-bright/60 text-on-surface-variant'
+  const style = OUTCOME_STYLES[outcome.classification] ?? 'bg-mist text-ink-3'
 
   return (
     <span

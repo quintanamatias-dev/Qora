@@ -2,7 +2,9 @@
  * StatCard — Dashboard-specific KPI card
  *
  * Design: features/dashboard (not promoted to design system — YAGNI)
- * Sovereign Interface: no borders, background-shift for depth, Manrope display value
+ * Qora Design System: bg-paper + rounded-lg + border border-line + shadow-md.
+ * Display value: Fredoka (font-display), large headline numbers.
+ * Accent: text-teal for primary, text-coral for error.
  *
  * Accent → data-accent attribute for CSS targeting + semantic styling
  */
@@ -23,28 +25,31 @@ export function StatCard({ label, value, accent, loading = false, className, 'da
 
   return (
     <div
-      className={['bg-surface-container-low p-4', className].filter(Boolean).join(' ')}
+      className={[
+        'bg-paper rounded-lg border border-line shadow-md p-6',
+        className,
+      ].filter(Boolean).join(' ')}
       data-testid={testId}
       {...accentAttr}
     >
-      <p className="font-body text-xs font-medium uppercase tracking-wider text-on-surface-variant">
+      <p className="font-mono text-xs font-medium uppercase tracking-[0.20em] text-ink-3 mb-3">
         {label}
       </p>
 
       {loading ? (
         <div
           data-testid="stat-skeleton"
-          className="mt-2 animate-pulse bg-surface-container rounded h-8 w-24"
+          className="animate-pulse bg-mist rounded h-12 w-28"
         />
       ) : (
         <p
           className={[
-            'mt-2 font-display text-3xl font-bold',
-            accent === 'primary' ? 'text-primary' :
-            accent === 'error' ? 'text-error' :
-            accent === 'secondary' ? 'text-secondary' :
+            'font-display text-[2.5rem] leading-none font-medium tracking-[-0.025em]',
+            accent === 'primary' ? 'text-teal' :
+            accent === 'error' ? 'text-coral' :
+            accent === 'secondary' ? 'text-ink-2' :
             accent === 'warning' ? 'text-warning' :
-            'text-on-surface',
+            'text-ink',
           ].join(' ')}
         >
           {value}

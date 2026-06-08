@@ -1,10 +1,10 @@
 /**
  * MetricsGrid — Composes 6 StatCards + StatusBreakdown from CallMetricsResponse
  *
- * Spec: 4-column primary grid (Total/Completed/Abandoned/Avg Duration)
+ * Spec: 2-column primary grid (Total/Completed / Abandoned/Avg Duration)
  *       2-column secondary grid (Total Duration / Billable Minutes)
  *       StatusBreakdown bar below
- * Design: 16px gap, no borders, responsive columns
+ * Design: generous gap (gap-6), large headline numbers per redesign spec
  */
 
 import type { CallMetricsResponse } from '@/api/types'
@@ -19,9 +19,9 @@ interface MetricsGridProps {
 
 export function MetricsGrid({ data, loading = false }: MetricsGridProps) {
   return (
-    <div className="space-y-4">
-      {/* Primary 4-column grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="space-y-6">
+      {/* Primary 2-column grid — main KPIs */}
+      <div className="grid grid-cols-2 gap-6">
         <StatCard
           label="Total Calls"
           value={String(data.total_calls)}
@@ -47,7 +47,7 @@ export function MetricsGrid({ data, loading = false }: MetricsGridProps) {
       </div>
 
       {/* Secondary 2-column grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 gap-6">
         <StatCard
           label="Total Duration"
           value={formatDuration(data.total_duration_seconds)}

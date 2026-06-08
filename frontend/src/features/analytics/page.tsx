@@ -56,12 +56,12 @@ export function AnalyticsDashboardPage() {
       {/* Page header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="font-display text-2xl font-bold text-on-surface">
+          <h1 className="font-display text-2xl font-medium text-ink">
             Analytics
           </h1>
           {clientId && (
-            <p className="text-sm text-on-surface-variant mt-1">
-              Client: <span className="text-primary font-medium">{clientId}</span>
+            <p className="text-sm text-ink-2 mt-1">
+              Client: <span className="text-teal font-medium">{clientId}</span>
             </p>
           )}
         </div>
@@ -123,7 +123,7 @@ function AnalyticsContent({
     return (
       <div data-testid="analytics-loading" className="space-y-4 animate-pulse">
         {[1, 2, 3, 4].map((i) => (
-          <div key={i} className="h-24 bg-surface-container rounded-lg" />
+          <div key={i} className="h-24 bg-mist rounded-lg" />
         ))}
       </div>
     )
@@ -135,9 +135,9 @@ function AnalyticsContent({
       <div
         data-testid="analytics-error"
         role="alert"
-        className="bg-surface-container-low p-8 text-center space-y-4"
+        className="bg-paper border border-line rounded-lg p-8 text-center space-y-4"
       >
-        <p className="text-on-surface font-medium">
+        <p className="text-ink font-medium">
           Unable to load analytics. Please try again.
         </p>
       </div>

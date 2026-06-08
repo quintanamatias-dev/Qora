@@ -20,6 +20,8 @@ import type {
   SessionTranscript,
   Client,
   Agent,
+  IntegrationConfig,
+  AvailableIntegration,
 } from '../../src/api/types'
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -229,6 +231,42 @@ const agentsFixture: Agent[] = [
 // Handlers
 // ──────────────────────────────────────────────────────────────────────────────
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Integration Fixtures
+// ──────────────────────────────────────────────────────────────────────────────
+
+const integrationsFixture: IntegrationConfig[] = [
+  {
+    provider: 'airtable',
+    base_id: 'appw59LRBdv95UPpB',
+    table_id: 'tblsWumwwfeoqkWid',
+    api_key_env: 'QUINTANA_AIRTABLE_API_KEY',
+    match_field: 'lead_id',
+    field_count: 11,
+    connected: true,
+  },
+]
+
+const availableIntegrationsConnected: AvailableIntegration[] = [
+  {
+    provider: 'airtable',
+    name: 'Airtable',
+    description: 'Sync leads with your Airtable base',
+    is_connected: true,
+    icon: '/images/integrations/airtable-icon.webp',
+  },
+]
+
+const availableIntegrationsNotConnected: AvailableIntegration[] = [
+  {
+    provider: 'airtable',
+    name: 'Airtable',
+    description: 'Sync leads with your Airtable base',
+    is_connected: false,
+    icon: '/images/integrations/airtable-icon.webp',
+  },
+]
+
 export const handlers = [
   // ── Admin: Clients ────────────────────────────────────────────────────────
 
@@ -261,12 +299,95 @@ export const handlers = [
     return HttpResponse.json({ ...client, ...body })
   }),
 
+  // GET /api/v1/clients/:clientId — returns a single client by ID
+  http.get('/api/v1/clients/:clientId', ({ params }) => {
+    const client = clientsFixture.find((c) => c.client_id === params.clientId)
+    if (!client) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
+    return HttpResponse.json(client)
+  }),
+
   // DELETE /api/v1/clients/:clientId — deactivates a client
   http.delete('/api/v1/clients/:clientId', ({ params }) => {
     const client = clientsFixture.find((c) => c.client_id === params.clientId)
     if (!client) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
     return HttpResponse.json({ ...client, is_active: false })
   }),
+
+  // ── Admin: Integrations ───────────────────────────────────────────────────
+
+  // GET /api/v1/clients/:clientId/integrations/available
+  // NOTE: must come BEFORE /:provider routes to avoid ambiguity
+  http.get('/api/v1/clients/:clientId/integrations/available', ({ params }) => {
+    const clientId = params.clientId as string
+    if (clientId === 'quintana-seguros') {
+      return HttpResponse.json(availableIntegrationsConnected)
+    }
+    return HttpResponse.json(availableIntegrationsNotConnected)
+  }),
+
+  // GET /api/v1/clients/:clientId/integrations
+  http.get('/api/v1/clients/:clientId/integrations', ({ params }) => {
+    const clientId = params.clientId as string
+    // Only quintana-seguros has integrations in fixtures
+    if (clientId === 'quintana-seguros') {
+      return HttpResponse.json(integrationsFixture)
+    }
+    return HttpResponse.json([])
+  }),
+
+  // PUT /api/v1/clients/:clientId/integrations/:provider
+  http.put(
+    '/api/v1/clients/:clientId/integrations/:provider',
+    async ({ params, request }) => {
+      const body = await request.json() as Partial<IntegrationConfig>
+      const base = integrationsFixture.find((i) => i.provider === params.provider)
+      if (!base) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
+      return HttpResponse.json({ ...base, ...body })
+    },
+  ),
+
+  // POST /api/v1/clients/:clientId/integrations/:provider/connect
+  http.post(
+    '/api/v1/clients/:clientId/integrations/:provider/connect',
+    async ({ params, request }) => {
+      const body = await request.json() as { base_id: string; table_id: string; api_key_env: string }
+      const connectedConfig: IntegrationConfig = {
+        provider: params.provider as string,
+        base_id: body.base_id ?? 'appNEWBASEID',
+        table_id: body.table_id ?? 'tblNEWTABLE',
+        api_key_env: body.api_key_env ?? 'NEW_API_KEY',
+        match_field: 'lead_id',
+        field_count: 5,
+        connected: false,
+      }
+      return HttpResponse.json(connectedConfig, { status: 201 })
+    },
+  ),
+
+  // DELETE /api/v1/clients/:clientId/integrations/:provider/disconnect
+  http.delete(
+    '/api/v1/clients/:clientId/integrations/:provider/disconnect',
+    ({ params }) => {
+      const clientId = params.clientId as string
+      if (clientId === 'quintana-seguros') {
+        return HttpResponse.json({ success: true, message: 'Integration disconnected' })
+      }
+      return HttpResponse.json({ detail: 'Integration not configured.' }, { status: 404 })
+    },
+  ),
+
+  // POST /api/v1/clients/:clientId/integrations/:provider/test
+  http.post(
+    '/api/v1/clients/:clientId/integrations/:provider/test',
+    ({ params }) => {
+      const clientId = params.clientId as string
+      const provider = params.provider as string
+      if (clientId === 'quintana-seguros' && provider === 'airtable') {
+        return HttpResponse.json({ success: true, message: 'Connected. Found 42 records.', record_count: 42 })
+      }
+      return HttpResponse.json({ success: false, message: 'Integration not configured.' })
+    },
+  ),
 
   // ── Admin: Agents ─────────────────────────────────────────────────────────
 

@@ -33,8 +33,8 @@ function urgencyStyle(urgency: string | null): string {
   switch (urgency) {
     case 'high': return 'text-error font-semibold'
     case 'medium': return 'text-warning font-medium'
-    case 'low': return 'text-on-surface-variant'
-    default: return 'text-on-surface-variant'
+    case 'low': return 'text-ink-3'
+    default: return 'text-ink-3'
   }
 }
 
@@ -44,7 +44,7 @@ function urgencyStyle(urgency: string | null): string {
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <p className="text-xs text-on-surface-variant uppercase tracking-wider mb-1.5">
+    <p className="text-xs text-ink-3 uppercase tracking-wider mb-1.5">
       {children}
     </p>
   )
@@ -52,7 +52,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 function Chip({ label }: { label: string }) {
   return (
-    <span className="inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-surface-container text-on-surface-variant border border-outline/20">
+    <span className="inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-mist text-ink-3 border border-line">
       {label}
     </span>
   )
@@ -60,7 +60,7 @@ function Chip({ label }: { label: string }) {
 
 function EmptyState({ label }: { label: string }) {
   return (
-    <p className="text-xs text-on-surface-variant italic">{label}</p>
+    <p className="text-xs text-ink-3 italic">{label}</p>
   )
 }
 
@@ -71,15 +71,15 @@ function EmptyState({ label }: { label: string }) {
 function InterestBar({ level }: { level: number | null }) {
   if (level === null || level === undefined) return null
   const pct = Math.max(0, Math.min(100, level))
-  const color = pct >= 70 ? 'bg-primary' : pct >= 40 ? 'bg-warning' : 'bg-error'
+  const color = pct >= 70 ? 'bg-teal' : pct >= 40 ? 'bg-warning' : 'bg-error'
 
   return (
     <div className="space-y-1">
-      <div className="flex items-center justify-between text-xs text-on-surface-variant">
+      <div className="flex items-center justify-between text-xs text-ink-3">
         <span>Interest Level</span>
-        <span className="font-medium text-on-surface">{pct}%</span>
+        <span className="font-medium text-ink">{pct}%</span>
       </div>
-      <div className="h-1.5 bg-surface-container rounded-full overflow-hidden">
+      <div className="h-1.5 bg-mist rounded-full overflow-hidden">
         <div
           data-testid="interest-bar"
           className={['h-full rounded-full transition-all', color].join(' ')}
@@ -105,7 +105,7 @@ function ObjectionsCard({ objections }: { objections: Record<string, unknown>[] 
         const severity = obj['severity'] as string | undefined
         return (
           <li key={idx} className="flex items-start gap-2">
-            <span className="text-sm text-on-surface">{text}</span>
+            <span className="text-sm text-ink">{text}</span>
             {severity && (
               <span className={['text-xs font-medium uppercase', urgencyStyle(severity)].join(' ')}>
                 {severity}
@@ -136,7 +136,7 @@ function PainPointsCard({ painPoints }: { painPoints: Record<string, unknown>[] 
           <li key={idx} className="space-y-0.5">
             <div className="flex items-center gap-2 flex-wrap">
               {category && (
-                <span className="inline-flex items-center px-1.5 py-0.5 text-xs rounded bg-surface-container-high text-on-surface-variant">
+                <span className="inline-flex items-center px-1.5 py-0.5 text-xs rounded bg-mist text-ink-3">
                   {category}
                 </span>
               )}
@@ -147,7 +147,7 @@ function PainPointsCard({ painPoints }: { painPoints: Record<string, unknown>[] 
               )}
             </div>
             {description && (
-              <p className="text-sm text-on-surface">{description}</p>
+              <p className="text-sm text-ink">{description}</p>
             )}
           </li>
         )
@@ -169,7 +169,7 @@ function ServiceIssuesCard({ serviceIssues }: { serviceIssues: Record<string, un
       {serviceIssues.map((issue, idx) => {
         const text = (issue['issue'] ?? issue['text'] ?? String(issue)) as string
         return (
-          <li key={idx} className="text-sm text-on-surface">
+          <li key={idx} className="text-sm text-ink">
             {text}
           </li>
         )
@@ -194,11 +194,11 @@ function ProfileFactsCard({ profileFacts }: { profileFacts: Record<string, unkno
         return (
           <div key={idx} className="flex items-start gap-2">
             {key && (
-              <dt className="text-xs text-on-surface-variant min-w-[80px] shrink-0">
+              <dt className="text-xs text-ink-3 min-w-[80px] shrink-0">
                 {key}
               </dt>
             )}
-            <dd className="text-sm text-on-surface">{value}</dd>
+            <dd className="text-sm text-ink">{value}</dd>
           </div>
         )
       })}
@@ -219,7 +219,7 @@ function CommitmentsCard({ commitments }: { commitments: Record<string, unknown>
       {commitments.map((c, idx) => {
         const text = (c['signal'] ?? c['text'] ?? String(c)) as string
         return (
-          <li key={idx} className="text-sm text-on-surface">
+          <li key={idx} className="text-sm text-ink">
             {text}
           </li>
         )
@@ -249,8 +249,8 @@ function MiscNotesCard({ miscNotes }: { miscNotes: Record<string, unknown> | Rec
   return (
     <ul className="space-y-1.5">
       {notes.map((note, idx) => (
-        <li key={idx} className="text-sm text-on-surface">
-          <span className="text-on-surface-variant text-xs uppercase mr-2">
+          <li key={idx} className="text-sm text-ink">
+            <span className="text-ink-3 text-xs uppercase mr-2">
             {typeof note.type === 'string' ? note.type.replace(/_/g, ' ') : ''}
           </span>
           {typeof note.note === 'string' ? note.note : JSON.stringify(note)}
@@ -276,10 +276,10 @@ function DataCorrectionsCard({ corrections }: { corrections: Record<string, unkn
         const newVal = (c['new_value'] ?? c['new'] ?? '') as string
         return (
           <li key={idx} className="text-sm space-y-0.5">
-            {field && <span className="text-xs text-on-surface-variant">{field}</span>}
+            {field && <span className="text-xs text-ink-3">{field}</span>}
             <div className="flex items-center gap-2">
-              {oldVal && <span className="line-through text-on-surface-variant">{oldVal}</span>}
-              {newVal && <span className="text-on-surface font-medium">→ {newVal}</span>}
+              {oldVal && <span className="line-through text-ink-3">{oldVal}</span>}
+              {newVal && <span className="text-ink font-medium">→ {newVal}</span>}
             </div>
           </li>
         )
@@ -299,11 +299,11 @@ function AuditSection({ analysis }: { analysis: CallAnalysis }) {
   const statusBadge = analysis.analysis_status === 'ok' ? 'success' : 'warning'
 
   return (
-    <div className="border border-outline/10 rounded-md">
+    <div className="border border-line rounded-md">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between px-4 py-2.5 text-sm text-on-surface-variant hover:bg-surface-container-low transition-colors rounded-md"
+        className="w-full flex items-center justify-between px-4 py-2.5 text-sm text-ink-3 hover:bg-pearl/50 transition-colors rounded-md"
       >
         <span className="font-medium">Audit / Metadata</span>
         <span>{open ? '▲' : '▼'}</span>
@@ -311,21 +311,21 @@ function AuditSection({ analysis }: { analysis: CallAnalysis }) {
       {open && (
         <div
           data-testid="audit-section"
-          className="px-4 pb-4 space-y-2 border-t border-outline/10"
+          className="px-4 pb-4 space-y-2 border-t border-line"
         >
           <div className="flex items-center gap-2 pt-2">
-            <span className="text-xs text-on-surface-variant">Status:</span>
+            <span className="text-xs text-ink-3">Status:</span>
             <Badge status={statusBadge}>{analysis.analysis_status}</Badge>
           </div>
           {hasError && (
             <div>
-              <span className="text-xs text-on-surface-variant">Error:</span>
+              <span className="text-xs text-ink-3">Error:</span>
               <p className="text-sm text-error mt-0.5">{analysis.analysis_error}</p>
             </div>
           )}
           <div>
-            <span className="text-xs text-on-surface-variant">Analyzed at: </span>
-            <span className="text-xs text-on-surface">
+            <span className="text-xs text-ink-3">Analyzed at: </span>
+            <span className="text-xs text-ink">
               {new Date(analysis.analyzed_at).toLocaleString()}
             </span>
           </div>
@@ -352,7 +352,7 @@ export function CallAnalysisPanel({ analysis, isLoading }: CallAnalysisPanelProp
   if (isLoading) {
     return (
       <div data-testid="analysis-loading" className="py-6 text-center">
-        <span className="text-on-surface-variant text-sm animate-pulse">
+        <span className="text-ink-3 text-sm animate-pulse">
           Loading analysis…
         </span>
       </div>
@@ -362,7 +362,7 @@ export function CallAnalysisPanel({ analysis, isLoading }: CallAnalysisPanelProp
   if (!analysis) {
     return (
       <div data-testid="analysis-empty" className="py-6 text-center">
-        <p className="text-on-surface-variant text-sm">No analysis available for this call</p>
+        <p className="text-ink-3 text-sm">No analysis available for this call</p>
       </div>
     )
   }
@@ -383,7 +383,7 @@ export function CallAnalysisPanel({ analysis, isLoading }: CallAnalysisPanelProp
           {analysis.summary && (
             <div>
               <SectionLabel>Summary</SectionLabel>
-              <p className="text-sm text-on-surface leading-relaxed">
+              <p className="text-sm text-ink leading-relaxed">
                 {analysis.summary}
               </p>
             </div>
@@ -405,7 +405,7 @@ export function CallAnalysisPanel({ analysis, isLoading }: CallAnalysisPanelProp
             {analysis.outcome_reason && (
               <div className="flex-1">
                 <SectionLabel>Outcome Reason</SectionLabel>
-                <p className="text-sm text-on-surface">{analysis.outcome_reason}</p>
+                <p className="text-sm text-ink">{analysis.outcome_reason}</p>
               </div>
             )}
           </div>
@@ -423,7 +423,7 @@ export function CallAnalysisPanel({ analysis, isLoading }: CallAnalysisPanelProp
             {analysis.primary_need && (
               <div>
                 <SectionLabel>Primary Need</SectionLabel>
-                <p className="text-sm text-on-surface">{analysis.primary_need}</p>
+                <p className="text-sm text-ink">{analysis.primary_need}</p>
               </div>
             )}
           </div>
@@ -442,7 +442,7 @@ export function CallAnalysisPanel({ analysis, isLoading }: CallAnalysisPanelProp
           {analysis.current_insurance && (
             <div>
               <SectionLabel>Current Insurance</SectionLabel>
-              <p className="text-sm text-on-surface">{analysis.current_insurance}</p>
+              <p className="text-sm text-ink">{analysis.current_insurance}</p>
             </div>
           )}
         </div>

@@ -30,12 +30,12 @@ export function LeadsPage() {
     <div className="space-y-6">
       {/* Page header */}
       <div>
-        <h1 className="font-display text-2xl font-bold text-on-surface">
+        <h1 className="font-display text-2xl font-medium text-ink">
           Leads
         </h1>
         {clientId && (
-          <p className="text-sm text-on-surface-variant mt-1">
-            Client: <span className="text-primary font-medium">{clientId}</span>
+          <p className="text-sm text-ink-2 mt-1">
+            Client: <span className="text-teal font-medium">{clientId}</span>
           </p>
         )}
       </div>
@@ -72,7 +72,7 @@ function LeadsArea({ loading, error, leads, onSelectLead }: LeadsAreaProps) {
         {[...Array(5)].map((_, i) => (
           <div
             key={i}
-            className="h-12 bg-surface-container-low rounded-sm animate-pulse"
+            className="h-12 bg-mist rounded-md animate-pulse"
           />
         ))}
       </div>
@@ -85,9 +85,9 @@ function LeadsArea({ loading, error, leads, onSelectLead }: LeadsAreaProps) {
       <div
         data-testid="leads-error"
         role="alert"
-        className="bg-surface-container-low p-8 text-center"
+        className="bg-paper border border-line rounded-lg p-8 text-center"
       >
-        <p className="text-on-surface font-medium">
+        <p className="text-ink font-medium">
           Unable to load leads. Please try again.
         </p>
       </div>
@@ -99,10 +99,10 @@ function LeadsArea({ loading, error, leads, onSelectLead }: LeadsAreaProps) {
     return (
       <div
         data-testid="leads-empty"
-        className="bg-surface-container-low p-8 text-center"
+        className="bg-paper border border-line rounded-lg p-8 text-center"
       >
-        <p className="text-on-surface font-medium">No leads found</p>
-        <p className="text-on-surface-variant text-sm mt-2">
+        <p className="text-ink font-medium">No leads found</p>
+        <p className="text-ink-3 text-sm mt-2">
           Import leads to start calling.
         </p>
       </div>

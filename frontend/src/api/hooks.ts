@@ -18,6 +18,14 @@ import {
   fetchAnalyticsInterests,
   fetchAnalyticsAgentStats,
 } from './analytics'
+import {
+  fetchIntegrations,
+  updateIntegration,
+  testIntegrationConnection,
+  fetchAvailableIntegrations,
+  connectIntegration,
+  disconnectIntegration,
+} from './integrations'
 import type {
   CallAnalysis,
   CallMetricsResponse,
@@ -35,6 +43,12 @@ import type {
   AnalyticsServiceIssuesResponse,
   AnalyticsInterestsResponse,
   AnalyticsAgentStatsResponse,
+  IntegrationConfig,
+  UpdateIntegrationPayload,
+  IntegrationTestResult,
+  AvailableIntegration,
+  ConnectIntegrationPayload,
+  DisconnectResult,
 } from './types'
 
 interface MetricsParams {
@@ -323,5 +337,96 @@ export function useAnalyticsAgentStats(clientId: string, params: AnalyticsParams
     queryFn: () => fetchAnalyticsAgentStats(clientId, params),
     enabled: Boolean(clientId),
     staleTime: 60_000,
+  })
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Integration Hooks
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * useIntegrations — fetches all integrations for a client
+ * queryKey: ['integrations', clientId]
+ * Disabled when clientId is empty/undefined.
+ */
+export function useIntegrations(clientId: string) {
+  return useQuery<IntegrationConfig[]>({
+    queryKey: ['integrations', clientId],
+    queryFn: () => fetchIntegrations(clientId),
+    enabled: Boolean(clientId),
+    staleTime: 30_000,
+  })
+}
+
+/**
+ * useUpdateIntegration — updates an integration config, invalidates on success
+ */
+export function useUpdateIntegration(clientId: string) {
+  const queryClient = useQueryClient()
+  return useMutation<
+    IntegrationConfig,
+    Error,
+    { provider: string; payload: UpdateIntegrationPayload }
+  >({
+    mutationFn: ({ provider, payload }) => updateIntegration(clientId, provider, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['integrations', clientId] })
+    },
+  })
+}
+
+/**
+ * useTestIntegration — tests an integration connection
+ * queryKey is not cached — this is a one-shot mutation
+ */
+export function useTestIntegration(clientId: string) {
+  return useMutation<IntegrationTestResult, Error, string>({
+    mutationFn: (provider) => testIntegrationConnection(clientId, provider),
+  })
+}
+
+/**
+ * useAvailableIntegrations — fetches all supported providers with connection status
+ * queryKey: ['integrations-available', clientId]
+ * Disabled when clientId is empty/undefined.
+ */
+export function useAvailableIntegrations(clientId: string) {
+  return useQuery<AvailableIntegration[]>({
+    queryKey: ['integrations-available', clientId],
+    queryFn: () => fetchAvailableIntegrations(clientId),
+    enabled: Boolean(clientId),
+    staleTime: 30_000,
+  })
+}
+
+/**
+ * useConnectIntegration — creates a new integration config, invalidates on success
+ */
+export function useConnectIntegration(clientId: string) {
+  const queryClient = useQueryClient()
+  return useMutation<
+    IntegrationConfig,
+    Error,
+    { provider: string; payload: ConnectIntegrationPayload }
+  >({
+    mutationFn: ({ provider, payload }) => connectIntegration(clientId, provider, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['integrations-available', clientId] })
+      queryClient.invalidateQueries({ queryKey: ['integrations', clientId] })
+    },
+  })
+}
+
+/**
+ * useDisconnectIntegration — removes an integration config, invalidates on success
+ */
+export function useDisconnectIntegration(clientId: string) {
+  const queryClient = useQueryClient()
+  return useMutation<DisconnectResult, Error, string>({
+    mutationFn: (provider) => disconnectIntegration(clientId, provider),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['integrations-available', clientId] })
+      queryClient.invalidateQueries({ queryKey: ['integrations', clientId] })
+    },
   })
 }

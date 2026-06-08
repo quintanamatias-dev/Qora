@@ -21,7 +21,7 @@ export function AgentFilter({ clientId, value, onChange }: AgentFilterProps) {
       data-testid="agent-filter"
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="rounded-md border border-outline bg-surface px-3 py-1.5 text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary"
+      className="rounded-md border border-line-2 bg-paper px-3 py-1.5 text-sm text-ink focus:outline-none focus:border-teal focus:shadow-[0_0_0_3px_var(--color-teal-faint)]"
       aria-label="Filter by agent"
     >
       <option value="all">All agents</option>
