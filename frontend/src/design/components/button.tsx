@@ -1,12 +1,12 @@
 /**
- * Button — Sovereign Interface primitive
+ * Button — Qora Design System primitive
  *
  * Variants:
- *  - primary:   135° gradient from #4edea3 → #10b981, text #003824, sharp 4px corners
- *  - secondary: ghost — outline at 20% opacity, secondary (#d0bcff) text
- *  - tertiary:  no background, on-surface text, underline on hover
+ *  - primary:   solid teal bg, white text, pill (r-full). Hover: teal-deep.
+ *  - secondary: ghost — border-line-2, text-ink-2, pill. Hover: border-line-3 text-ink.
+ *  - tertiary:  no background, text-ink-2. Hover: text-ink.
  *
- * Pill shapes PROHIBITED per DESIGN.md.
+ * Gradients PROHIBITED. Pills are canonical (r-full = 999px).
  */
 
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
@@ -22,31 +22,32 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const variantStyles: Record<ButtonVariant, string> = {
   primary: [
-    'bg-gradient-to-br from-primary to-primary-container',
-    'text-on-primary',
-    'font-semibold',
+    'bg-teal',
+    'text-white',
+    'font-medium',
     'border-none',
     'shadow-sm',
-    'hover:brightness-110',
-    'active:brightness-95',
+    'hover:bg-teal-deep',
+    'hover:-translate-y-px',
+    'active:translate-y-0',
     'disabled:opacity-40 disabled:cursor-not-allowed',
   ].join(' '),
 
   secondary: [
     'bg-transparent',
-    'border border-outline/20',
-    'text-secondary',
-    'hover:border-outline/40',
-    'hover:bg-surface-container-highest/30',
-    'active:bg-surface-container-highest/50',
+    'border border-line-2',
+    'text-ink-2',
+    'hover:border-line-3',
+    'hover:text-ink',
+    'active:opacity-70',
     'disabled:opacity-40 disabled:cursor-not-allowed',
   ].join(' '),
 
   tertiary: [
     'bg-transparent',
     'border-none',
-    'text-on-surface',
-    'hover:underline',
+    'text-ink-2',
+    'hover:text-ink',
     'active:opacity-70',
     'disabled:opacity-40 disabled:cursor-not-allowed',
   ].join(' '),
@@ -71,7 +72,7 @@ export function Button({
       data-size={size}
       className={[
         'inline-flex items-center justify-center gap-2',
-        'rounded', // DEFAULT = 0.25rem = 4px
+        'rounded-full', // r-full = 999px pill — canonical
         'transition-all duration-150',
         'focus:outline-none',
         variantStyles[variant],

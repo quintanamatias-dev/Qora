@@ -1,57 +1,86 @@
 @theme {
   /* ============================================================
-   * Surface Hierarchy — Obsidian base palette
+   * Canvas — Light base palette
    * ============================================================ */
-  --color-background: #0c1324;
-  --color-surface-container-lowest: #070d1f;
-  --color-surface-container-low: #151b2d;
-  --color-surface-container: #191f31;
-  --color-surface-container-highest: #222840;
-  --color-surface-bright: #33394c;
+  --color-pearl: #F2F4F3;
+  --color-paper: #FFFFFF;
+  --color-mist: #E8ECEB;
+  --color-smoke: #D6DAD9;
 
   /* ============================================================
-   * Primary Accents — Technical Emerald & Electric Violet
+   * Ink — Text hierarchy
    * ============================================================ */
-  --color-primary: #4edea3;
-  --color-primary-container: #10b981;
-  --color-on-primary: #003824;
-  --color-secondary: #d0bcff;
-  --color-secondary-container: #4a3f6b;
-  --color-on-secondary: #1c0d3b;
+  --color-ink: #0E1217;
+  --color-ink-2: #44474D;
+  --color-ink-3: #767880;
+  --color-ink-4: #B5B7BC;
 
   /* ============================================================
-   * Text / On-Surface Tokens
+   * Brand — Teal signature
    * ============================================================ */
-  --color-on-surface: #e2e8f0;
-  --color-on-surface-variant: #bbcabf;
-  --color-outline: #86948a;
-  --color-outline-variant: #3c4a42;
+  --color-teal: #1A8B7A;
+  --color-teal-deep: #0E4E45;
+  --color-teal-bright: #2EC9B0;
+  --color-teal-navy: #031A17;
+  --color-teal-faint: rgba(26,139,122,0.08);
+  --color-teal-line: rgba(26,139,122,0.28);
 
   /* ============================================================
-   * Status Colors
+   * Accent — Coral (eyedropper rule: max 1 per piece)
    * ============================================================ */
-  --color-success: #4edea3;
+  --color-coral: #E0764F;
+  --color-coral-soft: #FBE2D6;
+  --color-coral-faint: rgba(224,118,79,0.09);
+  --color-coral-line: rgba(224,118,79,0.30);
+
+  /* ============================================================
+   * Lines — Borders at opacity
+   * ============================================================ */
+  --color-line: rgba(14,18,23,0.08);
+  --color-line-2: rgba(14,18,23,0.14);
+  --color-line-3: rgba(14,18,23,0.24);
+
+  /* ============================================================
+   * Status — Semantic aliases
+   * ============================================================ */
+  --color-success: #1A8B7A;
   --color-warning: #f59e0b;
-  --color-error: #f87171;
-  --color-info: #d0bcff;
+  --color-error: #E0764F;
 
   /* ============================================================
-   * Typography
+   * Typography — Only Fredoka / Inter / JetBrains Mono
    * ============================================================ */
-  --font-display: 'Manrope', ui-sans-serif, system-ui, sans-serif;
-  --font-body: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
+  --font-display: 'Fredoka', ui-rounded, system-ui, sans-serif;
+  --font-body: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
   /* ============================================================
-   * Border Radius (max 4px — pills prohibited)
+   * Border Radius — Qora scale
    * ============================================================ */
-  --radius-DEFAULT: 0.25rem;
-  --radius-sm: 0.125rem;
-  --radius-md: 0.25rem;
+  --radius-sm: 6px;
+  --radius-DEFAULT: 12px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-xl: 32px;
+  --radius-full: 999px;
 
   /* ============================================================
-   * Spacing
+   * Shadows — Carbon-only, zero colored shadows
+   * ============================================================ */
+  --shadow-sm: 0 1px 0 rgba(14,18,23,0.08);
+  --shadow-md: 0 12px 28px rgba(14,18,23,0.06);
+  --shadow-lg: 0 24px 60px -45px rgba(14,18,23,0.30);
+  --shadow-xl: 0 30px 70px -40px rgba(14,18,23,0.35);
+
+  /* ============================================================
+   * Layout
    * ============================================================ */
   --spacing-sidebar: 14rem;
   --spacing-topbar: 3.5rem;
+
+  /* ============================================================
+   * Motion
+   * ============================================================ */
+  --ease-out: cubic-bezier(.2,.8,.2,1);
+  --ease-inout: cubic-bezier(.4,0,.2,1);
 }

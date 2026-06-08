@@ -1,11 +1,10 @@
 /**
- * Tabs — Sovereign Interface primitive
+ * Tabs — Qora Design System primitive
  *
  * Controlled tab navigation for admin panels and multi-view layouts.
- * Container: bg-surface-container-low rounded.
- * Active tab: bg-surface-container-highest text-on-surface font-semibold.
- * Inactive tab: transparent text-on-surface-variant, hover:text-on-surface.
- * Pills PROHIBITED — rounded or rounded-sm only.
+ * Container: bg-mist rounded-md.
+ * Active tab: bg-paper text-ink font-semibold.
+ * Inactive tab: transparent text-ink-2, hover:text-ink.
  * Uses data-active="true" on the active tab for testing.
  */
 
@@ -28,8 +27,8 @@ export function Tabs({ tabs, activeKey, onTabChange, className = '' }: TabsProps
       role="tablist"
       className={[
         'flex',
-        'bg-surface-container-low',
-        'rounded',
+        'bg-mist',
+        'rounded-md',
         'p-1',
         'gap-1',
         className,
@@ -50,12 +49,12 @@ export function Tabs({ tabs, activeKey, onTabChange, className = '' }: TabsProps
             className={[
               'px-4 py-2',
               'text-sm',
-              'rounded-sm',
+              'rounded-md',
               'transition-all duration-150',
               'focus:outline-none',
               isActive
-                ? 'bg-surface-container-highest text-on-surface font-semibold'
-                : 'bg-transparent text-on-surface-variant hover:text-on-surface',
+                ? 'bg-paper text-ink font-semibold shadow-sm'
+                : 'bg-transparent text-ink-2 hover:text-ink',
             ]
               .filter(Boolean)
               .join(' ')}

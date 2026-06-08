@@ -1,12 +1,11 @@
 /**
- * Table — Sovereign Interface primitive
+ * Table — Qora Design System primitive
  *
  * Compound component providing: Table, TableHeader, TableBody, TableRow, TableHead, TableCell.
- * No outer border — uses background-shift elevation.
- * Header: text-xs uppercase tracking-wider text-on-surface-variant.
- * Rows: ghost separator (border-b-outline-variant/10, almost invisible).
- * Last row: no bottom separator.
- * Hover: bg-surface-container/50.
+ * Header: bg-mist text-ink-3 uppercase.
+ * Rows: border-b border-line separator.
+ * Hover: bg-pearl/50.
+ * Text: text-ink.
  */
 
 import type { HTMLAttributes, TdHTMLAttributes, ThHTMLAttributes } from 'react'
@@ -26,7 +25,7 @@ export function Table({ className = '', children, ...rest }: TableProps) {
         className={[
           'w-full',
           'text-sm',
-          'text-on-surface',
+          'text-ink',
           'border-separate border-spacing-0',
           className,
         ]
@@ -69,9 +68,9 @@ export function TableRow({ className = '', children, ...rest }: TableRowProps) {
     <tr
       data-component="table-row"
       className={[
-        'border-b border-b-outline-variant/10',
+        'border-b border-b-line',
         'last:border-b-0',
-        'hover:bg-surface-container/50',
+        'hover:bg-pearl/50',
         'transition-colors duration-100',
         className,
       ]
@@ -91,9 +90,9 @@ export function TableHead({ className = '', children, ...rest }: TableHeadProps)
       className={[
         'px-4 py-3',
         'text-xs font-medium uppercase tracking-wider',
-        'text-on-surface-variant',
+        'text-ink-3',
         'text-left',
-        'bg-surface-container-low',
+        'bg-mist',
         className,
       ]
         .filter(Boolean)
@@ -112,7 +111,7 @@ export function TableCell({ className = '', children, ...rest }: TableCellProps)
       className={[
         'px-4 py-3',
         'text-sm',
-        'text-on-surface',
+        'text-ink',
         className,
       ]
         .filter(Boolean)

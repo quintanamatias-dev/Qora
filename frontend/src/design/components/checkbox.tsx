@@ -1,8 +1,8 @@
 /**
- * Checkbox — Sovereign Interface primitive
+ * Checkbox — Qora Design System primitive
  *
- * Custom styled checkbox with accent-primary for checked state.
- * Label rendered inline to the right.
+ * accent-teal for checked state.
+ * Label: text-ink.
  * Uses data-checked attribute for test targeting.
  * Extends native <input type="checkbox"> attributes.
  */
@@ -34,7 +34,7 @@ export function Checkbox({
         className={[
           'w-4 h-4',
           'rounded-sm',
-          'accent-primary',
+          'accent-teal',
           'cursor-pointer',
           'disabled:opacity-40 disabled:cursor-not-allowed',
           className,
@@ -46,7 +46,7 @@ export function Checkbox({
       {label && (
         <label
           htmlFor={checkboxId}
-          className="text-sm text-on-surface cursor-pointer select-none"
+          className="text-sm text-ink cursor-pointer select-none"
         >
           {label}
         </label>

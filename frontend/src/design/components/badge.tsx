@@ -1,8 +1,8 @@
 /**
- * Badge — Sovereign Interface primitive
+ * Badge — Qora Design System primitive
  *
- * Status indicator using design palette colors.
- * Small, compact, with label-sm uppercase style.
+ * Pill shape (r-full), JetBrains Mono, 11px uppercase, tracking +0.20em.
+ * Status variants map to Qora token colors.
  */
 
 import type { HTMLAttributes, ReactNode } from 'react'
@@ -25,19 +25,19 @@ export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
 }
 
 const statusStyles: Record<BadgeStatus, string> = {
-  // Design system states
-  success: 'bg-primary/20 text-primary',
-  active: 'bg-secondary/20 text-secondary',
-  neutral: 'bg-surface-bright/60 text-on-surface-variant',
-  error: 'bg-error/20 text-error',
-  warning: 'bg-warning/20 text-warning',
+  // Semantic states
+  success:  'bg-teal-faint text-teal border border-teal-line',
+  active:   'bg-teal-faint text-teal border border-teal-line',
+  neutral:  'bg-mist text-ink-3 border border-line',
+  error:    'bg-coral-faint text-coral border border-coral-line',
+  warning:  'bg-warning/10 text-warning border border-warning/20',
 
   // Lead status states (matching LeadStatus from API)
-  new: 'bg-primary/20 text-primary',
-  called: 'bg-secondary/20 text-secondary',
-  interested: 'bg-primary/30 text-primary',
-  not_interested: 'bg-surface-bright/60 text-on-surface-variant',
-  follow_up: 'bg-warning/20 text-warning',
+  new:          'bg-teal-faint text-teal border border-teal-line',
+  called:       'bg-mist text-ink-2 border border-line',
+  interested:   'bg-teal-faint text-teal border border-teal-line',
+  not_interested: 'bg-mist text-ink-3 border border-line',
+  follow_up:    'bg-warning/10 text-warning border border-warning/20',
 }
 
 export function Badge({
@@ -51,9 +51,9 @@ export function Badge({
       data-status={status}
       className={[
         'inline-flex items-center',
-        'px-2 py-0.5',
-        'text-xs font-medium uppercase tracking-wider',
-        'rounded-sm',
+        'px-2.5 py-1',
+        'font-mono text-[11px] font-medium uppercase tracking-[0.20em]',
+        'rounded-full',
         statusStyles[status],
         className,
       ]

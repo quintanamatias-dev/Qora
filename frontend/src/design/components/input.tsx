@@ -1,9 +1,9 @@
 /**
- * Input — Sovereign Interface primitive
+ * Input — Qora Design System primitive
  *
- * Background: surface-container-highest
- * Focus: violet (#d0bcff) bottom border with 2px glow
- * No bubbly focus rings (outline: none per DESIGN.md)
+ * bg-paper + border border-line-2 + rounded-md (12px).
+ * Focus: border-teal + shadow-[0_0_0_3px_var(--color-teal-faint)].
+ * No violet focus glow.
  */
 
 import type { InputHTMLAttributes } from 'react'
@@ -21,7 +21,7 @@ export function Input({ label, id, className = '', ...rest }: InputProps) {
       {label && (
         <label
           htmlFor={inputId}
-          className="text-xs font-medium uppercase tracking-widest text-on-surface-variant"
+          className="text-xs font-medium uppercase tracking-widest text-ink-3"
         >
           {label}
         </label>
@@ -30,19 +30,17 @@ export function Input({ label, id, className = '', ...rest }: InputProps) {
         id={inputId}
         className={[
           'w-full',
-          'bg-surface-container-highest',
-          'text-on-surface',
+          'bg-paper',
+          'text-ink',
           'text-sm',
           'px-3 py-2',
-          'rounded-sm',
-          // Bottom border focus: violet with glow
-          'border-b border-b-outline/30',
-          'focus:border-b-secondary',
-          'focus:shadow-[0_2px_0_0_#d0bcff]',
-          // No bubbly focus ring
+          'rounded-md',
+          'border border-line-2',
+          'focus:border-teal',
+          'focus:shadow-[0_0_0_3px_var(--color-teal-faint)]',
           'outline-none',
           'transition-all duration-150',
-          'placeholder:text-on-surface-variant/50',
+          'placeholder:text-ink-4',
           'disabled:opacity-40 disabled:cursor-not-allowed',
           className,
         ]

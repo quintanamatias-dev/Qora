@@ -1,10 +1,10 @@
 /**
- * Select — Sovereign Interface primitive
+ * Select — Qora Design System primitive
  *
- * Same visual style as Input: bg-surface-container-highest, violet focus glow.
+ * Same visual style as Input: bg-paper + border-line-2 + rounded-md.
+ * Focus: border-teal + teal shadow ring.
  * Label support via optional `label` prop (matches Input pattern).
  * Extends native <select> attributes.
- * No borders except bottom border focus indicator.
  */
 
 import type { SelectHTMLAttributes } from 'react'
@@ -23,7 +23,7 @@ export function Select({ label, id, className = '', children, ...rest }: SelectP
       {label && (
         <label
           htmlFor={selectId}
-          className="text-xs font-medium uppercase tracking-widest text-on-surface-variant"
+          className="text-xs font-medium uppercase tracking-widest text-ink-3"
         >
           {label}
         </label>
@@ -32,16 +32,14 @@ export function Select({ label, id, className = '', children, ...rest }: SelectP
         id={selectId}
         className={[
           'w-full',
-          'bg-surface-container-highest',
-          'text-on-surface',
+          'bg-paper',
+          'text-ink',
           'text-sm',
           'px-3 py-2',
-          'rounded-sm',
-          // Bottom border focus: violet with glow
-          'border-b border-b-outline/30',
-          'focus:border-b-secondary',
-          'focus:shadow-[0_2px_0_0_#d0bcff]',
-          // No bubbly focus ring
+          'rounded-md',
+          'border border-line-2',
+          'focus:border-teal',
+          'focus:shadow-[0_0_0_3px_var(--color-teal-faint)]',
           'outline-none',
           'transition-all duration-150',
           'disabled:opacity-40 disabled:cursor-not-allowed',
