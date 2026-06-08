@@ -229,6 +229,104 @@ async def _ensure_startup_schema_compat(db_module) -> None:
                 "startup_schema_compat_added", column="agents.elevenlabs_last_synced_at"
             )
 
+        # -----------------------------------------------------------------------
+        # dynamic-lead-fields WU-1: lead_custom_fields table + data migration
+        # -----------------------------------------------------------------------
+        # Phase A: CREATE TABLE IF NOT EXISTS (idempotent — CF-10)
+        await conn.execute(sqlalchemy.text("""
+            CREATE TABLE IF NOT EXISTS lead_custom_fields (
+                id TEXT PRIMARY KEY,
+                lead_id TEXT NOT NULL REFERENCES leads(id),
+                client_id TEXT NOT NULL REFERENCES clients(id),
+                field_key TEXT NOT NULL,
+                field_value TEXT,
+                field_type TEXT NOT NULL DEFAULT 'string',
+                created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+                updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
+            )
+        """))
+        # Indexes (IF NOT EXISTS guards make these idempotent in SQLite)
+        await conn.execute(sqlalchemy.text(
+            "CREATE INDEX IF NOT EXISTS ix_lcf_lead_client "
+            "ON lead_custom_fields(lead_id, client_id)"
+        ))
+        await conn.execute(sqlalchemy.text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_lcf_lead_key "
+            "ON lead_custom_fields(lead_id, field_key)"
+        ))
+
+        # Phase B: One-time data copy from legacy columns (CF-11, AC-2, AC-3)
+        # Guard: check for migration marker row.
+        # Marker is a row with field_key='_migration_v1' (no real lead_id FK — uses
+        # a sentinel value that won't conflict with real data).
+        marker_result = await conn.execute(sqlalchemy.text(
+            "SELECT COUNT(*) FROM lead_custom_fields WHERE field_key='_migration_v1'"
+        ))
+        marker_count = marker_result.scalar()
+
+        if marker_count == 0:
+            # Migration has not run yet — copy legacy column data.
+            # Only copies non-NULL values. Uses leads.client_id to populate client_id.
+            legacy_columns = [
+                ("car_make", "string"),
+                ("car_model", "string"),
+                ("car_year", "integer"),
+                ("current_insurance", "string"),
+                ("age", "integer"),
+                ("zona", "string"),
+            ]
+
+            # Check which legacy columns actually exist (defensive — avoids crash
+            # if this runs on a DB that already dropped them).
+            leads_cols_result = await conn.execute(
+                sqlalchemy.text("PRAGMA table_info(leads)")
+            )
+            existing_lead_cols = {row[1] for row in leads_cols_result.fetchall()}
+
+            import uuid as _uuid
+            from datetime import datetime as _dt, timezone as _tz
+
+            now_iso = _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+            for col_name, col_type in legacy_columns:
+                if col_name not in existing_lead_cols:
+                    continue  # Column was already dropped — skip
+
+                # Fetch all leads with a non-null value for this column
+                rows_result = await conn.execute(sqlalchemy.text(
+                    f"SELECT id, client_id, {col_name} FROM leads WHERE {col_name} IS NOT NULL"
+                ))
+                rows_to_copy = rows_result.fetchall()
+
+                for lead_id, client_id, raw_value in rows_to_copy:
+                    row_id = str(_uuid.uuid4())
+                    str_value = str(raw_value)
+                    # INSERT OR IGNORE protects against the unique constraint on
+                    # (lead_id, field_key) if the row somehow already exists.
+                    await conn.execute(sqlalchemy.text(
+                        "INSERT OR IGNORE INTO lead_custom_fields "
+                        "(id, lead_id, client_id, field_key, field_value, field_type, created_at, updated_at) "
+                        "VALUES (:id, :lead_id, :client_id, :field_key, :field_value, :field_type, :now, :now)"
+                    ), {
+                        "id": row_id,
+                        "lead_id": lead_id,
+                        "client_id": client_id,
+                        "field_key": col_name,
+                        "field_value": str_value,
+                        "field_type": col_type,
+                        "now": now_iso,
+                    })
+
+            # Write migration marker — sentinel uses a special ID that won't collide
+            # with real UUIDs. No lead_id FK needed here; client_id='_system'.
+            await conn.execute(sqlalchemy.text(
+                "INSERT OR IGNORE INTO lead_custom_fields "
+                "(id, lead_id, client_id, field_key, field_value, field_type, created_at, updated_at) "
+                "VALUES (:id, '_migration_sentinel', '_system', '_migration_v1', 'done', 'string', :now, :now)"
+            ), {"id": str(_uuid.uuid4()), "now": now_iso})
+
+            logger.info("startup_migration_custom_fields_done")
+
 
 # ---------------------------------------------------------------------------
 # Request logging middleware
