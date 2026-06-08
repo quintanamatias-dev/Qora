@@ -316,6 +316,81 @@ export interface ReadinessCheck {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Integration Config
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * IntegrationConfig — represents a configured CRM integration for a client.
+ * Returned by GET /api/v1/clients/{client_id}/integrations.
+ *
+ * SECURITY: api_key_env is always the env var NAME, never the actual secret.
+ */
+export interface IntegrationConfig {
+  provider: string
+  base_id: string
+  table_id: string
+  api_key_env: string   // env var NAME — never the secret value
+  match_field: string
+  field_count: number
+  connected: boolean
+  status_mapping?: Record<string, string>
+  import_status_mapping?: Record<string, string>
+}
+
+/**
+ * UpdateIntegrationPayload — partial update for integration config.
+ * PUT /api/v1/clients/{client_id}/integrations/{provider}
+ */
+export interface UpdateIntegrationPayload {
+  base_id?: string
+  table_id?: string
+  api_key_env?: string
+  match_field?: string
+  status_mapping?: Record<string, string>
+  import_status_mapping?: Record<string, string>
+}
+
+/**
+ * IntegrationTestResult — result of POST /api/v1/clients/{client_id}/integrations/{provider}/test
+ */
+export interface IntegrationTestResult {
+  success: boolean
+  message: string
+  record_count?: number
+}
+
+/**
+ * AvailableIntegration — a supported provider with its current connection status.
+ * GET /api/v1/clients/{client_id}/integrations/available
+ */
+export interface AvailableIntegration {
+  provider: string
+  name: string
+  description: string
+  is_connected: boolean
+  icon: string
+}
+
+/**
+ * ConnectIntegrationPayload — payload to create a new integration.
+ * POST /api/v1/clients/{client_id}/integrations/{provider}/connect
+ * SECURITY: api_key_env is the env var NAME only, never the actual secret.
+ */
+export interface ConnectIntegrationPayload {
+  base_id: string
+  table_id: string
+  api_key_env: string
+}
+
+/**
+ * DisconnectResult — result of DELETE /api/v1/clients/{client_id}/integrations/{provider}/disconnect
+ */
+export interface DisconnectResult {
+  success: boolean
+  message: string
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Analytics
 // ──────────────────────────────────────────────────────────────────────────────
 

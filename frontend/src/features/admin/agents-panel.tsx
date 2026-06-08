@@ -283,7 +283,7 @@ export function AgentsPanel() {
       {/* Client selector */}
       <Card>
         <div className="mb-4">
-          <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-on-surface-variant">
+          <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-ink-3">
             Select Client
           </p>
         </div>
@@ -311,17 +311,17 @@ export function AgentsPanel() {
         <>
           {/* Edit Agent inline panel */}
           {editingAgent && (
-            <Card stripe>
+            <Card className="border-teal-line bg-teal-faint/40">
               <div className="mb-4">
-                <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-on-surface-variant">
+                <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-ink-3">
                   Edit Agent
                 </p>
-                <code className="text-primary font-mono text-xs mt-0.5 block">{editingAgent.slug}</code>
+                <code className="text-teal font-mono text-xs mt-0.5 block">{editingAgent.slug}</code>
               </div>
 
               {/* Readiness Checklist */}
-              <div className="mb-6 p-4 rounded-md border border-surface-container-high bg-surface-container/50">
-                <p className="text-xs font-medium uppercase tracking-widest text-on-surface-variant mb-3">
+              <div className="mb-6 p-4 rounded-md border border-line bg-mist/50">
+                <p className="text-xs font-medium uppercase tracking-widest text-ink-3 mb-3">
                   Readiness
                 </p>
                 {/* Overall readiness indicator */}
@@ -343,7 +343,7 @@ export function AgentsPanel() {
                       >
                         {check.ready ? '✓' : '✗'}
                       </span>
-                      <span className={check.ready ? 'text-on-surface' : 'text-on-surface-variant'}>
+                      <span className={check.ready ? 'text-ink' : 'text-ink-3'}>
                         {check.label}
                       </span>
                     </li>
@@ -353,11 +353,11 @@ export function AgentsPanel() {
 
               {/* Custom LLM URL — read-only with copy */}
               <div className="mb-4">
-                <p className="text-xs font-medium uppercase tracking-widest text-on-surface-variant mb-1.5">
+                <p className="text-xs font-medium uppercase tracking-widest text-ink-3 mb-1.5">
                   Custom LLM URL
                 </p>
                 <div className="flex items-center gap-2">
-                  <code className="flex-1 text-xs font-mono text-primary bg-surface-container px-3 py-2 rounded-sm truncate">
+                  <code className="flex-1 text-xs font-mono text-teal bg-teal-faint px-3 py-2 rounded-sm truncate">
                     {editingAgent.custom_llm_url}
                   </code>
                   <Button
@@ -372,7 +372,7 @@ export function AgentsPanel() {
                     Copy
                   </Button>
                 </div>
-                <p className="text-xs text-on-surface-variant mt-1">
+                <p className="text-xs text-ink-3 mt-1">
                   Paste this URL into the ElevenLabs dashboard as the Custom LLM endpoint.
                 </p>
               </div>
@@ -390,7 +390,7 @@ export function AgentsPanel() {
                       value={editForm.voice_id}
                       onChange={(e) => setEditForm((f) => ({ ...f, voice_id: e.target.value }))}
                     />
-                    <p className="text-xs text-on-surface-variant mt-1">
+                    <p className="text-xs text-ink-3 mt-1">
                       Voice for ElevenLabs conversational agents is configured in the{' '}
                       <span className="font-medium">ElevenLabs dashboard</span>, not here.
                     </p>
@@ -446,10 +446,10 @@ export function AgentsPanel() {
                 </div>
 
                 <div>
-                  <p className="text-xs font-medium uppercase tracking-widest text-on-surface-variant mb-2">
+                  <p className="text-xs font-medium uppercase tracking-widest text-ink-3 mb-2">
                     Voice Tuning
                   </p>
-                  <p className="text-xs text-on-surface-variant mb-3">
+                  <p className="text-xs text-ink-3 mb-3">
                     Adjust how the voice sounds during live calls. Changes take effect on the next call.
                   </p>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -465,7 +465,7 @@ export function AgentsPanel() {
                           setEditForm((f) => ({ ...f, tts_speed: parseFloat(e.target.value) || 0.95 }))
                         }
                       />
-                      <p className="text-xs text-on-surface-variant mt-1">EL range: 0.7 – 1.2</p>
+                      <p className="text-xs text-ink-3 mt-1">EL range: 0.7 – 1.2</p>
                     </div>
                     <Input
                       label="Stability"
@@ -493,7 +493,7 @@ export function AgentsPanel() {
                 </div>
 
                 <div>
-                  <p className="text-xs font-medium uppercase tracking-widest text-on-surface-variant mb-2">
+                  <p className="text-xs font-medium uppercase tracking-widest text-ink-3 mb-2">
                     Tools Enabled
                   </p>
                   <div className="flex flex-wrap gap-4">
@@ -527,30 +527,30 @@ export function AgentsPanel() {
           {/* Agents table */}
           <Card>
             <div className="flex items-center justify-between mb-4">
-              <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-on-surface-variant">
+              <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-ink-3">
                 Agents
               </p>
-              <code className="font-mono text-xs text-primary">{selectedClientId}</code>
+              <code className="font-mono text-xs text-teal">{selectedClientId}</code>
             </div>
 
             {agentsLoading && (
               <div data-testid="agents-loading" className="space-y-2">
                 {[...Array(3)].map((_, i) => (
-                  <div key={i} className="h-10 bg-surface-container rounded-sm animate-pulse" />
+                  <div key={i} className="h-10 bg-mist rounded-md animate-pulse" />
                 ))}
               </div>
             )}
 
             {agentsError && (
               <div data-testid="agents-error" role="alert" className="py-8 text-center">
-                <p className="text-on-surface font-medium">Unable to load agents. Please try again.</p>
+                <p className="text-ink font-medium">Unable to load agents. Please try again.</p>
               </div>
             )}
 
             {!agentsLoading && !agentsError && agents && agents.length === 0 && (
               <div data-testid="agents-empty" className="py-8 text-center">
-                <p className="text-on-surface font-medium">No agents found</p>
-                <p className="text-on-surface-variant text-sm mt-1">Create the first agent below.</p>
+                <p className="text-ink font-medium">No agents found</p>
+                <p className="text-ink-3 text-sm mt-1">Create the first agent below.</p>
               </div>
             )}
 
@@ -571,20 +571,20 @@ export function AgentsPanel() {
                   {agents.map((agent) => (
                     <TableRow key={agent.agent_id}>
                       <TableCell>
-                        <code className="font-mono text-xs text-primary">{agent.slug}</code>
+                        <code className="font-mono text-xs text-teal">{agent.slug}</code>
                       </TableCell>
                       <TableCell>{agent.name}</TableCell>
                       <TableCell>
-                        <code className="font-mono text-xs text-on-surface-variant">{agent.voice_id}</code>
+                        <code className="font-mono text-xs text-ink-3">{agent.voice_id}</code>
                       </TableCell>
                       <TableCell>
-                        <code className="font-mono text-xs text-on-surface-variant">{agent.model}</code>
+                        <code className="font-mono text-xs text-ink-3">{agent.model}</code>
                       </TableCell>
                       <TableCell>
-                        <div className="text-xs text-on-surface-variant space-y-0.5" data-testid={`voice-tuning-${agent.agent_id}`}>
-                          <div>Speed: <span className="font-medium text-on-surface">{agent.tts_speed}</span></div>
-                          <div>Stability: <span className="font-medium text-on-surface">{agent.tts_stability}</span></div>
-                          <div>Similarity: <span className="font-medium text-on-surface">{agent.tts_similarity_boost}</span></div>
+                        <div className="text-xs text-ink-3 space-y-0.5" data-testid={`voice-tuning-${agent.agent_id}`}>
+                          <div>Speed: <span className="font-medium text-ink">{agent.tts_speed}</span></div>
+                          <div>Stability: <span className="font-medium text-ink">{agent.tts_stability}</span></div>
+                          <div>Similarity: <span className="font-medium text-ink">{agent.tts_similarity_boost}</span></div>
                         </div>
                       </TableCell>
                       <TableCell>
@@ -639,7 +639,7 @@ export function AgentsPanel() {
           {/* Create Agent form */}
           <Card>
             <div className="mb-4">
-              <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-on-surface-variant">
+              <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-ink-3">
                 New Agent
               </p>
             </div>
@@ -681,10 +681,10 @@ export function AgentsPanel() {
                 placeholder="System prompt for the agent…"
               />
               <div>
-                <p className="text-xs font-medium uppercase tracking-widest text-on-surface-variant mb-2">
+                <p className="text-xs font-medium uppercase tracking-widest text-ink-3 mb-2">
                   Voice Tuning
                 </p>
-                <p className="text-xs text-on-surface-variant mb-3">
+                <p className="text-xs text-ink-3 mb-3">
                   How the voice sounds during live calls. Defaults work well for most agents.
                 </p>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -700,7 +700,7 @@ export function AgentsPanel() {
                         setCreateForm((f) => ({ ...f, tts_speed: parseFloat(e.target.value) || 0.95 }))
                       }
                     />
-                    <p className="text-xs text-on-surface-variant mt-1">EL range: 0.7 – 1.2</p>
+                    <p className="text-xs text-ink-3 mt-1">EL range: 0.7 – 1.2</p>
                   </div>
                   <Input
                     label="Stability"
@@ -727,7 +727,7 @@ export function AgentsPanel() {
                 </div>
               </div>
               <div>
-                <p className="text-xs font-medium uppercase tracking-widest text-on-surface-variant mb-2">
+                <p className="text-xs font-medium uppercase tracking-widest text-ink-3 mb-2">
                   Tools Enabled
                 </p>
                 <div className="flex flex-wrap gap-4">

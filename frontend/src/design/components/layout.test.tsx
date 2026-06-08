@@ -56,9 +56,9 @@ describe('TopBar', () => {
     expect(screen.getByText('acme-motors')).toBeInTheDocument()
   })
 
-  it('renders Qora brand text', () => {
+  it('does NOT render Qora wordmark (lives in sidebar only)', () => {
     render(<TopBar clientId="demo-client" />)
-    expect(screen.getByText('Qora')).toBeInTheDocument()
+    expect(screen.queryByText('Qora')).not.toBeInTheDocument()
   })
 })
 

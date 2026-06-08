@@ -57,7 +57,7 @@ export function LeadTable({ leads, onSelectLead }: LeadTableProps) {
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-outline/20 text-on-surface-variant text-xs uppercase tracking-wider">
+          <tr className="border-b border-line text-ink-3 text-xs uppercase tracking-wider">
             <th className="py-3 px-4 text-left font-medium">Name</th>
             <th className="py-3 px-4 text-left font-medium">Phone</th>
             <th className="py-3 px-4 text-left font-medium">Status</th>
@@ -72,12 +72,12 @@ export function LeadTable({ leads, onSelectLead }: LeadTableProps) {
               key={lead.id}
               role="row"
               onClick={() => onSelectLead(lead.id)}
-              className="border-b border-outline/10 hover:bg-surface-container-low cursor-pointer transition-colors"
+              className="border-b border-line/50 hover:bg-pearl/50 cursor-pointer transition-colors"
             >
-              <td className="py-3 px-4 font-medium text-on-surface">
+              <td className="py-3 px-4 font-medium text-ink">
                 {lead.name}
               </td>
-              <td className="py-3 px-4 text-on-surface-variant">
+              <td className="py-3 px-4 text-ink-3">
                 {lead.phone}
               </td>
               <td className="py-3 px-4">
@@ -85,10 +85,10 @@ export function LeadTable({ leads, onSelectLead }: LeadTableProps) {
                   {lead.status.replace('_', ' ')}
                 </Badge>
               </td>
-              <td className="py-3 px-4 text-right text-on-surface-variant">
+              <td className="py-3 px-4 text-right text-ink-3">
                 {lead.call_count}
               </td>
-              <td className="py-3 px-4 text-on-surface-variant">
+              <td className="py-3 px-4 text-ink-3">
                 {formatLastCalled(lead.last_called_at)}
               </td>
               <td className="py-3 px-4">

@@ -58,20 +58,20 @@ describe('DashboardPage — renders heading', () => {
   })
 })
 
-describe('DashboardPage — default period is "Today"', () => {
-  it('"Today" option is active on first render', async () => {
+describe('DashboardPage — default period is "All"', () => {
+  it('"All" option is active on first render', async () => {
     renderDashboard()
     await waitFor(() =>
-      expect(screen.getByRole('radio', { name: 'Today' })).toHaveAttribute('data-state', 'on')
+      expect(screen.getByRole('radio', { name: 'All' })).toHaveAttribute('data-state', 'on')
     )
   })
 
   it('PeriodSelector renders all 4 options', async () => {
     renderDashboard()
-    await waitFor(() => expect(screen.getByRole('radio', { name: 'Today' })).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'All' })).toBeInTheDocument())
+    expect(screen.getByRole('radio', { name: 'Today' })).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: '7d' })).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: '30d' })).toBeInTheDocument()
-    expect(screen.getByRole('radio', { name: 'All' })).toBeInTheDocument()
   })
 })
 

@@ -38,11 +38,11 @@ function renderAdminLayout(outletContent: React.ReactNode = null) {
 }
 
 describe('AdminLayout', () => {
-  it('renders admin header with "QORA" logo and "Admin" badge', () => {
+  it('renders admin header with "Qora" logo and "Admin" badge', () => {
     renderAdminLayout()
     expect(screen.getByTestId('admin-header')).toBeInTheDocument()
-    // Header now shows "QORA" logo + "Admin" badge as separate elements
-    expect(screen.getByText('QORA')).toBeInTheDocument()
+    // Header shows "Qora" wordmark (Q uppercase + ora lowercase per design system) + "Admin" badge
+    expect(screen.getByText('Qora')).toBeInTheDocument()
     expect(screen.getByText('Admin')).toBeInTheDocument()
   })
 

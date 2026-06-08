@@ -1,6 +1,8 @@
 /**
  * CAP-3: Card Component Tests
  * TDD Layer: Integration — render + behavioral assertions
+ *
+ * stripe prop removed (anti-pattern #21 per Qora Design System).
  */
 
 import { render, screen } from '@testing-library/react'
@@ -24,23 +26,6 @@ describe('Card — default rendering', () => {
   })
 })
 
-describe('Card — stripe prop', () => {
-  it('has data-stripe="true" when stripe prop is set', () => {
-    render(<Card data-testid="card" stripe>Striped card</Card>)
-    expect(screen.getByTestId('card')).toHaveAttribute('data-stripe', 'true')
-  })
-
-  it('does NOT have data-stripe attribute by default', () => {
-    render(<Card data-testid="card">No stripe</Card>)
-    expect(screen.getByTestId('card')).not.toHaveAttribute('data-stripe')
-  })
-
-  it('still renders children when stripe is active', () => {
-    render(<Card stripe>Striped content</Card>)
-    expect(screen.getByText('Striped content')).toBeInTheDocument()
-  })
-})
-
 describe('Card — className passthrough', () => {
   it('applies additional className prop', () => {
     render(<Card data-testid="card" className="custom-class">Content</Card>)
@@ -51,7 +36,7 @@ describe('Card — className passthrough', () => {
 // ──────────────────────────────────────────────────────────────────────────────
 // REQ-3.2: Card behavioral specification
 // - Default card: renders as a div containing the children
-// - Stripe card: renders children AND exposes stripe state via data-stripe
+// - No stripe prop (removed — anti-pattern #21 per design system)
 // ──────────────────────────────────────────────────────────────────────────────
 describe('REQ-3.2 Card behavioral rendering', () => {
   it('default card renders as a div with children accessible as text', () => {
@@ -63,17 +48,8 @@ describe('REQ-3.2 Card behavioral rendering', () => {
     expect(card).toHaveTextContent('Invoice #1234')
   })
 
-  it('striped card renders children AND exposes data-stripe=true for styling hook', () => {
-    render(<Card data-testid="card" stripe>Active lead</Card>)
-    const card = screen.getByTestId('card')
-    // Children visible
-    expect(card).toHaveTextContent('Active lead')
-    // Stripe state exposed — this is the production code's contract for the visual stripe
-    expect(card).toHaveAttribute('data-stripe', 'true')
-  })
-
-  it('default card does NOT expose data-stripe (no stripe when not requested)', () => {
-    render(<Card data-testid="card">No stripe here</Card>)
+  it('card does NOT have data-stripe attribute (stripe prop removed)', () => {
+    render(<Card data-testid="card">Content</Card>)
     expect(screen.getByTestId('card')).not.toHaveAttribute('data-stripe')
   })
 })

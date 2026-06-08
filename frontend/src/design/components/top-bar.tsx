@@ -1,9 +1,9 @@
 /**
- * TopBar — Sovereign Interface layout primitive
+ * TopBar — Qora Design System layout primitive
  *
- * Sticky top bar with surface-container background.
- * Displays brand name + client context slot.
- * Uses font-display (Manrope) for title.
+ * bg-paper + border-b border-line.
+ * Shows current client context (no Qora wordmark — it lives in the sidebar only).
+ * Clean and minimal: just context info.
  */
 
 interface TopBarProps {
@@ -17,24 +17,18 @@ export function TopBar({ clientId }: TopBarProps) {
       className={[
         'fixed top-0 left-0 right-0',
         'h-14',
-        'bg-surface-container',
-        'flex items-center gap-4',
+        'bg-paper',
+        'flex items-center gap-3',
         'px-6',
         'z-50',
-        // Ghost border bottom — outline-variant at 15% opacity per DESIGN.md
-        'border-b border-b-outline-variant/15',
+        'border-b border-line',
       ].join(' ')}
     >
-      {/* Brand */}
-      <span className="font-display font-bold text-lg text-primary tracking-tight">
-        Qora
-      </span>
-
-      {/* Separator */}
-      <span className="text-outline/40 select-none">·</span>
-
       {/* Client context */}
-      <span className="text-sm text-on-surface-variant font-medium truncate">
+      <span
+        className="text-sm text-ink-3 font-mono uppercase tracking-[0.10em]"
+        aria-label={`Current client: ${clientId}`}
+      >
         {clientId}
       </span>
     </header>

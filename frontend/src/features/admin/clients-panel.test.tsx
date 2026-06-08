@@ -31,11 +31,11 @@ describe('ClientsPanel', () => {
     expect(screen.getByText('New Client')).toBeInTheDocument()
   })
 
-  it('renders Client ID, Broker Name, and Agent Name input fields', () => {
+  it('renders Client ID, Name, and Agent Name input fields', () => {
     renderClientsPanel()
     // Labels are uppercase
     expect(screen.getByLabelText(/client id/i)).toBeInTheDocument()
-    expect(screen.getByLabelText(/broker name/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/^name$/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/agent name/i)).toBeInTheDocument()
   })
 

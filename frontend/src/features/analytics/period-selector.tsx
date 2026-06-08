@@ -21,17 +21,17 @@ const PERIODS: { value: AnalyticsPeriod; label: string }[] = [
 
 export function PeriodSelector({ value, onChange }: PeriodSelectorProps) {
   return (
-    <div className="flex gap-1 rounded-md border border-border p-1 bg-surface-container-low">
+    <div className="flex gap-1 rounded-md border border-line p-1 bg-mist">
       {PERIODS.map((p) => (
         <button
           key={p.value}
           type="button"
           onClick={() => onChange(p.value)}
           className={[
-            'px-3 py-1 text-sm font-medium rounded transition-colors',
+            'px-3 py-1 text-sm font-medium rounded-md transition-colors',
             value === p.value
-              ? 'bg-primary text-on-primary'
-              : 'text-on-surface-variant hover:text-on-surface',
+              ? 'bg-teal-faint text-teal'
+              : 'text-ink-3 hover:text-ink',
           ].join(' ')}
         >
           {p.label}

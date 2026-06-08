@@ -1,7 +1,8 @@
 /**
- * CAP-2: Design Token System Tests
- * These tests verify that tokens.css and globals.css contain the required
- * token definitions from DESIGN.md (The Sovereign Interface).
+ * Design Token System Tests — Qora Design System
+ *
+ * Verifies that tokens.css and globals.css contain the required
+ * Qora-native token definitions (replaces Material/Sovereign Interface).
  *
  * TDD Layer: Unit — pure string/content assertions on CSS files.
  * No DOM or browser needed.
@@ -28,73 +29,90 @@ describe('tokens.css — @theme block', () => {
     expect(css).toMatch(/@theme\s*\{/)
   })
 
-  // Surface hierarchy tokens
-  it('defines --color-background as #0c1324', () => {
-    expect(css).toContain('--color-background')
-    expect(css).toContain('#0c1324')
+  // Canvas tokens
+  it('defines --color-pearl as #F2F4F3', () => {
+    expect(css).toContain('--color-pearl')
+    expect(css).toContain('#F2F4F3')
   })
 
-  it('defines --color-surface-container-lowest as #070d1f', () => {
-    expect(css).toContain('--color-surface-container-lowest')
-    expect(css).toContain('#070d1f')
+  it('defines --color-paper as #FFFFFF', () => {
+    expect(css).toContain('--color-paper')
+    expect(css).toContain('#FFFFFF')
   })
 
-  it('defines --color-surface-container-low as #151b2d', () => {
-    expect(css).toContain('--color-surface-container-low')
-    expect(css).toContain('#151b2d')
+  it('defines --color-mist as #E8ECEB', () => {
+    expect(css).toContain('--color-mist')
+    expect(css).toContain('#E8ECEB')
   })
 
-  it('defines --color-surface-container as #191f31', () => {
-    expect(css).toContain('--color-surface-container')
-    expect(css).toContain('#191f31')
+  it('defines --color-smoke as #D6DAD9', () => {
+    expect(css).toContain('--color-smoke')
+    expect(css).toContain('#D6DAD9')
   })
 
-  it('defines --color-surface-bright as #33394c', () => {
-    expect(css).toContain('--color-surface-bright')
-    expect(css).toContain('#33394c')
+  // Ink hierarchy tokens
+  it('defines --color-ink as #0E1217', () => {
+    expect(css).toContain('--color-ink:')
+    expect(css).toContain('#0E1217')
   })
 
-  // Primary accent tokens
-  it('defines --color-primary as #4edea3', () => {
-    expect(css).toContain('--color-primary')
-    expect(css).toContain('#4edea3')
+  it('defines --color-ink-2 as #44474D', () => {
+    expect(css).toContain('--color-ink-2')
+    expect(css).toContain('#44474D')
   })
 
-  it('defines --color-primary-container as #10b981', () => {
-    expect(css).toContain('--color-primary-container')
-    expect(css).toContain('#10b981')
+  it('defines --color-ink-3 as #767880', () => {
+    expect(css).toContain('--color-ink-3')
+    expect(css).toContain('#767880')
   })
 
-  it('defines --color-on-primary as #003824', () => {
-    expect(css).toContain('--color-on-primary')
-    expect(css).toContain('#003824')
+  // Brand tokens
+  it('defines --color-teal as #1A8B7A', () => {
+    expect(css).toContain('--color-teal:')
+    expect(css).toContain('#1A8B7A')
   })
 
-  it('defines --color-secondary as #d0bcff', () => {
-    expect(css).toContain('--color-secondary')
-    expect(css).toContain('#d0bcff')
+  it('defines --color-teal-deep as #0E4E45', () => {
+    expect(css).toContain('--color-teal-deep')
+    expect(css).toContain('#0E4E45')
   })
 
-  // Text tokens
-  it('defines --color-on-surface-variant as #bbcabf', () => {
-    expect(css).toContain('--color-on-surface-variant')
-    expect(css).toContain('#bbcabf')
+  it('defines --color-teal-faint', () => {
+    expect(css).toContain('--color-teal-faint')
+    expect(css).toContain('rgba(26,139,122,0.08)')
   })
 
-  it('defines --color-outline as #86948a', () => {
-    expect(css).toContain('--color-outline')
-    expect(css).toContain('#86948a')
+  it('defines --color-teal-line', () => {
+    expect(css).toContain('--color-teal-line')
+    expect(css).toContain('rgba(26,139,122,0.28)')
   })
 
-  it('defines --color-outline-variant as #3c4a42', () => {
-    expect(css).toContain('--color-outline-variant')
-    expect(css).toContain('#3c4a42')
+  // Accent tokens
+  it('defines --color-coral as #E0764F', () => {
+    expect(css).toContain('--color-coral:')
+    expect(css).toContain('#E0764F')
+  })
+
+  it('defines --color-coral-faint', () => {
+    expect(css).toContain('--color-coral-faint')
+    expect(css).toContain('rgba(224,118,79,0.09)')
+  })
+
+  // Line tokens
+  it('defines --color-line', () => {
+    expect(css).toContain('--color-line:')
+    expect(css).toContain('rgba(14,18,23,0.08)')
+  })
+
+  it('defines --color-line-2', () => {
+    expect(css).toContain('--color-line-2')
+    expect(css).toContain('rgba(14,18,23,0.14)')
   })
 
   // Typography tokens
-  it('defines --font-display with Manrope', () => {
+  it('defines --font-display with Fredoka', () => {
     expect(css).toContain('--font-display')
-    expect(css).toContain('Manrope')
+    expect(css).toContain('Fredoka')
   })
 
   it('defines --font-body with Inter', () => {
@@ -102,15 +120,64 @@ describe('tokens.css — @theme block', () => {
     expect(css).toContain('Inter')
   })
 
-  // Radius tokens
-  it('defines --radius-DEFAULT as 0.25rem', () => {
-    expect(css).toContain('--radius-DEFAULT')
-    expect(css).toContain('0.25rem')
+  it('defines --font-mono with JetBrains Mono', () => {
+    expect(css).toContain('--font-mono')
+    expect(css).toContain('JetBrains Mono')
   })
 
-  it('defines --radius-sm as 0.125rem', () => {
-    expect(css).toContain('--radius-sm')
-    expect(css).toContain('0.125rem')
+  // Radius tokens — Qora scale (not old 0.25rem)
+  it('defines --radius-DEFAULT as 12px', () => {
+    expect(css).toContain('--radius-DEFAULT')
+    expect(css).toContain('12px')
+  })
+
+  it('defines --radius-full as 999px (pill)', () => {
+    expect(css).toContain('--radius-full')
+    expect(css).toContain('999px')
+  })
+
+  it('defines --radius-lg as 20px', () => {
+    expect(css).toContain('--radius-lg')
+    expect(css).toContain('20px')
+  })
+
+  // Shadow tokens
+  it('defines --shadow-md', () => {
+    expect(css).toContain('--shadow-md')
+    expect(css).toContain('rgba(14,18,23,0.06)')
+  })
+
+  // Layout tokens
+  it('defines --spacing-sidebar', () => {
+    expect(css).toContain('--spacing-sidebar')
+  })
+
+  it('defines --spacing-topbar', () => {
+    expect(css).toContain('--spacing-topbar')
+  })
+
+  // Old Sovereign Interface tokens must NOT be present
+  it('does NOT contain old Obsidian background #0c1324', () => {
+    expect(css).not.toContain('#0c1324')
+  })
+
+  it('does NOT contain --color-primary (Material naming removed)', () => {
+    expect(css).not.toContain('--color-primary:')
+    expect(css).not.toContain('--color-primary-container')
+  })
+
+  it('does NOT contain --color-surface-container (Material naming removed)', () => {
+    expect(css).not.toContain('--color-surface-container:')
+    expect(css).not.toContain('--color-surface-container-low')
+  })
+
+  it('does NOT contain --color-on-surface (Material naming removed)', () => {
+    expect(css).not.toContain('--color-on-surface:')
+    expect(css).not.toContain('--color-on-surface-variant')
+  })
+
+  it('does NOT contain Manrope (banned font)', () => {
+    expect(css).not.toContain('Manrope')
   })
 })
 
@@ -129,13 +196,37 @@ describe('globals.css — structure', () => {
     expect(css).toMatch(/@import\s+["']\.\/tokens\.css["']/)
   })
 
-  it('contains @font-face for Manrope', () => {
-    expect(css).toContain('@font-face')
-    expect(css).toContain('Manrope')
+  it('imports Google Fonts (Fredoka + Inter + JetBrains Mono)', () => {
+    expect(css).toContain('fonts.googleapis.com')
+    expect(css).toContain('Fredoka')
+    expect(css).toContain('Inter')
+    expect(css).toContain('JetBrains+Mono')
   })
 
-  it('contains @font-face for Inter', () => {
-    expect(css).toContain('@font-face')
-    expect(css).toContain('Inter')
+  it('does NOT contain @font-face for Manrope (self-hosted Manrope removed)', () => {
+    // Manrope @font-face blocks are removed — using Google Fonts CDN
+    const manropeFontFace = css.match(/@font-face[\s\S]*?Manrope/)
+    expect(manropeFontFace).toBeNull()
+  })
+
+  it('sets body background-color to var(--color-pearl)', () => {
+    expect(css).toContain('background-color: var(--color-pearl)')
+  })
+
+  it('sets body color to var(--color-ink)', () => {
+    expect(css).toContain('color: var(--color-ink)')
+  })
+
+  it('has :focus-visible with teal ring', () => {
+    expect(css).toContain(':focus-visible')
+    expect(css).toContain('var(--color-teal-faint)')
+  })
+
+  it('does NOT contain hardcoded background #0c1324 (dark mode removed)', () => {
+    expect(css).not.toContain('#0c1324')
+  })
+
+  it('does NOT contain hardcoded color #e2e8f0 (on-surface removed)', () => {
+    expect(css).not.toContain('#e2e8f0')
   })
 })

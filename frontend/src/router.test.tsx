@@ -85,11 +85,11 @@ describe('REQ-4.1 Production route config — correct rendering', () => {
     expect(routes).toHaveLength(4)
   })
 
-  it('/admin renders AdminLayout with QORA logo and Admin badge', () => {
+  it('/admin renders AdminLayout with Qora logo and Admin badge', () => {
     renderAt('/admin')
     expect(screen.getByTestId('admin-header')).toBeInTheDocument()
-    // Header shows "QORA" logo + "Admin" badge as separate elements
-    expect(screen.getByText('QORA')).toBeInTheDocument()
+    // Header shows "Qora" wordmark (Q uppercase + ora lowercase per design system) + "Admin" badge
+    expect(screen.getByText('Qora')).toBeInTheDocument()
     expect(screen.getByText('Admin')).toBeInTheDocument()
   })
 

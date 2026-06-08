@@ -2,7 +2,7 @@
  * PeriodSelector — Radix ToggleGroup wrapper for period filtering
  *
  * Design: single-select, always has one active value (no deselect)
- * Sovereign Interface: no borders, obsidian-surface active state
+ * Qora Design System: active state bg-teal-faint text-teal, inactive text-ink-3
  *
  * Spec: Today | 7d | 30d | All — default is "today"
  */
@@ -37,14 +37,14 @@ export function PeriodSelector({ value, onChange }: PeriodSelectorProps) {
       type="single"
       value={value}
       onValueChange={handleValueChange}
-      className="flex gap-1"
+      className="flex gap-1 bg-mist rounded-md p-1"
       aria-label="Select time period"
     >
       {PERIODS.map(period => (
         <ToggleGroup.Item
           key={period.value}
           value={period.value}
-          className="px-3 py-1 text-sm font-medium text-on-surface-variant data-[state=on]:bg-surface-bright data-[state=on]:text-on-surface focus:outline-none"
+          className="px-3 py-1 text-sm font-medium rounded-md text-ink-3 data-[state=on]:bg-teal-faint data-[state=on]:text-teal focus:outline-none transition-colors duration-150"
         >
           {period.label}
         </ToggleGroup.Item>

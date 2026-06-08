@@ -25,6 +25,7 @@ import { LeadDetailPage } from './features/leads/detail-page'
 import { ImportPage } from './features/import/page'
 import { AdminLayout } from './features/admin/admin-layout'
 import { AdminPage } from './features/admin/page'
+import { ClientDetailPage } from './features/admin/client-detail-page'
 import { AnalyticsDashboardPage } from './features/analytics/page'
 import { CallDetailPage } from './features/calls/call-detail-page'
 
@@ -80,6 +81,10 @@ export const routes: RouteObject[] = [
       {
         index: true,
         element: <AdminPage />,
+      },
+      {
+        path: 'clients/:clientId',
+        element: <ClientDetailPage />,
       },
     ],
   },

@@ -31,3 +31,5 @@ export type { CheckboxProps } from './checkbox'
 
 export { Toast } from './toast'
 export type { ToastProps, ToastStatus, ToastVariant } from './toast'
+
+export { LiveIndicator } from './live-indicator'

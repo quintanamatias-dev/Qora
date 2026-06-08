@@ -65,7 +65,7 @@ export function CallHistoryList({
   if (sessions.length === 0) {
     return (
       <div className="py-8 text-center">
-        <p className="text-on-surface-variant text-sm">No calls yet</p>
+        <p className="text-ink-3 text-sm">No calls yet</p>
       </div>
     )
   }
@@ -80,20 +80,20 @@ export function CallHistoryList({
         const callOutcome = session.extracted_facts?.call_outcome as CallOutcome | null | undefined
 
         return (
-          <div key={session.id} className="border border-outline/10 rounded-md">
+          <div key={session.id} className="border border-line rounded-md">
             {/* Session row — clickable */}
             <div
               data-testid="call-history-item"
               onClick={() => onToggleSession(session.id)}
-              className="flex items-center gap-4 px-4 py-3 cursor-pointer hover:bg-surface-container-low transition-colors rounded-t-md"
+              className="flex items-center gap-4 px-4 py-3 cursor-pointer hover:bg-pearl/50 transition-colors rounded-t-md"
             >
               {/* Date */}
-              <span className="text-sm text-on-surface min-w-[140px]">
+              <span className="text-sm text-ink min-w-[140px]">
                 {formatCallDate(session.started_at)}
               </span>
 
               {/* Duration */}
-              <span className="text-sm text-on-surface-variant min-w-[60px]">
+              <span className="text-sm text-ink-3 min-w-[60px]">
                 {session.duration_seconds != null
                   ? formatDuration(session.duration_seconds)
                   : '—'}
@@ -108,14 +108,14 @@ export function CallHistoryList({
               {callOutcome ? (
                 <CallOutcomeBadge outcome={callOutcome} />
               ) : session.outcome ? (
-                <span className="text-xs text-on-surface-variant">
+                <span className="text-xs text-ink-3">
                   {session.outcome}
                 </span>
               ) : null}
 
               {/* Summary snippet */}
               {summarySnippet && (
-                <span className="text-xs text-on-surface-variant flex-1 truncate">
+                <span className="text-xs text-ink-3 flex-1 truncate">
                   {summarySnippet}
                 </span>
               )}
@@ -129,11 +129,11 @@ export function CallHistoryList({
                     e.stopPropagation()
                     navigate(`/app/${clientId}/calls/${session.id}`)
                   }}
-                  className="text-xs text-primary hover:underline"
+                  className="text-xs text-teal hover:underline"
                 >
                   View detail
                 </button>
-                <span className="text-on-surface-variant text-xs">
+                <span className="text-ink-3 text-xs">
                   {isExpanded ? '▲' : '▼'}
                 </span>
               </div>
@@ -143,7 +143,7 @@ export function CallHistoryList({
             {isExpanded && (
               <div
                 data-testid="transcript-viewer"
-                className="border-t border-outline/10 bg-surface-container-lowest max-h-[500px] overflow-y-auto rounded-b-md"
+                className="border-t border-line bg-mist max-h-[500px] overflow-y-auto rounded-b-md"
               >
                 <TranscriptViewer sessionId={session.id} />
               </div>

@@ -60,7 +60,7 @@ function TurnItem({ turn }: TurnItemProps) {
       ].join(' ')}
     >
       {/* Role label + timestamp */}
-      <div className="flex items-center gap-2 text-xs text-on-surface-variant">
+      <div className="flex items-center gap-2 text-xs text-ink-3">
         <span className="font-medium">
           {isAgent ? 'Agent' : 'User'}
         </span>
@@ -72,8 +72,8 @@ function TurnItem({ turn }: TurnItemProps) {
         className={[
           'px-3 py-2 rounded-md text-sm',
           isAgent
-            ? 'bg-surface-bright text-on-surface'
-            : 'bg-primary/20 text-on-surface',
+            ? 'bg-mist text-ink'
+            : 'bg-teal-faint text-ink',
         ].join(' ')}
       >
         {turn.content}
@@ -93,7 +93,7 @@ export function TranscriptViewer({ sessionId }: TranscriptViewerProps) {
   if (isLoading) {
     return (
       <div data-testid="transcript-loading" className="py-6 text-center">
-        <span className="text-on-surface-variant text-sm animate-pulse">
+        <span className="text-ink-3 text-sm animate-pulse">
           Loading transcript…
         </span>
       </div>
@@ -113,7 +113,7 @@ export function TranscriptViewer({ sessionId }: TranscriptViewerProps) {
   if (!data || data.turns.length === 0) {
     return (
       <div className="py-6 text-center">
-        <p className="text-on-surface-variant text-sm">No transcript available</p>
+        <p className="text-ink-3 text-sm">No transcript available</p>
       </div>
     )
   }
