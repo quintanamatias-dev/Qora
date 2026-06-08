@@ -24,42 +24,47 @@ Chain strategy: feature-branch-chain
 
 ## WU-1: Schema + Model + CRUD Service
 
-### 1.1 LeadCustomField model and migration tests
+### [x] 1.1 LeadCustomField model and migration tests
 - Description: RED tests for model constraints, type validation, startup table creation, one-time copy marker.
-- Files: `backend/tests/leads/test_lead_custom_fields_service.py`, `backend/tests/test_schema_compat.py`.
+- Files: `backend/tests/unit/leads/test_lead_custom_fields_service.py`, `backend/tests/unit/test_schema_compat_custom_fields.py`.
 - Dependencies: none.
 - Test requirements: CF-1..CF-11 migration/idempotency scenarios.
 - Estimated lines changed: 180-240.
+- Status: DONE — 30 tests written and passing.
 
-### 1.2 Implement model, service, and startup migration
+### [x] 1.2 Implement model, service, and startup migration
 - Description: Add `LeadCustomField`, CRUD/upsert/batch service, write-time coercion, idempotent copy from legacy columns.
 - Files: `backend/app/leads/models.py`, `backend/app/leads/lead_custom_fields_service.py`, `backend/app/main.py`.
 - Dependencies: 1.1.
 - Test requirements: make 1.1 pass; run `cd backend && python3 -m pytest tests/ -q`.
 - Estimated lines changed: 260-340.
+- Status: DONE — all 30 task 1.1 tests passing; 2062 total suite tests passing.
 
-### 1.3 Update CRM config schema for custom fields
+### [x] 1.3 Update CRM config schema for custom fields
 - Description: Add `CustomFieldDef`, `custom_fields`, `quote_ready_fields`, `api_key` resolver; update Quintana config.
 - Files: `backend/app/integrations/crm_config.py`, `backend/clients/quintana-seguros/crm.yaml`, config tests.
 - Dependencies: 1.2.
 - Test requirements: QR-3, QR-4, duplicate field rejection.
 - Estimated lines changed: 120-170.
+- Status: DONE — 14 new tests passing; all 15 existing CRM config tests passing.
 
 ## WU-2: CRM Import/Export Adaptation
 
-### 2.1 Test CRM export/import custom field routing
+### [x] 2.1 Test CRM export/import custom field routing
 - Description: RED tests for `_lead_to_dict` merge and import base-vs-custom classification.
-- Files: `backend/tests/integrations/test_crm_sync_service.py`, `backend/tests/integrations/test_crm_import_service.py`.
+- Files: `backend/tests/unit/integrations/test_crm_custom_fields_routing.py` (new).
 - Dependencies: 1.3.
 - Test requirements: CRM export/import scenarios, no custom fields safe path.
 - Estimated lines changed: 140-190.
+- Status: DONE — 19 new tests written and passing.
 
-### 2.2 Implement CRM custom field read/write paths
+### [x] 2.2 Implement CRM custom field read/write paths
 - Description: Export loads custom fields; import upserts non-base fields through service with configured types.
 - Files: `backend/app/integrations/crm_sync_service.py`, `backend/app/integrations/crm_import_service.py`.
 - Dependencies: 2.1.
 - Test requirements: make 2.1 pass.
 - Estimated lines changed: 150-220.
+- Status: DONE — all 2081 tests passing (19 new).
 
 ## WU-3: Prompt Rendering Adaptation
 

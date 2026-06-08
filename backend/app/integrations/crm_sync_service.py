@@ -111,8 +111,14 @@ async def sync_lead(
             )
             return
 
-        # 4. Map lead fields → CRM payload (pure; no IO)
-        lead_data = _lead_to_dict(lead)
+        # 4. Map lead fields → CRM payload
+        # Load custom fields from lead_custom_fields table (AC-7: export includes custom fields)
+        from app.leads import lead_custom_fields_service
+
+        custom_fields = await lead_custom_fields_service.get_all(
+            db_session, lead.id, lead.client_id
+        )
+        lead_data = _lead_to_dict(lead, custom_fields=custom_fields)
         mapper = FieldMapper(config.field_mappings, status_mapping=config.status_mapping)
         try:
             payload = mapper.map(lead_data)
@@ -242,29 +248,34 @@ async def sync_lead(
 # ---------------------------------------------------------------------------
 
 
-def _lead_to_dict(lead: Any) -> dict[str, Any]:
+def _lead_to_dict(lead: Any, *, custom_fields: dict[str, Any] | None = None) -> dict[str, Any]:
     """Convert a Lead ORM object to a flat dict for FieldMapper.map().
 
-    Includes all mappable fields from the Lead model. None values are included
-    so that FieldMapper can decide whether to omit optional fields or raise on
-    required missing fields.
+    Includes all mappable base fields from the Lead model. Custom fields are
+    merged from the pre-loaded `custom_fields` dict (from lead_custom_fields table).
 
-    This is a pure function: same lead → same dict.
+    Design (dynamic-lead-fields WU-2, AC-7):
+    - Base Lead fields (name, phone, status, etc.) are always read from the ORM.
+    - Legacy custom columns (car_make, car_model, car_year, current_insurance, age, zona)
+      are read from ORM as FALLBACK — present during the transition period.
+    - custom_fields (from lead_custom_fields table) is the PRIMARY source and OVERRIDES
+      any legacy column values for the same key.
+    - None values are included for all fields so FieldMapper can decide how to handle them.
+
+    Args:
+        lead: Lead ORM object.
+        custom_fields: Pre-loaded {field_key: field_value} from lead_custom_fields_service.get_all().
+                       If None or empty, falls back to legacy Lead ORM columns only.
     """
-    return {
+    # Base Lead fields — always read from ORM
+    result: dict[str, Any] = {
         "id": lead.id,
         "client_id": lead.client_id,
         "name": lead.name,
         "phone": lead.phone,
         "status": lead.status,
         "notes": lead.notes,
-        "car_make": lead.car_make,
-        "car_model": lead.car_model,
-        "car_year": lead.car_year,
-        "current_insurance": lead.current_insurance,
         "email": lead.email,
-        "age": lead.age,
-        "zona": lead.zona,
         "summary_last_call": lead.summary_last_call,
         "interest_level": lead.interest_level,
         "do_not_call": lead.do_not_call,
@@ -273,3 +284,20 @@ def _lead_to_dict(lead: Any) -> dict[str, Any]:
         "external_lead_id": lead.external_lead_id,
         "external_crm_id": lead.external_crm_id,
     }
+
+    # Legacy custom columns — FALLBACK during transition period.
+    # Read from ORM only if the attribute exists (backward compat with Lead models
+    # that still carry these columns in the DB). custom_fields will override below.
+    _legacy_custom_columns = (
+        "car_make", "car_model", "car_year", "current_insurance", "age", "zona"
+    )
+    for col in _legacy_custom_columns:
+        if hasattr(lead, col):
+            result[col] = getattr(lead, col)
+
+    # custom_fields is the PRIMARY source — overrides legacy column values.
+    # After WU-7, the legacy fallback above will be removed.
+    if custom_fields:
+        result.update(custom_fields)
+
+    return result

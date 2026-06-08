@@ -44,7 +44,41 @@ from app.integrations.crm_config import (
     ConfigValidationError,
 )
 from app.integrations.field_mapping import FieldMapper
+from app.leads import lead_custom_fields_service
 from app.leads.models import Lead, LeadStatus
+
+
+# ---------------------------------------------------------------------------
+# Base Lead field set — used to classify import fields as base vs custom
+# ---------------------------------------------------------------------------
+#
+# These are the columns that exist on the Lead ORM model itself.
+# Any reverse-mapped field NOT in this set is a custom field and must be
+# upserted to lead_custom_fields via the CRUD service (AC-8).
+#
+# Design (dynamic-lead-fields WU-2): during the transition period, custom
+# fields are DUAL-WRITTEN — they go to both lead_custom_fields AND the
+# legacy Lead ORM columns (backward compat for existing code paths).
+# After WU-7, legacy column writes will be removed.
+_BASE_LEAD_FIELDS: frozenset[str] = frozenset({
+    "id",
+    "client_id",
+    "name",
+    "phone",
+    "email",
+    "status",
+    "notes",
+    "external_lead_id",
+    "external_crm_id",
+    "call_count",
+    "do_not_call",
+    "summary_last_call",
+    "interest_level",
+    "objections_heard",
+    "extracted_facts",
+    "next_action",
+    "next_action_at",
+})
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +213,13 @@ async def import_leads_from_crm(
         import_status_mapping=import_status_mapping,
     )
 
+    # Build field_types lookup from custom_fields config for type-aware upserts (AC-8)
+    # {field_key: field_type} — used when upserting to lead_custom_fields
+    _custom_field_types: dict[str, str] = {
+        cf.field_key: cf.field_type
+        for cf in getattr(config, "custom_fields", [])
+    }
+
     # 4. Process each record
     for record in records:
         airtable_id = record.get("id", "")
@@ -228,25 +269,45 @@ async def import_leads_from_crm(
                     if eid_holder is not None and eid_holder.id != existing.id:
                         eid_holder_id = eid_holder.id
 
-                _update_lead_from_qora_data(
+                # Returns pending_custom_fields dict (AC-8)
+                pending_custom_fields = _update_lead_from_qora_data(
                     existing,
                     qora_data,
                     airtable_id,
                     existing_external_lead_id_holder=eid_holder_id,
                 )
+                # Upsert non-base fields to lead_custom_fields (AC-8)
+                if pending_custom_fields:
+                    await lead_custom_fields_service.upsert_many(
+                        db_session,
+                        lead_id=existing.id,
+                        client_id=client_id,
+                        fields=pending_custom_fields,
+                        field_types=_custom_field_types if _custom_field_types else None,
+                    )
                 result.updated += 1
                 logger.info(
                     "crm_import_lead_updated",
                     extra={"lead_id": existing.id, "airtable_id": airtable_id},
                 )
             else:
-                # 4e. Create new lead
-                lead = _create_lead_from_qora_data(
+                # 4e. Create new lead — returns (Lead, pending_custom_fields) (AC-8)
+                lead, pending_custom_fields = _create_lead_from_qora_data(
                     client_id=client_id,
                     qora_data=qora_data,
                     airtable_id=airtable_id,
                 )
                 db_session.add(lead)
+                await db_session.flush()
+                # Upsert non-base fields to lead_custom_fields (AC-8)
+                if pending_custom_fields:
+                    await lead_custom_fields_service.upsert_many(
+                        db_session,
+                        lead_id=lead.id,
+                        client_id=client_id,
+                        fields=pending_custom_fields,
+                        field_types=_custom_field_types if _custom_field_types else None,
+                    )
                 result.created += 1
                 logger.info(
                     "crm_import_lead_created",
@@ -316,7 +377,7 @@ def _update_lead_from_qora_data(
     qora_data: dict[str, Any],
     airtable_id: str,
     existing_external_lead_id_holder: str | None = None,
-) -> None:
+) -> dict[str, Any]:
     """Update mutable fields on an existing Lead from imported Qora data dict.
 
     Only updates fields that are present in qora_data (reverse-mapped from Airtable).
@@ -328,6 +389,13 @@ def _update_lead_from_qora_data(
     is equal or already ahead, the status is left unchanged to avoid regressing
     leads that have progressed in Qora.
 
+    Design (dynamic-lead-fields WU-2, AC-8):
+    - Base fields (name, email, status, external_lead_id) are written to Lead ORM columns.
+    - Non-base fields (car_make, car_model, car_year, current_insurance, age, zona, and
+      future custom fields) are collected and returned as pending_custom_fields.
+    - DUAL-WRITE: non-base fields are ALSO written to legacy Lead ORM columns (backward
+      compat during transition; removed in WU-7).
+
     Args:
         lead: The Lead ORM object to update.
         qora_data: Reverse-mapped fields from the Airtable record.
@@ -335,23 +403,19 @@ def _update_lead_from_qora_data(
         existing_external_lead_id_holder: If another lead already holds the
             same external_lead_id value from qora_data, pass that lead's ID
             here so a warning is logged. The update still proceeds.
+
+    Returns:
+        pending_custom_fields: {field_key: value} for all non-base fields found
+        in qora_data. The caller is responsible for upsetting these to
+        lead_custom_fields via lead_custom_fields_service.upsert_many().
     """
+    pending_custom_fields: dict[str, Any] = {}
+
+    # --- Base fields: write directly to Lead ORM ---
     if "name" in qora_data:
         lead.name = qora_data["name"]
     if "email" in qora_data:
         lead.email = qora_data["email"]
-    if "current_insurance" in qora_data:
-        lead.current_insurance = qora_data["current_insurance"]
-    if "zona" in qora_data:
-        lead.zona = qora_data["zona"]
-    if "age" in qora_data:
-        lead.age = qora_data["age"]
-    if "car_make" in qora_data:
-        lead.car_make = qora_data["car_make"]
-    if "car_model" in qora_data:
-        lead.car_model = qora_data["car_model"]
-    if "car_year" in qora_data:
-        lead.car_year = qora_data["car_year"]
     if "status" in qora_data:
         _apply_status_if_ahead(lead, qora_data["status"])
     if "external_lead_id" in qora_data:
@@ -372,8 +436,22 @@ def _update_lead_from_qora_data(
                 },
             )
         lead.external_lead_id = incoming_eid
+
     # Always store the Airtable record ID
     lead.external_crm_id = airtable_id
+
+    # --- Non-base fields: classify as custom + DUAL-WRITE to legacy columns ---
+    for key, value in qora_data.items():
+        if key in _BASE_LEAD_FIELDS:
+            continue
+        # Collect for upsert to lead_custom_fields
+        pending_custom_fields[key] = value
+        # DUAL-WRITE: also write to legacy Lead column if it exists (backward compat)
+        # This keeps existing code paths working until WU-7 removes the legacy columns.
+        if hasattr(lead, key):
+            setattr(lead, key, value)
+
+    return pending_custom_fields
 
 
 def _apply_status_if_ahead(lead: Lead, imported_status_raw: Any) -> None:
@@ -405,11 +483,20 @@ def _create_lead_from_qora_data(
     client_id: str,
     qora_data: dict[str, Any],
     airtable_id: str,
-) -> Lead:
+) -> tuple[Lead, dict[str, Any]]:
     """Create a new Lead instance from reverse-mapped Qora data.
 
     New leads from Airtable import always start with status="new" unless
     a status mapping produced a known Qora status.
+
+    Design (dynamic-lead-fields WU-2, AC-8):
+    - Base fields are set directly on the Lead ORM object.
+    - Non-base fields are collected as pending_custom_fields.
+    - DUAL-WRITE: non-base fields are ALSO set on legacy Lead ORM columns (backward compat).
+
+    Returns:
+        (lead, pending_custom_fields): The new Lead instance and a dict of non-base
+        fields that must be upserted to lead_custom_fields by the caller.
     """
     status_raw = qora_data.get("status", LeadStatus.NEW.value)
     # Validate status value; fall back to "new" if unknown
@@ -418,12 +505,23 @@ def _create_lead_from_qora_data(
     except ValueError:
         status = LeadStatus.NEW.value
 
-    return Lead(
+    # Collect non-base fields as pending custom fields
+    pending_custom_fields: dict[str, Any] = {
+        key: value
+        for key, value in qora_data.items()
+        if key not in _BASE_LEAD_FIELDS and key != "phone" and key != "status"
+    }
+
+    # DUAL-WRITE: also populate legacy Lead columns for backward compat.
+    # The Lead constructor accepts them directly; during transition these columns
+    # still exist in the DB and may be read by code not yet migrated to WU-2+.
+    lead = Lead(
         id=str(uuid.uuid4()),
         client_id=client_id,
         name=qora_data.get("name", ""),
         phone=qora_data["phone"],
         email=qora_data.get("email"),
+        # Legacy columns (DUAL-WRITE — backward compat until WU-7)
         current_insurance=qora_data.get("current_insurance"),
         zona=qora_data.get("zona"),
         age=qora_data.get("age"),
@@ -434,3 +532,5 @@ def _create_lead_from_qora_data(
         external_crm_id=airtable_id,
         external_lead_id=qora_data.get("external_lead_id"),
     )
+
+    return lead, pending_custom_fields
