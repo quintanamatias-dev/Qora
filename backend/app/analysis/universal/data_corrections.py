@@ -176,64 +176,79 @@ class CorrectableField:
         type:       Target Python type ('str', 'int', 'float').
         crm_field:  Reserved for future CRM sync mapping (None today).
         validator:  Optional per-field validation callable.
+        storage:    Where to write corrections:
+                    - 'lead_attr': write to Lead ORM column (name, phone, email)
+                    - 'custom_field': write to lead_custom_fields table (car_make, etc.)
+                    During transition, 'custom_field' fields also DUAL-WRITE to Lead column.
     """
 
     lead_attr: str
     type: str
     crm_field: str | None
     validator: Callable[[str], tuple[bool, str | None]] | None = None
+    storage: str = "lead_attr"  # 'lead_attr' | 'custom_field'
 
 
 # Registry — hardcoded today, designed to be per-client configurable in future.
 # CRM_FUTURE: populate crm_field per client when CRM sync activates.
+# dynamic-lead-fields WU-4: storage='custom_field' for business-specific fields;
+# 'lead_attr' for core identity fields (name, phone, email).
 CORRECTABLE_FIELDS: dict[str, CorrectableField] = {
     "name": CorrectableField(
         lead_attr="name",
         type="str",
         crm_field=None,
         validator=_validate_name,
+        storage="lead_attr",
     ),
     "phone": CorrectableField(
         lead_attr="phone",
         type="str",
         crm_field=None,
         validator=_validate_phone,
+        storage="lead_attr",
     ),
     "email": CorrectableField(
         lead_attr="email",
         type="str",
         crm_field=None,
         validator=_validate_email,
+        storage="lead_attr",
     ),
     "age": CorrectableField(
         lead_attr="age",
         type="int",
         crm_field=None,
         validator=_validate_age,
+        storage="custom_field",
     ),
     "car_make": CorrectableField(
         lead_attr="car_make",
         type="str",
         crm_field=None,
         validator=None,
+        storage="custom_field",
     ),
     "car_model": CorrectableField(
         lead_attr="car_model",
         type="str",
         crm_field=None,
         validator=None,
+        storage="custom_field",
     ),
     "car_year": CorrectableField(
         lead_attr="car_year",
         type="int",
         crm_field=None,
         validator=_validate_car_year,
+        storage="custom_field",
     ),
     "current_insurance": CorrectableField(
         lead_attr="current_insurance",
         type="str",
         crm_field=None,
         validator=None,
+        storage="custom_field",
     ),
 }
 

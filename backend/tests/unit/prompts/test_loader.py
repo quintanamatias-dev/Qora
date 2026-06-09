@@ -918,10 +918,12 @@ async def test_fallback_jaumpablo_template_receives_memory_kwarg(
     # Save the original function before patching
     _original_render_system_prompt = insurance_module.render_system_prompt
 
-    def spy_render_system_prompt(c, lead_arg, call_count, memory=None):
+    def spy_render_system_prompt(c, lead_arg, call_count, memory=None, custom_fields=None):
         captured_memory.append(memory)
         # Call the original (saved reference, not the module attribute, to avoid recursion)
-        return _original_render_system_prompt(c, lead_arg, call_count, memory=memory)
+        return _original_render_system_prompt(
+            c, lead_arg, call_count, memory=memory, custom_fields=custom_fields
+        )
 
     # Monkeypatch render_system_prompt in insurance_agent module
     # (loader imports it from there in the render() method)
@@ -1226,3 +1228,274 @@ async def test_quintana_prompt_memoria_section_present_with_empty_dict_facts(
 
     # No unfilled placeholders
     assert "{{confirmed_facts}}" not in result
+
+
+# ---------------------------------------------------------------------------
+# WU-3 Task 3.1 — _build_variables merges custom fields
+# Spec: prompt-rendering scenarios; base Lead keys win collisions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_build_variables_merges_custom_fields_into_context(tmp_path: Path):
+    """RED test: _build_variables loads custom fields from DB and exposes them as template vars.
+
+    Spec scenario: Template resolves custom field variable
+    GIVEN custom_fields = {car_make: "Toyota", car_year: "2021"}
+    WHEN _build_variables builds the context
+    THEN result["car_make"] == "Toyota" and result["car_year"] == "2021"
+    """
+    from unittest.mock import AsyncMock, patch
+    from app.prompts.loader import PromptLoader
+
+    loader = PromptLoader(clients_dir=tmp_path)
+    client = make_client(client_id="quintana-seguros")
+    lead = make_lead(name="Ana García")
+    lead.id = "lead-abc"
+
+    mock_custom_fields = {"car_make": "Toyota", "car_year": "2021"}
+
+    with patch(
+        "app.prompts.loader.lead_custom_fields_service.get_all",
+        new=AsyncMock(return_value=mock_custom_fields),
+    ):
+        mock_db = MagicMock()
+        result = await loader._build_variables(client, lead, call_count=1, db=mock_db)
+
+    assert result["car_make"] == "Toyota", (
+        f"Expected car_make='Toyota' from custom_fields, got {result['car_make']!r}"
+    )
+    assert result["car_year"] == "2021", (
+        f"Expected car_year='2021' from custom_fields, got {result['car_year']!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_variables_missing_custom_field_renders_empty_string(tmp_path: Path):
+    """RED test: Missing custom field renders as empty string (not an error).
+
+    Spec scenario: Missing custom field — empty string
+    GIVEN car_model is absent from custom_fields
+    WHEN _build_variables builds the context
+    THEN result["car_model"] == "" (not a KeyError, not "tu auto")
+    """
+    from unittest.mock import AsyncMock, patch
+    from app.prompts.loader import PromptLoader
+
+    loader = PromptLoader(clients_dir=tmp_path)
+    client = make_client(client_id="quintana-seguros")
+    lead = make_lead(name="Pedro Ruiz")
+    lead.id = "lead-def"
+    # Simulate car_model absent from lead ORM too so we can isolate the custom_field path
+    lead.car_model = None
+
+    mock_custom_fields = {"car_make": "Ford"}  # car_model is NOT present
+
+    with patch(
+        "app.prompts.loader.lead_custom_fields_service.get_all",
+        new=AsyncMock(return_value=mock_custom_fields),
+    ):
+        mock_db = MagicMock()
+        result = await loader._build_variables(client, lead, call_count=1, db=mock_db)
+
+    assert result["car_model"] == "", (
+        f"Missing custom field 'car_model' should render as empty string, "
+        f"got {result['car_model']!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_variables_base_lead_key_wins_collision(tmp_path: Path):
+    """RED test: Base Lead fields (name, phone, email, status) override custom fields on collision.
+
+    Spec: Base Lead keys win on collision
+    GIVEN both lead.name="Real Name" and custom_fields={"lead_name": "Injected Name"}
+    WHEN _build_variables builds the context
+    THEN result["lead_name"] == "Real Name" (from Lead ORM, not custom_fields)
+    """
+    from unittest.mock import AsyncMock, patch
+    from app.prompts.loader import PromptLoader
+
+    loader = PromptLoader(clients_dir=tmp_path)
+    client = make_client(client_id="quintana-seguros")
+    lead = make_lead(name="Real Name")
+    lead.id = "lead-ghi"
+
+    # Custom fields try to override lead_name
+    mock_custom_fields = {"lead_name": "Injected Name", "car_make": "Fiat"}
+
+    with patch(
+        "app.prompts.loader.lead_custom_fields_service.get_all",
+        new=AsyncMock(return_value=mock_custom_fields),
+    ):
+        mock_db = MagicMock()
+        result = await loader._build_variables(client, lead, call_count=1, db=mock_db)
+
+    assert result["lead_name"] == "Real Name", (
+        f"Base Lead field 'lead_name' must win over custom_fields on collision. "
+        f"Got {result['lead_name']!r}"
+    )
+    # But other custom fields (not in base) are still present
+    assert result["car_make"] == "Fiat", (
+        f"Custom field 'car_make' should be present when not colliding. "
+        f"Got {result.get('car_make')!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_variables_no_custom_fields_when_db_is_none(tmp_path: Path):
+    """RED test: When db=None, custom fields are not loaded (no DB call happens).
+
+    Behavior: graceful — no crash, no attempt to call get_all.
+    """
+    from unittest.mock import AsyncMock, patch
+    from app.prompts.loader import PromptLoader
+
+    loader = PromptLoader(clients_dir=tmp_path)
+    client = make_client(client_id="quintana-seguros")
+    lead = make_lead(name="Solo Lead")
+    lead.id = "lead-jkl"
+
+    mock_get_all = AsyncMock(return_value={})
+
+    with patch(
+        "app.prompts.loader.lead_custom_fields_service.get_all",
+        new=mock_get_all,
+    ):
+        # db=None — get_all must NOT be called
+        result = await loader._build_variables(client, lead, call_count=1, db=None)
+
+    mock_get_all.assert_not_called()
+    assert isinstance(result, dict)
+    assert "lead_name" in result
+
+
+@pytest.mark.asyncio
+async def test_render_template_resolves_custom_field_variable(tmp_path: Path):
+    """RED test: Full render() substitutes {{car_make}} from custom fields.
+
+    Spec scenario: Template resolves custom field variable
+    GIVEN system-prompt.md contains "{{car_make}} {{car_year}}"
+    AND custom_fields = {car_make: "Toyota", car_year: "2021"}
+    WHEN render() is called
+    THEN output contains "Toyota 2021"
+    """
+    from unittest.mock import AsyncMock, patch
+    from app.prompts.loader import PromptLoader
+
+    client_dir = tmp_path / "quintana-seguros"
+    client_dir.mkdir()
+    (client_dir / "prompt.md").write_text(
+        "Auto: {{car_make}} año {{car_year}}. Hola {{lead_name}}."
+    )
+
+    loader = PromptLoader(clients_dir=tmp_path)
+    client = make_client(client_id="quintana-seguros")
+    lead = make_lead(name="Carlos Pérez")
+    lead.id = "lead-mno"
+    lead.car_make = None
+    lead.car_year = None
+
+    mock_custom_fields = {"car_make": "Toyota", "car_year": "2021"}
+
+    with patch(
+        "app.prompts.loader.lead_custom_fields_service.get_all",
+        new=AsyncMock(return_value=mock_custom_fields),
+    ):
+        mock_db = MagicMock()
+        result = await loader.render(client, lead, db=mock_db)
+
+    assert "Toyota" in result, f"Expected 'Toyota' in rendered output, got: {result!r}"
+    assert "2021" in result, f"Expected '2021' in rendered output, got: {result!r}"
+    assert "Carlos Pérez" in result
+
+
+# Triangulation: additional scenarios for prompt variable merge
+
+
+@pytest.mark.asyncio
+async def test_build_variables_arbitrary_custom_field_available_as_template_var(
+    tmp_path: Path,
+):
+    """Triangulation: arbitrary custom field (e.g. zona) appears in context dict.
+
+    A custom field not in the base Lead schema (e.g. 'zona') must still be
+    available as a template variable so {{zona}} can be resolved.
+    """
+    from unittest.mock import AsyncMock, patch
+    from app.prompts.loader import PromptLoader
+
+    loader = PromptLoader(clients_dir=tmp_path)
+    client = make_client(client_id="quintana-seguros")
+    lead = make_lead(name="Luis Ramos")
+    lead.id = "lead-pqr"
+
+    mock_custom_fields = {"zona": "Norte", "age": "35"}
+
+    with patch(
+        "app.prompts.loader.lead_custom_fields_service.get_all",
+        new=AsyncMock(return_value=mock_custom_fields),
+    ):
+        mock_db = MagicMock()
+        result = await loader._build_variables(client, lead, call_count=1, db=mock_db)
+
+    assert result.get("zona") == "Norte", (
+        f"Custom field 'zona' must be present in template context, "
+        f"got {result.get('zona')!r}"
+    )
+    assert result.get("age") == "35", (
+        f"Custom field 'age' must be present in template context, "
+        f"got {result.get('age')!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_variables_get_all_exception_falls_back_gracefully(tmp_path: Path):
+    """Triangulation: if get_all raises, _build_variables does not crash.
+
+    Custom fields load errors must be swallowed and the function returns
+    base variables only (graceful degradation).
+    """
+    from unittest.mock import AsyncMock, patch
+    from app.prompts.loader import PromptLoader
+
+    loader = PromptLoader(clients_dir=tmp_path)
+    client = make_client(client_id="quintana-seguros")
+    lead = make_lead(name="Carmen Díaz")
+    lead.id = "lead-stu"
+
+    async def _raise(*args, **kwargs):
+        raise RuntimeError("DB unavailable")
+
+    with patch(
+        "app.prompts.loader.lead_custom_fields_service.get_all",
+        new=_raise,
+    ):
+        mock_db = MagicMock()
+        # Must NOT raise — returns dict with base keys
+        result = await loader._build_variables(client, lead, call_count=1, db=mock_db)
+
+    assert isinstance(result, dict)
+    assert result["lead_name"] == "Carmen Díaz"
+
+
+@pytest.mark.asyncio
+async def test_build_variables_with_lead_none_does_not_call_get_all(tmp_path: Path):
+    """Triangulation: lead=None → get_all is never called (no DB query for custom fields)."""
+    from unittest.mock import AsyncMock, patch
+    from app.prompts.loader import PromptLoader
+
+    loader = PromptLoader(clients_dir=tmp_path)
+    client = make_client(client_id="quintana-seguros")
+
+    mock_get_all = AsyncMock(return_value={})
+    mock_db = MagicMock()
+
+    with patch(
+        "app.prompts.loader.lead_custom_fields_service.get_all",
+        new=mock_get_all,
+    ):
+        result = await loader._build_variables(client, None, call_count=1, db=mock_db)
+
+    mock_get_all.assert_not_called()
+    assert result["lead_name"] == "el cliente"

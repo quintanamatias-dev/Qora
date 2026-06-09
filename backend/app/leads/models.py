@@ -215,8 +215,8 @@ class LeadCustomField(Base):
     __table_args__ = (
         # Composite index for efficient per-lead per-client queries
         Index("ix_lcf_lead_client", "lead_id", "client_id"),
-        # Unique: one row per (lead, field_key) — client scope enforced at app layer
-        Index("ix_lcf_lead_key", "lead_id", "field_key", unique=True),
+        # Unique: one row per (lead_id, client_id, field_key) — spec CF-1
+        Index("ix_lcf_lead_client_key", "lead_id", "client_id", "field_key", unique=True),
     )
 
     def __repr__(self) -> str:  # pragma: no cover

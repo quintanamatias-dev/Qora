@@ -1056,11 +1056,30 @@ async def _process_custom_llm_request(
             or (agent is not None and agent.system_prompt and not _agent_has_template_vars)
         )
         if _has_static_prompt and lead is not None and not _context_render_failed:
+            # dynamic-lead-fields WU-7: read car/insurance data from lead_custom_fields,
+            # not from legacy Lead ORM columns (AC-1). Load synchronously via DB session.
+            _lead_cf: dict = {}
+            try:
+                from app.leads.lead_custom_fields_service import get_all as _get_all_cf
+
+                _lead_cf = await _get_all_cf(db, lead.id, client_id)
+            except Exception:
+                pass  # best-effort — static context still rendered without car data
+
+            _car_str = " ".join(
+                filter(None, [
+                    _lead_cf.get("car_make", ""),
+                    _lead_cf.get("car_model", ""),
+                    _lead_cf.get("car_year", ""),
+                ])
+            )
+            _insurance_str = _lead_cf.get("current_insurance", "") or "No especificado"
+
             lead_context = (
                 f"\n[CONTEXTO DEL LEAD]\n"
                 f"Nombre: {lead.name}\n"
-                f"Auto: {lead.car_make or ''} {lead.car_model or ''} {lead.car_year or ''}\n"
-                f"Seguro actual: {lead.current_insurance or 'No especificado'}\n"
+                f"Auto: {_car_str}\n"
+                f"Seguro actual: {_insurance_str}\n"
                 f"Estado: {lead.status}\n"
                 f"Notas: {lead.notes or ''}\n"
             )

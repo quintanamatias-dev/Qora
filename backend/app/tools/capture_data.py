@@ -1,14 +1,17 @@
 """QORA Tools — capture_data handler.
 
 Generic field-capture tool whose schema is stored per-agent in tool_config JSON.
-Validates arguments against the agent's stored JSON Schema, then writes one
-LeadProfileFact row per captured field using the key format `captured:{field_name}`.
+Validates arguments against the agent's stored JSON Schema, then:
+1. Writes one lead_custom_fields row per captured field (primary storage — WU-5)
+2. Dual-writes one LeadProfileFact row per field with key `captured:{field_name}`
+   for backward compatibility with the intelligence pipeline.
 
 Spec: Requirement: capture_data Handler Validates and Persists
 AC-2: Missing required fields → error, no DB writes (atomic)
 AC-3: Cross-tenant access → lead_not_found (no leakage)
 AC-4: Each captured field → one active LeadProfileFact with key `captured:{name}`
 AC-5: Never transitions lead status
+dynamic-lead-fields WU-5: business data written to lead_custom_fields (dual-write)
 """
 
 from __future__ import annotations
@@ -38,12 +41,16 @@ async def capture_data(
     captured_fields: dict,
     client_id: str,
     source_call_id: str | None = None,
+    field_type_map: dict[str, str] | None = None,
 ) -> dict:
-    """Validate captured fields against agent schema and write LeadProfileFact rows.
+    """Validate captured fields against agent schema and write to storage.
 
     The function validates that all required fields (from tool_config["capture_data"]
-    ["required"], excluding "lead_id") are present in captured_fields. On success,
-    it writes one LeadProfileFact row per captured field with key `captured:{field}`.
+    ["required"], excluding "lead_id") are present in captured_fields. On success:
+    1. Upserts each captured field to lead_custom_fields (primary storage, WU-5)
+    2. Dual-writes a LeadProfileFact row with key `captured:{field}` for backward
+       compat with the intelligence/summarizer pipeline.
+
     On failure (missing fields, lead not found, wrong client), it returns an error
     dict and writes nothing.
 
@@ -55,6 +62,8 @@ async def capture_data(
         captured_fields: Dict of field_name → value provided by the LLM.
         client_id: Tenant client ID — used to enforce cross-tenant isolation.
         source_call_id: Optional call session ID for fact provenance.
+        field_type_map: Optional dict of field_name → field_type for lead_custom_fields
+            coercion (e.g. {"car_year": "integer"}). Defaults to "string" for unknown fields.
 
     Returns:
         On success: {"status": "captured", "fields": [list of captured field names]}
@@ -110,6 +119,37 @@ async def capture_data(
     ]
 
     now = _utcnow()
+    _effective_field_type_map: dict[str, str] = field_type_map or {}
+
+    # --- WU-5: Primary storage — upsert to lead_custom_fields ---
+    # Each captured field is written to the lead_custom_fields table using the
+    # field_type_map to resolve the appropriate field_type for coercion.
+    from app.leads import lead_custom_fields_service as _lcf_service
+
+    for field_name, field_value in fields_to_write:
+        field_type = _effective_field_type_map.get(field_name, "string")
+        try:
+            await _lcf_service.upsert(
+                session,
+                lead_id=lead_id,
+                client_id=client_id,
+                field_key=field_name,
+                field_value=field_value,
+                field_type=field_type,
+            )
+        except Exception:
+            # Log but don't fail the whole call — fall back to LeadProfileFact only
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "capture_data: failed to upsert %s to lead_custom_fields; "
+                "LeadProfileFact write still proceeds",
+                field_name,
+                exc_info=True,
+            )
+
+    # --- Backward compat: dual-write to LeadProfileFact (captured: namespace) ---
+    # The intelligence/summarizer pipeline reads from captured: facts during WU-5.
+    # This write is kept for backward compat until WU-7 removes it.
 
     # Batch-load all existing active captured: facts for this lead in one query
     # to avoid N+1 selects (one per field).

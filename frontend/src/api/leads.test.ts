@@ -16,6 +16,7 @@ const mockLead: Lead = {
   client_id: 'demo-client',
   name: 'John Doe',
   phone: '+1-555-0100',
+  // Transition: legacy fields still present
   car_make: 'Toyota',
   car_model: 'Camry',
   car_year: 2022,
@@ -36,6 +37,8 @@ const mockLead: Lead = {
   next_action_at: null,
   // Phase 7
   next_scheduled_call_at: null,
+  // WU-6: custom fields
+  custom_fields: { car_make: 'Toyota', car_model: 'Camry', car_year: '2022' },
 }
 
 function mockFetch(status: number, body: unknown) {

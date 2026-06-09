@@ -1558,93 +1558,37 @@ async def test_summarizer_unknown_extra_fields_ignored(seeded_db):
 
 # ---------------------------------------------------------------------------
 # Issue #21 — Car correction propagation via data_corrections
+# dynamic-lead-fields WU-7: _apply_data_corrections (legacy string-parser) removed.
+# Corrections go through _apply_structured_corrections (the structured pipeline).
 # ---------------------------------------------------------------------------
 
 
-def test_apply_data_corrections_updates_car_model():
-    """_apply_data_corrections parses 'car_model: Polo Trend' and updates lead.car_model."""
-    from app.summarizer import _apply_data_corrections
-    from unittest.mock import MagicMock
+def test_apply_data_corrections_legacy_function_removed():
+    """_apply_data_corrections (legacy string parser) must NOT exist after WU-7.
 
-    lead = MagicMock()
-    lead.car_make = "VW"
-    lead.car_model = "Golf"
-    lead.car_year = 2019
+    The structured corrections pipeline (_apply_structured_corrections) replaces it.
+    Only the old free-text line-parser is gone; structured corrections remain.
+    """
+    import app.summarizer as summarizer_module
 
-    _apply_data_corrections(lead, "car_model: Polo Trend")
-
-    assert (
-        lead.car_model == "Polo Trend"
-    ), "car_model must be updated to 'Polo Trend' from data_corrections"
-    # car_make unchanged
-    assert lead.car_make == "VW"
+    assert not hasattr(summarizer_module, "_apply_data_corrections"), (
+        "_apply_data_corrections (legacy string parser) was removed in WU-7. "
+        "Use _apply_structured_corrections for corrections via the DataCorrectionsAxis pipeline."
+    )
 
 
-def test_apply_data_corrections_updates_car_make():
-    """_apply_data_corrections parses 'car_make: Ford' and updates lead.car_make."""
-    from app.summarizer import _apply_data_corrections
-    from unittest.mock import MagicMock
+def test_apply_structured_corrections_still_present():
+    """_apply_structured_corrections must still exist — it is NOT the one removed.
 
-    lead = MagicMock()
-    lead.car_make = "VW"
-    lead.car_model = "Golf"
-    lead.car_year = 2019
+    Only the legacy free-text _apply_data_corrections is removed.
+    The structured pipeline function stays.
+    """
+    import app.summarizer as summarizer_module
 
-    _apply_data_corrections(lead, "car_make: Ford")
-
-    assert lead.car_make == "Ford"
-    assert lead.car_model == "Golf"  # unchanged
-
-
-def test_apply_data_corrections_leaves_columns_unchanged_when_no_match():
-    """_apply_data_corrections with empty or irrelevant string leaves car columns unchanged."""
-    from app.summarizer import _apply_data_corrections
-    from unittest.mock import MagicMock
-
-    lead = MagicMock()
-    lead.car_make = "VW"
-    lead.car_model = "Golf"
-    lead.car_year = 2019
-
-    # Empty string — no corrections
-    _apply_data_corrections(lead, "")
-
-    assert lead.car_make == "VW"
-    assert lead.car_model == "Golf"
-    assert lead.car_year == 2019
-
-
-def test_apply_data_corrections_ignores_unrecognized_fields():
-    """_apply_data_corrections with unrecognized field names does not crash or modify lead."""
-    from app.summarizer import _apply_data_corrections
-    from unittest.mock import MagicMock
-
-    lead = MagicMock()
-    lead.car_make = "VW"
-    lead.car_model = "Golf"
-    lead.car_year = 2019
-
-    # Unknown field — should be silently ignored
-    _apply_data_corrections(lead, "unknown_field: some value")
-
-    assert lead.car_make == "VW"
-    assert lead.car_model == "Golf"
-
-
-def test_apply_data_corrections_multiple_lines():
-    """_apply_data_corrections handles multiple corrections on separate lines."""
-    from app.summarizer import _apply_data_corrections
-    from unittest.mock import MagicMock
-
-    lead = MagicMock()
-    lead.car_make = "VW"
-    lead.car_model = "Golf"
-    lead.car_year = 2019
-
-    _apply_data_corrections(lead, "car_make: Toyota\ncar_model: Corolla")
-
-    assert lead.car_make == "Toyota"
-    assert lead.car_model == "Corolla"
+    assert hasattr(summarizer_module, "_apply_structured_corrections"), (
+        "_apply_structured_corrections must remain in summarizer.py after WU-7. "
+        "Only the legacy string-parsing _apply_data_corrections was removed."
+    )
 
 
 async def test_summarizer_analysis_axes_flow_to_lead(seeded_db):

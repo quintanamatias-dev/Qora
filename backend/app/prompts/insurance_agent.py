@@ -97,7 +97,7 @@ NUNCA inventés precios ni porcentajes. Decís "cotización a medida".
 PASO 5 — CIERRE ACTIVO
 No preguntés "¿te interesa?" — asumí el interés y avanzá:
 "Bueno {lead_name}, ¿te mando la cotización al mail o preferís que te llame con los números?"
-Si acepta → llamá a register_interest
+Si acepta → seguí naturalmente y coordiná el próximo paso
 Si pone objeciones → manejo (ver abajo)
 Si dice que no claramente → llamá a mark_not_interested con la razón
 
@@ -126,7 +126,6 @@ MANEJO DE OBJECIONES — RESPUESTAS CONCRETAS
 REGLAS DE HERRAMIENTAS
 ════════════════════════════════════════════════════
 
-- register_interest: Cuando el lead acepta recibir cotización o muestra interés claro
 - mark_not_interested: Cuando rechaza claramente, después de intentar al menos una objeción
 - schedule_followup: Cuando pide ser llamado en otro momento — siempre confirmá la fecha
 - get_lead_details: Solo si necesitás más datos que no tenés
@@ -160,16 +159,19 @@ def render_system_prompt(
     lead: "Lead | None" = None,
     call_count: int = 1,
     memory: "MemoryContext | None" = None,
+    custom_fields: dict | None = None,
 ) -> str:
     """Render the Jaumpablo system prompt with client and lead context.
 
     Args:
         client: Client (tenant) configuration with name and agent_name.
-        lead: Lead record with car and personal data. None = use defaults.
+        lead: Lead record with name data. None = use defaults.
         call_count: Number of times this lead has been called (>1 = returning caller).
         memory: Optional MemoryContext from build_memory_context. When provided,
             its call_number is used to determine returning caller context instead
             of call_count. Backward-compatible — existing callers unaffected.
+        custom_fields: Optional dict of custom field values from lead_custom_fields.
+            When provided, car/insurance data is read from here (AC-1).
 
     Returns:
         Fully rendered system prompt string with all variables substituted.
@@ -179,19 +181,18 @@ def render_system_prompt(
     company_name = client.name if client else "la aseguradora"
     agent_name = client.agent_name if client else "Jaumpablo"
 
-    # Extract lead fields with safe defaults
+    # Extract lead name — only use ORM for the name field (non-business-data)
     if lead is not None:
         lead_name = lead.name or "el cliente"
-        lead_car_make = lead.car_make or "tu auto"
-        lead_car_model = lead.car_model or ""
-        lead_car_year = str(lead.car_year) if lead.car_year else ""
-        current_insurance = lead.current_insurance or "no tiene"
     else:
         lead_name = "el cliente"
-        lead_car_make = "tu auto"
-        lead_car_model = ""
-        lead_car_year = ""
-        current_insurance = "no tiene"
+
+    # Car and insurance data comes from custom_fields (AC-1: no legacy ORM column reads)
+    cf = custom_fields or {}
+    lead_car_make = cf.get("car_make") or "tu auto"
+    lead_car_model = cf.get("car_model") or ""
+    lead_car_year = cf.get("car_year") or ""
+    current_insurance = cf.get("current_insurance") or "no tiene"
 
     # CAP-2: Use memory's call_number when memory is provided; fall back to call_count
     effective_call_count = memory["call_number"] if memory is not None else call_count

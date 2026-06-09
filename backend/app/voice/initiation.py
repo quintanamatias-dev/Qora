@@ -148,10 +148,20 @@ async def initiation_webhook(
                     )
 
                 lead_name = lead.name
-                car_make = lead.car_make or ""
-                car_model = lead.car_model or ""
-                car_year = str(lead.car_year) if lead.car_year else ""
-                current_insurance = lead.current_insurance or ""
+                # dynamic-lead-fields WU-7: read car/insurance data from lead_custom_fields
+                # (AC-1: legacy ORM columns no longer read in active production paths).
+                try:
+                    from app.leads.lead_custom_fields_service import get_all as _get_cf_all
+
+                    _lcf = await _get_cf_all(session, lead.id, resolved_client_id)
+                except Exception:
+                    _lcf = {}
+
+                car_make = _lcf.get("car_make", "")
+                car_model = _lcf.get("car_model", "")
+                _cy_raw = _lcf.get("car_year", "")
+                car_year = str(_cy_raw) if _cy_raw else ""
+                current_insurance = _lcf.get("current_insurance", "")
                 lead_status = lead.status
                 lead_notes = lead.notes or ""
 

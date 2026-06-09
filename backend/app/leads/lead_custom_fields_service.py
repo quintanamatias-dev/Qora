@@ -145,16 +145,25 @@ async def get_one(
     db: AsyncSession,
     lead_id: str,
     field_key: str,
+    client_id: str | None = None,
 ) -> str | None:
     """Return single field value or None.
 
-    Note: not scoped by client_id — use get_all for client-isolated reads.
-    This is an internal helper for direct key lookups.
+    Args:
+        db: Async DB session.
+        lead_id: Lead to look up.
+        field_key: Field key to retrieve.
+        client_id: Optional — when provided, scopes the lookup by client_id
+            for full CF-1 compliance. Should always be passed in production code.
     """
-    stmt = select(LeadCustomField).where(
+    conditions = [
         LeadCustomField.lead_id == lead_id,
         LeadCustomField.field_key == field_key,
-    )
+    ]
+    if client_id is not None:
+        conditions.append(LeadCustomField.client_id == client_id)
+
+    stmt = select(LeadCustomField).where(*conditions)
     result = await db.execute(stmt)
     row = result.scalars().first()
     return row.field_value if row is not None else None
@@ -211,9 +220,10 @@ async def upsert(
     # Write-time coercion — raises FieldTypeError on failure (CF-4)
     coerced = coerce_value(field_value, field_type)
 
-    # Look for existing row
+    # Look for existing row — scoped by (lead_id, client_id, field_key) per CF-1
     stmt = select(LeadCustomField).where(
         LeadCustomField.lead_id == lead_id,
+        LeadCustomField.client_id == client_id,
         LeadCustomField.field_key == field_key,
     )
     result = await db.execute(stmt)

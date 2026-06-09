@@ -24,7 +24,7 @@ async def create_client(
     model: str = "gpt-4o",
     temperature: float = 0.7,
     max_tokens: int = 300,
-    tools_enabled: str = '["get_lead_details","register_interest","mark_not_interested","schedule_followup"]',
+    tools_enabled: str = '["get_lead_details","capture_data","mark_not_interested","schedule_followup"]',
     is_active: bool = True,
     # Scheduler configuration (Phase 7 — bootstrappable at create time)
     scheduler_enabled: bool = False,
@@ -162,36 +162,6 @@ async def update_client(
 # populate agent.system_prompt when no filesystem file existed previously.
 # ---------------------------------------------------------------------------
 
-# Phase 1 (configurable-agent-tools): Quintana capture_data tool_config.
-# Maps old register_interest car fields to capture_data schema.
-# Dual-run: capture_data added alongside legacy register_interest in tools_enabled
-# so both write paths are active during Phase 1 validation.
-# Field names match the LeadProfileFact keys used by the existing car pipeline.
-_QUINTANA_TOOL_CONFIG = {
-    "capture_data": {
-        "description": "Registrás el interés del lead y los datos del vehículo para cotización",
-        "type": "object",
-        "properties": {
-            "car_make": {"type": "string", "description": "Marca del auto"},
-            "car_model": {"type": "string", "description": "Modelo del auto"},
-            "car_year": {"type": "integer", "description": "Año del auto"},
-            "current_insurance": {
-                "type": "string",
-                "description": "Aseguradora actual del cliente (opcional)",
-            },
-            "age": {
-                "type": "integer",
-                "description": "Edad del titular de la póliza",
-            },
-            "zona": {
-                "type": "string",
-                "description": "Zona donde vive el titular (barrio/localidad)",
-            },
-        },
-        "required": ["lead_id", "car_make", "car_model", "car_year", "age", "zona"],
-    }
-}
-
 _QUINTANA_SYSTEM_PROMPT = """\
 Sos {{agent_name}}, asesor de seguros de {{company_name}}, una correduría argentina.
 Hablás siempre en español rioplatense con voseo natural. Sos cálido, directo y genuino — como ese vendedor que te cae bien y te convence porque es honesto, no porque te presiona.
@@ -256,7 +226,7 @@ NUNCA inventés precios ni porcentajes. Decís "cotización a medida".
 PASO 5 — CIERRE ACTIVO
 No preguntés "¿te interesa?" — asumí el interés y avanzá:
 "Bueno {{lead_name}}, ¿te mando la cotización al mail o preferís que te llame con los números?"
-Si acepta → llamá a register_interest
+Si acepta → seguí naturalmente y coordiná el próximo paso
 Si pone objeciones → manejo (ver abajo)
 Si dice que no claramente → llamá a mark_not_interested con la razón
 
@@ -285,7 +255,6 @@ MANEJO DE OBJECIONES — RESPUESTAS CONCRETAS
 REGLAS DE HERRAMIENTAS
 ════════════════════════════════════════════════════
 
-- register_interest: Cuando el lead acepta recibir cotización o muestra interés claro
 - mark_not_interested: Cuando rechaza claramente, después de intentar al menos una objeción
 - schedule_followup: Cuando pide ser llamado en otro momento — siempre confirmá la fecha
 - get_lead_details: Solo si necesitás más datos que no tenés
@@ -358,17 +327,14 @@ async def seed_quintana(session: AsyncSession) -> None:
     AD-2: Non-overwrite guard — only updates agent fields when they are missing or blank
     (None or empty string). Protects runtime edits made via admin UI.
     """
-    # Phase 1 (configurable-agent-tools): tools_enabled includes capture_data for dual-run.
-    # Legacy tools stay alongside capture_data so both write paths are active during
-    # Phase 1 validation. Phase 2 will remove legacy tools.
+    # Tools: capture_data schema is generated from crm.yaml field_definitions at agent load time.
+    # tool_config column not used for capture_data schema — CRMConfig is the source of truth.
     _QUINTANA_TOOLS_ENABLED = json.dumps([
         "get_lead_details",
-        "register_interest",
         "mark_not_interested",
         "schedule_followup",
         "capture_data",
     ])
-    _QUINTANA_TOOL_CONFIG_JSON = json.dumps(_QUINTANA_TOOL_CONFIG)
 
     existing = await get_client(session, "quintana-seguros")
     if existing is not None:
@@ -382,18 +348,17 @@ async def seed_quintana(session: AsyncSession) -> None:
             if not agent.knowledge_base:
                 agent.knowledge_base = _QUINTANA_KNOWLEDGE_BASE
                 updated = True
-            # Phase 1: Idempotently add capture_data to tools_enabled and set tool_config
-            # only if tool_config is not yet set (non-overwrite guard).
-            if not agent.tool_config:
-                agent.tool_config = _QUINTANA_TOOL_CONFIG_JSON
-                # Also add capture_data to tools_enabled if not already present
-                try:
-                    current_tools = json.loads(agent.tools_enabled or "[]")
-                except (json.JSONDecodeError, TypeError):
-                    current_tools = []
+            # Idempotently remove register_interest from tools_enabled if still present
+            # (legacy agents seeded before Phase 2 may still carry it).
+            try:
+                current_tools = json.loads(agent.tools_enabled or "[]")
+            except (json.JSONDecodeError, TypeError):
+                current_tools = []
+            if "register_interest" in current_tools:
+                current_tools = [t for t in current_tools if t != "register_interest"]
                 if "capture_data" not in current_tools:
                     current_tools.append("capture_data")
-                    agent.tools_enabled = json.dumps(current_tools)
+                agent.tools_enabled = json.dumps(current_tools)
                 updated = True
             if updated:
                 await session.flush()
@@ -412,12 +377,8 @@ async def seed_quintana(session: AsyncSession) -> None:
         system_prompt_override=_QUINTANA_SYSTEM_PROMPT,
         knowledge_base=_QUINTANA_KNOWLEDGE_BASE,
     )
-    # Set tool_config on the newly created agent
-    new_agent = await get_default_agent(session, "quintana-seguros")
-    if new_agent is not None:
-        new_agent.tool_config = _QUINTANA_TOOL_CONFIG_JSON
-        await session.flush()
     # Note: create_client() auto-creates the default Agent — no separate create_agent() needed.
+    # tool_config column not set — capture_data schema is generated from crm.yaml at runtime.
 
 
 _QORA_EXPLAINER_SYSTEM_PROMPT = """\
@@ -548,7 +509,7 @@ async def create_agent(
     model: str = "gpt-4o",
     temperature: float = 0.7,
     max_tokens: int = 300,
-    tools_enabled: str = '["get_lead_details","register_interest","mark_not_interested","schedule_followup"]',
+    tools_enabled: str = '["get_lead_details","capture_data","mark_not_interested","schedule_followup"]',
     is_active: bool = True,
     is_default: bool = False,
     elevenlabs_agent_id: str | None = None,

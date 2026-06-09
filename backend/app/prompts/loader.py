@@ -46,6 +46,8 @@ if TYPE_CHECKING:
     from app.tenants.models import Agent, Client
     from app.leads.models import Lead
 
+from app.leads import lead_custom_fields_service
+
 logger = logging.getLogger(__name__)
 _structlog = structlog.get_logger()
 
@@ -293,6 +295,7 @@ class PromptLoader:
                 # Build a minimal client-like object with agent's name
                 _agent_as_client = _AgentClientAdapter(agent, client)
                 fallback_memory = None
+                fallback_custom_fields: dict = {}
                 if db is not None and lead is not None:
                     try:
                         from app.memory import build_memory_context
@@ -306,8 +309,27 @@ class PromptLoader:
                             error_msg=str(exc),
                             branch="render_for_agent_fallback",
                         )
+                    try:
+                        _lead_id = getattr(lead, "id", None)
+                        _client_id = getattr(agent, "client_id", None)
+                        if _lead_id and _client_id:
+                            fallback_custom_fields = await lead_custom_fields_service.get_all(
+                                db, _lead_id, _client_id
+                            )
+                    except Exception as exc:
+                        _structlog.error(
+                            "custom_fields_load_failed",
+                            lead_id=getattr(lead, "id", None),
+                            error_type=type(exc).__name__,
+                            error_msg=str(exc),
+                            branch="render_for_agent_fallback_cf",
+                        )
                 prompt_body = render_system_prompt(
-                    _agent_as_client, lead, call_count, memory=fallback_memory
+                    _agent_as_client,
+                    lead,
+                    call_count,
+                    memory=fallback_memory,
+                    custom_fields=fallback_custom_fields,
                 )
             else:
                 prompt_body = await self._render_template(
@@ -374,6 +396,7 @@ class PromptLoader:
             # REQ-2.8: Build memory context and pass it so render_system_prompt
             # uses real call_number / is_returning_caller data.
             fallback_memory = None
+            render_custom_fields: dict = {}
             if db is not None and lead is not None:
                 try:
                     from app.memory import build_memory_context
@@ -388,8 +411,27 @@ class PromptLoader:
                         branch="fallback_jaumpablo",
                     )
                     # fallback_memory stays None — render_system_prompt uses call_count
+                try:
+                    _lead_id = getattr(lead, "id", None)
+                    _client_id = getattr(client, "id", None)
+                    if _lead_id and _client_id:
+                        render_custom_fields = await lead_custom_fields_service.get_all(
+                            db, _lead_id, _client_id
+                        )
+                except Exception as exc:
+                    _structlog.error(
+                        "custom_fields_load_failed",
+                        lead_id=getattr(lead, "id", None),
+                        error_type=type(exc).__name__,
+                        error_msg=str(exc),
+                        branch="render_jaumpablo_cf",
+                    )
             prompt_body = render_system_prompt(
-                client, lead, call_count, memory=fallback_memory
+                client,
+                lead,
+                call_count,
+                memory=fallback_memory,
+                custom_fields=render_custom_fields,
             )
         else:
             prompt_body = await self._render_template(
@@ -424,6 +466,13 @@ class PromptLoader:
         to inject real memory variables. Falls back to empty defaults on
         any exception, logging ``memory_context_failed``.
 
+        WU-3 (dynamic-lead-fields): Also loads custom fields from
+        ``lead_custom_fields`` table via ``lead_custom_fields_service.get_all()``.
+        Custom fields become template variables (e.g. ``{{car_make}}``,
+        ``{{zona}}``). Merge order: custom_fields first, then base Lead
+        variables OVERRIDE on collision. Missing custom fields render as
+        empty string (never raise KeyError).
+
         Includes memory variables (call_history, confirmed_facts,
         is_returning_caller, call_number). call_history/is_returning_caller/
         call_number use real values when db+lead are provided; confirmed_facts
@@ -434,12 +483,39 @@ class PromptLoader:
         company_name = client.name if client else "la aseguradora"
         agent_name = client.agent_name if client else "Jaumpablo"
 
+        # ------------------------------------------------------------------
+        # WU-3: Load custom fields from DB (PRIMARY source for business data)
+        # Missing fields default to empty string — never raise KeyError (spec AC-9).
+        # ------------------------------------------------------------------
+        custom_fields: dict[str, str] = {}
+        if db is not None and lead is not None:
+            try:
+                lead_id = getattr(lead, "id", None)
+                client_id = getattr(client, "id", None) if client else None
+                if lead_id is not None and client_id is not None:
+                    custom_fields = await lead_custom_fields_service.get_all(
+                        db, lead_id, client_id
+                    )
+            except Exception as exc:
+                _structlog.error(
+                    "custom_fields_load_failed",
+                    lead_id=getattr(lead, "id", None),
+                    error_type=type(exc).__name__,
+                    error_msg=str(exc),
+                )
+                # Keep empty dict — graceful degradation
+
+        # ------------------------------------------------------------------
+        # Base Lead fields — DUAL-READ: custom fields PRIMARY, legacy columns FALLBACK
+        # Base Lead keys win on collision (spec: "Base Lead keys win on collision")
+        # ------------------------------------------------------------------
         if lead is not None:
             lead_name = lead.name or "el cliente"
-            car_make = lead.car_make or "tu auto"
-            car_model = lead.car_model or ""
-            car_year = str(lead.car_year) if lead.car_year else ""
-            current_insurance = lead.current_insurance or "no tiene"
+            # Custom fields are the authoritative source (AC-1: no legacy ORM column reads)
+            car_make = custom_fields.get("car_make") or "tu auto"
+            car_model = custom_fields.get("car_model") or ""
+            car_year = custom_fields.get("car_year") or ""
+            current_insurance = custom_fields.get("current_insurance") or "no tiene"
         else:
             lead_name = "el cliente"
             car_make = "tu auto"
@@ -485,7 +561,16 @@ class PromptLoader:
                 )
                 # Keep empty defaults already set above
 
-        return {
+        # ------------------------------------------------------------------
+        # Merge order: custom_fields FIRST (provides extra keys from DB),
+        # then base variables OVERRIDE (base Lead keys always win on collision).
+        # ------------------------------------------------------------------
+        # Start from custom_fields so any field_key from the DB is available
+        # as a template variable (e.g. {{zona}}, {{age}}, etc.)
+        merged: dict[str, str] = {k: v for k, v in custom_fields.items()}
+
+        # Base variables always override — this is the "base Lead keys win" guarantee
+        base_variables: dict[str, str] = {
             "lead_name": lead_name,
             "company_name": company_name,
             "agent_name": agent_name,
@@ -500,6 +585,8 @@ class PromptLoader:
             "is_returning_caller": is_returning_caller_str,
             "call_number": call_number_str,
         }
+        merged.update(base_variables)
+        return merged
 
     @staticmethod
     def _sanitize_value(value: str) -> str:

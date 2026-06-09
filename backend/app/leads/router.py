@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.leads import lead_custom_fields_service as cf_service
 from app.leads.models import LeadStatus
 from app.leads.service import (
     InvalidTransitionError,
@@ -66,6 +67,8 @@ class CreateLeadRequest(BaseModel):
     car_year: int | None = None
     current_insurance: str | None = None
     notes: str | None = None
+    # WU-6: optional custom fields written to lead_custom_fields table
+    custom_fields: dict[str, str] | None = None
 
 
 class PatchStatusRequest(BaseModel):
@@ -114,12 +117,13 @@ def _lead_to_dict(
     next_scheduled_call_at: datetime | None = None,
     profile_facts: list | None = None,
     interest_history: list | None = None,
+    custom_fields: dict[str, str] | None = None,
 ) -> dict:
     """Serialize a Lead ORM object to a response dict.
 
     Includes Phase 2 CRM fields (summary_last_call, interest_level, etc.),
-    Phase 7 enrichment field (next_scheduled_call_at), and Issue #36 additive
-    fields (profile_facts, interest_history).
+    Phase 7 enrichment field (next_scheduled_call_at), Issue #36 additive
+    fields (profile_facts, interest_history), and WU-6 custom_fields dict.
     All optional fields are null-safe — returned as null if not set.
 
     Args:
@@ -130,6 +134,8 @@ def _lead_to_dict(
             If None, defaults to empty dict in the response.
         interest_history: Pre-fetched list of LeadInterestHistory dicts (Issue #36).
             If None, defaults to empty list in the response.
+        custom_fields: Pre-fetched {field_key: field_value} from lead_custom_fields (WU-6).
+            If None, defaults to empty dict in the response.
     """
     # Group profile_facts by namespace prefix (strip trailing colon)
     grouped_profile_facts: dict = {}
@@ -146,10 +152,6 @@ def _lead_to_dict(
         "client_id": lead.client_id,
         "name": lead.name,
         "phone": lead.phone,
-        "car_make": lead.car_make,
-        "car_model": lead.car_model,
-        "car_year": lead.car_year,
-        "current_insurance": lead.current_insurance,
         "status": lead.status,
         "notes": lead.notes,
         "call_count": lead.call_count,
@@ -181,6 +183,8 @@ def _lead_to_dict(
             }
             for row in (interest_history or [])
         ],
+        # WU-6: dynamic custom fields from lead_custom_fields table
+        "custom_fields": custom_fields if custom_fields is not None else {},
     }
 
 
@@ -211,8 +215,14 @@ async def list_leads(
         return []
     lead_ids = [lead.id for lead in leads]
     schedule_map = await _batch_next_scheduled_call_at(session, lead_ids)
+    # WU-6: batch load custom fields for all leads in one query
+    cf_map = await cf_service.batch_get(session, lead_ids, client_id.lower())
     return [
-        _lead_to_dict(lead, next_scheduled_call_at=schedule_map.get(lead.id))
+        _lead_to_dict(
+            lead,
+            next_scheduled_call_at=schedule_map.get(lead.id),
+            custom_fields=cf_map.get(lead.id, {}),
+        )
         for lead in leads
     ]
 
@@ -237,9 +247,14 @@ async def get_lead_by_id(
     # Issue #36: Fetch accumulated profile data from relational tables
     profile_facts = await get_active_profile_facts(session, lead_id)
     interest_history = await get_interest_history(session, lead_id)
+    # WU-6: load custom fields scoped to this lead's client
+    custom_fields = await cf_service.get_all(session, lead_id, lead.client_id)
 
     return _lead_to_dict(
-        lead, profile_facts=profile_facts, interest_history=interest_history
+        lead,
+        profile_facts=profile_facts,
+        interest_history=interest_history,
+        custom_fields=custom_fields,
     )
 
 
@@ -264,8 +279,21 @@ async def create_new_lead(
         current_insurance=body.current_insurance,
         notes=body.notes,
     )
+
+    # WU-6: write custom_fields to lead_custom_fields table if provided
+    if body.custom_fields:
+        await cf_service.upsert_many(
+            session,
+            lead_id=lead.id,
+            client_id=body.client_id,
+            fields=body.custom_fields,
+        )
+
     await session.commit()
-    return _lead_to_dict(lead)
+
+    # Reload custom fields after commit so response reflects stored values
+    custom_fields = await cf_service.get_all(session, lead.id, body.client_id)
+    return _lead_to_dict(lead, custom_fields=custom_fields)
 
 
 @router.patch("/{lead_id}/status")
@@ -299,7 +327,9 @@ async def patch_lead_status(
         )
 
     await session.commit()
-    return _lead_to_dict(lead)
+    # WU-6: include custom_fields in patch status response
+    custom_fields = await cf_service.get_all(session, lead_id, lead.client_id)
+    return _lead_to_dict(lead, custom_fields=custom_fields)
 
 
 @router.get("/{lead_id}/history")

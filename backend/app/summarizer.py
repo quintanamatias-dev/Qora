@@ -67,27 +67,27 @@ _NEGATIVE_CLASSIFICATIONS: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 
 
-def is_quote_ready(lead: "Any") -> bool:
-    """Return True if a lead has all required fields for insurance quoting.
+def is_quote_ready(
+    custom_fields: "dict[str, str]",
+    quote_ready_fields: "list[str] | None",
+) -> bool:
+    """Return True if all required fields are present and non-empty in custom_fields.
 
     This is a pure function — no DB access, no side effects.
-    All five fields must be non-None and truthy.
+    Driven entirely by the client's CRM config (quote_ready_fields from crm.yaml).
 
     Args:
-        lead: Lead ORM instance (or any object with the required attributes).
+        custom_fields: Dict of {field_key: field_value} loaded from lead_custom_fields.
+        quote_ready_fields: List of required field keys from CRMConfig.quote_ready_fields.
+            If None or empty, always returns False (never infer "quoted").
 
     Returns:
-        True if car_make, car_model, car_year, age, and zona are all set.
+        True if ALL fields in quote_ready_fields are present and truthy in custom_fields.
+        False if quote_ready_fields is None, empty, or any required field is absent/empty.
     """
-    return all(
-        [
-            lead.car_make,
-            lead.car_model,
-            lead.car_year,
-            lead.age,
-            lead.zona,
-        ]
-    )
+    if not quote_ready_fields:
+        return False
+    return all(custom_fields.get(f) for f in quote_ready_fields)
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +99,8 @@ def apply_status_from_next_action(
     current_status: str,
     next_action_result: dict | None,
     lead: "Any | None" = None,
+    custom_fields: "dict[str, str] | None" = None,
+    quote_ready_fields: "list[str] | None" = None,
 ) -> str | None:
     """Map next_action_result to a target lead status.
 
@@ -112,7 +114,7 @@ def apply_status_from_next_action(
     - "new" / any other non-called state → None.
     - action == "close_lead":
         - outcome.classification == "completed_positive":
-            - is_quote_ready(lead) → "quoted"
+            - is_quote_ready(custom_fields, quote_ready_fields) → "quoted"
             - else → "follow_up"
         - outcome.classification in {completed_negative, do_not_contact, hostile} → "not_interested"
     - action in {"follow_up", "schedule_call"} → "follow_up"
@@ -122,8 +124,11 @@ def apply_status_from_next_action(
     Args:
         current_status: Lead.status value (string).
         next_action_result: Dict with "action" key (and optional "outcome" sub-dict).
-        lead: Optional Lead ORM instance used to check is_quote_ready(). When None,
-              treated as not quote-ready (follow_up for positive outcomes).
+        lead: Deprecated. Kept for backward compatibility; ignored when custom_fields provided.
+        custom_fields: Dict of {field_key: field_value} loaded from lead_custom_fields.
+            When provided, used with quote_ready_fields to determine quote-readiness.
+        quote_ready_fields: List of required field keys from CRMConfig.quote_ready_fields.
+            When None or empty, "quoted" status is never returned.
 
     Returns:
         Target status string or None.
@@ -142,8 +147,11 @@ def apply_status_from_next_action(
             outcome.get("classification") if isinstance(outcome, dict) else None
         )
         if classification == "completed_positive":
-            if lead is not None and is_quote_ready(lead):
-                return "quoted"
+            # Config-driven path: use custom_fields + quote_ready_fields (pure, config-driven).
+            # dynamic-lead-fields WU-7: legacy _is_quote_ready_legacy removed; only this path used.
+            if custom_fields is not None:
+                if is_quote_ready(custom_fields, quote_ready_fields):
+                    return "quoted"
             return "follow_up"
         if classification in _NEGATIVE_CLASSIFICATIONS:
             return "not_interested"
@@ -265,17 +273,39 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
             )
             current_misc_notes = _coerce_current_notes(raw_misc)
 
-            # Build snapshot of correctable fields for the data corrections pipeline
+            # Build snapshot of correctable fields for the data corrections pipeline.
+            # dynamic-lead-fields WU-4: merge base Lead fields + custom fields from DB.
+            # Custom fields override legacy Lead ORM columns for the same key.
             current_lead_data = {
                 "name": lead_for_notes.name,
                 "phone": lead_for_notes.phone,
                 "email": lead_for_notes.email,
+                # Legacy ORM values as fallback (may be None post-WU-7)
                 "age": lead_for_notes.age,
                 "car_make": lead_for_notes.car_make,
                 "car_model": lead_for_notes.car_model,
                 "car_year": lead_for_notes.car_year,
                 "current_insurance": lead_for_notes.current_insurance,
             }
+            # Merge custom fields on top (custom field values take precedence)
+            if cs.client_id:
+                try:
+                    from app.leads.lead_custom_fields_service import (
+                        get_all as _get_all_cf,
+                    )
+
+                    _cf_snapshot = await _get_all_cf(
+                        db, cs.lead_id, cs.client_id
+                    )
+                    # Custom fields override legacy ORM values (they are the source of truth)
+                    current_lead_data.update(_cf_snapshot)
+                except Exception as _cf_exc:
+                    logger.debug(
+                        "summarizer_custom_fields_snapshot_failed",
+                        lead_id=cs.lead_id,
+                        client_id=cs.client_id,
+                        error=str(_cf_exc),
+                    )
 
             # qora-next-action: build LeadSnapshot for post-analysis pipeline
             from app.analysis.universal.next_action import LeadSnapshot
@@ -372,6 +402,7 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
                 facts,
                 session_id=cs.id,
                 corrections_axis=_corrections_axis,
+                client_id=cs.client_id,
             )
 
         # DEPRECATED: cs.extracted_facts — use call_analyses table instead.
@@ -804,6 +835,7 @@ async def _merge_facts_into_lead(
     *,
     session_id: str | None = None,
     corrections_axis: "DataCorrectionsAxis | None" = None,
+    client_id: str | None = None,
 ) -> None:
     """Merge extracted facts into the Lead record and dual-write to new relational tables.
 
@@ -914,12 +946,31 @@ async def _merge_facts_into_lead(
     # configurable-agent-tools Phase 2: apply status transitions from next_action_result.
     # Only transitions when lead.status == "called"; terminal states are guarded in
     # apply_status_from_next_action (returns None → no transition attempted).
-    # quote-ready-status: pass lead to enable is_quote_ready check inside the function.
+    # dynamic-lead-fields WU-4: load custom fields + CRM config for config-driven quote-ready check.
     _next_action_result_for_status = facts.get("next_action_result")
+    _custom_fields_for_status: dict[str, str] = {}
+    _quote_ready_fields_for_status: list[str] = []
+    if client_id:
+        try:
+            from app.leads.lead_custom_fields_service import get_all as _get_custom_fields
+            from app.integrations.crm_config import CRMConfigLoader as _CRMConfigLoader
+
+            _custom_fields_for_status = await _get_custom_fields(db, lead_id, client_id)
+            _crm_cfg = _CRMConfigLoader.load(client_id)
+            if _crm_cfg is not None:
+                _quote_ready_fields_for_status = list(_crm_cfg.quote_ready_fields or [])
+        except Exception as _qr_exc:
+            logger.debug(
+                "summarizer_quote_ready_load_failed",
+                lead_id=lead_id,
+                client_id=client_id,
+                error=str(_qr_exc),
+            )
     _target_status = apply_status_from_next_action(
         current_status=lead.status,
         next_action_result=_next_action_result_for_status,
-        lead=lead,
+        custom_fields=_custom_fields_for_status,
+        quote_ready_fields=_quote_ready_fields_for_status,
     )
     if _target_status is not None:
         from app.leads.service import transition_lead_status as _transition
@@ -943,6 +994,7 @@ async def _merge_facts_into_lead(
     # qora-data-corrections: apply structured corrections from pipeline
     # corrections_axis is DataCorrectionsAxis from run_data_corrections_pipeline;
     # _apply_structured_corrections uses CORRECTABLE_FIELDS registry to set lead attrs.
+    # dynamic-lead-fields WU-4: also dual-write to lead_custom_fields for custom field storage.
     if corrections_axis is not None and isinstance(
         corrections_axis, DataCorrectionsAxis
     ):
@@ -957,6 +1009,11 @@ async def _merge_facts_into_lead(
             await _write_structured_correction_facts(
                 db, lead_id, session_id, actually_applied
             )
+            # dual-write to lead_custom_fields for 'custom_field' storage entries
+            if client_id:
+                await _apply_custom_field_corrections(
+                    db, lead_id, client_id, actually_applied
+                )
     else:
         facts["data_corrections"] = []
 
@@ -1079,44 +1136,6 @@ async def _run_crm_sync_in_background(client_id: str, lead_id: str) -> None:
         )
 
 
-def _apply_data_corrections(lead: "Lead", corrections_str: str) -> None:
-    """Parse 'field: value' lines from data_corrections and update Lead columns.
-
-    Supported fields: car_make, car_model, car_year.
-    Ignores unrecognized fields (forward-compatible).
-    car_year is parsed as int; others as stripped strings.
-
-    Args:
-        lead: Lead ORM instance to update.
-        corrections_str: Free-text string with 'field: value' per line.
-    """
-    if not corrections_str or not corrections_str.strip():
-        return
-
-    _SUPPORTED_FIELDS = {"car_make", "car_model", "car_year"}
-
-    for line in corrections_str.splitlines():
-        line = line.strip()
-        if not line or ":" not in line:
-            continue
-        # Split on first colon only
-        field, _, value = line.partition(":")
-        field = field.strip()
-        value = value.strip()
-
-        if field not in _SUPPORTED_FIELDS:
-            continue
-
-        if field == "car_year":
-            try:
-                setattr(lead, field, int(value))
-            except (ValueError, TypeError):
-                pass  # ignore malformed year — forward-compatible
-        else:
-            if value:
-                setattr(lead, field, value)
-
-
 # ---------------------------------------------------------------------------
 # Structured corrections application (qora-data-corrections)
 # ---------------------------------------------------------------------------
@@ -1132,6 +1151,11 @@ def _apply_structured_corrections(
     Only corrections with applied=True are written to the Lead.
     Idempotency: skips if corrected_value equals current value (already handled
     by the pipeline, but double-checked here as a safety gate).
+
+    dynamic-lead-fields WU-4: fields with storage='custom_field' must be written via
+    lead_custom_fields_service (async). This function returns a list of pending custom
+    field writes that the async caller must execute. Lead ORM column is ALSO written
+    (dual-write during transition until WU-7 removes legacy columns).
 
     Args:
         lead: Lead ORM instance to update in-place.
@@ -1156,12 +1180,15 @@ def _apply_structured_corrections(
         entry = CORRECTABLE_FIELDS[field]
         try:
             coerced = coerce_value(correction.corrected_value, entry.type)
-            setattr(lead, entry.lead_attr, coerced)
+            # Always write to Lead ORM column (dual-write for backward compat during transition)
+            if hasattr(lead, entry.lead_attr):
+                setattr(lead, entry.lead_attr, coerced)
             all_corrections.append(correction)
             logger.info(
                 "data_correction_applied",
                 field=field,
                 lead_attr=entry.lead_attr,
+                storage=entry.storage,
                 corrected_value=correction.corrected_value,
                 confidence=correction.confidence,
             )
@@ -1187,6 +1214,65 @@ def _apply_structured_corrections(
                 )
             )
     return all_corrections
+
+
+async def _apply_custom_field_corrections(
+    db: "AsyncSession",
+    lead_id: str,
+    client_id: str,
+    corrections: list["DataCorrection"],
+) -> None:
+    """Write corrections with storage='custom_field' to lead_custom_fields table.
+
+    Called after _apply_structured_corrections to complete the dual-write for
+    custom-field-backed correctable fields (car_make, car_model, car_year,
+    current_insurance, age). No-op if client_id is None or corrections list is empty.
+
+    Args:
+        db: Active async DB session.
+        lead_id: UUID of the lead.
+        client_id: Client slug for custom field scoping.
+        corrections: Applied DataCorrection items (applied=True only).
+    """
+    from app.analysis.universal.data_corrections import CORRECTABLE_FIELDS, coerce_value
+    from app.leads.lead_custom_fields_service import upsert as _upsert_cf
+
+    for correction in corrections:
+        if not correction.applied:
+            continue
+        field = correction.field
+        if field not in CORRECTABLE_FIELDS:
+            continue
+        entry = CORRECTABLE_FIELDS[field]
+        if entry.storage != "custom_field":
+            continue
+        try:
+            coerced = coerce_value(correction.corrected_value, entry.type)
+            # Determine field_type for the custom fields service
+            field_type_map = {"str": "string", "int": "integer", "float": "string"}
+            cf_field_type = field_type_map.get(entry.type, "string")
+            await _upsert_cf(
+                db,
+                lead_id=lead_id,
+                client_id=client_id,
+                field_key=field,
+                field_value=str(coerced),
+                field_type=cf_field_type,
+            )
+            logger.info(
+                "data_correction_custom_field_written",
+                field=field,
+                lead_id=lead_id,
+                corrected_value=correction.corrected_value,
+            )
+        except Exception as exc:
+            logger.warning(
+                "data_correction_custom_field_write_failed",
+                field=field,
+                lead_id=lead_id,
+                corrected_value=correction.corrected_value,
+                error=str(exc),
+            )
 
 
 async def _write_structured_correction_facts(

@@ -96,123 +96,195 @@ def test_is_valid_transition_quoted_to_anything_is_false():
 
 
 # ---------------------------------------------------------------------------
-# Task 3: _QUINTANA_TOOL_CONFIG includes age + zona
+# Task 3 (WU-5 updated): Dynamic schema from field_definitions includes age + zona
+# _QUINTANA_TOOL_CONFIG was removed in WU-5 — schema now comes from crm.yaml
 # ---------------------------------------------------------------------------
 
 
-def test_quintana_tool_config_has_age():
-    """_QUINTANA_TOOL_CONFIG must include 'age' in properties and required."""
-    from app.tenants.service import _QUINTANA_TOOL_CONFIG
+def test_dynamic_schema_from_crm_config_has_age():
+    """Dynamic capture_data schema from CRMConfig must include 'age' field.
 
-    props = _QUINTANA_TOOL_CONFIG["capture_data"]["properties"]
-    assert "age" in props, "capture_data properties must include 'age'"
+    WU-5: Schema generated from field_definitions, not _QUINTANA_TOOL_CONFIG.
+    """
+    from app.tools.registry import build_capture_data_from_field_definitions
+    from app.integrations.crm_config import CRMConfig, CustomFieldDef
+
+    crm_config = CRMConfig(
+        provider="airtable",
+        base_id="app_q",
+        table_id="tbl_q",
+        api_key="LITERAL_KEY",
+        match_field="lead_id",
+        custom_fields=[
+            CustomFieldDef(field_key="car_make", field_type="string", label="Car Make"),
+            CustomFieldDef(field_key="age", field_type="integer", label="Age"),
+            CustomFieldDef(field_key="zona", field_type="string", label="Zone"),
+        ],
+    )
+    result = build_capture_data_from_field_definitions(crm_config)
+    assert result is not None
+    props = result["function"]["parameters"]["properties"]
+    assert "age" in props, "dynamic schema must include 'age' field"
     assert props["age"]["type"] == "integer"
 
 
-def test_quintana_tool_config_has_zona():
-    """_QUINTANA_TOOL_CONFIG must include 'zona' in properties and required."""
-    from app.tenants.service import _QUINTANA_TOOL_CONFIG
+def test_dynamic_schema_from_crm_config_has_zona():
+    """Dynamic capture_data schema from CRMConfig must include 'zona' field.
 
-    props = _QUINTANA_TOOL_CONFIG["capture_data"]["properties"]
-    assert "zona" in props, "capture_data properties must include 'zona'"
+    WU-5: Schema generated from field_definitions, not _QUINTANA_TOOL_CONFIG.
+    """
+    from app.tools.registry import build_capture_data_from_field_definitions
+    from app.integrations.crm_config import CRMConfig, CustomFieldDef
+
+    crm_config = CRMConfig(
+        provider="airtable",
+        base_id="app_q",
+        table_id="tbl_q",
+        api_key="LITERAL_KEY",
+        match_field="lead_id",
+        custom_fields=[
+            CustomFieldDef(field_key="zona", field_type="string", label="Zone"),
+        ],
+    )
+    result = build_capture_data_from_field_definitions(crm_config)
+    assert result is not None
+    props = result["function"]["parameters"]["properties"]
+    assert "zona" in props, "dynamic schema must include 'zona' field"
     assert props["zona"]["type"] == "string"
 
 
-def test_quintana_tool_config_required_includes_age_and_zona():
-    """required list must include 'lead_id', 'car_make', 'car_model', 'car_year', 'age', 'zona'."""
-    from app.tenants.service import _QUINTANA_TOOL_CONFIG
+def test_dynamic_schema_lead_id_always_required():
+    """Dynamic schema always includes lead_id in required, regardless of field_definitions.
 
-    required = _QUINTANA_TOOL_CONFIG["capture_data"]["required"]
-    for field in ["lead_id", "car_make", "car_model", "car_year", "age", "zona"]:
-        assert field in required, f"'{field}' must be in capture_data required list"
+    WU-5: lead_id is always required for handler lookup.
+    """
+    from app.tools.registry import build_capture_data_from_field_definitions
+    from app.integrations.crm_config import CRMConfig, CustomFieldDef
+
+    crm_config = CRMConfig(
+        provider="airtable",
+        base_id="app_q",
+        table_id="tbl_q",
+        api_key="LITERAL_KEY",
+        match_field="lead_id",
+        custom_fields=[
+            CustomFieldDef(field_key="car_make", field_type="string", label="Car Make"),
+            CustomFieldDef(field_key="car_model", field_type="string", label="Car Model"),
+            CustomFieldDef(field_key="car_year", field_type="integer", label="Car Year"),
+            CustomFieldDef(field_key="age", field_type="integer", label="Age"),
+            CustomFieldDef(field_key="zona", field_type="string", label="Zone"),
+        ],
+    )
+    result = build_capture_data_from_field_definitions(crm_config)
+    assert result is not None
+    required = result["function"]["parameters"]["required"]
+    assert "lead_id" in required, "lead_id must always be in required list"
 
 
 # ---------------------------------------------------------------------------
-# Task 4: is_quote_ready() pure function
+# Task 4: is_quote_ready() pure function — new signature (WU-4)
 # ---------------------------------------------------------------------------
+# New API: is_quote_ready(custom_fields: dict[str, str], quote_ready_fields: list[str]) -> bool
+# These tests verify the new config-driven pure function behavior.
+# (Old Lead-ORM-based tests removed — new tests in tests/unit/test_quote_ready.py)
 
-
-class _MockLead:
-    """Minimal Lead-like object for testing is_quote_ready."""
-
-    def __init__(self, **kwargs):
-        self.car_make = kwargs.get("car_make")
-        self.car_model = kwargs.get("car_model")
-        self.car_year = kwargs.get("car_year")
-        self.age = kwargs.get("age")
-        self.zona = kwargs.get("zona")
+_QUINTANA_QR_FIELDS = ["car_make", "car_model", "car_year", "age", "zona"]
 
 
 def test_is_quote_ready_returns_true_when_all_fields_present():
-    """is_quote_ready() → True when all 5 fields are set."""
+    """is_quote_ready() → True when all required fields present in custom_fields."""
     from app.summarizer import is_quote_ready
 
-    lead = _MockLead(
-        car_make="Toyota",
-        car_model="Corolla",
-        car_year=2020,
-        age=35,
-        zona="Palermo",
-    )
-    assert is_quote_ready(lead) is True
+    custom_fields = {
+        "car_make": "Toyota",
+        "car_model": "Corolla",
+        "car_year": "2020",
+        "age": "35",
+        "zona": "Palermo",
+    }
+    assert is_quote_ready(custom_fields, _QUINTANA_QR_FIELDS) is True
 
 
 def test_is_quote_ready_returns_false_when_zona_missing():
-    """is_quote_ready() → False when zona is None."""
+    """is_quote_ready() → False when zona is absent from custom_fields."""
     from app.summarizer import is_quote_ready
 
-    lead = _MockLead(car_make="Toyota", car_model="Corolla", car_year=2020, age=35)
-    assert is_quote_ready(lead) is False
+    custom_fields = {
+        "car_make": "Toyota",
+        "car_model": "Corolla",
+        "car_year": "2020",
+        "age": "35",
+    }
+    assert is_quote_ready(custom_fields, _QUINTANA_QR_FIELDS) is False
 
 
 def test_is_quote_ready_returns_false_when_age_missing():
-    """is_quote_ready() → False when age is None."""
+    """is_quote_ready() → False when age is absent from custom_fields."""
     from app.summarizer import is_quote_ready
 
-    lead = _MockLead(car_make="Toyota", car_model="Corolla", car_year=2020, zona="San Telmo")
-    assert is_quote_ready(lead) is False
+    custom_fields = {
+        "car_make": "Toyota",
+        "car_model": "Corolla",
+        "car_year": "2020",
+        "zona": "San Telmo",
+    }
+    assert is_quote_ready(custom_fields, _QUINTANA_QR_FIELDS) is False
 
 
 def test_is_quote_ready_returns_false_when_car_make_missing():
-    """is_quote_ready() → False when car_make is None."""
+    """is_quote_ready() → False when car_make is absent from custom_fields."""
     from app.summarizer import is_quote_ready
 
-    lead = _MockLead(car_model="Corolla", car_year=2020, age=35, zona="Recoleta")
-    assert is_quote_ready(lead) is False
+    custom_fields = {
+        "car_model": "Corolla",
+        "car_year": "2020",
+        "age": "35",
+        "zona": "Recoleta",
+    }
+    assert is_quote_ready(custom_fields, _QUINTANA_QR_FIELDS) is False
 
 
 def test_is_quote_ready_returns_false_when_car_model_missing():
-    """is_quote_ready() → False when car_model is None."""
+    """is_quote_ready() → False when car_model is absent from custom_fields."""
     from app.summarizer import is_quote_ready
 
-    lead = _MockLead(car_make="Toyota", car_year=2020, age=35, zona="Recoleta")
-    assert is_quote_ready(lead) is False
+    custom_fields = {
+        "car_make": "Toyota",
+        "car_year": "2020",
+        "age": "35",
+        "zona": "Recoleta",
+    }
+    assert is_quote_ready(custom_fields, _QUINTANA_QR_FIELDS) is False
 
 
 def test_is_quote_ready_returns_false_when_car_year_missing():
-    """is_quote_ready() → False when car_year is None."""
+    """is_quote_ready() → False when car_year is absent from custom_fields."""
     from app.summarizer import is_quote_ready
 
-    lead = _MockLead(car_make="Toyota", car_model="Corolla", age=35, zona="Recoleta")
-    assert is_quote_ready(lead) is False
+    custom_fields = {
+        "car_make": "Toyota",
+        "car_model": "Corolla",
+        "age": "35",
+        "zona": "Recoleta",
+    }
+    assert is_quote_ready(custom_fields, _QUINTANA_QR_FIELDS) is False
 
 
 def test_is_quote_ready_returns_false_when_all_missing():
-    """is_quote_ready() → False when nothing is set."""
+    """is_quote_ready() → False when custom_fields is empty."""
     from app.summarizer import is_quote_ready
 
-    lead = _MockLead()
-    assert is_quote_ready(lead) is False
+    assert is_quote_ready({}, _QUINTANA_QR_FIELDS) is False
 
 
 # ---------------------------------------------------------------------------
-# Task 5: apply_status_from_next_action updated logic
+# Task 5: apply_status_from_next_action updated logic (WU-4)
 # ---------------------------------------------------------------------------
-# The new signature adds an optional `lead` parameter.
+# New API: pass custom_fields + quote_ready_fields (config-driven).
 # When action=close_lead + completed_positive:
-#   - is_quote_ready(lead) True  → "quoted"
-#   - is_quote_ready(lead) False → "follow_up"
-#   - lead=None (fallback)       → "follow_up" (not is_quote_ready)
+#   - all quote_ready_fields present in custom_fields → "quoted"
+#   - any missing → "follow_up"
+#   - quote_ready_fields=[] (no crm.yaml) → "follow_up"
 
 
 def _make_close_lead_positive() -> dict:
@@ -233,17 +305,24 @@ def _make_follow_up_action() -> dict:
     return {"action": "follow_up"}
 
 
+_ALL_FIELDS_CF = {
+    "car_make": "Toyota",
+    "car_model": "Corolla",
+    "car_year": "2020",
+    "age": "35",
+    "zona": "Palermo",
+}
+
+
 def test_apply_status_quoted_when_quote_ready():
-    """close_lead + completed_positive + is_quote_ready → 'quoted'."""
+    """close_lead + completed_positive + all fields present → 'quoted'."""
     from app.summarizer import apply_status_from_next_action
 
-    lead = _MockLead(
-        car_make="Toyota", car_model="Corolla", car_year=2020, age=35, zona="Palermo"
-    )
     result = apply_status_from_next_action(
         current_status="called",
         next_action_result=_make_close_lead_positive(),
-        lead=lead,
+        custom_fields=_ALL_FIELDS_CF,
+        quote_ready_fields=_QUINTANA_QR_FIELDS,
     )
     assert result == "quoted"
 
@@ -252,23 +331,23 @@ def test_apply_status_follow_up_when_not_quote_ready():
     """close_lead + completed_positive + missing zona → 'follow_up'."""
     from app.summarizer import apply_status_from_next_action
 
-    lead = _MockLead(car_make="Toyota", car_model="Corolla", car_year=2020, age=35)
     result = apply_status_from_next_action(
         current_status="called",
         next_action_result=_make_close_lead_positive(),
-        lead=lead,
+        custom_fields={"car_make": "Toyota", "car_model": "Corolla", "car_year": "2020", "age": "35"},
+        quote_ready_fields=_QUINTANA_QR_FIELDS,
     )
     assert result == "follow_up"
 
 
 def test_apply_status_follow_up_when_lead_is_none():
-    """close_lead + completed_positive + lead=None → 'follow_up'."""
+    """close_lead + completed_positive + no custom_fields → 'follow_up'."""
     from app.summarizer import apply_status_from_next_action
 
     result = apply_status_from_next_action(
         current_status="called",
         next_action_result=_make_close_lead_positive(),
-        lead=None,
+        # No custom_fields or quote_ready_fields → follow_up
     )
     assert result == "follow_up"
 
@@ -277,13 +356,11 @@ def test_apply_status_not_interested_still_works():
     """Negative outcomes → 'not_interested' regardless of lead state."""
     from app.summarizer import apply_status_from_next_action
 
-    lead = _MockLead(
-        car_make="Toyota", car_model="Corolla", car_year=2020, age=35, zona="Palermo"
-    )
     result = apply_status_from_next_action(
         current_status="called",
         next_action_result=_make_close_lead_negative(),
-        lead=lead,
+        custom_fields=_ALL_FIELDS_CF,
+        quote_ready_fields=_QUINTANA_QR_FIELDS,
     )
     assert result == "not_interested"
 
@@ -292,13 +369,11 @@ def test_apply_status_follow_up_action_unchanged():
     """follow_up action → 'follow_up' regardless of lead state."""
     from app.summarizer import apply_status_from_next_action
 
-    lead = _MockLead(
-        car_make="Toyota", car_model="Corolla", car_year=2020, age=35, zona="Palermo"
-    )
     result = apply_status_from_next_action(
         current_status="called",
         next_action_result=_make_follow_up_action(),
-        lead=lead,
+        custom_fields=_ALL_FIELDS_CF,
+        quote_ready_fields=_QUINTANA_QR_FIELDS,
     )
     assert result == "follow_up"
 
@@ -307,13 +382,11 @@ def test_apply_status_non_called_still_none():
     """When current_status != 'called' → None regardless of lead state."""
     from app.summarizer import apply_status_from_next_action
 
-    lead = _MockLead(
-        car_make="Toyota", car_model="Corolla", car_year=2020, age=35, zona="Palermo"
-    )
     result = apply_status_from_next_action(
         current_status="new",
         next_action_result=_make_close_lead_positive(),
-        lead=lead,
+        custom_fields=_ALL_FIELDS_CF,
+        quote_ready_fields=_QUINTANA_QR_FIELDS,
     )
     assert result is None
 

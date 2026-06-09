@@ -48,23 +48,33 @@ async def db(tmp_path: Path):
 
 
 async def test_get_lead_details_returns_full_record(db):
-    """get_lead_details returns full lead data as dict (CAP-4)."""
+    """get_lead_details returns full lead data as dict (CAP-4).
+
+    dynamic-lead-fields WU-7: car data is now in custom_fields, not legacy ORM columns.
+    Legacy columns (car_make, car_model, car_year) remain in the response for backward compat
+    but are None when no legacy value was written (new seed path uses custom_fields only).
+    """
     from app.tools.get_lead_details import get_lead_details
 
     async with db.async_session_factory() as sess:
         result = await get_lead_details(
             session=sess,
             lead_id="lead-quintana-001",
+            client_id="quintana-seguros",
         )
 
     assert result is not None
     assert "error" not in result
     assert result["id"] == "lead-quintana-001"
     assert result["name"] == "Carlos Méndez"
-    assert result["car_make"] == "Toyota"
-    assert result["car_model"] == "Corolla"
-    assert result["car_year"] == 2021
     assert result["status"] == "new"
+    # WU-7: car data comes from custom_fields, not legacy ORM columns
+    cf = result.get("custom_fields", {})
+    assert cf.get("car_make") == "Toyota", (
+        f"car_make must be in custom_fields. Got: {cf}"
+    )
+    assert cf.get("car_model") == "Corolla"
+    assert cf.get("car_year") == "2021"  # stored as TEXT in custom_fields
 
 
 async def test_get_lead_details_returns_call_count_from_lead_record(db):

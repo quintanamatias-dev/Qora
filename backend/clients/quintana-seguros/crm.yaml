@@ -1,7 +1,7 @@
 # Quintana Seguros — Airtable CRM integration config
 #
 # IMPORTANT: This file is committed to version control.
-# It must NOT contain any secret values. The api_key_env field references
+# It must NOT contain any secret values. The api_key field should reference
 # the NAME of an environment variable that holds the real Airtable PAT.
 #
 # Setup:
@@ -19,7 +19,6 @@ table_id: tblsWumwwfeoqkWid
 # API key field (dynamic-lead-fields WU-1 QR-4):
 # - If value matches ^[A-Z][A-Z0-9_]+$ → treated as env var name (runtime lookup)
 # - Otherwise → used as literal value (dev/test)
-# Old field name api_key_env is still accepted for backward compat.
 api_key: QUINTANA_AIRTABLE_API_KEY
 
 # Matching field: leads are upserted by their numeric Meta/Facebook lead_id.

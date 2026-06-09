@@ -18,6 +18,7 @@ Dispatcher returns tool_removed for any calls to these legacy names.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from app.tools.get_lead_details import TOOL_DEFINITION as _get_lead_details_def
 from app.tools.get_lead_profile import TOOL_DEFINITION as _get_lead_profile_def
@@ -150,20 +151,81 @@ def build_capture_data_definition(tool_config: dict) -> dict | None:
     }
 
 
+def build_capture_data_from_field_definitions(crm_config: "CRMConfig") -> dict | None:
+    """Build an OpenAI function-calling schema for capture_data from CRMConfig.custom_fields.
+
+    Implements: dynamic-lead-fields AC-5 —
+    "capture_data schema contains exactly the fields from field_definitions"
+
+    Each CustomFieldDef entry in crm_config.custom_fields produces one property in
+    the OpenAI function-calling schema. The field_type is mapped to a JSON Schema type.
+    lead_id is always included as a required property.
+
+    Args:
+        crm_config: Validated CRMConfig instance (from crm.yaml).
+
+    Returns:
+        Complete OpenAI tool definition dict, or None if custom_fields is empty
+        (caller should exclude capture_data when no field_definitions are configured).
+    """
+    if not crm_config.custom_fields:
+        return None
+
+    # Map CRM field_type to JSON Schema type
+    _FIELD_TYPE_TO_JSON: dict[str, str] = {
+        "string": "string",
+        "integer": "integer",
+        "boolean": "boolean",
+        "date": "string",   # dates are string in JSON Schema
+        "phone": "string",  # phones are string in JSON Schema
+    }
+
+    properties: dict = {
+        "lead_id": {"type": "string", "description": "ID del lead"},
+    }
+    for field_def in crm_config.custom_fields:
+        json_type = _FIELD_TYPE_TO_JSON.get(field_def.field_type, "string")
+        properties[field_def.field_key] = {
+            "type": json_type,
+            "description": field_def.label,
+        }
+
+    required = ["lead_id"] + [
+        fd.field_key for fd in crm_config.custom_fields if fd.required
+    ]
+
+    return {
+        "type": "function",
+        "function": {
+            "name": "capture_data",
+            "description": _CAPTURE_DATA_BASE_DEF["function"]["description"],
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            },
+        },
+    }
+
+
 def build_tool_definitions(
     tool_names: list[str],
     *,
     agent_tool_config: dict | None = None,
+    crm_config: "CRMConfig | None" = None,
 ) -> list[dict] | None:
     """Build OpenAI tool definitions for the given tool names.
 
-    For capture_data, the schema is built dynamically from agent_tool_config.
-    If capture_data is requested but agent_tool_config is None or lacks the key,
-    capture_data is silently excluded (no exception raised).
+    For capture_data, the schema is built dynamically in priority order:
+    1. From crm_config.custom_fields (dynamic-lead-fields WU-5, preferred path)
+    2. From agent_tool_config (legacy tool_config JSON column, fallback)
+    If neither source provides a valid schema, capture_data is silently excluded.
 
     Args:
         tool_names: List of tool name strings to include.
-        agent_tool_config: Optional parsed tool_config dict from the Agent record.
+        agent_tool_config: Optional parsed tool_config dict from the Agent record (legacy).
+        crm_config: Optional CRMConfig — when present, capture_data schema is built from
+            its custom_fields (field_definitions). Takes priority over agent_tool_config.
 
     Returns:
         List of OpenAI tool definition dicts, or None if the list is empty.
@@ -171,20 +233,30 @@ def build_tool_definitions(
     tools: list[dict] = []
     for name in tool_names:
         if name == "capture_data":
-            if agent_tool_config:
+            definition: dict | None = None
+            # Priority 1: CRMConfig field_definitions (WU-5 dynamic schema)
+            if crm_config is not None:
+                definition = build_capture_data_from_field_definitions(crm_config)
+                if definition is None:
+                    logger.warning(
+                        "capture_data requested but CRMConfig has no custom_fields; "
+                        "excluding from tool list"
+                    )
+            # Priority 2: Legacy agent tool_config JSON column
+            elif agent_tool_config:
                 definition = build_capture_data_definition(agent_tool_config)
-                if definition is not None:
-                    tools.append(definition)
-                else:
+                if definition is None:
                     logger.warning(
                         "capture_data requested but tool_config missing or invalid; "
                         "excluding from tool list"
                     )
             else:
                 logger.warning(
-                    "capture_data requested but no agent_tool_config supplied; "
+                    "capture_data requested but no crm_config or agent_tool_config supplied; "
                     "excluding from tool list"
                 )
+            if definition is not None:
+                tools.append(definition)
         elif name in TOOL_DEFINITIONS:
             tools.append(TOOL_DEFINITIONS[name])
     return tools if tools else None
