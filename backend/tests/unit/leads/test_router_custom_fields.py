@@ -324,6 +324,27 @@ async def test_create_lead_without_custom_fields_returns_empty_dict(
     assert data["custom_fields"] == {}
 
 
+@pytest.mark.asyncio
+async def test_create_lead_rejects_legacy_business_fields(
+    custom_fields_client: AsyncClient,
+):
+    """API final contract: business fields must be sent via custom_fields.
+
+    Top-level car_make/car_model/car_year/current_insurance are not accepted by
+    CreateLeadRequest anymore, preventing writes to deprecated Lead columns.
+    """
+    resp = await custom_fields_client.post(
+        "/api/v1/leads?client_id=quintana-seguros",
+        json={
+            "name": "Legacy Payload Lead",
+            "phone": "+5411100009",
+            "car_make": "Toyota",
+        },
+    )
+
+    assert resp.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # API-7: Legacy top-level fields are ABSENT (now in custom_fields only)
 # ---------------------------------------------------------------------------

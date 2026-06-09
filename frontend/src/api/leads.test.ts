@@ -126,5 +126,10 @@ describe('createLead', () => {
     // Method must be POST
     const calledInit = fetchSpy.mock.calls[0][1] as RequestInit
     expect(calledInit.method).toBe('POST')
+    expect(JSON.parse(calledInit.body as string)).toMatchObject({
+      client_id: 'demo-client',
+      name: 'John Doe',
+      phone: '+1-555-0100',
+    })
   })
 })

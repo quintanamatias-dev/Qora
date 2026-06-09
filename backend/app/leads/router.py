@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,16 +59,16 @@ async def get_db_session():
 class CreateLeadRequest(BaseModel):
     """Request body for creating a new lead."""
 
-    client_id: str
+    # Backward-compatible optional body field. New frontend calls scope by
+    # `client_id` query param, matching list endpoints.
+    client_id: str | None = None
     name: str
     phone: str
-    car_make: str | None = None
-    car_model: str | None = None
-    car_year: int | None = None
-    current_insurance: str | None = None
     notes: str | None = None
     # WU-6: optional custom fields written to lead_custom_fields table
     custom_fields: dict[str, str] | None = None
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class PatchStatusRequest(BaseModel):
@@ -261,6 +261,7 @@ async def get_lead_by_id(
 @router.post("", status_code=201)
 async def create_new_lead(
     body: CreateLeadRequest,
+    client_id: str | None = Query(None, description="Tenant client ID to scope creation"),
     session: AsyncSession = Depends(get_db_session),
 ):
     """Create a new lead record.
@@ -268,15 +269,15 @@ async def create_new_lead(
     Returns:
         Created lead object (HTTP 201).
     """
+    resolved_client_id = (client_id or body.client_id or "").lower()
+    if not resolved_client_id:
+        raise HTTPException(status_code=422, detail={"error": "client_id is required"})
+
     lead = await create_lead(
         session,
-        client_id=body.client_id,
+        client_id=resolved_client_id,
         name=body.name,
         phone=body.phone,
-        car_make=body.car_make,
-        car_model=body.car_model,
-        car_year=body.car_year,
-        current_insurance=body.current_insurance,
         notes=body.notes,
     )
 
@@ -285,14 +286,14 @@ async def create_new_lead(
         await cf_service.upsert_many(
             session,
             lead_id=lead.id,
-            client_id=body.client_id,
+            client_id=resolved_client_id,
             fields=body.custom_fields,
         )
 
     await session.commit()
 
     # Reload custom fields after commit so response reflects stored values
-    custom_fields = await cf_service.get_all(session, lead.id, body.client_id)
+    custom_fields = await cf_service.get_all(session, lead.id, resolved_client_id)
     return _lead_to_dict(lead, custom_fields=custom_fields)
 
 

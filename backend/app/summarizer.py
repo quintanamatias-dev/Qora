@@ -943,6 +943,33 @@ async def _merge_facts_into_lead(
     if facts.get("next_action_suggested"):
         lead.next_action = facts["next_action_suggested"]
 
+    # qora-data-corrections: apply structured corrections from pipeline BEFORE
+    # quote-ready evaluation. If this call captures the final required fields,
+    # the lead should be able to transition to "quoted" immediately.
+    # corrections_axis is DataCorrectionsAxis from run_data_corrections_pipeline;
+    # _apply_structured_corrections uses CORRECTABLE_FIELDS registry to set lead attrs.
+    # dynamic-lead-fields WU-4: also writes to lead_custom_fields for custom field storage.
+    if corrections_axis is not None and isinstance(
+        corrections_axis, DataCorrectionsAxis
+    ):
+        all_corrections = _apply_structured_corrections(
+            lead, corrections_axis.corrections
+        )
+        # Store ALL corrections in facts (applied + rejected) for full audit trail
+        facts["data_corrections"] = [c.model_dump() for c in all_corrections]
+        # Write LeadProfileFact rows for APPLIED corrections only (not rejected)
+        actually_applied = [c for c in all_corrections if c.applied]
+        if actually_applied:
+            await _write_structured_correction_facts(
+                db, lead_id, session_id, actually_applied
+            )
+            if client_id:
+                await _apply_custom_field_corrections(
+                    db, lead_id, client_id, actually_applied
+                )
+    else:
+        facts["data_corrections"] = []
+
     # configurable-agent-tools Phase 2: apply status transitions from next_action_result.
     # Only transitions when lead.status == "called"; terminal states are guarded in
     # apply_status_from_next_action (returns None → no transition attempted).
@@ -990,32 +1017,6 @@ async def _merge_facts_into_lead(
                 target_status=_target_status,
                 error=str(_exc),
             )
-
-    # qora-data-corrections: apply structured corrections from pipeline
-    # corrections_axis is DataCorrectionsAxis from run_data_corrections_pipeline;
-    # _apply_structured_corrections uses CORRECTABLE_FIELDS registry to set lead attrs.
-    # dynamic-lead-fields WU-4: also dual-write to lead_custom_fields for custom field storage.
-    if corrections_axis is not None and isinstance(
-        corrections_axis, DataCorrectionsAxis
-    ):
-        all_corrections = _apply_structured_corrections(
-            lead, corrections_axis.corrections
-        )
-        # Store ALL corrections in facts (applied + rejected) for full audit trail
-        facts["data_corrections"] = [c.model_dump() for c in all_corrections]
-        # Write LeadProfileFact rows for APPLIED corrections only (not rejected)
-        actually_applied = [c for c in all_corrections if c.applied]
-        if actually_applied:
-            await _write_structured_correction_facts(
-                db, lead_id, session_id, actually_applied
-            )
-            # dual-write to lead_custom_fields for 'custom_field' storage entries
-            if client_id:
-                await _apply_custom_field_corrections(
-                    db, lead_id, client_id, actually_applied
-                )
-    else:
-        facts["data_corrections"] = []
 
     # ★ NEW: Dual-write to relational tables (analysis v2)
     await _write_lead_profile_facts(db, lead_id, session_id, facts)

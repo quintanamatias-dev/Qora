@@ -240,17 +240,17 @@ def build_tool_definitions(
                 if definition is None:
                     logger.warning(
                         "capture_data requested but CRMConfig has no custom_fields; "
-                        "excluding from tool list"
+                        "falling back to agent_tool_config"
                     )
             # Priority 2: Legacy agent tool_config JSON column
-            elif agent_tool_config:
+            if definition is None and agent_tool_config:
                 definition = build_capture_data_definition(agent_tool_config)
                 if definition is None:
                     logger.warning(
                         "capture_data requested but tool_config missing or invalid; "
                         "excluding from tool list"
                     )
-            else:
+            if definition is None and crm_config is None and not agent_tool_config:
                 logger.warning(
                     "capture_data requested but no crm_config or agent_tool_config supplied; "
                     "excluding from tool list"

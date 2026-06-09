@@ -189,15 +189,22 @@ async def test_create_lead_returns_201(leads_client: AsyncClient):
             "client_id": "quintana-seguros",
             "name": "Nuevo Lead",
             "phone": "+5411199999",
-            "car_make": "Honda",
-            "car_model": "Civic",
-            "car_year": 2022,
+            "custom_fields": {
+                "car_make": "Honda",
+                "car_model": "Civic",
+                "car_year": "2022",
+            },
         },
     )
     assert response.status_code == 201
     data = response.json()
     assert data["name"] == "Nuevo Lead"
     assert data["status"] == "new"
+    assert data["custom_fields"] == {
+        "car_make": "Honda",
+        "car_model": "Civic",
+        "car_year": "2022",
+    }
     assert "id" in data
 
 

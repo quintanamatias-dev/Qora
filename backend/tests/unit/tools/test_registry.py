@@ -134,6 +134,45 @@ def test_build_tool_definitions_capture_data_missing_key_returns_none():
     assert result is None
 
 
+def test_build_tool_definitions_falls_back_to_agent_tool_config_when_crm_has_no_custom_fields():
+    """crm_config without custom_fields must not suppress legacy agent schema.
+
+    GIVEN a client has crm.yaml but no field_definitions/custom_fields
+    AND the agent still has a valid capture_data tool_config
+    WHEN build_tool_definitions is called with both
+    THEN capture_data is included using the legacy agent_tool_config schema.
+    """
+    from app.integrations.crm_config import CRMConfig
+    from app.tools.registry import build_tool_definitions
+
+    crm_config = CRMConfig(
+        provider="airtable",
+        base_id="app123",
+        table_id="tbl123",
+        api_key="TEST_AIRTABLE_KEY",
+        match_field="lead_id",
+        custom_fields=[],
+    )
+    tool_config = {
+        "capture_data": {
+            "type": "object",
+            "properties": {"budget": {"type": "string"}},
+            "required": ["lead_id", "budget"],
+        }
+    }
+
+    result = build_tool_definitions(
+        ["capture_data"],
+        crm_config=crm_config,
+        agent_tool_config=tool_config,
+    )
+
+    assert result is not None
+    params = result[0]["function"]["parameters"]
+    assert "budget" in params["properties"]
+    assert "budget" in params["required"]
+
+
 # ---------------------------------------------------------------------------
 # Scenario: Static tools unaffected by agent_tool_config
 # ---------------------------------------------------------------------------

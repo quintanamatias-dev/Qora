@@ -268,6 +268,8 @@ async def import_leads_from_crm(
         # both real AsyncSession (AsyncSessionTransaction is awaitable) and
         # AsyncMock-based unit tests (which require await to get the cm).
         try:
+            record_outcome: str | None = None
+            record_lead_id: str | None = None
             async with await db_session.begin_nested() as savepoint:
                 if existing is not None:
                     # 4d. Update existing lead — check for duplicate external_lead_id
@@ -296,11 +298,8 @@ async def import_leads_from_crm(
                             fields=pending_custom_fields,
                             field_types=_custom_field_types if _custom_field_types else None,
                         )
-                    result.updated += 1
-                    logger.info(
-                        "crm_import_lead_updated",
-                        extra={"lead_id": existing.id, "airtable_id": airtable_id},
-                    )
+                    record_outcome = "updated"
+                    record_lead_id = existing.id
                 else:
                     # 4e. Create new lead — returns (Lead, pending_custom_fields) (AC-8)
                     lead, pending_custom_fields = _create_lead_from_qora_data(
@@ -319,11 +318,20 @@ async def import_leads_from_crm(
                             fields=pending_custom_fields,
                             field_types=_custom_field_types if _custom_field_types else None,
                         )
-                    result.created += 1
-                    logger.info(
-                        "crm_import_lead_created",
-                        extra={"lead_id": lead.id, "airtable_id": airtable_id},
-                    )
+                    record_outcome = "created"
+                    record_lead_id = lead.id
+            if record_outcome == "updated":
+                result.updated += 1
+                logger.info(
+                    "crm_import_lead_updated",
+                    extra={"lead_id": record_lead_id, "airtable_id": airtable_id},
+                )
+            elif record_outcome == "created":
+                result.created += 1
+                logger.info(
+                    "crm_import_lead_created",
+                    extra={"lead_id": record_lead_id, "airtable_id": airtable_id},
+                )
         except Exception as exc:
             # Savepoint was rolled back automatically by the context manager on exception.
             # Lead mutations and custom-field writes for this record are fully reverted.

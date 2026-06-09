@@ -36,6 +36,6 @@ export async function createLead(
 ): Promise<Lead> {
   return apiFetch<Lead>(`/api/v1/leads?client_id=${encodeURIComponent(clientId)}`, {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...payload, client_id: clientId }),
   })
 }
