@@ -178,6 +178,54 @@ class LeadProfileFact(Base):
         )
 
 
+class LeadCustomField(Base):
+    """Type-enforced key-value store for client-specific business data attached to leads.
+
+    Design: dynamic-lead-fields — replaces the 6 hardcoded legacy columns
+    (car_make, car_model, car_year, current_insurance, age, zona) with a
+    queryable, typed, multi-tenant row-per-field model.
+
+    Constraints:
+    - Unique on (lead_id, field_key): one row per field per lead (client scoped).
+    - field_type must be one of: string, integer, boolean, date, phone.
+    - field_value stored as TEXT regardless of field_type (coercion at write time).
+    """
+
+    __tablename__ = "lead_custom_fields"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    lead_id: Mapped[str] = mapped_column(
+        String, ForeignKey("leads.id"), nullable=False
+    )
+    client_id: Mapped[str] = mapped_column(
+        String, ForeignKey("clients.id"), nullable=False
+    )
+    field_key: Mapped[str] = mapped_column(String, nullable=False)
+    field_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    field_type: Mapped[str] = mapped_column(
+        String, nullable=False, default="string"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
+    )
+
+    __table_args__ = (
+        # Composite index for efficient per-lead per-client queries
+        Index("ix_lcf_lead_client", "lead_id", "client_id"),
+        # Unique: one row per (lead_id, client_id, field_key) — spec CF-1
+        Index("ix_lcf_lead_client_key", "lead_id", "client_id", "field_key", unique=True),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<LeadCustomField lead={self.lead_id!r} key={self.field_key!r} "
+            f"value={self.field_value!r} type={self.field_type!r}>"
+        )
+
+
 class LeadInterestHistory(Base):
     """Append-only time series of interest_level measurements per lead.
 

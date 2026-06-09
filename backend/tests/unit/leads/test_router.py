@@ -120,14 +120,23 @@ async def test_list_leads_response_shape(leads_client: AsyncClient):
 
 
 async def test_get_lead_by_id_returns_correct_record(leads_client: AsyncClient):
-    """GET /leads/{id} returns the correct lead record."""
+    """GET /leads/{id} returns the correct lead record.
+
+    dynamic-lead-fields WU-7: car data is now stored in custom_fields, not in legacy ORM
+    columns. Verify both the base fields (id, name) and that custom_fields contains
+    the car data seeded via lead_custom_fields.
+    """
     response = await leads_client.get("/api/v1/leads/lead-quintana-001")
     assert response.status_code == 200
     data = response.json()
     assert data["id"] == "lead-quintana-001"
     assert data["name"] == "Carlos Méndez"
-    assert data["car_make"] == "Toyota"
-    assert data["car_model"] == "Corolla"
+    # WU-7: car data is in custom_fields, not legacy ORM columns
+    cf = data.get("custom_fields", {})
+    assert cf.get("car_make") == "Toyota", (
+        f"car_make must be in custom_fields. Got custom_fields={cf}"
+    )
+    assert cf.get("car_model") == "Corolla"
 
 
 async def test_get_lead_by_id_not_found(leads_client: AsyncClient):
@@ -137,7 +146,11 @@ async def test_get_lead_by_id_not_found(leads_client: AsyncClient):
 
 
 async def test_get_lead_response_has_full_fields(leads_client: AsyncClient):
-    """GET /leads/{id} response includes all expected fields."""
+    """GET /leads/{id} response includes all expected fields.
+
+    Note: car_make, car_model, car_year, current_insurance are no longer top-level
+    fields (AC-1 / WU-7). They live in custom_fields dict when present.
+    """
     response = await leads_client.get("/api/v1/leads/lead-quintana-001")
     assert response.status_code == 200
     data = response.json()
@@ -146,18 +159,21 @@ async def test_get_lead_response_has_full_fields(leads_client: AsyncClient):
         "client_id",
         "name",
         "phone",
-        "car_make",
-        "car_model",
-        "car_year",
-        "current_insurance",
         "status",
         "notes",
         "call_count",
         "created_at",
         "updated_at",
+        "custom_fields",
     ]
     for field in expected_fields:
         assert field in data, f"Missing field: {field}"
+
+    # Verify legacy fields are NOT top-level (now in custom_fields only)
+    for legacy_field in ["car_make", "car_model", "car_year", "current_insurance"]:
+        assert legacy_field not in data, (
+            f"Legacy field '{legacy_field}' must not be top-level (AC-1 / WU-7)"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -173,15 +189,22 @@ async def test_create_lead_returns_201(leads_client: AsyncClient):
             "client_id": "quintana-seguros",
             "name": "Nuevo Lead",
             "phone": "+5411199999",
-            "car_make": "Honda",
-            "car_model": "Civic",
-            "car_year": 2022,
+            "custom_fields": {
+                "car_make": "Honda",
+                "car_model": "Civic",
+                "car_year": "2022",
+            },
         },
     )
     assert response.status_code == 201
     data = response.json()
     assert data["name"] == "Nuevo Lead"
     assert data["status"] == "new"
+    assert data["custom_fields"] == {
+        "car_make": "Honda",
+        "car_model": "Civic",
+        "car_year": "2022",
+    }
     assert "id" in data
 
 
@@ -882,7 +905,11 @@ async def test_get_lead_by_id_404_still_returned_for_unknown_lead(leads_client):
 
 @pytest.mark.asyncio
 async def test_get_lead_by_id_existing_fields_unchanged(leads_client):
-    """Issue #36 Phase 5: GET /leads/{id} still returns all previously existing fields unchanged."""
+    """Issue #36 Phase 5: GET /leads/{id} returns all expected fields.
+
+    Note: car_make, car_model, car_year, current_insurance removed from top-level
+    as per AC-1 / WU-7 (dynamic-lead-fields). These now live in custom_fields only.
+    """
     response = await leads_client.get("/api/v1/leads/lead-quintana-001")
     assert response.status_code == 200
     data = response.json()
@@ -892,10 +919,6 @@ async def test_get_lead_by_id_existing_fields_unchanged(leads_client):
         "client_id",
         "name",
         "phone",
-        "car_make",
-        "car_model",
-        "car_year",
-        "current_insurance",
         "status",
         "notes",
         "call_count",
@@ -910,8 +933,15 @@ async def test_get_lead_by_id_existing_fields_unchanged(leads_client):
         "next_action",
         "next_action_at",
         "next_scheduled_call_at",
+        "custom_fields",
     ]
     for field in existing_fields:
         assert (
             field in data
         ), f"Previously existing field '{field}' is missing from response"
+
+    # Verify legacy fields are NOT top-level (now in custom_fields only)
+    for legacy_field in ["car_make", "car_model", "car_year", "current_insurance"]:
+        assert legacy_field not in data, (
+            f"Legacy field '{legacy_field}' must not be top-level (AC-1 / WU-7)"
+        )

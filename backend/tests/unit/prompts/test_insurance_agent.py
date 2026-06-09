@@ -41,7 +41,12 @@ def make_lead(
     car_year: int = 2021,
     current_insurance: str | None = None,
 ) -> MagicMock:
-    """Create a mock Lead object."""
+    """Create a mock Lead object.
+
+    Note: car_make, car_model, car_year, current_insurance are only set on the
+    mock for backward compat. After dynamic-lead-fields WU-7, render_system_prompt
+    reads these values from custom_fields, not from lead ORM columns.
+    """
     lead = MagicMock()
     lead.name = name
     lead.car_make = car_make
@@ -49,6 +54,23 @@ def make_lead(
     lead.car_year = car_year
     lead.current_insurance = current_insurance
     return lead
+
+
+def make_custom_fields(
+    car_make: str = "Toyota",
+    car_model: str = "Corolla",
+    car_year: str = "2021",
+    current_insurance: str | None = None,
+) -> dict:
+    """Create a custom_fields dict matching the lead_custom_fields table."""
+    cf: dict = {
+        "car_make": car_make,
+        "car_model": car_model,
+        "car_year": car_year,
+    }
+    if current_insurance is not None:
+        cf["current_insurance"] = current_insurance
+    return cf
 
 
 # ---------------------------------------------------------------------------
@@ -98,32 +120,32 @@ def test_lead_name_injected():
 
 
 def test_car_make_injected():
-    """Car make is correctly substituted in the prompt."""
+    """Car make is correctly substituted in the prompt from custom_fields (AC-1)."""
     from app.prompts.insurance_agent import render_system_prompt
 
     client = make_client()
-    lead = make_lead(car_make="Honda")
-    result = render_system_prompt(client, lead)
+    lead = make_lead()
+    result = render_system_prompt(client, lead, custom_fields={"car_make": "Honda"})
     assert "Honda" in result
 
 
 def test_car_model_injected():
-    """Car model is correctly substituted in the prompt."""
+    """Car model is correctly substituted in the prompt from custom_fields (AC-1)."""
     from app.prompts.insurance_agent import render_system_prompt
 
     client = make_client()
-    lead = make_lead(car_model="Civic")
-    result = render_system_prompt(client, lead)
+    lead = make_lead()
+    result = render_system_prompt(client, lead, custom_fields={"car_model": "Civic"})
     assert "Civic" in result
 
 
 def test_car_year_injected():
-    """Car year is correctly substituted in the prompt."""
+    """Car year is correctly substituted in the prompt from custom_fields (AC-1)."""
     from app.prompts.insurance_agent import render_system_prompt
 
     client = make_client()
-    lead = make_lead(car_year=2022)
-    result = render_system_prompt(client, lead)
+    lead = make_lead()
+    result = render_system_prompt(client, lead, custom_fields={"car_year": "2022"})
     assert "2022" in result
 
 
@@ -214,17 +236,19 @@ def test_render_without_lead_uses_defaults():
 
 
 def test_current_insurance_injected_when_present():
-    """current_insurance value is included in prompt when lead has one."""
+    """current_insurance value from custom_fields is included in prompt (AC-1)."""
     from app.prompts.insurance_agent import render_system_prompt
 
     client = make_client()
-    lead = make_lead(current_insurance="Mapfre")
-    result = render_system_prompt(client, lead)
+    lead = make_lead()
+    result = render_system_prompt(
+        client, lead, custom_fields={"current_insurance": "Mapfre"}
+    )
     assert "Mapfre" in result
 
 
 def test_current_insurance_fallback_when_none():
-    """Prompt handles None current_insurance gracefully."""
+    """Prompt handles absent current_insurance gracefully (defaults to 'no tiene')."""
     from app.prompts.insurance_agent import render_system_prompt
 
     client = make_client()

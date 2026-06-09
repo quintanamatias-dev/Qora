@@ -36,7 +36,7 @@ def test_create_lead_populates_external_lead_id():
         "external_lead_id": 123456,
     }
 
-    lead = _create_lead_from_qora_data(
+    lead, _pending = _create_lead_from_qora_data(
         client_id="quintana-seguros",
         qora_data=qora_data,
         airtable_id="recABC123",
@@ -67,7 +67,7 @@ def test_create_lead_external_lead_id_none_when_absent():
         # No external_lead_id key — manually added lead
     }
 
-    lead = _create_lead_from_qora_data(
+    lead, _pending = _create_lead_from_qora_data(
         client_id="quintana-seguros",
         qora_data=qora_data,
         airtable_id="recXYZ789",

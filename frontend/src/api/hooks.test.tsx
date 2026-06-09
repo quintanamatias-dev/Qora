@@ -56,10 +56,6 @@ const mockLead: Lead = {
   client_id: 'demo-client',
   name: 'Jane Smith',
   phone: '+1-555-0200',
-  car_make: null,
-  car_model: null,
-  car_year: null,
-  current_insurance: null,
   status: 'new',
   notes: null,
   call_count: 0,
@@ -76,6 +72,8 @@ const mockLead: Lead = {
   next_action_at: null,
   // Phase 7
   next_scheduled_call_at: null,
+  // WU-6: custom fields
+  custom_fields: {},
 }
 
 const mockSession: CallSession = {

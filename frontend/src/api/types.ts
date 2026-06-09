@@ -9,17 +9,13 @@
 // Lead
 // ──────────────────────────────────────────────────────────────────────────────
 
-export type LeadStatus = 'new' | 'called' | 'interested' | 'not_interested' | 'follow_up'
+export type LeadStatus = 'new' | 'called' | 'quoted' | 'interested' | 'not_interested' | 'follow_up'
 
 export interface Lead {
   id: string
   client_id: string
   name: string
   phone: string
-  car_make: string | null
-  car_model: string | null
-  car_year: number | null
-  current_insurance: string | null
   status: LeadStatus
   notes: string | null
   call_count: number
@@ -36,16 +32,16 @@ export interface Lead {
   next_action_at: string | null
   // Phase 7 — earliest pending/in_progress scheduled call time, or null
   next_scheduled_call_at: string | null
+  // WU-6: dynamic custom fields from lead_custom_fields table
+  custom_fields?: Record<string, string>
 }
 
 export interface CreateLeadPayload {
   name: string
   phone: string
-  car_make?: string | null
-  car_model?: string | null
-  car_year?: number | null
-  current_insurance?: string | null
   notes?: string | null
+  // WU-6: optional custom fields written to lead_custom_fields table
+  custom_fields?: Record<string, string>
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

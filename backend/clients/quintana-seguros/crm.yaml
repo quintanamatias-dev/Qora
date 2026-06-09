@@ -1,7 +1,7 @@
 # Quintana Seguros — Airtable CRM integration config
 #
 # IMPORTANT: This file is committed to version control.
-# It must NOT contain any secret values. The api_key_env field references
+# It must NOT contain any secret values. The api_key field should reference
 # the NAME of an environment variable that holds the real Airtable PAT.
 #
 # Setup:
@@ -16,9 +16,10 @@ provider: airtable
 base_id: appw59LRBdv95UPpB
 table_id: tblsWumwwfeoqkWid
 
-# Name of the environment variable that holds the Airtable Personal Access Token.
-# The secret value itself is NEVER stored here.
-api_key_env: QUINTANA_AIRTABLE_API_KEY
+# API key field (dynamic-lead-fields WU-1 QR-4):
+# - If value matches ^[A-Z][A-Z0-9_]+$ → treated as env var name (runtime lookup)
+# - Otherwise → used as literal value (dev/test)
+api_key: QUINTANA_AIRTABLE_API_KEY
 
 # Matching field: leads are upserted by their numeric Meta/Facebook lead_id.
 # external_lead_id is now stored in Qora (Integer column, populated at import time).
@@ -103,3 +104,43 @@ field_mappings:
   - source: zona
     target: "Zona"
     type: string
+
+# ---------------------------------------------------------------------------
+# Dynamic lead fields (dynamic-lead-fields WU-1)
+# ---------------------------------------------------------------------------
+
+# Fields required for a lead to reach "quoted" status.
+# All must be present and non-empty in lead_custom_fields.
+quote_ready_fields:
+  - car_make
+  - car_model
+  - car_year
+  - age
+  - zona
+
+# Custom field definitions — drives capture_data tool schema and type validation.
+# Each entry produces one property in the OpenAI function-calling schema.
+field_definitions:
+  - field_key: car_make
+    field_type: string
+    label: "Car Make"
+
+  - field_key: car_model
+    field_type: string
+    label: "Car Model"
+
+  - field_key: car_year
+    field_type: integer
+    label: "Car Year"
+
+  - field_key: current_insurance
+    field_type: string
+    label: "Current Insurance"
+
+  - field_key: age
+    field_type: integer
+    label: "Age"
+
+  - field_key: zona
+    field_type: string
+    label: "Zone"

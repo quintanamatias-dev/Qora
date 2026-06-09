@@ -16,10 +16,6 @@ const mockLead: Lead = {
   client_id: 'demo-client',
   name: 'John Doe',
   phone: '+1-555-0100',
-  car_make: 'Toyota',
-  car_model: 'Camry',
-  car_year: 2022,
-  current_insurance: 'State Farm',
   status: 'new',
   notes: null,
   call_count: 0,
@@ -36,6 +32,8 @@ const mockLead: Lead = {
   next_action_at: null,
   // Phase 7
   next_scheduled_call_at: null,
+  // WU-6: custom fields
+  custom_fields: { car_make: 'Toyota', car_model: 'Camry', car_year: '2022' },
 }
 
 function mockFetch(status: number, body: unknown) {
@@ -128,5 +126,10 @@ describe('createLead', () => {
     // Method must be POST
     const calledInit = fetchSpy.mock.calls[0][1] as RequestInit
     expect(calledInit.method).toBe('POST')
+    expect(JSON.parse(calledInit.body as string)).toMatchObject({
+      client_id: 'demo-client',
+      name: 'John Doe',
+      phone: '+1-555-0100',
+    })
   })
 })

@@ -257,42 +257,60 @@ async def test_cap4_get_lead_details_not_found(db_session):
     assert result == {"error": "lead_not_found"}
 
 
-async def test_cap4_register_interest_successful(db_session):
-    """CAP-4: register_interest transitions lead to 'interested' and persists data."""
-    from app.tools.register_interest import register_interest
-    from app.leads.service import get_lead
+async def test_cap4_capture_data_successful(db_session):
+    """CAP-4 (WU-5): capture_data stores business data and returns captured status.
 
-    # lead-quintana-001 is 'new', transition to 'called' first
-    from app.leads.service import transition_lead_status
+    register_interest was removed in WU-5 (AC-6). capture_data is the replacement.
+    """
+    from app.tools.capture_data import capture_data
 
-    await transition_lead_status(db_session, "lead-quintana-001", "called")
+    tool_config = {
+        "capture_data": {
+            "type": "object",
+            "properties": {
+                "car_make": {"type": "string"},
+                "car_model": {"type": "string"},
+                "car_year": {"type": "integer"},
+            },
+            "required": ["lead_id", "car_make", "car_model", "car_year"],
+        }
+    }
 
-    result = await register_interest(
+    result = await capture_data(
         db_session,
         lead_id="lead-quintana-001",
-        car_make="Toyota",
-        car_model="Corolla",
-        car_year=2021,
+        tool_config=tool_config,
+        captured_fields={"car_make": "Toyota", "car_model": "Corolla", "car_year": 2021},
+        client_id="quintana-seguros",
     )
-    assert "error" not in result
-
-    lead = await get_lead(db_session, "lead-quintana-001")
-    assert lead.status == "interested"
+    assert result.get("status") == "captured", f"Expected captured, got: {result}"
+    assert "car_make" in result.get("fields", [])
 
 
-async def test_cap4_register_interest_missing_car_make(db_session):
-    """CAP-4: register_interest without car_make returns missing_field error."""
-    from app.tools.register_interest import register_interest
+async def test_cap4_capture_data_missing_required_field(db_session):
+    """CAP-4 (WU-5): capture_data without required field returns missing_required_fields error."""
+    from app.tools.capture_data import capture_data
 
-    result = await register_interest(
+    tool_config = {
+        "capture_data": {
+            "type": "object",
+            "properties": {
+                "car_make": {"type": "string"},
+                "car_model": {"type": "string"},
+            },
+            "required": ["lead_id", "car_make", "car_model"],
+        }
+    }
+
+    result = await capture_data(
         db_session,
         lead_id="lead-quintana-001",
-        car_make=None,
-        car_model="Corolla",
-        car_year=2021,
+        tool_config=tool_config,
+        captured_fields={"car_make": "Toyota"},  # missing car_model
+        client_id="quintana-seguros",
     )
-    assert result.get("error") == "missing_field"
-    assert result.get("field") == "car_make"
+    assert result.get("error") == "missing_required_fields"
+    assert "car_model" in result.get("missing", [])
 
 
 async def test_cap4_mark_not_interested_stores_reason(db_session):
@@ -537,7 +555,7 @@ async def test_cap7_billable_minutes_ceil(db_session):
 
 
 def test_cap8_prompt_variables_injected():
-    """CAP-8: Warm greeting with known lead — lead_name and car_make injected."""
+    """CAP-8: Warm greeting with known lead — lead_name and car_make injected from custom_fields (AC-1)."""
     from app.prompts.insurance_agent import render_system_prompt
 
     client = MagicMock()
@@ -546,12 +564,12 @@ def test_cap8_prompt_variables_injected():
 
     lead = MagicMock()
     lead.name = "Carlos"
-    lead.car_make = "Toyota"
-    lead.car_model = "Corolla"
-    lead.car_year = 2021
-    lead.current_insurance = None
 
-    prompt = render_system_prompt(client, lead)
+    prompt = render_system_prompt(
+        client,
+        lead,
+        custom_fields={"car_make": "Toyota", "car_model": "Corolla", "car_year": "2021"},
+    )
     assert "Carlos" in prompt
     assert "Toyota" in prompt
     assert "Quintana Seguros" in prompt
@@ -572,7 +590,11 @@ def test_cap8_prompt_voseo_enforced():
 
 
 def test_cap8_prompt_tool_rules():
-    """CAP-8: Prompt includes tool invocation rules — never call without user intent."""
+    """CAP-8: Prompt includes tool invocation rules — never call without user intent.
+
+    Note: register_interest was removed in Phase 2 / dynamic-lead-fields (AC-6).
+    Prompt now references mark_not_interested, schedule_followup, get_lead_details.
+    """
     from app.prompts.insurance_agent import render_system_prompt
 
     client = MagicMock()
@@ -581,8 +603,10 @@ def test_cap8_prompt_tool_rules():
 
     prompt = render_system_prompt(client, lead=None)
     lower = prompt.lower()
-    # Prompt must reference all 4 tools
-    assert "register_interest" in lower
+    # register_interest is gone (AC-6); remaining tools must be present
+    assert "register_interest" not in lower, (
+        "register_interest must be absent from prompt (AC-6 / dynamic-lead-fields)"
+    )
     assert "mark_not_interested" in lower
     assert "schedule_followup" in lower
     assert "get_lead_details" in lower
@@ -632,7 +656,12 @@ def test_cap8_no_unfilled_template_variables():
 
 
 def test_cap8_interest_confirmed_tool_fires():
-    """CAP-8: Prompt instructs agent to call register_interest ONLY when lead agrees."""
+    """CAP-8: Prompt handles positive interest — register_interest removed (AC-6).
+
+    register_interest was removed in Phase 2 / dynamic-lead-fields (AC-6).
+    Prompt now instructs the agent to continue naturally on acceptance
+    instead of calling a removed tool.
+    """
     from app.prompts.insurance_agent import render_system_prompt
 
     client = MagicMock()
@@ -641,11 +670,14 @@ def test_cap8_interest_confirmed_tool_fires():
 
     prompt = render_system_prompt(client, lead=None)
     lower = prompt.lower()
-    # The prompt must say only call register_interest when lead explicitly confirms
-    assert "register_interest" in lower
-    assert any(
-        kw in lower for kw in ["explícitamente", "acepta", "only when", "solo cuando"]
+    # register_interest must be absent (AC-6)
+    assert "register_interest" not in lower, (
+        "register_interest must be absent from prompt (AC-6 / dynamic-lead-fields)"
     )
+    # Prompt must still guide acceptance handling naturally
+    assert any(
+        kw in lower for kw in ["acepta", "cotización", "paso", "cierre", "naturalmente"]
+    ), "Prompt must still describe how to handle lead acceptance"
 
 
 def test_cap8_rejection_handled_gracefully():

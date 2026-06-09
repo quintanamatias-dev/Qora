@@ -327,7 +327,10 @@ async def test_build_voice_context_lead_profile_contains_lead_name():
     client = make_client()
     mock_db = AsyncMock()
 
-    with patch("app.voice.context.PromptLoader") as MockLoader:
+    with patch("app.voice.context.PromptLoader") as MockLoader, \
+         patch("app.leads.lead_custom_fields_service.get_all", new=AsyncMock(
+             return_value={"car_make": "Honda", "car_model": "Civic", "car_year": "2020"}
+         )):
         mock_instance = MockLoader.return_value
         mock_instance.render_for_agent = AsyncMock(return_value="prompt")
         mock_instance.load_agent_skills = AsyncMock(return_value="")

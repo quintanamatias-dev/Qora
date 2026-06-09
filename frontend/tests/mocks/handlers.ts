@@ -44,10 +44,6 @@ const leadsFixture: Lead[] = [
     client_id: 'demo-client',
     name: 'John Doe',
     phone: '+1-555-0100',
-    car_make: 'Toyota',
-    car_model: 'Camry',
-    car_year: 2022,
-    current_insurance: 'State Farm',
     status: 'new',
     notes: null,
     call_count: 2,
@@ -64,16 +60,14 @@ const leadsFixture: Lead[] = [
     next_action_at: null,
     // Phase 7
     next_scheduled_call_at: null,
+    // WU-6: custom fields from lead_custom_fields table
+    custom_fields: { car_make: 'Toyota', car_model: 'Camry', car_year: '2022', current_insurance: 'State Farm' },
   },
   {
     id: 'lead-2',
     client_id: 'demo-client',
     name: 'Jane Smith',
     phone: '+1-555-0200',
-    car_make: null,
-    car_model: null,
-    car_year: null,
-    current_insurance: null,
     status: 'interested',
     notes: 'Callback requested',
     call_count: 1,
@@ -90,6 +84,8 @@ const leadsFixture: Lead[] = [
     next_action_at: null,
     // Phase 7
     next_scheduled_call_at: null,
+    // WU-6: no custom fields
+    custom_fields: {},
   },
 ]
 

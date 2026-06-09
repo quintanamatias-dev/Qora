@@ -213,6 +213,7 @@ async def _execute_tool(
     registry_entries: list | None = None,
     clients_dir: Any | None = None,
     agent_tool_config: dict | None = None,
+    crm_config: Any | None = None,
 ) -> dict:
     """Execute a tool by name and return the result dict.
 
@@ -231,6 +232,7 @@ async def _execute_tool(
             registry_entries=registry_entries or [],
             clients_dir=clients_dir,
             agent_tool_config=agent_tool_config,
+            crm_config=crm_config,
         )
     except ImportError:
         # Tools module not yet implemented — return safe stub
@@ -259,6 +261,7 @@ async def _stream_llm_response(
     registry_entries: "list | None" = None,
     conv_state: "ConversationState | None" = None,
     agent_tool_config: dict | None = None,
+    crm_config: "Any | None" = None,
 ) -> AsyncGenerator[str, None]:
     """Generate SSE chunks from GPT-4o, handling tool calls mid-stream.
 
@@ -368,6 +371,7 @@ async def _stream_llm_response(
                             agent_slug=agent_slug,
                             registry_entries=registry_entries or [],
                             agent_tool_config=_resolved_tool_config,
+                            crm_config=crm_config,
                         )
 
                         # After a successful load_skill, store the content in conv_state
@@ -792,6 +796,8 @@ async def _process_custom_llm_request(
     _new_session_context: "VoiceSessionContext | None" = None
     # Resolved agent_tool_config — set from cached context or per-turn fallback parse
     _agent_tool_config_resolved: dict | None = None
+    # CRM config for capture_data field_type_map (FIX-7)
+    _crm_config_resolved: Any | None = None
     # True when build_voice_context was used (not the per-turn render_for_agent fallback)
     _used_voice_context = False
     _context_render_failed = False
@@ -814,6 +820,14 @@ async def _process_custom_llm_request(
         _agent_slug = ctx.agent_slug
         _registry_entries = list(ctx.skill_registry_entries)
         _agent_tool_config_resolved = ctx.agent_tool_config
+
+        # Load CRM config for capture_data field_type_map (FIX-7)
+        try:
+            from app.integrations.crm_config import CRMConfigLoader as _CRMConfigLoaderFP
+
+            _crm_config_resolved = _CRMConfigLoaderFP.load(client_id)
+        except Exception:
+            _crm_config_resolved = None
 
         # Still need a valid api_key — already retrieved above
         # Validate tenant is accessible (minimal check — context was already built)
@@ -875,6 +889,12 @@ async def _process_custom_llm_request(
                         _agent_slug = getattr(agent, "slug", None)
                         _registry_entries = list(lazy_ctx.skill_registry_entries)
                         _agent_tool_config_resolved = lazy_ctx.agent_tool_config
+                        try:
+                            from app.integrations.crm_config import CRMConfigLoader as _CRMCfgLazyBuild
+
+                            _crm_config_resolved = _CRMCfgLazyBuild.load(client_id)
+                        except Exception:
+                            _crm_config_resolved = None
                     except Exception as exc:
                         structlog.get_logger().warning(
                             "voice_context_lazy_build_failed",
@@ -912,6 +932,12 @@ async def _process_custom_llm_request(
                     _agent_slug = getattr(agent, "slug", None)
                     _registry_entries = list(new_ctx.skill_registry_entries)
                     _agent_tool_config_resolved = new_ctx.agent_tool_config
+                    try:
+                        from app.integrations.crm_config import CRMConfigLoader as _CRMCfgNewSession
+
+                        _crm_config_resolved = _CRMCfgNewSession.load(client_id)
+                    except Exception:
+                        _crm_config_resolved = None
                 except Exception as exc:
                     structlog.get_logger().warning(
                         "voice_context_new_session_build_failed",
@@ -983,9 +1009,16 @@ async def _process_custom_llm_request(
                             _fallback_tool_config = parse_agent_tool_config(agent)
 
                         _agent_tool_config_resolved = _fallback_tool_config
+
+                        # Load CRM config — provides field_definitions for capture_data (FIX-1, FIX-7)
+                        from app.integrations.crm_config import CRMConfigLoader as _CRMConfigLoader
+
+                        _crm_config_per_turn = _CRMConfigLoader.load(client_id)
+                        _crm_config_resolved = _crm_config_per_turn
                         tools = _build_tool_definitions(
                             enabled_tool_names,
                             agent_tool_config=_fallback_tool_config,
+                            crm_config=_crm_config_per_turn,
                         )
                     except (json.JSONDecodeError, TypeError):
                         structlog.get_logger().warning(
@@ -1056,11 +1089,30 @@ async def _process_custom_llm_request(
             or (agent is not None and agent.system_prompt and not _agent_has_template_vars)
         )
         if _has_static_prompt and lead is not None and not _context_render_failed:
+            # dynamic-lead-fields WU-7: read car/insurance data from lead_custom_fields,
+            # not from legacy Lead ORM columns (AC-1). Load synchronously via DB session.
+            _lead_cf: dict = {}
+            try:
+                from app.leads.lead_custom_fields_service import get_all as _get_all_cf
+
+                _lead_cf = await _get_all_cf(db, lead.id, client_id)
+            except Exception:
+                pass  # best-effort — static context still rendered without car data
+
+            _car_str = " ".join(
+                filter(None, [
+                    _lead_cf.get("car_make", ""),
+                    _lead_cf.get("car_model", ""),
+                    _lead_cf.get("car_year", ""),
+                ])
+            )
+            _insurance_str = _lead_cf.get("current_insurance", "") or "No especificado"
+
             lead_context = (
                 f"\n[CONTEXTO DEL LEAD]\n"
                 f"Nombre: {lead.name}\n"
-                f"Auto: {lead.car_make or ''} {lead.car_model or ''} {lead.car_year or ''}\n"
-                f"Seguro actual: {lead.current_insurance or 'No especificado'}\n"
+                f"Auto: {_car_str}\n"
+                f"Seguro actual: {_insurance_str}\n"
                 f"Estado: {lead.status}\n"
                 f"Notas: {lead.notes or ''}\n"
             )
@@ -1194,6 +1246,7 @@ async def _process_custom_llm_request(
                 registry_entries=_registry_entries,
                 conv_state=conv_state,
                 agent_tool_config=_agent_tool_config_resolved,
+                crm_config=_crm_config_resolved,
             ):
                 yield chunk
         except Exception as exc:

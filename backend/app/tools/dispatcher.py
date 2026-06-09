@@ -25,6 +25,7 @@ from app.tools.get_lead_pain_points import get_lead_pain_points
 from app.tools.get_lead_profile import get_lead_profile
 
 if TYPE_CHECKING:
+    from app.integrations.crm_config import CRMConfig
     from app.prompts.skill_loader import SkillRegistryEntry
 
 # Legacy tool names removed in Phase 2 (imported from registry for single source of truth).
@@ -52,6 +53,7 @@ async def dispatch_tool(
     registry_entries: "list[SkillRegistryEntry] | None" = None,
     clients_dir: Path | None = None,
     agent_tool_config: dict | None = None,
+    crm_config: "CRMConfig | None" = None,
 ) -> dict:
     """Route a tool call to the correct handler.
 
@@ -68,6 +70,9 @@ async def dispatch_tool(
         agent_tool_config: Optional per-agent tool config dict (parsed from JSON).
             Required for capture_data routing — passed to the handler for schema
             validation. Ignored for all other tool names.
+        crm_config: Optional CRMConfig — when present, capture_data uses
+            field_definitions for schema validation and field_type coercion.
+            Takes priority over agent_tool_config for capture_data schema.
 
     Returns:
         Tool result dict. Always returns a dict — never raises.
@@ -83,8 +88,32 @@ async def dispatch_tool(
             ),
         }
 
-    # --- capture_data is handled separately — requires agent_tool_config ---
+    # --- capture_data is handled separately — requires agent_tool_config or crm_config ---
     if tool_name == "capture_data":
+        # Resolve effective tool_config and field_type_map.
+        # Priority 1: CRMConfig.custom_fields → build synthetic tool_config + field_type_map
+        # Priority 2: agent_tool_config (legacy JSON column)
+        _effective_tool_config: dict = agent_tool_config or {}
+        _effective_field_type_map: dict[str, str] = {}
+        if crm_config is not None and crm_config.custom_fields:
+            # Build a synthetic tool_config["capture_data"] from crm.yaml field_definitions
+            _props: dict = {"lead_id": {"type": "string", "description": "ID del lead"}}
+            _required: list[str] = ["lead_id"]
+            for _fd in crm_config.custom_fields:
+                _props[_fd.field_key] = {"type": _fd.field_type, "description": _fd.label}
+                if _fd.required:
+                    _required.append(_fd.field_key)
+                _effective_field_type_map[_fd.field_key] = _fd.field_type
+            _effective_tool_config = {
+                "capture_data": {
+                    "parameters": {
+                        "type": "object",
+                        "properties": _props,
+                        "required": _required,
+                    }
+                }
+            }
+
         async def _call_capture_data(sess: AsyncSession) -> dict:
             effective_lead_id = tool_args.get("lead_id") or lead_id or None
             if not effective_lead_id:
@@ -94,9 +123,10 @@ async def dispatch_tool(
             return await _capture_data_handler(
                 session=sess,
                 lead_id=effective_lead_id,
-                tool_config=agent_tool_config or {},
+                tool_config=_effective_tool_config,
                 captured_fields=captured_fields,
                 client_id=client_id,
+                field_type_map=_effective_field_type_map or None,
             )
 
         if session is not None:
@@ -158,6 +188,7 @@ async def dispatch_tool(
             return await get_lead_details(
                 session=sess,
                 lead_id=effective_lead_id,
+                client_id=client_id,
             )
         elif tool_name == "get_lead_profile":
             return await get_lead_profile(

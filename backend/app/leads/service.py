@@ -15,6 +15,7 @@ from app.leads.models import (
     LeadStatus,
     is_valid_transition,
 )
+from app.leads import lead_custom_fields_service
 
 
 # ---------------------------------------------------------------------------
@@ -243,64 +244,85 @@ _SEED_LEADS = [
         "id": "lead-quintana-001",
         "name": "Carlos Méndez",
         "phone": "+5411155501",
-        "car_make": "Toyota",
-        "car_model": "Corolla",
-        "car_year": 2021,
-        "current_insurance": None,
         "status": LeadStatus.NEW.value,
         "notes": "Pidió cotización por web",
+        # dynamic-lead-fields WU-7: business data stored in lead_custom_fields,
+        # not in Lead ORM columns (legacy columns kept for rollback, not read).
+        "custom_fields": {
+            "car_make": ("Toyota", "string"),
+            "car_model": ("Corolla", "string"),
+            "car_year": (2021, "integer"),
+        },
     },
     {
         "id": "lead-quintana-002",
         "name": "María López",
         "phone": "+5411155502",
-        "car_make": "VW",
-        "car_model": "Golf",
-        "car_year": 2019,
-        "current_insurance": None,
         "status": LeadStatus.NEW.value,
         "notes": "Referida por cliente existente",
+        "custom_fields": {
+            "car_make": ("VW", "string"),
+            "car_model": ("Golf", "string"),
+            "car_year": (2019, "integer"),
+        },
     },
     {
         "id": "lead-quintana-003",
         "name": "Juan Pérez",
         "phone": "+5411155503",
-        "car_make": "Ford",
-        "car_model": "Ranger",
-        "car_year": 2022,
-        "current_insurance": None,
         "status": LeadStatus.CALLED.value,
         "notes": "Llamado una vez, no atendió",
+        "custom_fields": {
+            "car_make": ("Ford", "string"),
+            "car_model": ("Ranger", "string"),
+            "car_year": (2022, "integer"),
+        },
     },
     {
         "id": "lead-quintana-004",
         "name": "Ana García",
         "phone": "+5411155504",
-        "car_make": "Fiat",
-        "car_model": "Cronos",
-        "car_year": 2023,
-        "current_insurance": None,
         "status": LeadStatus.INTERESTED.value,
         "notes": "Quiere todo riesgo",
+        "custom_fields": {
+            "car_make": ("Fiat", "string"),
+            "car_model": ("Cronos", "string"),
+            "car_year": (2023, "integer"),
+        },
     },
     {
         "id": "lead-quintana-005",
         "name": "Roberto Silva",
         "phone": "+5411155505",
-        "car_make": "Chevrolet",
-        "car_model": "Cruze",
-        "car_year": 2020,
-        "current_insurance": "La Caja",
         "status": LeadStatus.NOT_INTERESTED.value,
         "notes": "Tiene seguro reciente",
+        "custom_fields": {
+            "car_make": ("Chevrolet", "string"),
+            "car_model": ("Cruze", "string"),
+            "car_year": (2020, "integer"),
+            "current_insurance": ("La Caja", "string"),
+        },
     },
 ]
+
+# Field type map for seed custom fields (field_key → field_type)
+_SEED_FIELD_TYPES: dict[str, str] = {
+    "car_make": "string",
+    "car_model": "string",
+    "car_year": "integer",
+    "current_insurance": "string",
+    "age": "integer",
+    "zona": "string",
+}
 
 
 async def seed_leads(session: AsyncSession) -> None:
     """Seed 5 test leads for quintana-seguros if none exist.
 
     Idempotent: skips if any leads already exist for the client.
+
+    dynamic-lead-fields WU-7: creates Lead records without legacy car columns,
+    then writes car data to lead_custom_fields via the CRUD service.
     """
     existing = await list_leads_for_client(session, "quintana-seguros")
     if existing:
@@ -312,13 +334,21 @@ async def seed_leads(session: AsyncSession) -> None:
             client_id="quintana-seguros",
             name=data["name"],
             phone=data["phone"],
-            car_make=data.get("car_make"),
-            car_model=data.get("car_model"),
-            car_year=data.get("car_year"),
-            current_insurance=data.get("current_insurance"),
             status=data["status"],
             notes=data.get("notes"),
         )
         session.add(lead)
+        await session.flush()
+
+        # Write business fields to lead_custom_fields (AC-1: no writes to legacy columns)
+        for field_key, (field_value, field_type) in data.get("custom_fields", {}).items():
+            await lead_custom_fields_service.upsert(
+                session,
+                lead_id=data["id"],
+                client_id="quintana-seguros",
+                field_key=field_key,
+                field_value=field_value,
+                field_type=field_type,
+            )
 
     await session.flush()
