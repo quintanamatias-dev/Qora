@@ -773,3 +773,145 @@ def test_register_interest_module_does_not_exist():
         "app.tools.register_interest module must be deleted. "
         "It was superseded by capture_data in WU-5."
     )
+
+
+# ---------------------------------------------------------------------------
+# Scenario CD-12: capture_data partial-write atomicity
+# Judgment Day Round 2 — confirmed by both judges
+# Problem: if first field succeeds and second fails coercion, no writes at all
+# ---------------------------------------------------------------------------
+
+
+async def test_capture_data_failed_coercion_writes_zero_custom_fields(db):
+    """capture_data with a bad coercion value must write ZERO custom fields.
+
+    GIVEN a fresh lead with no existing custom fields
+    AND a tool_config with car_make (string) and car_year (integer)
+    AND captured_fields has car_make="Toyota" (valid) and car_year="abc" (invalid int)
+    WHEN capture_data is called
+    THEN result has error=custom_field_write_failed
+    AND no lead_custom_fields rows exist (no partial write — car_make NOT written)
+    """
+    from app.tools.capture_data import capture_data
+    from app.leads.models import LeadCustomField
+    from app.leads.service import create_lead
+    from sqlalchemy import select
+
+    # Use a fresh lead with no pre-seeded custom fields to avoid fixture interference
+    async with db.async_session_factory() as sess:
+        await create_lead(
+            sess,
+            client_id="quintana-seguros",
+            name="Atomicity Test Lead",
+            phone="+54911000001",
+            lead_id="lead-atomicity-test-001",
+        )
+        await sess.commit()
+
+    tool_config = {
+        "capture_data": {
+            "type": "object",
+            "properties": {
+                "car_make": {"type": "string"},
+                "car_year": {"type": "integer"},
+            },
+            "required": ["lead_id", "car_make", "car_year"],
+        }
+    }
+    field_type_map = {"car_make": "string", "car_year": "integer"}
+
+    async with db.async_session_factory() as sess:
+        result = await capture_data(
+            session=sess,
+            lead_id="lead-atomicity-test-001",
+            tool_config=tool_config,
+            captured_fields={"car_make": "Toyota", "car_year": "abc"},  # abc is invalid int
+            client_id="quintana-seguros",
+            field_type_map=field_type_map,
+        )
+        await sess.commit()
+
+    # Must report error
+    assert result.get("error") == "custom_field_write_failed", (
+        f"Expected custom_field_write_failed, got: {result}"
+    )
+
+    # No custom fields must have been written — atomicity enforced
+    async with db.async_session_factory() as sess:
+        rows = await sess.execute(
+            select(LeadCustomField).where(
+                LeadCustomField.lead_id == "lead-atomicity-test-001",
+                LeadCustomField.client_id == "quintana-seguros",
+            )
+        )
+        cf_rows = list(rows.scalars().all())
+
+    assert len(cf_rows) == 0, (
+        f"Expected zero custom_fields on coercion failure (car_make must NOT be written), "
+        f"found {len(cf_rows)}: " + str([r.field_key for r in cf_rows])
+    )
+
+
+async def test_capture_data_failed_coercion_first_field_writes_zero(db):
+    """capture_data fails on first-field coercion error — writes nothing.
+
+    GIVEN a fresh lead with no existing custom fields
+    AND car_year is declared integer but value "NotANumber" is invalid
+    WHEN capture_data is called
+    THEN no custom_fields row is written (not even car_make which follows)
+    """
+    from app.tools.capture_data import capture_data
+    from app.leads.models import LeadCustomField
+    from app.leads.service import create_lead
+    from sqlalchemy import select
+
+    # Use a fresh lead with no pre-seeded custom fields
+    async with db.async_session_factory() as sess:
+        await create_lead(
+            sess,
+            client_id="quintana-seguros",
+            name="Atomicity Test Lead 2",
+            phone="+54911000002",
+            lead_id="lead-atomicity-test-002",
+        )
+        await sess.commit()
+
+    tool_config = {
+        "capture_data": {
+            "type": "object",
+            "properties": {
+                "car_year": {"type": "integer"},
+                "car_make": {"type": "string"},
+            },
+            "required": ["lead_id", "car_year", "car_make"],
+        }
+    }
+    # car_year fails coercion; car_make is valid but must NOT be written
+    field_type_map = {"car_year": "integer", "car_make": "string"}
+
+    async with db.async_session_factory() as sess:
+        result = await capture_data(
+            session=sess,
+            lead_id="lead-atomicity-test-002",
+            tool_config=tool_config,
+            captured_fields={"car_year": "NotANumber", "car_make": "Honda"},
+            client_id="quintana-seguros",
+            field_type_map=field_type_map,
+        )
+        await sess.commit()
+
+    assert result.get("error") == "custom_field_write_failed"
+
+    async with db.async_session_factory() as sess:
+        rows = await sess.execute(
+            select(LeadCustomField).where(
+                LeadCustomField.lead_id == "lead-atomicity-test-002",
+                LeadCustomField.client_id == "quintana-seguros",
+            )
+        )
+        cf_rows = list(rows.scalars().all())
+
+    assert len(cf_rows) == 0, (
+        "No custom fields must be written when any field fails coercion. "
+        f"Found: {[r.field_key for r in cf_rows]}"
+    )

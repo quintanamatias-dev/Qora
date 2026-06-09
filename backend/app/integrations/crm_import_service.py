@@ -257,63 +257,76 @@ async def import_leads_from_crm(
             result.skipped += 1
             continue
 
+        # Wrap the entire per-record persist block in a savepoint.
+        # If _update_lead_from_qora_data mutates the Lead ORM and then
+        # upsert_many fails, the savepoint rollback reverts BOTH the Lead
+        # mutations and any custom-field writes staged within this record.
+        # The outer transaction is preserved for all other records.
+        #
+        # Note: `await db_session.begin_nested()` is used instead of the
+        # bare `db_session.begin_nested()` form — this is compatible with
+        # both real AsyncSession (AsyncSessionTransaction is awaitable) and
+        # AsyncMock-based unit tests (which require await to get the cm).
         try:
-            if existing is not None:
-                # 4d. Update existing lead — check for duplicate external_lead_id
-                eid_holder_id: str | None = None
-                incoming_eid = qora_data.get("external_lead_id")
-                if incoming_eid is not None:
-                    eid_holder = await _find_lead_by_external_lead_id(
-                        db_session, client_id, incoming_eid
-                    )
-                    if eid_holder is not None and eid_holder.id != existing.id:
-                        eid_holder_id = eid_holder.id
+            async with await db_session.begin_nested() as savepoint:
+                if existing is not None:
+                    # 4d. Update existing lead — check for duplicate external_lead_id
+                    eid_holder_id: str | None = None
+                    incoming_eid = qora_data.get("external_lead_id")
+                    if incoming_eid is not None:
+                        eid_holder = await _find_lead_by_external_lead_id(
+                            db_session, client_id, incoming_eid
+                        )
+                        if eid_holder is not None and eid_holder.id != existing.id:
+                            eid_holder_id = eid_holder.id
 
-                # Returns pending_custom_fields dict (AC-8)
-                pending_custom_fields = _update_lead_from_qora_data(
-                    existing,
-                    qora_data,
-                    airtable_id,
-                    existing_external_lead_id_holder=eid_holder_id,
-                )
-                # Upsert non-base fields to lead_custom_fields (AC-8)
-                if pending_custom_fields:
-                    await lead_custom_fields_service.upsert_many(
-                        db_session,
-                        lead_id=existing.id,
-                        client_id=client_id,
-                        fields=pending_custom_fields,
-                        field_types=_custom_field_types if _custom_field_types else None,
+                    # Returns pending_custom_fields dict (AC-8)
+                    pending_custom_fields = _update_lead_from_qora_data(
+                        existing,
+                        qora_data,
+                        airtable_id,
+                        existing_external_lead_id_holder=eid_holder_id,
                     )
-                result.updated += 1
-                logger.info(
-                    "crm_import_lead_updated",
-                    extra={"lead_id": existing.id, "airtable_id": airtable_id},
-                )
-            else:
-                # 4e. Create new lead — returns (Lead, pending_custom_fields) (AC-8)
-                lead, pending_custom_fields = _create_lead_from_qora_data(
-                    client_id=client_id,
-                    qora_data=qora_data,
-                    airtable_id=airtable_id,
-                )
-                db_session.add(lead)
-                await db_session.flush()
-                # Upsert non-base fields to lead_custom_fields (AC-8)
-                if pending_custom_fields:
-                    await lead_custom_fields_service.upsert_many(
-                        db_session,
-                        lead_id=lead.id,
-                        client_id=client_id,
-                        fields=pending_custom_fields,
-                        field_types=_custom_field_types if _custom_field_types else None,
+                    # Upsert non-base fields to lead_custom_fields (AC-8)
+                    if pending_custom_fields:
+                        await lead_custom_fields_service.upsert_many(
+                            db_session,
+                            lead_id=existing.id,
+                            client_id=client_id,
+                            fields=pending_custom_fields,
+                            field_types=_custom_field_types if _custom_field_types else None,
+                        )
+                    result.updated += 1
+                    logger.info(
+                        "crm_import_lead_updated",
+                        extra={"lead_id": existing.id, "airtable_id": airtable_id},
                     )
-                result.created += 1
-                logger.info(
-                    "crm_import_lead_created",
-                    extra={"lead_id": lead.id, "airtable_id": airtable_id},
-                )
+                else:
+                    # 4e. Create new lead — returns (Lead, pending_custom_fields) (AC-8)
+                    lead, pending_custom_fields = _create_lead_from_qora_data(
+                        client_id=client_id,
+                        qora_data=qora_data,
+                        airtable_id=airtable_id,
+                    )
+                    db_session.add(lead)
+                    await db_session.flush()
+                    # Upsert non-base fields to lead_custom_fields (AC-8)
+                    if pending_custom_fields:
+                        await lead_custom_fields_service.upsert_many(
+                            db_session,
+                            lead_id=lead.id,
+                            client_id=client_id,
+                            fields=pending_custom_fields,
+                            field_types=_custom_field_types if _custom_field_types else None,
+                        )
+                    result.created += 1
+                    logger.info(
+                        "crm_import_lead_created",
+                        extra={"lead_id": lead.id, "airtable_id": airtable_id},
+                    )
         except Exception as exc:
+            # Savepoint was rolled back automatically by the context manager on exception.
+            # Lead mutations and custom-field writes for this record are fully reverted.
             logger.error(
                 "crm_import_record_persist_failed",
                 extra={"airtable_id": airtable_id, "error": str(exc)},

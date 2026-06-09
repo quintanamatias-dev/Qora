@@ -125,33 +125,41 @@ async def capture_data(
     # Each captured field is written to the lead_custom_fields table using the
     # field_type_map to resolve the appropriate field_type for coercion.
     from app.leads import lead_custom_fields_service as _lcf_service
+    from app.leads.lead_custom_fields_service import coerce_value, FieldTypeError
 
+    # Atomicity gate: validate/coerce ALL fields BEFORE writing any of them.
+    # If any field fails coercion, return an error without touching the DB.
+    # This prevents partial writes where earlier fields succeed but later ones fail.
+    coerced_fields: list[tuple[str, str, str]] = []  # (field_name, coerced_value, field_type)
     for field_name, field_value in fields_to_write:
         field_type = _effective_field_type_map.get(field_name, "string")
         try:
-            await _lcf_service.upsert(
-                session,
-                lead_id=lead_id,
-                client_id=client_id,
-                field_key=field_name,
-                field_value=field_value,
-                field_type=field_type,
-            )
-        except Exception:
-            # Custom-field write failure is fatal — abort and surface the error.
-            # LeadProfileFact is dual-write / backward-compat data; it must NOT
-            # be written when the primary storage write fails (would give a false
-            # "captured" status while business data is missing).
+            coerced = coerce_value(field_value, field_type)
+            coerced_fields.append((field_name, coerced, field_type))
+        except (FieldTypeError, Exception):
             import logging as _logging
             _logging.getLogger(__name__).error(
-                "capture_data: failed to upsert %s to lead_custom_fields; aborting",
+                "capture_data: coercion failed for %s (type=%s); aborting before any writes",
                 field_name,
+                field_type,
                 exc_info=True,
             )
             return {
                 "error": "custom_field_write_failed",
                 "field": field_name,
             }
+
+    # All fields validated — now write them all (no partial failures possible here
+    # since coerce_value already succeeded for every field above).
+    for field_name, coerced_value, field_type in coerced_fields:
+        await _lcf_service.upsert(
+            session,
+            lead_id=lead_id,
+            client_id=client_id,
+            field_key=field_name,
+            field_value=coerced_value,
+            field_type=field_type,
+        )
 
     # --- Backward compat: dual-write to LeadProfileFact (captured: namespace) ---
     # The intelligence/summarizer pipeline reads from captured: facts during WU-5.
@@ -171,9 +179,9 @@ async def capture_data(
     }
 
     # Upsert each captured field as a LeadProfileFact with "captured:" prefix
-    for field_name, field_value in fields_to_write:
+    for field_name, coerced_value, _ftype in coerced_fields:
         fact_key = f"captured:{field_name}"
-        fact_value = str(field_value)
+        fact_value = coerced_value  # already a canonical string from coerce_value
 
         existing = _existing_facts.get(fact_key)
 
@@ -193,5 +201,5 @@ async def capture_data(
             )
         )
 
-    captured_names = [name for name, _ in fields_to_write]
+    captured_names = [name for name, _, _ in coerced_fields]
     return {"status": "captured", "fields": captured_names}
