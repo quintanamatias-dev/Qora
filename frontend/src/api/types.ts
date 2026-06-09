@@ -9,7 +9,7 @@
 // Lead
 // ──────────────────────────────────────────────────────────────────────────────
 
-export type LeadStatus = 'new' | 'called' | 'interested' | 'not_interested' | 'follow_up'
+export type LeadStatus = 'new' | 'called' | 'quoted' | 'interested' | 'not_interested' | 'follow_up'
 
 export interface Lead {
   id: string
