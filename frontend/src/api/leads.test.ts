@@ -16,11 +16,6 @@ const mockLead: Lead = {
   client_id: 'demo-client',
   name: 'John Doe',
   phone: '+1-555-0100',
-  // Transition: legacy fields still present
-  car_make: 'Toyota',
-  car_model: 'Camry',
-  car_year: 2022,
-  current_insurance: 'State Farm',
   status: 'new',
   notes: null,
   call_count: 0,

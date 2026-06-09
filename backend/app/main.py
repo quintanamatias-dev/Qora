@@ -250,9 +250,13 @@ async def _ensure_startup_schema_compat(db_module) -> None:
             "CREATE INDEX IF NOT EXISTS ix_lcf_lead_client "
             "ON lead_custom_fields(lead_id, client_id)"
         ))
+        # Drop stale index from pre-dynamic-lead-fields schema if it exists (idempotent)
         await conn.execute(sqlalchemy.text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS ix_lcf_lead_key "
-            "ON lead_custom_fields(lead_id, field_key)"
+            "DROP INDEX IF EXISTS ix_lcf_lead_key"
+        ))
+        await conn.execute(sqlalchemy.text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_lcf_lead_client_key "
+            "ON lead_custom_fields(lead_id, client_id, field_key)"
         ))
 
         # Phase B: One-time data copy from legacy columns (CF-11, AC-2, AC-3)

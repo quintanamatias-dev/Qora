@@ -144,23 +144,30 @@ class VoiceSessionContext:
 # ---------------------------------------------------------------------------
 
 
-def _build_lead_profile_block(lead: "Lead") -> str:
+def _build_lead_profile_block(lead: "Lead", custom_fields: dict | None = None) -> str:
     """Format lead data into a [CONTEXTO DEL LEAD] block.
+
+    Business fields (car_make, car_model, car_year, current_insurance) are read
+    from custom_fields (lead_custom_fields table) rather than legacy ORM columns
+    that no longer exist on the Lead model.
 
     Args:
         lead: Lead ORM instance.
+        custom_fields: Dict of custom field values from lead_custom_fields table.
+            If None or empty, business fields are omitted from the block.
 
     Returns:
         Formatted string with lead context data. Empty string if all fields empty.
     """
     name = getattr(lead, "name", "") or ""
-    car_make = getattr(lead, "car_make", "") or ""
-    car_model = getattr(lead, "car_model", "") or ""
-    car_year_raw = getattr(lead, "car_year", None)
-    car_year = str(car_year_raw) if car_year_raw else ""
-    current_insurance = getattr(lead, "current_insurance", "") or ""
     status = getattr(lead, "status", "") or ""
     notes = getattr(lead, "notes", "") or ""
+
+    cf = custom_fields or {}
+    car_make = cf.get("car_make", "") or ""
+    car_model = cf.get("car_model", "") or ""
+    car_year = str(cf.get("car_year", "")) if cf.get("car_year") else ""
+    current_insurance = cf.get("current_insurance", "") or ""
 
     # If all key fields are empty, return empty string
     if not name and not car_make:
@@ -279,10 +286,25 @@ async def build_voice_context(
             else:
                 misc_notes = str(raw_notes) if raw_notes else ""
 
+    # Load custom fields for the lead profile block (FIX-6)
+    lead_custom_fields: dict = {}
+    if lead is not None:
+        try:
+            from app.leads.lead_custom_fields_service import get_all as _get_all_cf
+
+            lead_custom_fields = await _get_all_cf(db, str(lead.id), client_id)
+        except Exception as exc:  # noqa: BLE001 - custom fields are best-effort context
+            logger.warning(
+                "voice_context_custom_fields_load_failed",
+                **_agent_log_fields(agent),
+                error_type=type(exc).__name__,
+                error_msg=str(exc),
+            )
+
     # Build lead profile block — always computed for metadata/inspection.
     # Whether it's included in the assembled system message depends on whether
     # the agent system_prompt has template vars (see _assemble_context_system_content).
-    lead_profile = _build_lead_profile_block(lead) if lead is not None else ""
+    lead_profile = _build_lead_profile_block(lead, lead_custom_fields) if lead is not None else ""
 
     # Track whether the effective prompt template uses lead vars. Filesystem
     # prompts are canonical; agent.system_prompt is only the legacy fallback.
@@ -347,7 +369,16 @@ async def build_voice_context(
         # Used by capture_data to get the per-agent parameters schema.
         agent_tool_config = parse_agent_tool_config(agent)
 
-        tools = _build_tool_definitions(enabled_names, agent_tool_config=agent_tool_config)
+        # Load CRM config — provides field_definitions for capture_data schema (FIX-1)
+        from app.integrations.crm_config import CRMConfigLoader as _CRMConfigLoader
+
+        _crm_config = _CRMConfigLoader.load(client_id)
+
+        tools = _build_tool_definitions(
+            enabled_names,
+            agent_tool_config=agent_tool_config,
+            crm_config=_crm_config,
+        )
     except ImportError as exc:
         logger.warning(
             "voice_context_tool_helpers_import_failed",

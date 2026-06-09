@@ -467,6 +467,24 @@ async def override_app_client(tmp_path: Path):
             current_insurance="Sancor",
             lead_id=LEAD_ID,
         )
+        # Populate lead_custom_fields so _build_lead_profile_block can read car data
+        # (FIX-6: profile block now reads from custom_fields, not legacy ORM columns)
+        from app.leads import lead_custom_fields_service as _lcf_svc
+
+        for _field_key, _field_value, _field_type in [
+            ("car_make", "Honda", "string"),
+            ("car_model", "Civic", "string"),
+            ("car_year", "2019", "string"),
+            ("current_insurance", "Sancor", "string"),
+        ]:
+            await _lcf_svc.upsert(
+                sess,
+                lead_id=LEAD_ID,
+                client_id="override-client",
+                field_key=_field_key,
+                field_value=_field_value,
+                field_type=_field_type,
+            )
         await sess.commit()
 
     from app.voice.webhook import router as webhook_router

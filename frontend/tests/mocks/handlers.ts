@@ -44,11 +44,6 @@ const leadsFixture: Lead[] = [
     client_id: 'demo-client',
     name: 'John Doe',
     phone: '+1-555-0100',
-    // Transition: legacy fields still present
-    car_make: 'Toyota',
-    car_model: 'Camry',
-    car_year: 2022,
-    current_insurance: 'State Farm',
     status: 'new',
     notes: null,
     call_count: 2,
@@ -73,11 +68,6 @@ const leadsFixture: Lead[] = [
     client_id: 'demo-client',
     name: 'Jane Smith',
     phone: '+1-555-0200',
-    // Transition: legacy fields still present (null)
-    car_make: null,
-    car_model: null,
-    car_year: null,
-    current_insurance: null,
     status: 'interested',
     notes: 'Callback requested',
     call_count: 1,

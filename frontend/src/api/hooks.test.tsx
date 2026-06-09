@@ -56,11 +56,6 @@ const mockLead: Lead = {
   client_id: 'demo-client',
   name: 'Jane Smith',
   phone: '+1-555-0200',
-  // Transition: legacy fields still present
-  car_make: null,
-  car_model: null,
-  car_year: null,
-  current_insurance: null,
   status: 'new',
   notes: null,
   call_count: 0,

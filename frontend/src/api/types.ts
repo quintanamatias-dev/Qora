@@ -16,11 +16,6 @@ export interface Lead {
   client_id: string
   name: string
   phone: string
-  // Transition period: legacy columns still present during WU-6 → WU-7 migration
-  car_make: string | null
-  car_model: string | null
-  car_year: number | null
-  current_insurance: string | null
   status: LeadStatus
   notes: string | null
   call_count: number
@@ -44,10 +39,6 @@ export interface Lead {
 export interface CreateLeadPayload {
   name: string
   phone: string
-  car_make?: string | null
-  car_model?: string | null
-  car_year?: number | null
-  current_insurance?: string | null
   notes?: string | null
   // WU-6: optional custom fields written to lead_custom_fields table
   custom_fields?: Record<string, string>

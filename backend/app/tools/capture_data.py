@@ -138,14 +138,20 @@ async def capture_data(
                 field_type=field_type,
             )
         except Exception:
-            # Log but don't fail the whole call — fall back to LeadProfileFact only
+            # Custom-field write failure is fatal — abort and surface the error.
+            # LeadProfileFact is dual-write / backward-compat data; it must NOT
+            # be written when the primary storage write fails (would give a false
+            # "captured" status while business data is missing).
             import logging as _logging
-            _logging.getLogger(__name__).warning(
-                "capture_data: failed to upsert %s to lead_custom_fields; "
-                "LeadProfileFact write still proceeds",
+            _logging.getLogger(__name__).error(
+                "capture_data: failed to upsert %s to lead_custom_fields; aborting",
                 field_name,
                 exc_info=True,
             )
+            return {
+                "error": "custom_field_write_failed",
+                "field": field_name,
+            }
 
     # --- Backward compat: dual-write to LeadProfileFact (captured: namespace) ---
     # The intelligence/summarizer pipeline reads from captured: facts during WU-5.
