@@ -48,6 +48,18 @@ function NextActionCell({ lead }: { lead: Lead }) {
   return <Badge status={badge}>{label}</Badge>
 }
 
+function formatCustomFieldsSummary(customFields: Lead['custom_fields']): string {
+  const entries = Object.entries(customFields ?? {}).filter(([, value]) => value)
+  if (entries.length === 0) return '—'
+
+  const preview = entries
+    .slice(0, 2)
+    .map(([key, value]) => `${key.replace(/[_-]+/g, ' ')}: ${value}`)
+    .join(', ')
+
+  return entries.length > 2 ? `${preview} +${entries.length - 2}` : preview
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // LeadTable
 // ──────────────────────────────────────────────────────────────────────────────
@@ -63,6 +75,7 @@ export function LeadTable({ leads, onSelectLead }: LeadTableProps) {
             <th className="py-3 px-4 text-left font-medium">Status</th>
             <th className="py-3 px-4 text-right font-medium">Calls</th>
             <th className="py-3 px-4 text-left font-medium">Last Called</th>
+            <th className="py-3 px-4 text-left font-medium">Fields</th>
             <th className="py-3 px-4 text-left font-medium">Next Action</th>
           </tr>
         </thead>
@@ -90,6 +103,9 @@ export function LeadTable({ leads, onSelectLead }: LeadTableProps) {
               </td>
               <td className="py-3 px-4 text-ink-3">
                 {formatLastCalled(lead.last_called_at)}
+              </td>
+              <td className="py-3 px-4 text-ink-3 max-w-[220px] truncate">
+                {formatCustomFieldsSummary(lead.custom_fields)}
               </td>
               <td className="py-3 px-4">
                 <NextActionCell lead={lead} />

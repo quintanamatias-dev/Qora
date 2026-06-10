@@ -20,6 +20,8 @@ import type {
   AvailableIntegration,
   ConnectIntegrationPayload,
   DisconnectResult,
+  AirtableFieldsResponse,
+  SaveMappingsPayload,
 } from './types'
 
 /**
@@ -113,6 +115,29 @@ export async function disconnectIntegration(
     `/api/v1/clients/${encodeURIComponent(clientId)}/integrations/${encodeURIComponent(provider)}/disconnect`,
     {
       method: 'DELETE',
+    },
+  )
+}
+
+export async function fetchIntegrationFields(
+  clientId: string,
+  provider: string,
+): Promise<AirtableFieldsResponse> {
+  return apiFetch<AirtableFieldsResponse>(
+    `/api/v1/clients/${encodeURIComponent(clientId)}/integrations/${encodeURIComponent(provider)}/fields`,
+  )
+}
+
+export async function saveIntegrationMappings(
+  clientId: string,
+  provider: string,
+  payload: SaveMappingsPayload,
+): Promise<IntegrationConfig> {
+  return apiFetch<IntegrationConfig>(
+    `/api/v1/clients/${encodeURIComponent(clientId)}/integrations/${encodeURIComponent(provider)}/mappings`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(payload),
     },
   )
 }

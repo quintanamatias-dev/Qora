@@ -214,9 +214,9 @@ describe('LeadsPage — successful data rendering', () => {
       )
     )
     renderLeadsPage()
-    // Active state shows relative time label — "En Xh" for 2h from now
+    // Active state shows the intended relative label for a future scheduled call.
     await waitFor(() => {
-      const labels = screen.getAllByText(/^En \d+h$/)
+      const labels = screen.getAllByText(/^(En \d+h|Mañana \d{2}:\d{2})$/)
       expect(labels.length).toBeGreaterThanOrEqual(1)
     })
   })

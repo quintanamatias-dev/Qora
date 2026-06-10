@@ -12,8 +12,20 @@ import { describe, it, expect } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
-import { fetchIntegrations, updateIntegration, testIntegrationConnection } from './integrations'
-import { useIntegrations, useUpdateIntegration, useTestIntegration } from './hooks'
+import {
+  fetchIntegrations,
+  updateIntegration,
+  testIntegrationConnection,
+  fetchIntegrationFields,
+  saveIntegrationMappings,
+} from './integrations'
+import {
+  useIntegrations,
+  useUpdateIntegration,
+  useTestIntegration,
+  useIntegrationFields,
+  useSaveIntegrationMappings,
+} from './hooks'
 import type { IntegrationConfig } from './types'
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -43,6 +55,9 @@ describe('fetchIntegrations', () => {
     expect(item).toHaveProperty('match_field')
     expect(item).toHaveProperty('field_count')
     expect(item).toHaveProperty('connected')
+    expect(item).toHaveProperty('field_mappings')
+    expect(item).toHaveProperty('field_definitions')
+    expect(item).toHaveProperty('quote_ready_fields')
   })
 
   it('api_key_env field is a string (env var name, not a secret)', async () => {
@@ -75,6 +90,29 @@ describe('testIntegrationConnection', () => {
   it('returns failure for unconfigured client/provider', async () => {
     const result = await testIntegrationConnection('demo-client', 'airtable')
     expect(result.success).toBe(false)
+  })
+})
+
+describe('integration mapping endpoints', () => {
+  it('fetches Airtable fields for dropdown mapping', async () => {
+    const result = await fetchIntegrationFields('quintana-seguros', 'airtable')
+    expect(result.fields.length).toBeGreaterThan(0)
+    expect(result.fields[0]).toHaveProperty('name')
+  })
+
+  it('saves mappings and returns updated field count', async () => {
+    const result = await saveIntegrationMappings('quintana-seguros', 'airtable', {
+      field_mappings: [
+        { source: 'external_lead_id', target: 'lead_id', type: 'integer' },
+        { source: 'car_make', target: 'Marca_Auto', type: 'string' },
+      ],
+      field_definitions: [
+        { field_key: 'car_make', field_type: 'string', label: 'Car Make' },
+      ],
+      quote_ready_fields: ['car_make'],
+    })
+    expect(result.field_count).toBe(2)
+    expect(result.quote_ready_fields).toEqual(['car_make'])
   })
 })
 
@@ -139,6 +177,27 @@ describe('useTestIntegration hook', () => {
   it('is a mutation hook with mutate function', () => {
     const { result } = renderHook(
       () => useTestIntegration('quintana-seguros'),
+      { wrapper: createWrapper() },
+    )
+    expect(typeof result.current.mutate).toBe('function')
+  })
+})
+
+describe('integration field/mapping hooks', () => {
+  it('useIntegrationFields returns Airtable fields', async () => {
+    const { result } = renderHook(
+      () => useIntegrationFields('quintana-seguros', 'airtable'),
+      { wrapper: createWrapper() },
+    )
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false)
+    })
+    expect(result.current.data?.fields.length).toBeGreaterThan(0)
+  })
+
+  it('useSaveIntegrationMappings is a mutation hook', () => {
+    const { result } = renderHook(
+      () => useSaveIntegrationMappings('quintana-seguros'),
       { wrapper: createWrapper() },
     )
     expect(typeof result.current.mutate).toBe('function')

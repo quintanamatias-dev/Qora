@@ -108,6 +108,22 @@ describe('LeadDetailPage — lead header', () => {
       expect(screen.getByText('No summary yet')).toBeInTheDocument()
     )
   })
+
+  it('renders custom fields with readable labels', async () => {
+    renderDetailPage()
+    await waitFor(() => expect(screen.getByText('Custom Fields')).toBeInTheDocument())
+    expect(screen.getByText('Car Make')).toBeInTheDocument()
+    expect(screen.getByText('Toyota')).toBeInTheDocument()
+    expect(screen.getByText('Current Insurance')).toBeInTheDocument()
+    expect(screen.getByText('State Farm')).toBeInTheDocument()
+  })
+
+  it('renders custom fields empty state', async () => {
+    renderDetailPage('demo-client', 'lead-2')
+    await waitFor(() =>
+      expect(screen.getByText('No custom fields captured yet.')).toBeInTheDocument()
+    )
+  })
 })
 
 // ──────────────────────────────────────────────────────────────────────────────

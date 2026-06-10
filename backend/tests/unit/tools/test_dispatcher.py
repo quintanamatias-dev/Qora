@@ -235,6 +235,58 @@ async def test_dispatcher_routes_capture_data_with_agent_tool_config(db):
     assert facts[0].fact_value == "Toyota"
 
 
+async def test_dispatcher_capture_data_partial_capture_with_required_crm_fields(db):
+    """Partial capture is accepted when crm.yaml marks fields as required.
+
+    P1 fix (partial capture): required:true in crm.yaml is for quote-ready
+    evaluation, not tool-call validation. Capturing ONE field mid-call must
+    succeed and persist, even when other crm.yaml fields are required=true.
+
+    GIVEN crm_config with car_make/age/zona where age+zona are required=true
+    WHEN dispatch_tool('capture_data') is called with ONLY car_make
+    THEN the capture succeeds and car_make is written to lead_custom_fields
+    """
+    from app.tools.dispatcher import dispatch_tool
+    from app.integrations.crm_config import CRMConfig, CustomFieldDef
+    from app.leads import lead_custom_fields_service
+
+    crm_config = CRMConfig(
+        provider="airtable",
+        base_id="app123",
+        table_id="tbl123",
+        api_key="LITERAL_KEY",
+        match_field="lead_id",
+        custom_fields=[
+            CustomFieldDef(field_key="car_make", field_type="string", label="Car Make", required=True),
+            CustomFieldDef(field_key="age", field_type="integer", label="Age", required=True),
+            CustomFieldDef(field_key="zona", field_type="string", label="Zone", required=True),
+        ],
+    )
+
+    async with db.async_session_factory() as sess:
+        result = await dispatch_tool(
+            tool_name="capture_data",
+            tool_args={"lead_id": "lead-quintana-001", "car_make": "Toyota"},
+            client_id="quintana-seguros",
+            lead_id="lead-quintana-001",
+            session=sess,
+            crm_config=crm_config,
+        )
+        await sess.commit()
+
+    assert result.get("status") == "captured", (
+        f"Partial capture of one field must succeed, got: {result}"
+    )
+    assert result.get("fields") == ["car_make"]
+
+    # Verify the partial field was written to lead_custom_fields
+    async with db.async_session_factory() as sess:
+        stored = await lead_custom_fields_service.get_all(
+            sess, "lead-quintana-001", "quintana-seguros"
+        )
+    assert stored.get("car_make") == "Toyota"
+
+
 async def test_dispatcher_capture_data_without_tool_config_returns_error(db):
     """dispatch_tool with capture_data and no agent_tool_config returns error.
 

@@ -17,6 +17,7 @@ Design decisions:
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
@@ -24,6 +25,13 @@ from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError, model_validator
+
+logger = logging.getLogger(__name__)
+
+# Custom field keys should be snake_case — they become tool-schema property names
+# and lead_custom_fields keys. Non-conforming keys are warned (not rejected) here
+# to avoid breaking existing configs at load time; the save endpoint rejects them.
+_SNAKE_CASE_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +131,19 @@ class CRMConfig(BaseModel):
                     "Each field_key must be unique."
                 )
             seen.add(fd.field_key)
+        return self
+
+    @model_validator(mode="after")
+    def _warn_non_snake_case_custom_field_keys(self) -> "CRMConfig":
+        """Warn (non-fatal) for custom field keys that are not snake_case."""
+        for fd in self.custom_fields:
+            if not _SNAKE_CASE_KEY_PATTERN.match(fd.field_key):
+                logger.warning(
+                    "Custom field key %r is not snake_case; it may break tool-schema "
+                    "property names and lead_custom_fields lookups. Use lowercase "
+                    "letters, digits, and underscores (e.g. 'car_make').",
+                    fd.field_key,
+                )
         return self
 
     def resolve_api_key(self) -> str:

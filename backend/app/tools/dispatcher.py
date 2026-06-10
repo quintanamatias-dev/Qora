@@ -98,11 +98,12 @@ async def dispatch_tool(
         if crm_config is not None and crm_config.custom_fields:
             # Build a synthetic tool_config["capture_data"] from crm.yaml field_definitions
             _props: dict = {"lead_id": {"type": "string", "description": "ID del lead"}}
+            # Only lead_id is required: CustomFieldDef.required is for quote-ready
+            # evaluation, not tool-call validation. Partial captures (one field at
+            # a time) must be accepted mid-call (P1 fix: partial capture).
             _required: list[str] = ["lead_id"]
             for _fd in crm_config.custom_fields:
                 _props[_fd.field_key] = {"type": _fd.field_type, "description": _fd.label}
-                if _fd.required:
-                    _required.append(_fd.field_key)
                 _effective_field_type_map[_fd.field_key] = _fd.field_type
             _effective_tool_config = {
                 "capture_data": {

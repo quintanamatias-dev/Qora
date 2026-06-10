@@ -319,18 +319,35 @@ export interface ReadinessCheck {
  * IntegrationConfig — represents a configured CRM integration for a client.
  * Returned by GET /api/v1/clients/{client_id}/integrations.
  *
- * SECURITY: api_key_env is always the env var NAME, never the actual secret.
+ * SECURITY: api_key_env is an env var name or masked credential label, never the actual secret.
  */
 export interface IntegrationConfig {
   provider: string
   base_id: string
   table_id: string
-  api_key_env: string   // env var NAME — never the secret value
+  api_key_env: string   // env var name or masked credential label — never the secret value
   match_field: string
   field_count: number
   connected: boolean
   status_mapping?: Record<string, string>
   import_status_mapping?: Record<string, string>
+  field_mappings?: CRMFieldMapping[]
+  field_definitions?: CRMFieldDefinition[]
+  quote_ready_fields?: string[]
+}
+
+export interface CRMFieldMapping {
+  source: string
+  target: string
+  type: string
+  required?: boolean
+}
+
+export interface CRMFieldDefinition {
+  field_key: string
+  field_type: string
+  label: string
+  required?: boolean
 }
 
 /**
@@ -344,6 +361,22 @@ export interface UpdateIntegrationPayload {
   match_field?: string
   status_mapping?: Record<string, string>
   import_status_mapping?: Record<string, string>
+}
+
+export interface AirtableField {
+  id?: string | null
+  name: string
+  type?: string | null
+}
+
+export interface AirtableFieldsResponse {
+  fields: AirtableField[]
+}
+
+export interface SaveMappingsPayload {
+  field_mappings: CRMFieldMapping[]
+  field_definitions: CRMFieldDefinition[]
+  quote_ready_fields: string[]
 }
 
 /**

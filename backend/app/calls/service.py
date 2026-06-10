@@ -77,7 +77,45 @@ async def create_session(
     )
     session.add(cs)
     await session.flush()
+
+    # P1 fix (lead lifecycle): a call session starting IS the "lead was called"
+    # event, regardless of entry path (voice initiation, browser, webhook backfill).
+    # Idempotent by design: only new → called; any later status (called, quoted,
+    # follow_up, not_interested, ...) is preserved untouched. Counters are NOT
+    # touched here — call_count/last_called_at stay with their existing owners
+    # (initiation / close_session) to avoid double increments.
+    if lead_id:
+        await _advance_new_lead_to_called(session, lead_id=lead_id, client_id=client_id)
+
     return cs
+
+
+async def _advance_new_lead_to_called(
+    session: AsyncSession,
+    *,
+    lead_id: str,
+    client_id: str,
+) -> None:
+    """Transition a lead from 'new' to 'called' when a call session is created.
+
+    No-op when the lead does not exist, belongs to another client, or is in any
+    status other than 'new'. Never raises — lifecycle advancement must not block
+    call session creation.
+    """
+    from app.leads.models import Lead, LeadStatus  # avoid circular import
+    from app.leads.service import InvalidTransitionError, transition_lead_status
+
+    result = await session.execute(select(Lead).where(Lead.id == lead_id))
+    lead = result.scalar_one_or_none()
+    if lead is None or lead.client_id != client_id:
+        return
+    if lead.status != LeadStatus.NEW.value:
+        return
+    try:
+        await transition_lead_status(session, lead_id, LeadStatus.CALLED.value)
+    except (InvalidTransitionError, ValueError):
+        # Race or concurrent transition — lifecycle advancement is best-effort.
+        pass
 
 
 async def get_session(session: AsyncSession, session_id: str) -> CallSession | None:

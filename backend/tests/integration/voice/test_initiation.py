@@ -433,21 +433,21 @@ def test_initiation_uses_shared_build_memory_context():
 
 
 # ---------------------------------------------------------------------------
-# Task 1.6 — call_count increment moved to initiation
-# Design: initiation.py is the canonical "call started" event
+# call_count increment: canonical event is close_session, NOT initiation.
+# Initiation only transitions new→called (idempotent safety net).
+# close_session increments call_count + last_called_at once on first close.
 # ---------------------------------------------------------------------------
 
 
-async def test_initiation_increments_call_count(app_client: AsyncClient):
-    """POST /initiation increments lead.call_count and sets last_called_at.
+async def test_initiation_does_not_increment_call_count(app_client: AsyncClient):
+    """POST /initiation does NOT increment call_count (close_session does).
 
-    Task 1.6: call_count increment MOVED from get_lead_details to initiation.
-    initiation.py is the canonical "call started" event.
+    call_count belongs in close_session to avoid double-counting. Initiation
+    only handles the new→called status transition as an idempotent safety net.
 
-    GIVEN a lead with call_count=0
+    GIVEN a lead with call_count=N
     WHEN POST /initiation is called
-    THEN lead.call_count == 1
-    AND lead.last_called_at is set
+    THEN lead.call_count == N (unchanged)
     """
     from app.core import database as db_module
     from app.leads.service import get_lead
@@ -469,10 +469,7 @@ async def test_initiation_increments_call_count(app_client: AsyncClient):
     async with db_module.async_session_factory() as sess:
         lead_after = await get_lead(sess, "lead-quintana-001")
 
-    assert lead_after.call_count == count_before + 1, (
-        f"initiation must increment call_count. "
-        f"Was {count_before}, expected {count_before + 1}, got {lead_after.call_count}"
-    )
-    assert lead_after.last_called_at is not None, (
-        "initiation must set last_called_at"
+    assert lead_after.call_count == count_before, (
+        f"initiation must NOT increment call_count (close_session does). "
+        f"Was {count_before}, got {lead_after.call_count}"
     )

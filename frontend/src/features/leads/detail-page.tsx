@@ -26,6 +26,12 @@ function formatInterestLevel(level: number | null): string {
   return `${level}%`
 }
 
+function formatCustomFieldKey(key: string): string {
+  return key
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // LeadDetailPage
 // ──────────────────────────────────────────────────────────────────────────────
@@ -149,6 +155,34 @@ export function LeadDetailPage() {
           />
         )}
       </div>
+
+      <section className="bg-paper border border-line rounded-lg p-6 space-y-4">
+        <div>
+          <h2 className="text-lg font-semibold text-ink">Custom Fields</h2>
+          <p className="text-sm text-ink-3 mt-1">
+            Client-specific lead data captured from CRM imports and calls.
+          </p>
+        </div>
+
+        {Object.entries(lead.custom_fields ?? {}).length > 0 ? (
+          <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {Object.entries(lead.custom_fields ?? {}).map(([key, value]) => (
+              <div key={key} className="rounded-md border border-line bg-pearl px-3 py-2.5">
+                <dt className="text-[0.65rem] font-semibold uppercase tracking-[0.08em] text-ink-3">
+                  {formatCustomFieldKey(key)}
+                </dt>
+                <dd className="mt-1 text-sm font-medium text-ink break-words">
+                  {value || '—'}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        ) : (
+          <p className="rounded-md border border-line bg-pearl px-3 py-3 text-sm text-ink-3">
+            No custom fields captured yet.
+          </p>
+        )}
+      </section>
 
       {/* Call History section */}
       <section>

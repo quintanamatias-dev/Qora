@@ -36,7 +36,7 @@ describe('Badge — rendering', () => {
 })
 
 describe('Badge — lead status variants', () => {
-  const statuses = ['new', 'called', 'interested', 'not_interested', 'follow_up'] as const
+  const statuses = ['new', 'called', 'quoted', 'interested', 'not_interested', 'follow_up'] as const
 
   statuses.forEach((status) => {
     it(`renders badge with lead status "${status}"`, () => {

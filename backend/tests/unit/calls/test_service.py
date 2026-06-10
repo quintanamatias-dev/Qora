@@ -76,6 +76,88 @@ async def test_create_session_persists_record(seeded_session: AsyncSession):
     assert session.outcome is None
 
 
+async def test_create_session_transitions_new_lead_to_called(seeded_session: AsyncSession):
+    """create_session() advances a 'new' lead to 'called' (path-independent lifecycle).
+
+    P1 fix: browser/webhook calls create sessions without going through
+    /voice/initiation, leaving leads stuck in 'new'. The transition now lives in
+    create_session — the central path for ALL call session creation.
+    """
+    from app.calls.service import create_session
+    from app.leads.service import get_lead
+
+    lead = await get_lead(seeded_session, "test-lead-001")
+    assert lead is not None and lead.status == "new"
+
+    await create_session(
+        seeded_session,
+        client_id="quintana-seguros",
+        lead_id="test-lead-001",
+    )
+
+    lead = await get_lead(seeded_session, "test-lead-001")
+    assert lead.status == "called", (
+        "create_session must advance a 'new' lead to 'called'"
+    )
+
+
+async def test_create_session_preserves_non_new_lead_status(seeded_session: AsyncSession):
+    """create_session() never overrides statuses beyond 'new' (idempotent lifecycle).
+
+    A lead already in 'quoted' (or follow_up/not_interested/...) must keep its
+    status when a new call session is created.
+    """
+    from app.calls.service import create_session
+    from app.leads.service import get_lead
+
+    lead = await get_lead(seeded_session, "test-lead-001")
+    lead.status = "quoted"
+    await seeded_session.flush()
+
+    await create_session(
+        seeded_session,
+        client_id="quintana-seguros",
+        lead_id="test-lead-001",
+    )
+
+    lead = await get_lead(seeded_session, "test-lead-001")
+    assert lead.status == "quoted", (
+        "create_session must not override non-new lead statuses"
+    )
+
+
+async def test_create_session_repeat_calls_keep_called_status(seeded_session: AsyncSession):
+    """Creating multiple sessions only transitions once: new → called, then no-op."""
+    from app.calls.service import create_session
+    from app.leads.service import get_lead
+
+    await create_session(
+        seeded_session,
+        client_id="quintana-seguros",
+        lead_id="test-lead-001",
+    )
+    await create_session(
+        seeded_session,
+        client_id="quintana-seguros",
+        lead_id="test-lead-001",
+    )
+
+    lead = await get_lead(seeded_session, "test-lead-001")
+    assert lead.status == "called"
+
+
+async def test_create_session_without_lead_id_skips_lifecycle(seeded_session: AsyncSession):
+    """create_session() with lead_id=None creates the session without lifecycle errors."""
+    from app.calls.service import create_session
+
+    cs = await create_session(
+        seeded_session,
+        client_id="quintana-seguros",
+        lead_id=None,
+    )
+    assert cs.status == "initiated"
+
+
 async def test_end_session_updates_fields(seeded_session: AsyncSession):
     """end_session() sets ended_at, duration_seconds, outcome, and billable_minutes."""
     from app.calls.service import create_session, end_session

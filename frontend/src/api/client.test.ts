@@ -47,8 +47,16 @@ describe('apiFetch — success', () => {
 describe('apiFetch — error', () => {
   it('throws ApiError with status 422 on 422 response', async () => {
     mockFetch(422, { detail: 'Validation error' })
-    await expect(apiFetch('/api/v1/leads')).rejects.toThrow(ApiError)
-    await expect(apiFetch('/api/v1/leads')).rejects.toMatchObject({ status: 422 })
+    try {
+      await apiFetch('/api/v1/leads')
+      expect.fail('Should have thrown')
+    } catch (err) {
+      expect(err).toBeInstanceOf(ApiError)
+      expect(err).toMatchObject({
+        status: 422,
+        message: 'Validation error',
+      })
+    }
   })
 
   it('throws ApiError with status 404 on 404 response', async () => {

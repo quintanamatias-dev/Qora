@@ -240,6 +240,23 @@ const integrationsFixture: IntegrationConfig[] = [
     match_field: 'lead_id',
     field_count: 11,
     connected: true,
+    field_mappings: [
+      { source: 'external_lead_id', target: 'lead_id', type: 'integer' },
+      { source: 'name', target: 'Nombre Completo', type: 'string' },
+      { source: 'phone', target: 'Teléfono', type: 'phone' },
+      { source: 'email', target: 'Email', type: 'string' },
+      { source: 'status', target: 'Status', type: 'string' },
+      { source: 'car_make', target: 'Marca_Auto', type: 'string' },
+      { source: 'car_model', target: 'Modelo_Auto', type: 'string' },
+      { source: 'car_year', target: 'Año_Auto', type: 'string' },
+    ],
+    field_definitions: [
+      { field_key: 'car_make', field_type: 'string', label: 'Car Make' },
+      { field_key: 'car_model', field_type: 'string', label: 'Car Model' },
+      { field_key: 'car_year', field_type: 'integer', label: 'Car Year' },
+      { field_key: 'current_insurance', field_type: 'string', label: 'Current Insurance' },
+    ],
+    quote_ready_fields: ['car_make', 'car_model', 'car_year', 'age', 'zona'],
   },
 ]
 
@@ -262,6 +279,19 @@ const availableIntegrationsNotConnected: AvailableIntegration[] = [
     icon: '/images/integrations/airtable-icon.webp',
   },
 ]
+
+const airtableFieldsFixture = {
+  fields: [
+    { id: 'fldLeadId', name: 'lead_id', type: 'singleLineText' },
+    { id: 'fldName', name: 'Nombre Completo', type: 'singleLineText' },
+    { id: 'fldPhone', name: 'Teléfono', type: 'phoneNumber' },
+    { id: 'fldEmail', name: 'Email', type: 'email' },
+    { id: 'fldStatus', name: 'Status', type: 'singleSelect' },
+    { id: 'fldMake', name: 'Marca_Auto', type: 'singleLineText' },
+    { id: 'fldModel', name: 'Modelo_Auto', type: 'singleLineText' },
+    { id: 'fldYear', name: 'Año_Auto', type: 'number' },
+  ],
+}
 
 export const handlers = [
   // ── Admin: Clients ────────────────────────────────────────────────────────
@@ -330,6 +360,29 @@ export const handlers = [
     }
     return HttpResponse.json([])
   }),
+
+  http.get('/api/v1/clients/:clientId/integrations/:provider/fields', ({ params }) => {
+    if (params.clientId === 'quintana-seguros' && params.provider === 'airtable') {
+      return HttpResponse.json(airtableFieldsFixture)
+    }
+    return HttpResponse.json({ detail: 'Integration not configured.' }, { status: 404 })
+  }),
+
+  http.put(
+    '/api/v1/clients/:clientId/integrations/:provider/mappings',
+    async ({ params, request }) => {
+      const body = await request.json() as Partial<IntegrationConfig>
+      const base = integrationsFixture.find((i) => i.provider === params.provider)
+      if (!base) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
+      return HttpResponse.json({
+        ...base,
+        field_mappings: body.field_mappings ?? base.field_mappings,
+        field_definitions: body.field_definitions ?? base.field_definitions,
+        quote_ready_fields: body.quote_ready_fields ?? base.quote_ready_fields,
+        field_count: body.field_mappings?.length ?? base.field_count,
+      })
+    },
+  ),
 
   // PUT /api/v1/clients/:clientId/integrations/:provider
   http.put(

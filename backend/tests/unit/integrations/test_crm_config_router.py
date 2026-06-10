@@ -45,6 +45,10 @@ VALID_CRM_DATA = {
         {"source": "phone", "target": "Teléfono", "type": "phone"},
         {"source": "email", "target": "Correo", "type": "string"},
     ],
+    "field_definitions": [
+        {"field_key": "car_make", "field_type": "string", "label": "Car Make"},
+    ],
+    "quote_ready_fields": ["car_make"],
 }
 
 
@@ -90,6 +94,15 @@ def test_get_integrations_returns_list_for_configured_client(
     assert item["api_key_env"] == "QUINTANA_AIRTABLE_API_KEY"
     assert item["match_field"] == "lead_id"
     assert item["field_count"] == 3
+    assert item["field_mappings"] == [
+        {"source": "name", "target": "Nombre", "type": "string", "required": False},
+        {"source": "phone", "target": "Teléfono", "type": "phone", "required": False},
+        {"source": "email", "target": "Correo", "type": "string", "required": False},
+    ]
+    assert item["field_definitions"] == [
+        {"field_key": "car_make", "field_type": "string", "label": "Car Make", "required": False},
+    ]
+    assert item["quote_ready_fields"] == ["car_make"]
 
 
 def test_get_integrations_never_returns_raw_api_key(tmp_path: Path, monkeypatch):
@@ -108,6 +121,24 @@ def test_get_integrations_never_returns_raw_api_key(tmp_path: Path, monkeypatch)
     assert resp.status_code == 200
     # The raw secret must NEVER appear in the response JSON
     assert "pat_super_secret_value" not in resp.text
+
+
+def test_get_integrations_masks_literal_api_key_in_config(tmp_path: Path):
+    """SECURITY: literal PAT stored in crm.yaml must not be returned in GET responses."""
+    client_dir = tmp_path / "clients" / "quintana-seguros"
+    data = {**VALID_CRM_DATA, "api_key_env": "pat_literal_secret_should_not_leak"}
+    _write_crm_yaml(client_dir, data)
+
+    with patch(
+        "app.integrations.crm_config_router.CLIENTS_ROOT",
+        tmp_path / "clients",
+    ):
+        tc = _make_test_client(tmp_path)
+        resp = tc.get("/api/v1/clients/quintana-seguros/integrations")
+
+    assert resp.status_code == 200
+    assert "pat_literal_secret_should_not_leak" not in resp.text
+    assert resp.json()[0]["api_key_env"] == "Stored credential (masked)"
 
 
 def test_get_integrations_returns_empty_for_unconfigured_client(tmp_path: Path):
@@ -204,6 +235,26 @@ def test_put_integration_updates_table_id(tmp_path: Path, monkeypatch):
 
     assert resp.status_code == 200
     assert resp.json()["table_id"] == "tblNEW123"
+
+
+def test_put_integration_rejects_truncated_base_id(tmp_path: Path, monkeypatch):
+    """PUT integration → helpful 422 before malformed Airtable URL can be used."""
+    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test")
+    client_dir = tmp_path / "clients" / "quintana-seguros"
+    _write_crm_yaml(client_dir, VALID_CRM_DATA)
+
+    with patch(
+        "app.integrations.crm_config_router.CLIENTS_ROOT",
+        tmp_path / "clients",
+    ):
+        tc = _make_test_client(tmp_path)
+        resp = tc.put(
+            "/api/v1/clients/quintana-seguros/integrations/airtable",
+            json={"base_id": "w59LRBdv95UPpB"},
+        )
+
+    assert resp.status_code == 422
+    assert "must start with 'app'" in resp.text
 
 
 def test_put_integration_updates_api_key_env_name(tmp_path: Path, monkeypatch):
@@ -323,6 +374,187 @@ def test_post_test_never_leaks_api_key_on_failure(tmp_path: Path, monkeypatch):
             )
 
     assert "pat_ultra_secret_should_not_appear" not in resp.text
+
+
+def test_post_test_returns_validation_error_for_truncated_ids(tmp_path: Path):
+    """POST test → invalid base/table IDs return actionable message without external call."""
+    client_dir = tmp_path / "clients" / "quintana-seguros"
+    data = {**VALID_CRM_DATA, "base_id": "w59LRBdv95UPpB", "table_id": "sWumwwfeoqkWid"}
+    _write_crm_yaml(client_dir, data)
+
+    with patch(
+        "app.integrations.crm_config_router.CLIENTS_ROOT",
+        tmp_path / "clients",
+    ):
+        tc = _make_test_client(tmp_path)
+        resp = tc.post("/api/v1/clients/quintana-seguros/integrations/airtable/test")
+
+    assert resp.status_code == 200
+    result = resp.json()
+    assert result["success"] is False
+    assert "must start with 'app'" in result["message"]
+
+
+def test_get_fields_returns_mocked_airtable_columns(tmp_path: Path, monkeypatch):
+    """GET fields → returns Airtable table columns for mapping UI."""
+    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test")
+    client_dir = tmp_path / "clients" / "quintana-seguros"
+    _write_crm_yaml(client_dir, VALID_CRM_DATA)
+
+    with patch(
+        "app.integrations.crm_config_router.CLIENTS_ROOT",
+        tmp_path / "clients",
+    ), patch(
+        "app.integrations.crm_config_router._list_airtable_fields",
+        return_value=[
+            {"id": "fldName", "name": "Nombre", "type": "singleLineText"},
+            {"id": "fldPhone", "name": "Teléfono", "type": "phoneNumber"},
+        ],
+    ):
+        tc = _make_test_client(tmp_path)
+        resp = tc.get("/api/v1/clients/quintana-seguros/integrations/airtable/fields")
+
+    assert resp.status_code == 200
+    assert resp.json()["fields"] == [
+        {"id": "fldName", "name": "Nombre", "type": "singleLineText"},
+        {"id": "fldPhone", "name": "Teléfono", "type": "phoneNumber"},
+    ]
+
+
+def test_put_mappings_persists_custom_and_quote_ready_fields(tmp_path: Path, monkeypatch):
+    """PUT mappings → updates mappings, custom field definitions, and quote-ready fields."""
+    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test")
+    client_dir = tmp_path / "clients" / "quintana-seguros"
+    _write_crm_yaml(client_dir, VALID_CRM_DATA)
+
+    with patch(
+        "app.integrations.crm_config_router.CLIENTS_ROOT",
+        tmp_path / "clients",
+    ):
+        tc = _make_test_client(tmp_path)
+        resp = tc.put(
+            "/api/v1/clients/quintana-seguros/integrations/airtable/mappings",
+            json={
+                "field_mappings": [
+                    {"source": "external_lead_id", "target": "lead_id", "type": "integer"},
+                    {"source": "name", "target": "Nombre", "type": "string"},
+                    {"source": "phone", "target": "Teléfono", "type": "phone"},
+                    {"source": "email", "target": "Correo", "type": "string"},
+                    {"source": "car_make", "target": "Marca_Auto", "type": "string"},
+                ],
+                "field_definitions": [
+                    {"field_key": "car_make", "field_type": "string", "label": "Car Make"},
+                ],
+                "quote_ready_fields": ["car_make"],
+            },
+        )
+
+    assert resp.status_code == 200
+    result = resp.json()
+    assert result["field_count"] == 5
+    assert result["field_definitions"] == [
+        {"field_key": "car_make", "field_type": "string", "label": "Car Make", "required": False},
+    ]
+    assert result["quote_ready_fields"] == ["car_make"]
+
+
+def test_put_mappings_rejects_missing_required_core_fields(tmp_path: Path, monkeypatch):
+    """PUT mappings → required core mappings must have non-empty Airtable targets."""
+    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test")
+    client_dir = tmp_path / "clients" / "quintana-seguros"
+    _write_crm_yaml(client_dir, VALID_CRM_DATA)
+
+    with patch(
+        "app.integrations.crm_config_router.CLIENTS_ROOT",
+        tmp_path / "clients",
+    ):
+        tc = _make_test_client(tmp_path)
+        resp = tc.put(
+            "/api/v1/clients/quintana-seguros/integrations/airtable/mappings",
+            json={
+                "field_mappings": [
+                    {"source": "external_lead_id", "target": "lead_id", "type": "integer"},
+                    {"source": "name", "target": "", "type": "string"},
+                    {"source": "phone", "target": "Teléfono", "type": "phone"},
+                ],
+                "field_definitions": [],
+                "quote_ready_fields": [],
+            },
+        )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "Missing required Airtable mappings: name, email."
+
+
+def test_put_mappings_rejects_non_snake_case_custom_field_keys(tmp_path: Path, monkeypatch):
+    """PUT mappings → custom field keys must be snake_case (e.g. 'test-field' rejected).
+
+    P3 cleanup: hyphenated/uppercase keys break tool-schema property names and
+    lead_custom_fields lookups. The save endpoint rejects them with 422.
+    """
+    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test")
+    client_dir = tmp_path / "clients" / "quintana-seguros"
+    _write_crm_yaml(client_dir, VALID_CRM_DATA)
+
+    with patch(
+        "app.integrations.crm_config_router.CLIENTS_ROOT",
+        tmp_path / "clients",
+    ):
+        tc = _make_test_client(tmp_path)
+        resp = tc.put(
+            "/api/v1/clients/quintana-seguros/integrations/airtable/mappings",
+            json={
+                "field_mappings": [
+                    {"source": "external_lead_id", "target": "lead_id", "type": "integer"},
+                    {"source": "name", "target": "Nombre", "type": "string"},
+                    {"source": "phone", "target": "Teléfono", "type": "phone"},
+                    {"source": "email", "target": "Correo", "type": "string"},
+                ],
+                "field_definitions": [
+                    {"field_key": "test-field", "field_type": "string", "label": "Test Field"},
+                    {"field_key": "Zona", "field_type": "string", "label": "Zone"},
+                ],
+                "quote_ready_fields": [],
+            },
+        )
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "test-field" in detail
+    assert "Zona" in detail
+    assert "snake_case" in detail
+
+
+def test_put_mappings_accepts_snake_case_custom_field_keys(tmp_path: Path, monkeypatch):
+    """PUT mappings → valid snake_case keys (car_make, zona, age) are accepted."""
+    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test")
+    client_dir = tmp_path / "clients" / "quintana-seguros"
+    _write_crm_yaml(client_dir, VALID_CRM_DATA)
+
+    with patch(
+        "app.integrations.crm_config_router.CLIENTS_ROOT",
+        tmp_path / "clients",
+    ):
+        tc = _make_test_client(tmp_path)
+        resp = tc.put(
+            "/api/v1/clients/quintana-seguros/integrations/airtable/mappings",
+            json={
+                "field_mappings": [
+                    {"source": "external_lead_id", "target": "lead_id", "type": "integer"},
+                    {"source": "name", "target": "Nombre", "type": "string"},
+                    {"source": "phone", "target": "Teléfono", "type": "phone"},
+                    {"source": "email", "target": "Correo", "type": "string"},
+                    {"source": "zona", "target": "Zona", "type": "string"},
+                ],
+                "field_definitions": [
+                    {"field_key": "zona", "field_type": "string", "label": "Zone"},
+                    {"field_key": "car_make", "field_type": "string", "label": "Car Make"},
+                ],
+                "quote_ready_fields": ["zona"],
+            },
+        )
+
+    assert resp.status_code == 200
 
 
 def test_post_test_404_for_unconfigured_client(tmp_path: Path):

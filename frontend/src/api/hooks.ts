@@ -25,6 +25,8 @@ import {
   fetchAvailableIntegrations,
   connectIntegration,
   disconnectIntegration,
+  fetchIntegrationFields,
+  saveIntegrationMappings,
 } from './integrations'
 import type {
   CallAnalysis,
@@ -49,6 +51,8 @@ import type {
   AvailableIntegration,
   ConnectIntegrationPayload,
   DisconnectResult,
+  AirtableFieldsResponse,
+  SaveMappingsPayload,
 } from './types'
 
 interface MetricsParams {
@@ -427,6 +431,30 @@ export function useDisconnectIntegration(clientId: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['integrations-available', clientId] })
       queryClient.invalidateQueries({ queryKey: ['integrations', clientId] })
+    },
+  })
+}
+
+export function useIntegrationFields(clientId: string, provider: string, enabled = true) {
+  return useQuery<AirtableFieldsResponse>({
+    queryKey: ['integration-fields', clientId, provider],
+    queryFn: () => fetchIntegrationFields(clientId, provider),
+    enabled: Boolean(clientId) && Boolean(provider) && enabled,
+    staleTime: 30_000,
+  })
+}
+
+export function useSaveIntegrationMappings(clientId: string) {
+  const queryClient = useQueryClient()
+  return useMutation<
+    IntegrationConfig,
+    Error,
+    { provider: string; payload: SaveMappingsPayload }
+  >({
+    mutationFn: ({ provider, payload }) => saveIntegrationMappings(clientId, provider, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['integrations', clientId] })
+      queryClient.invalidateQueries({ queryKey: ['integrations-available', clientId] })
     },
   })
 }

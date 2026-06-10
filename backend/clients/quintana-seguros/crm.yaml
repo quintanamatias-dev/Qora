@@ -1,146 +1,90 @@
-# Quintana Seguros — Airtable CRM integration config
-#
-# IMPORTANT: This file is committed to version control.
-# It must NOT contain any secret values. The api_key field should reference
-# the NAME of an environment variable that holds the real Airtable PAT.
-#
-# Setup:
-#   1. Set QUINTANA_AIRTABLE_API_KEY in the server/staging .env to a real
-#      Airtable Personal Access Token scoped to the base below.
-#
-# Rollback: rename or delete this file. Zero code changes needed.
-
-provider: airtable
-
-# Real Airtable base + leads table.
+api_key_env: QUINTANA_AIRTABLE_API_KEY
 base_id: appw59LRBdv95UPpB
-table_id: tblsWumwwfeoqkWid
-
-# API key field (dynamic-lead-fields WU-1 QR-4):
-# - If value matches ^[A-Z][A-Z0-9_]+$ → treated as env var name (runtime lookup)
-# - Otherwise → used as literal value (dev/test)
-api_key: QUINTANA_AIRTABLE_API_KEY
-
-# Matching field: leads are upserted by their numeric Meta/Facebook lead_id.
-# external_lead_id is now stored in Qora (Integer column, populated at import time).
-# This provides stronger idempotency than email — duplicate Airtable records are
-# prevented even when leads share email addresses.
-# Fallback: leads without external_lead_id (e.g. manually created) are matched by
-# external_crm_id (Airtable recXXX) via the adapter's fallback path.
-match_field: "lead_id"
-
-# Status mapping: Qora internal status → Airtable singleSelect value.
-# Values MUST match exactly the singleSelect choices in the Airtable table
-# (case-sensitive, with accents). If a Qora status is absent from this map,
-# the raw Qora value is used as fallback.
-status_mapping:
-  new: "Nuevo!"
-  called: "Contactado (en espera)"
-  quoted: "Cotizado"
-  interested: "COMPRÓ"
-  not_interested: "Perdido"
-  follow_up: "Recontactar"
-
-# Reverse status mapping: Airtable singleSelect value → Qora internal status.
-# Used during import (Airtable → Qora) to translate CRM status values back.
-# If an Airtable status is absent from this map, the raw value is stored.
-import_status_mapping:
-  "Nuevo!": new
-  "Contactado (en espera)": called
-  "Cotizado": quoted
-  "COMPRÓ": interested
-  "Perdido": not_interested
-  "Recontactar": follow_up
-
-# Field mappings: Qora lead fields → Airtable column names.
-# Only fields Qora produces today are mapped. Airtable-automation fields
-# (Creada, Last_Update, Fecha_*) and Meta campaign fields come from n8n, not Qora.
-# singleSelect fields (Status, etc.) are translated via status_mapping above.
-# Add or remove entries here; no code changes required (FM-6).
+custom_fields:
+- field_key: car_make
+  field_type: string
+  label: Car Make
+  required: true
+- field_key: car_model
+  field_type: string
+  label: Car Model
+  required: true
+- field_key: car_year
+  field_type: integer
+  label: Car Year
+  required: true
+- field_key: current_insurance
+  field_type: string
+  label: Current Insurance
+  required: false
+- field_key: age
+  field_type: integer
+  label: Age
+  required: true
+- field_key: zona
+  field_type: string
+  label: Zone
+  required: true
 field_mappings:
-  # external_lead_id → Airtable lead_id (numeric Meta/Facebook lead ID).
-  # This is the primary match field for upserts (match_field: lead_id above).
-  # type: integer ensures the value is sent as a number, not a string.
-  - source: external_lead_id
-    target: "lead_id"
-    type: integer
-
-  - source: name
-    target: "Nombre Completo"
-    type: string
-
-  - source: phone
-    target: "Teléfono"
-    type: phone
-
-  - source: email
-    target: "Correo electrónico"
-    type: string
-
-  - source: status
-    target: "Status"
-    type: string
-
-  - source: current_insurance
-    target: "Poliza_Actual"
-    type: string
-
-  - source: car_make
-    target: "Marca_Auto"
-    type: string
-
-  - source: car_model
-    target: "Modelo_Auto"
-    type: string
-
-  - source: car_year
-    target: "Año_Auto"
-    type: string
-
-  - source: age
-    target: "Edad"
-    type: integer
-
-  - source: zona
-    target: "Zona"
-    type: string
-
-# ---------------------------------------------------------------------------
-# Dynamic lead fields (dynamic-lead-fields WU-1)
-# ---------------------------------------------------------------------------
-
-# Fields required for a lead to reach "quoted" status.
-# All must be present and non-empty in lead_custom_fields.
+- source: external_lead_id
+  target: lead_id
+  type: integer
+- source: name
+  target: Nombre Completo
+  type: string
+- source: phone
+  target: Teléfono
+  type: phone
+- source: email
+  target: Correo electrónico
+  type: string
+- source: status
+  target: Status
+  type: string
+- required: true
+  source: car_make
+  target: Marca_Auto
+  type: string
+- required: true
+  source: car_model
+  target: Modelo_Auto
+  type: string
+- required: true
+  source: car_year
+  target: Año_Auto
+  type: integer
+- required: false
+  source: current_insurance
+  target: Poliza_Actual
+  type: string
+- required: true
+  source: age
+  target: Edad
+  type: integer
+- required: true
+  source: zona
+  target: Zona
+  type: string
+import_status_mapping:
+  COMPRÓ: interested
+  Contactado (en espera): called
+  Cotizado: quoted
+  Nuevo!: new
+  Perdido: not_interested
+  Recontactar: follow_up
+match_field: lead_id
+provider: airtable
 quote_ready_fields:
-  - car_make
-  - car_model
-  - car_year
-  - age
-  - zona
-
-# Custom field definitions — drives capture_data tool schema and type validation.
-# Each entry produces one property in the OpenAI function-calling schema.
-field_definitions:
-  - field_key: car_make
-    field_type: string
-    label: "Car Make"
-
-  - field_key: car_model
-    field_type: string
-    label: "Car Model"
-
-  - field_key: car_year
-    field_type: integer
-    label: "Car Year"
-
-  - field_key: current_insurance
-    field_type: string
-    label: "Current Insurance"
-
-  - field_key: age
-    field_type: integer
-    label: "Age"
-
-  - field_key: zona
-    field_type: string
-    label: "Zone"
+- car_make
+- car_model
+- car_year
+- age
+- zona
+status_mapping:
+  called: Contactado (en espera)
+  follow_up: Recontactar
+  interested: COMPRÓ
+  new: Nuevo!
+  not_interested: Perdido
+  quoted: Cotizado
+table_id: tblsWumwwfeoqkWid

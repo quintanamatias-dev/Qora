@@ -80,7 +80,7 @@ async def test_get_lead_details_returns_full_record(db):
 async def test_get_lead_details_returns_call_count_from_lead_record(db):
     """get_lead_details returns call_count from the DB record (read-only after Task 1.6).
 
-    Task 1.6: call_count increment MOVED to initiation.py.
+    call_count increment belongs in close_session (canonical "call completed" event).
     get_lead_details is now a pure read — it returns the current call_count without
     incrementing it.
 
@@ -118,8 +118,8 @@ async def test_get_lead_details_not_found_returns_error(db):
 
 # ---------------------------------------------------------------------------
 # Task 1.6 RED — get_lead_details must NOT increment call_count
-# Design decision: call_count increment belongs in initiation.py (canonical
-# "call started" event). Side-effects in a query tool violate least-surprise.
+# Design decision: call_count increment belongs in close_session (canonical
+# "call completed" event). Side-effects in a query tool violate least-surprise.
 # ---------------------------------------------------------------------------
 
 

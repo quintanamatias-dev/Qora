@@ -21,8 +21,15 @@ import {
   useTestIntegration,
   useConnectIntegration,
   useDisconnectIntegration,
+  useIntegrationFields,
+  useSaveIntegrationMappings,
 } from '@/api/hooks'
-import type { ConnectIntegrationPayload } from '@/api/types'
+import type {
+  ConnectIntegrationPayload,
+  CRMFieldDefinition,
+  CRMFieldMapping,
+  IntegrationConfig,
+} from '@/api/types'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Types
@@ -35,6 +42,26 @@ interface ToastState {
 
 interface IntegrationsSectionProps {
   clientId: string
+}
+
+const CORE_FIELDS = [
+  { key: 'external_lead_id', label: 'External lead ID', type: 'integer' },
+  { key: 'name', label: 'Name', type: 'string' },
+  { key: 'phone', label: 'Phone', type: 'phone' },
+  { key: 'email', label: 'Email', type: 'string' },
+  { key: 'status', label: 'Status', type: 'string' },
+] as const
+
+const REQUIRED_CORE_FIELD_KEYS = ['external_lead_id', 'name', 'phone', 'email'] as const
+
+const FIELD_TYPES = ['string', 'integer', 'boolean', 'date', 'phone'] as const
+
+// Custom field keys become tool-schema property names and lead_custom_fields keys.
+// Hyphens/uppercase break downstream lookups — enforce snake_case before saving.
+const SNAKE_CASE_KEY_PATTERN = /^[a-z][a-z0-9_]*$/
+
+function mappingTarget(config: IntegrationConfig, source: string): string {
+  return config.field_mappings?.find((field) => field.source === source)?.target ?? ''
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -88,21 +115,20 @@ function ConnectForm({ provider, clientId, onSuccess, onError }: ConnectFormProp
             htmlFor={`api-key-env-${provider}`}
             className="block text-[0.65rem] font-semibold uppercase tracking-[0.08em] text-ink-3 mb-1"
           >
-            API Key Environment Variable
+            Airtable API Key or Environment Variable
           </label>
           <input
             id={`api-key-env-${provider}`}
-            type="text"
+            type="password"
             value={apiKeyEnv}
             onChange={(e) => setApiKeyEnv(e.target.value)}
-            placeholder="MY_CLIENT_AIRTABLE_API_KEY"
+            placeholder="pat... or MY_CLIENT_AIRTABLE_API_KEY"
             required
             className="w-full text-sm font-mono px-3 py-2 rounded-md border border-line bg-white text-ink placeholder:text-ink-3 focus:outline-none focus:ring-2 focus:ring-teal focus:border-transparent"
             data-testid="connect-api-key-env-input"
           />
           <p className="text-[0.65rem] text-ink-3 mt-1">
-            Environment variable name for your Airtable API key (e.g., MY_CLIENT_AIRTABLE_API_KEY).
-            The actual API key value is never entered here.
+            You can paste a PAT or an env var name. Qora stores it for use, but never displays the raw value again.
           </p>
         </div>
 
@@ -124,6 +150,9 @@ function ConnectForm({ provider, clientId, onSuccess, onError }: ConnectFormProp
             className="w-full text-sm font-mono px-3 py-2 rounded-md border border-line bg-white text-ink placeholder:text-ink-3 focus:outline-none focus:ring-2 focus:ring-teal focus:border-transparent"
             data-testid="connect-base-id-input"
           />
+          <p className="text-[0.65rem] text-ink-3 mt-1">
+            Airtable Base IDs start with <code>app</code>. Do not paste a shortened URL fragment.
+          </p>
         </div>
 
         {/* Table ID */}
@@ -144,6 +173,9 @@ function ConnectForm({ provider, clientId, onSuccess, onError }: ConnectFormProp
             className="w-full text-sm font-mono px-3 py-2 rounded-md border border-line bg-white text-ink placeholder:text-ink-3 focus:outline-none focus:ring-2 focus:ring-teal focus:border-transparent"
             data-testid="connect-table-id-input"
           />
+          <p className="text-[0.65rem] text-ink-3 mt-1">
+            Prefer a Table ID that starts with <code>tbl</code>. Exact table names are also supported.
+          </p>
         </div>
       </div>
 
@@ -159,6 +191,291 @@ function ConnectForm({ provider, clientId, onSuccess, onError }: ConnectFormProp
         </Button>
       </div>
     </form>
+  )
+}
+
+interface MappingEditorProps {
+  clientId: string
+  config: IntegrationConfig
+  onSuccess: (message: string) => void
+  onError: (message: string) => void
+}
+
+function MappingEditor({ clientId, config, onSuccess, onError }: MappingEditorProps) {
+  const fieldsQuery = useIntegrationFields(clientId, config.provider)
+  const saveMutation = useSaveIntegrationMappings(clientId)
+  const [coreMappings, setCoreMappings] = useState<Record<string, string>>(() =>
+    Object.fromEntries(CORE_FIELDS.map((field) => [field.key, mappingTarget(config, field.key)])),
+  )
+  const [customFields, setCustomFields] = useState(() =>
+    (config.field_definitions ?? []).map((field) => ({
+      ...field,
+      target: mappingTarget(config, field.field_key),
+    })),
+  )
+  const [quoteReadyFields, setQuoteReadyFields] = useState<string[]>(config.quote_ready_fields ?? [])
+
+  const airtableFields = fieldsQuery.data?.fields ?? []
+  const missingRequiredCoreFields = REQUIRED_CORE_FIELD_KEYS.filter(
+    (key) => !coreMappings[key]?.trim(),
+  )
+  const requiredCoreMappingMessage = missingRequiredCoreFields.length > 0
+    ? `Required mappings missing: ${missingRequiredCoreFields.join(', ')}.`
+    : null
+  const configuredFieldKeys = [
+    ...CORE_FIELDS.map((field) => ({ key: field.key, label: field.label })),
+    ...customFields.map((field) => ({ key: field.field_key, label: field.label || field.field_key })),
+  ]
+
+  function setCustomField(index: number, patch: Partial<CRMFieldDefinition & { target: string }>) {
+    setCustomFields((current) =>
+      current.map((field, fieldIndex) => (fieldIndex === index ? { ...field, ...patch } : field)),
+    )
+  }
+
+  function addCustomField() {
+    setCustomFields((current) => [
+      ...current,
+      { field_key: '', label: '', field_type: 'string', required: false, target: '' },
+    ])
+  }
+
+  function removeCustomField(index: number) {
+    const removed = customFields[index]?.field_key
+    setCustomFields((current) => current.filter((_, fieldIndex) => fieldIndex !== index))
+    if (removed) {
+      setQuoteReadyFields((current) => current.filter((field) => field !== removed))
+    }
+  }
+
+  function toggleQuoteReady(fieldKey: string) {
+    setQuoteReadyFields((current) =>
+      current.includes(fieldKey)
+        ? current.filter((field) => field !== fieldKey)
+        : [...current, fieldKey],
+    )
+  }
+
+  function handleSave() {
+    if (missingRequiredCoreFields.length > 0) return
+
+    const invalidCustomFieldKeys = customFields
+      .map((field) => field.field_key.trim())
+      .filter((key) => key && !SNAKE_CASE_KEY_PATTERN.test(key))
+    if (invalidCustomFieldKeys.length > 0) {
+      onError(
+        `Invalid custom field keys: ${invalidCustomFieldKeys.join(', ')}. ` +
+          "Keys must be snake_case (lowercase letters, digits, underscores; e.g. 'car_make').",
+      )
+      return
+    }
+
+    const coreFieldMappings: CRMFieldMapping[] = CORE_FIELDS
+      .map((field) => ({ source: field.key, target: coreMappings[field.key] ?? '', type: field.type }))
+      .filter((field) => field.target)
+
+    const cleanedCustomFields = customFields
+      .map((field) => ({
+        field_key: field.field_key.trim(),
+        label: field.label.trim(),
+        field_type: field.field_type,
+        required: quoteReadyFields.includes(field.field_key),
+        target: field.target.trim(),
+      }))
+      .filter((field) => field.field_key && field.label && field.target)
+
+    const customFieldMappings: CRMFieldMapping[] = cleanedCustomFields.map((field) => ({
+      source: field.field_key,
+      target: field.target,
+      type: field.field_type,
+      required: field.required,
+    }))
+
+    saveMutation.mutate(
+      {
+        provider: config.provider,
+        payload: {
+          field_mappings: [...coreFieldMappings, ...customFieldMappings],
+          field_definitions: cleanedCustomFields.map(({ target: _target, ...field }) => field),
+          quote_ready_fields: quoteReadyFields.filter((field) =>
+            configuredFieldKeys.some((configured) => configured.key === field),
+          ),
+        },
+      },
+      {
+        onSuccess: () => onSuccess('Airtable mappings saved.'),
+        onError: (err) => onError(`Failed to save mappings: ${err.message}`),
+      },
+    )
+  }
+
+  return (
+    <div className="space-y-4" data-testid="airtable-mapping-editor">
+      <div className="rounded-lg border border-line bg-pearl p-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-ink">Step 2: Map Airtable columns</p>
+            <p className="mt-1 max-w-2xl text-xs leading-5 text-ink-3">
+              Choose which Airtable column feeds each Qora field. Quote-ready fields are the pieces of
+              information that must be captured before a lead can be considered ready to quote or quoted.
+            </p>
+          </div>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleSave}
+            disabled={
+              saveMutation.isPending || fieldsQuery.isLoading || missingRequiredCoreFields.length > 0
+            }
+            data-testid="save-mappings-button"
+          >
+            {saveMutation.isPending ? 'Saving…' : 'Save mappings'}
+          </Button>
+        </div>
+
+        {fieldsQuery.isLoading && (
+          <p className="mt-3 text-xs text-ink-3" data-testid="airtable-fields-loading">
+            Loading Airtable columns…
+          </p>
+        )}
+        {fieldsQuery.isError && (
+          <p className="mt-3 rounded-md border border-coral-line bg-coral-faint px-3 py-2 text-xs text-coral" data-testid="airtable-fields-error">
+            Could not load Airtable columns: {fieldsQuery.error.message}
+          </p>
+        )}
+        {requiredCoreMappingMessage && (
+          <p className="mt-3 rounded-md border border-coral-line bg-coral-faint px-3 py-2 text-xs text-coral" data-testid="required-core-mappings-error">
+            {requiredCoreMappingMessage}
+          </p>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+        <div className="rounded-lg border border-line bg-white p-4">
+          <p className="text-[0.65rem] font-semibold uppercase tracking-[0.08em] text-ink-3 mb-3">
+            Core Mappings
+          </p>
+          <div className="space-y-3" data-testid="core-mappings-editor">
+            {CORE_FIELDS.map((field) => (
+              <label key={field.key} className="grid gap-1 sm:grid-cols-[160px_1fr] sm:items-center">
+                <span className="text-xs font-medium text-ink">{field.label}</span>
+                <select
+                  value={coreMappings[field.key] ?? ''}
+                  onChange={(event) =>
+                    setCoreMappings((current) => ({ ...current, [field.key]: event.target.value }))
+                  }
+                  className="w-full rounded-md border border-line bg-pearl px-3 py-2 text-sm text-ink focus:border-transparent focus:outline-none focus:ring-2 focus:ring-teal"
+                  data-testid={`core-mapping-${field.key}`}
+                >
+                  <option value="">Select Airtable column</option>
+                  {airtableFields.map((airtableField) => (
+                    <option key={airtableField.id ?? airtableField.name} value={airtableField.name}>
+                      {airtableField.name}
+                    </option>
+                  ))}
+                  {coreMappings[field.key] && !airtableFields.some((f) => f.name === coreMappings[field.key]) && (
+                    <option value={coreMappings[field.key]}>{coreMappings[field.key]}</option>
+                  )}
+                </select>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-line bg-white p-4">
+          <p className="text-[0.65rem] font-semibold uppercase tracking-[0.08em] text-ink-3 mb-3">
+            Quote-Ready Fields
+          </p>
+          <p className="mb-3 text-xs leading-5 text-ink-3" data-testid="quote-ready-explanation">
+            Select the fields that must be present before Qora treats the lead as quote-ready.
+          </p>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" data-testid="quote-ready-selector">
+            {configuredFieldKeys.map((field) => (
+              <label key={field.key} className="flex items-center gap-2 rounded-md border border-line bg-pearl px-3 py-2 text-xs text-ink">
+                <input
+                  type="checkbox"
+                  checked={quoteReadyFields.includes(field.key)}
+                  onChange={() => toggleQuoteReady(field.key)}
+                  data-testid={`quote-ready-${field.key}`}
+                />
+                {field.label}
+              </label>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-line bg-white p-4">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-[0.65rem] font-semibold uppercase tracking-[0.08em] text-ink-3">
+            Custom Fields
+          </p>
+          <Button variant="secondary" size="sm" onClick={addCustomField} data-testid="add-custom-field-button">
+            Add custom field
+          </Button>
+        </div>
+        <div className="mt-3 space-y-3" data-testid="custom-fields-editor">
+          {customFields.length === 0 && <p className="text-xs text-ink-3">No custom fields yet.</p>}
+          {customFields.map((field, index) => (
+            <div key={`${field.field_key}-${index}`} className="grid gap-2 rounded-md border border-line bg-pearl p-3 lg:grid-cols-[1fr_1fr_130px_1fr_auto] lg:items-end">
+              <label className="space-y-1">
+                <span className="text-[0.65rem] font-semibold uppercase tracking-[0.08em] text-ink-3">Key</span>
+                <input
+                  value={field.field_key}
+                  onChange={(event) => setCustomField(index, { field_key: event.target.value })}
+                  placeholder="car_make"
+                  className="w-full rounded-md border border-line bg-white px-3 py-2 text-sm text-ink"
+                  data-testid={`custom-field-key-${index}`}
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-[0.65rem] font-semibold uppercase tracking-[0.08em] text-ink-3">Label</span>
+                <input
+                  value={field.label}
+                  onChange={(event) => setCustomField(index, { label: event.target.value })}
+                  placeholder="Car Make"
+                  className="w-full rounded-md border border-line bg-white px-3 py-2 text-sm text-ink"
+                  data-testid={`custom-field-label-${index}`}
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-[0.65rem] font-semibold uppercase tracking-[0.08em] text-ink-3">Type</span>
+                <select
+                  value={field.field_type}
+                  onChange={(event) => setCustomField(index, { field_type: event.target.value as CRMFieldDefinition['field_type'] })}
+                  className="w-full rounded-md border border-line bg-white px-3 py-2 text-sm text-ink"
+                  data-testid={`custom-field-type-${index}`}
+                >
+                  {FIELD_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+                </select>
+              </label>
+              <label className="space-y-1">
+                <span className="text-[0.65rem] font-semibold uppercase tracking-[0.08em] text-ink-3">Airtable Column</span>
+                <select
+                  value={field.target}
+                  onChange={(event) => setCustomField(index, { target: event.target.value })}
+                  className="w-full rounded-md border border-line bg-white px-3 py-2 text-sm text-ink"
+                  data-testid={`custom-field-target-${index}`}
+                >
+                  <option value="">Select column</option>
+                  {airtableFields.map((airtableField) => (
+                    <option key={airtableField.id ?? airtableField.name} value={airtableField.name}>
+                      {airtableField.name}
+                    </option>
+                  ))}
+                  {field.target && !airtableFields.some((f) => f.name === field.target) && (
+                    <option value={field.target}>{field.target}</option>
+                  )}
+                </select>
+              </label>
+              <Button variant="secondary" size="sm" onClick={() => removeCustomField(index)} data-testid={`remove-custom-field-${index}`}>
+                Remove
+              </Button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -375,6 +692,13 @@ export function IntegrationsSection({ clientId }: IntegrationsSectionProps) {
                       <code className="text-xs font-mono text-ink">{config.match_field}</code>
                     </div>
                   </div>
+
+                  <MappingEditor
+                    clientId={clientId}
+                    config={config}
+                    onSuccess={(msg) => showToast(msg, 'success')}
+                    onError={(msg) => showToast(msg, 'error')}
+                  />
 
                   {/* Inline test result feedback */}
                   {testResult && testResult.provider === available.provider && (

@@ -15,6 +15,7 @@ export type BadgeStatus =
   | 'warning'
   | 'new'
   | 'called'
+  | 'quoted'
   | 'interested'
   | 'not_interested'
   | 'follow_up'
@@ -35,6 +36,7 @@ const statusStyles: Record<BadgeStatus, string> = {
   // Lead status states (matching LeadStatus from API)
   new:          'bg-teal-faint text-teal border border-teal-line',
   called:       'bg-mist text-ink-2 border border-line',
+  quoted:       'bg-warning/10 text-warning border border-warning/20',
   interested:   'bg-teal-faint text-teal border border-teal-line',
   not_interested: 'bg-mist text-ink-3 border border-line',
   follow_up:    'bg-warning/10 text-warning border border-warning/20',

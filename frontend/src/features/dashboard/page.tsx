@@ -61,13 +61,14 @@ export function periodToDateRange(period: Period): DateRange {
 
 export function DashboardPage() {
   const { clientId } = useParams<{ clientId: string }>()
+  const activeClientId = clientId ?? ''
   const [period, setPeriod] = useState<Period>('all')
 
   // useMemo prevents new Date() from generating a different queryKey on every render,
   // which would cause an infinite refetch loop in TanStack Query.
   // Re-computes only when `period` changes (user clicks a different tab).
   const dateRange = useMemo(() => periodToDateRange(period), [period])
-  const { data, isLoading, isError, refetch } = useMetrics(clientId ?? '', dateRange)
+  const { data, isLoading, isError, refetch } = useMetrics(activeClientId, dateRange)
 
   return (
     <div className="space-y-6">
@@ -101,8 +102,8 @@ export function DashboardPage() {
 
         {/* Right column — integrations + agent status (~40%) */}
         <div className="flex-[2] min-w-0 space-y-4">
-          <ActiveIntegrationsCard clientId={clientId} />
-          <AgentStatusCard clientId={clientId} />
+          <ActiveIntegrationsCard />
+          <AgentStatusCard clientId={activeClientId} />
         </div>
       </div>
     </div>
@@ -188,11 +189,7 @@ function MetricsArea({ loading, error, data, onRetry }: MetricsAreaProps) {
 // ActiveIntegrationsCard — right column top panel
 // ──────────────────────────────────────────────────────────────────────────────
 
-interface ActiveIntegrationsCardProps {
-  clientId?: string
-}
-
-function ActiveIntegrationsCard({ clientId: _clientId }: ActiveIntegrationsCardProps) {
+function ActiveIntegrationsCard() {
   return (
     <div className="bg-paper border border-line rounded-lg shadow-md p-6">
       <p className="font-mono text-xs font-medium uppercase tracking-[0.20em] text-ink-3 mb-4">

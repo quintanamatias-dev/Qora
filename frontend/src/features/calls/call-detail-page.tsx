@@ -19,7 +19,7 @@ import { Badge } from '@/design/components/badge'
 // ──────────────────────────────────────────────────────────────────────────────
 
 export function CallDetailPage() {
-  const { clientId, sessionId } = useParams<{ clientId: string; sessionId: string }>()
+  const { sessionId } = useParams<{ clientId: string; sessionId: string }>()
   const navigate = useNavigate()
 
   const {

@@ -190,9 +190,11 @@ def build_capture_data_from_field_definitions(crm_config: "CRMConfig") -> dict |
             "description": field_def.label,
         }
 
-    required = ["lead_id"] + [
-        fd.field_key for fd in crm_config.custom_fields if fd.required
-    ]
+    # Only lead_id is required in the tool schema. CustomFieldDef.required marks
+    # fields needed for quote-ready evaluation (quote_ready_fields), NOT required
+    # tool parameters. Marking them required here prevented the model from emitting
+    # capture_data calls for partial data mid-call (P1 fix: partial capture).
+    required = ["lead_id"]
 
     return {
         "type": "function",

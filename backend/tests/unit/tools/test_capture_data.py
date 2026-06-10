@@ -739,6 +739,59 @@ def test_build_capture_data_from_field_definitions_label_used_as_description():
     )
 
 
+def test_required_custom_fields_not_in_tool_schema_required():
+    """crm.yaml required:true fields must NOT become required tool parameters.
+
+    P1 fix (partial capture): CustomFieldDef.required marks fields for quote-ready
+    evaluation only. If they leak into the tool schema's required list, the model
+    cannot emit a valid capture_data call until the lead provides ALL of them —
+    so partial data captured mid-call is never persisted.
+
+    GIVEN field_definitions where age and zona have required=true
+    WHEN build_capture_data_from_field_definitions is called
+    THEN the schema required list contains ONLY lead_id
+    AND age/zona remain present as optional properties with type/description intact
+    """
+    from app.tools.registry import build_capture_data_from_field_definitions
+    from app.integrations.crm_config import CRMConfig, CustomFieldDef
+
+    crm_config = CRMConfig(
+        provider="airtable",
+        base_id="app123",
+        table_id="tbl123",
+        api_key="LITERAL_KEY",
+        match_field="lead_id",
+        custom_fields=[
+            CustomFieldDef(field_key="age", field_type="integer", label="Age", required=True),
+            CustomFieldDef(field_key="zona", field_type="string", label="Zone", required=True),
+            CustomFieldDef(
+                field_key="current_insurance",
+                field_type="string",
+                label="Current Insurance",
+                required=False,
+            ),
+        ],
+    )
+
+    result = build_capture_data_from_field_definitions(crm_config)
+    assert result is not None
+    params = result["function"]["parameters"]
+
+    assert params["required"] == ["lead_id"], (
+        "Only lead_id may be required in the tool schema; "
+        f"got: {params['required']}"
+    )
+
+    # Properties and metadata must be preserved so the model can still capture them
+    props = params["properties"]
+    assert props["age"] == {"type": "integer", "description": "Age"}
+    assert props["zona"] == {"type": "string", "description": "Zone"}
+    assert props["current_insurance"] == {
+        "type": "string",
+        "description": "Current Insurance",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Scenario CD-11: _QUINTANA_TOOL_CONFIG removed from tenants/service.py
 # Spec: "_QUINTANA_TOOL_CONFIG constant MUST be removed"

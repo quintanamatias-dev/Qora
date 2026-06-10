@@ -33,12 +33,13 @@ Design decisions:
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 import yaml
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.integrations.crm_config import CRMConfig, CRMConfigLoader, ConfigValidationError
 
@@ -63,12 +64,15 @@ class IntegrationConfigResponse(BaseModel):
     provider: str
     base_id: str
     table_id: str
-    api_key_env: str       # SECURITY: env var NAME only, never the actual secret
+    api_key_env: str       # SECURITY: env var name or masked literal credential
     match_field: str
     field_count: int
     connected: bool
     status_mapping: dict[str, str] | None = None
     import_status_mapping: dict[str, str] | None = None
+    field_mappings: list[dict[str, Any]] = Field(default_factory=list)
+    field_definitions: list[dict[str, Any]] = Field(default_factory=list)
+    quote_ready_fields: list[str] = Field(default_factory=list)
 
 
 class UpdateIntegrationPayload(BaseModel):
@@ -88,6 +92,28 @@ class ConnectIntegrationPayload(BaseModel):
     base_id: str
     table_id: str
     api_key_env: str  # Name of the env var (e.g., "QORA_DEMO_AIRTABLE_API_KEY")
+
+
+class AirtableFieldResponse(BaseModel):
+    """Airtable table field metadata used by the admin mapping UI."""
+
+    id: str | None = None
+    name: str
+    type: str | None = None
+
+
+class AirtableFieldsResponse(BaseModel):
+    """Response for GET /integrations/{provider}/fields."""
+
+    fields: list[AirtableFieldResponse]
+
+
+class SaveMappingsPayload(BaseModel):
+    """Payload for saving admin-managed field mapping configuration."""
+
+    field_mappings: list[dict[str, Any]] = Field(default_factory=list)
+    field_definitions: list[dict[str, Any]] = Field(default_factory=list)
+    quote_ready_fields: list[str] = Field(default_factory=list)
 
 
 class IntegrationTestResult(BaseModel):
@@ -113,6 +139,66 @@ class AvailableIntegration(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+_ENV_VAR_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+$")
+_AIRTABLE_PAT_PATTERN = re.compile(r"\b(?:pat|key)[A-Za-z0-9._-]{12,}\b")
+_REQUIRED_CORE_MAPPINGS = ("external_lead_id", "name", "phone", "email")
+# Custom field keys must be snake_case: they become tool-schema property names
+# and lead_custom_fields keys. Hyphens/uppercase break downstream lookups.
+_SNAKE_CASE_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def _invalid_custom_field_keys(field_definitions: list[dict[str, Any]]) -> list[str]:
+    """Return custom field keys that are not snake_case (e.g. 'test-field')."""
+    invalid: list[str] = []
+    for definition in field_definitions:
+        key = str(definition.get("field_key", ""))
+        if key and not _SNAKE_CASE_KEY_PATTERN.match(key):
+            invalid.append(key)
+    return invalid
+
+
+def _looks_like_env_var_name(value: str) -> bool:
+    return bool(_ENV_VAR_NAME_PATTERN.match(value))
+
+
+def _safe_credential_label(value: str) -> str:
+    """Return a display-safe credential label without exposing literal tokens."""
+    if _looks_like_env_var_name(value):
+        return value
+    return "Stored credential (masked)"
+
+
+def _sanitize_secret_text(text: str, config: CRMConfig) -> str:
+    """Strip known Airtable token shapes from user-facing error text."""
+    cleaned = _AIRTABLE_PAT_PATTERN.sub("[REDACTED]", text)
+    if config.api_key and not _looks_like_env_var_name(config.api_key):
+        cleaned = cleaned.replace(config.api_key, "[REDACTED]")
+    try:
+        actual_key = os.environ.get(config.api_key_env, "")
+        if actual_key:
+            cleaned = cleaned.replace(actual_key, "[REDACTED]")
+    except Exception:
+        pass
+    return cleaned
+
+
+def _validate_airtable_ids(base_id: str, table_id: str) -> str | None:
+    """Return a helpful validation error, or None when IDs are usable."""
+    if not base_id.startswith("app"):
+        return (
+            "Airtable Base ID must start with 'app'. Paste the full Base ID from Airtable, "
+            "not the shortened value from a URL."
+        )
+    if not table_id:
+        return "Airtable Table ID or table name is required."
+    if table_id.startswith("tbl") or not re.fullmatch(r"[A-Za-z0-9]{8,}", table_id):
+        return None
+    return (
+        "Airtable Table ID should usually start with 'tbl'. If using a table name, include the "
+        "actual readable table name instead of a shortened URL fragment."
+    )
+
+
 def _load_config_or_none(client_id: str) -> CRMConfig | None:
     """Load crm.yaml for client_id, returning None if not found or invalid."""
     try:
@@ -128,13 +214,17 @@ def _config_to_response(config: CRMConfig) -> IntegrationConfigResponse:
     The 'connected' field checks whether the env var is set (not that the key is valid).
     """
     env_var_name = config.api_key_env
-    connected = bool(os.environ.get(env_var_name))
+    connected = (
+        bool(env_var_name)
+        if not _looks_like_env_var_name(env_var_name)
+        else bool(os.environ.get(env_var_name))
+    )
 
     return IntegrationConfigResponse(
         provider=config.provider,
         base_id=config.base_id,
         table_id=config.table_id,
-        api_key_env=env_var_name,
+        api_key_env=_safe_credential_label(env_var_name),
         match_field=config.match_field,
         field_count=len(config.field_mappings),
         connected=connected,
@@ -142,6 +232,9 @@ def _config_to_response(config: CRMConfig) -> IntegrationConfigResponse:
         import_status_mapping=(
             dict(config.import_status_mapping) if config.import_status_mapping else None
         ),
+        field_mappings=[field.model_dump() for field in config.field_mappings],
+        field_definitions=[field.model_dump() for field in config.custom_fields],
+        quote_ready_fields=list(config.quote_ready_fields),
     )
 
 
@@ -152,6 +245,10 @@ def _test_airtable_connection(config: CRMConfig) -> dict[str, Any]:
 
     SECURITY: NEVER includes the raw API key in the returned dict.
     """
+    validation_error = _validate_airtable_ids(config.base_id, config.table_id)
+    if validation_error:
+        return {"success": False, "message": validation_error}
+
     try:
         api_key = config.resolve_api_key()
     except Exception as e:
@@ -176,16 +273,70 @@ def _test_airtable_connection(config: CRMConfig) -> dict[str, Any]:
             "message": "pyairtable is not installed. Cannot test connection.",
         }
     except Exception as e:
-        # Sanitize error message — do NOT include the api_key value
-        error_str = str(e)
-        # Extra safety: strip the actual secret from any error message
-        try:
-            actual_key = os.environ.get(config.api_key_env, "")
-            if actual_key:
-                error_str = error_str.replace(actual_key, "[REDACTED]")
-        except Exception:
-            pass
+        error_str = _sanitize_secret_text(str(e), config)
+        if "404" in error_str or "NOT_FOUND" in error_str.upper():
+            error_str = (
+                f"Airtable could not find base '{config.base_id}' and table '{config.table_id}'. "
+                "Check that the Base ID starts with 'app', the Table ID starts with 'tbl' or is an exact table name, "
+                "and the credential has access to that base."
+            )
         return {"success": False, "message": f"Connection failed: {error_str}"}
+
+
+def _list_airtable_fields(config: CRMConfig) -> list[dict[str, Any]]:
+    """Fetch Airtable table fields via pyairtable schema APIs."""
+    validation_error = _validate_airtable_ids(config.base_id, config.table_id)
+    if validation_error:
+        raise HTTPException(status_code=422, detail=validation_error)
+
+    try:
+        api_key = config.resolve_api_key()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Credential error: {e}") from e
+
+    try:
+        from pyairtable import Api  # type: ignore[import-untyped]
+
+        schema = Api(api_key).base(config.base_id).schema()
+        tables = getattr(schema, "tables", [])
+        for table in tables:
+            table_id = getattr(table, "id", None) or (table.get("id") if isinstance(table, dict) else None)
+            table_name = getattr(table, "name", None) or (table.get("name") if isinstance(table, dict) else None)
+            if config.table_id not in {table_id, table_name}:
+                continue
+            raw_fields = getattr(table, "fields", None) or (table.get("fields") if isinstance(table, dict) else [])
+            return [
+                {
+                    "id": getattr(field, "id", None) or (field.get("id") if isinstance(field, dict) else None),
+                    "name": getattr(field, "name", None) or (field.get("name") if isinstance(field, dict) else ""),
+                    "type": getattr(field, "type", None) or (field.get("type") if isinstance(field, dict) else None),
+                }
+                for field in raw_fields
+                if getattr(field, "name", None) or (field.get("name") if isinstance(field, dict) else None)
+            ]
+    except ImportError as e:
+        raise HTTPException(status_code=500, detail="pyairtable is not installed. Cannot list Airtable fields.") from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        detail = _sanitize_secret_text(str(e), config)
+        raise HTTPException(status_code=502, detail=f"Unable to fetch Airtable fields: {detail}") from e
+
+    raise HTTPException(
+        status_code=404,
+        detail=(
+            f"Airtable table '{config.table_id}' was not found in base '{config.base_id}'. "
+            "Use a Table ID that starts with 'tbl' or the exact table name."
+        ),
+    )
+
+
+def _missing_required_core_mappings(field_mappings: list[dict[str, Any]]) -> list[str]:
+    mapped_sources = {
+        str(mapping.get("source", "")): str(mapping.get("target", "")).strip()
+        for mapping in field_mappings
+    }
+    return [field for field in _REQUIRED_CORE_MAPPINGS if not mapped_sources.get(field)]
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +421,12 @@ async def update_integration(
 
     # Apply partial updates
     update_data = payload.model_dump(exclude_none=True)
+    next_base_id = update_data.get("base_id", raw.get("base_id", ""))
+    next_table_id = update_data.get("table_id", raw.get("table_id", ""))
+    if "base_id" in update_data or "table_id" in update_data:
+        validation_error = _validate_airtable_ids(str(next_base_id), str(next_table_id))
+        if validation_error:
+            raise HTTPException(status_code=422, detail=validation_error)
     raw.update(update_data)
 
     # Write back to YAML
@@ -320,6 +477,73 @@ async def test_integration(
     return IntegrationTestResult(**result)
 
 
+@router.get(
+    "/{client_id}/integrations/{provider}/fields",
+    response_model=AirtableFieldsResponse,
+    summary="List Airtable table fields for mapping",
+)
+async def get_integration_fields(client_id: str, provider: str) -> AirtableFieldsResponse:
+    """GET /api/v1/clients/{client_id}/integrations/{provider}/fields"""
+    config = _load_config_or_none(client_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail=f"No integration config found for client '{client_id}'")
+    if config.provider != provider:
+        raise HTTPException(status_code=404, detail=f"Provider '{provider}' not configured for client '{client_id}'")
+    return AirtableFieldsResponse(fields=[AirtableFieldResponse(**field) for field in _list_airtable_fields(config)])
+
+
+@router.put(
+    "/{client_id}/integrations/{provider}/mappings",
+    response_model=IntegrationConfigResponse,
+    summary="Save Airtable field mappings for a client",
+)
+async def save_integration_mappings(
+    client_id: str,
+    provider: str,
+    payload: SaveMappingsPayload,
+) -> IntegrationConfigResponse:
+    """PUT /api/v1/clients/{client_id}/integrations/{provider}/mappings"""
+    crm_path = CLIENTS_ROOT / client_id / "crm.yaml"
+    if not crm_path.exists():
+        raise HTTPException(status_code=404, detail=f"No integration config found for client '{client_id}'")
+
+    raw: dict = yaml.safe_load(crm_path.read_text()) or {}
+    if raw.get("provider") != provider:
+        raise HTTPException(status_code=404, detail=f"Provider '{provider}' not configured for client '{client_id}'")
+
+    missing_required = _missing_required_core_mappings(payload.field_mappings)
+    if missing_required:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Missing required Airtable mappings: {', '.join(missing_required)}.",
+        )
+
+    invalid_keys = _invalid_custom_field_keys(payload.field_definitions)
+    if invalid_keys:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Invalid custom field keys: {', '.join(invalid_keys)}. "
+                "Keys must be snake_case (lowercase letters, digits, underscores; "
+                "e.g. 'car_make')."
+            ),
+        )
+
+    raw["field_mappings"] = payload.field_mappings
+    raw["custom_fields"] = payload.field_definitions
+    raw.pop("field_definitions", None)
+    raw["quote_ready_fields"] = payload.quote_ready_fields
+    crm_path.write_text(yaml.dump(raw, allow_unicode=True, default_flow_style=False))
+
+    try:
+        config = CRMConfigLoader.load(client_id, clients_root=CLIENTS_ROOT)
+    except ConfigValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    if config is None:
+        raise HTTPException(status_code=500, detail="Failed to reload integration config after mapping update")
+    return _config_to_response(config)
+
+
 @router.post(
     "/{client_id}/integrations/{provider}/connect",
     response_model=IntegrationConfigResponse,
@@ -354,6 +578,10 @@ async def connect_integration(
                 "Use PUT to update the existing configuration."
             ),
         )
+
+    validation_error = _validate_airtable_ids(payload.base_id, payload.table_id)
+    if validation_error:
+        raise HTTPException(status_code=422, detail=validation_error)
 
     crm_data: dict = {
         "provider": "airtable",

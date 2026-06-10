@@ -43,7 +43,6 @@ import * as analyticsApi from './analytics'
 const mockOverview: AnalyticsOverviewResponse = {
   total_calls: 24,
   outcome_distribution: { interested: 12, not_interested: 8, busy: 4 },
-  engagement_distribution: { high: 5, medium: 10, low: 7, none: 2 },
   avg_call_duration_seconds: 120.5,
   conversion_rate: 0.5,
   period: 'month',

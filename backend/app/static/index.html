@@ -332,7 +332,11 @@
           const opt = document.createElement('option');
           opt.value = l.id;
           // Build a descriptive label
-          const carInfo = [l.car_make, l.car_model, l.car_year].filter(Boolean).join(' ');
+          const carInfo = [
+            leadValue(l, 'car_make'),
+            leadValue(l, 'car_model'),
+            leadValue(l, 'car_year'),
+          ].filter(Boolean).join(' ');
           const desc = carInfo || (l.notes ? l.notes.substring(0, 40) : l.phone);
           opt.textContent = l.name + (desc ? ' — ' + desc : '');
           leadSelect.appendChild(opt);
@@ -387,6 +391,23 @@
       return d.innerHTML;
     }
 
+    function leadCustomFields(lead) {
+      return lead && lead.custom_fields && typeof lead.custom_fields === 'object'
+        ? lead.custom_fields
+        : {};
+    }
+
+    function leadValue(lead, key, fallbackValue) {
+      const customFields = leadCustomFields(lead);
+      if (customFields[key] !== undefined && customFields[key] !== null && customFields[key] !== '') {
+        return customFields[key];
+      }
+      if (lead && lead[key] !== undefined && lead[key] !== null && lead[key] !== '') {
+        return lead[key];
+      }
+      return fallbackValue || '';
+    }
+
     function toggleMute() {
       isMuted = !isMuted;
       if (mediaStream) {
@@ -403,7 +424,11 @@
       document.getElementById('leadStatus').textContent = lead.status;
       document.getElementById('leadStatus').className = 'status-badge status-' + lead.status;
       document.getElementById('leadName').textContent = lead.name || '—';
-      const car = [lead.car_make, lead.car_model, lead.car_year].filter(Boolean).join(' ');
+      const car = [
+        leadValue(lead, 'car_make'),
+        leadValue(lead, 'car_model'),
+        leadValue(lead, 'car_year'),
+      ].filter(Boolean).join(' ');
       document.getElementById('leadCar').textContent = car || '—';
       document.getElementById('lastAction').textContent = lead.updated_at
         ? new Date(lead.updated_at).toLocaleTimeString('es-AR') : '—';
@@ -507,21 +532,35 @@
           similarity_boost: currentAgentConfig.tts_similarity_boost,
         });
       }
+      const customFields = leadCustomFields(lead);
+      const customDynamicVariables = {};
+      Object.entries(customFields).forEach(([key, value]) => {
+        if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+          const normalizedValue = value == null ? '' : String(value);
+          customDynamicVariables[key] = normalizedValue;
+          customDynamicVariables['_' + key + '_'] = normalizedValue;
+        }
+      });
+      const carMake = leadValue(lead, 'car_make');
+      const carModel = leadValue(lead, 'car_model');
+      const carYear = leadValue(lead, 'car_year');
+      const currentInsurance = leadValue(lead, 'current_insurance', 'no tiene');
       const payload = {
         type: 'conversation_initiation_client_data',
         conversation_config_override: { ...ttsOverride },
         dynamic_variables: {
+          ...customDynamicVariables,
           // Underscore-wrapped names match the agent's first-message template: {{_lead_name_}}
           _lead_name_:         lead.name             || '',
           lead_name:           lead.name             || '',
-          _car_make_:          lead.car_make          || '',
-          car_make:            lead.car_make          || '',
-          _car_model_:         lead.car_model         || '',
-          car_model:           lead.car_model         || '',
-          _car_year_:          String(lead.car_year   || ''),
-          car_year:            String(lead.car_year   || ''),
-          _current_insurance_: lead.current_insurance || 'no tiene',
-          current_insurance:   lead.current_insurance || 'no tiene',
+          _car_make_:          carMake,
+          car_make:            carMake,
+          _car_model_:         carModel,
+          car_model:           carModel,
+          _car_year_:          String(carYear || ''),
+          car_year:            String(carYear || ''),
+          _current_insurance_: currentInsurance,
+          current_insurance:   currentInsurance,
           _company_name_:      currentClientData.name || '',
           company_name:        currentClientData.name || '',
           // DEPRECATED: use company_name instead.
