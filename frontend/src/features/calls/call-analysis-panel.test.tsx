@@ -319,82 +319,74 @@ describe('CallAnalysisPanel — detected interest rendering', () => {
 })
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Scenario: Data corrections — applied_to_qora vs crm_sync_status states
+// Scenario: Data corrections — light inline rows, no per-row cards/badges
+//
+// Latest UI feedback: each correction is a simple `field → value` row at roughly
+// the field-key font size. No per-correction gray card, no per-row sync badges,
+// and no heavy headline-weight value typography.
 // ──────────────────────────────────────────────────────────────────────────────
 
-describe('CallAnalysisPanel — DataCorrectionsCard CRM parity states', () => {
-  it('shows "Applied to Qora" label when applied_to_qora=true', () => {
-    const analysis = makeAnalysis({
-      data_corrections: [makeCorrection({ applied_to_qora: true, crm_sync_status: null })],
-    })
-    render(<CallAnalysisPanel analysis={analysis} />)
-
-    expect(screen.getByTestId('correction-applied-label')).toBeInTheDocument()
-  })
-
-  it('does NOT show a current CRM sync label when crm_sync_status=null', () => {
-    const analysis = makeAnalysis({
-      data_corrections: [makeCorrection({ applied_to_qora: true, crm_sync_status: null })],
-    })
-    render(<CallAnalysisPanel analysis={analysis} />)
-
-    // No fake in-sync / out-of-sync claim should appear...
-    expect(screen.queryByTestId('correction-crm-label')).not.toBeInTheDocument()
-    // ...but an honest "CRM unknown" indicator must be present instead.
-    expect(screen.getByTestId('correction-crm-unknown-label')).toBeInTheDocument()
-  })
-
-  it('shows an honest "CRM unknown" indicator when crm_sync_status="unknown"', () => {
-    const analysis = makeAnalysis({
-      data_corrections: [makeCorrection({ applied_to_qora: true, crm_sync_status: 'unknown' })],
-    })
-    render(<CallAnalysisPanel analysis={analysis} />)
-
-    expect(screen.queryByTestId('correction-crm-label')).not.toBeInTheDocument()
-    expect(screen.getByTestId('correction-crm-unknown-label')).toBeInTheDocument()
-  })
-
-  it('shows both labels as distinct states when applied=true AND crm_sync_status=in_sync', () => {
-    const analysis = makeAnalysis({
-      data_corrections: [makeCorrection({ applied_to_qora: true, crm_sync_status: 'in_sync' })],
-    })
-    render(<CallAnalysisPanel analysis={analysis} />)
-
-    expect(screen.getByTestId('correction-applied-label')).toBeInTheDocument()
-    expect(screen.getByTestId('correction-crm-label')).toBeInTheDocument()
-  })
-
-  it('does NOT show "Applied" label when not applied', () => {
-    const analysis = makeAnalysis({
-      data_corrections: [makeCorrection({ applied: false, crm_sync_status: null })],
-    })
-    render(<CallAnalysisPanel analysis={analysis} />)
-
-    expect(screen.queryByTestId('correction-applied-label')).not.toBeInTheDocument()
-  })
-
-  it('shows unapplied/pending indicator when not applied', () => {
-    const analysis = makeAnalysis({
-      data_corrections: [makeCorrection({ applied: false, crm_sync_status: null })],
-    })
-    render(<CallAnalysisPanel analysis={analysis} />)
-
-    expect(screen.getByTestId('correction-pending-label')).toBeInTheDocument()
-  })
-
-  it('shows the corrected value for each correction', () => {
+describe('CallAnalysisPanel — DataCorrectionsCard inline rows', () => {
+  it('shows the corrected value inline next to the field name', () => {
     const analysis = makeAnalysis({
       data_corrections: [makeCorrection({ corrected_value: 'Palermo', field: 'zona' })],
     })
     render(<CallAnalysisPanel analysis={analysis} />)
 
-    // The corrected value appears as "→ Palermo" in the rendered output
-    expect(screen.getByText(/Palermo/)).toBeInTheDocument()
-    // The field name must also appear
+    expect(screen.getByTestId('correction-value').textContent).toContain('Palermo')
     expect(screen.getByText(/zona/)).toBeInTheDocument()
   })
 
-  it('does NOT render a confidence percentage on the correction card', () => {
+  it('renders the value at field-key weight (not a heavy headline)', () => {
+    const analysis = makeAnalysis({
+      data_corrections: [{ field: 'car_make', corrected_value: 'Volkswagen', applied: true }],
+    })
+    render(<CallAnalysisPanel analysis={analysis} />)
+
+    const value = screen.getByTestId('correction-value')
+    // Light inline typography: small size, not bold/medium headline.
+    expect(value.className).toContain('text-xs')
+    expect(value.className).not.toContain('text-sm')
+    expect(value.className).not.toContain('font-medium')
+    expect(value.className).not.toContain('font-semibold')
+  })
+
+  it('does NOT wrap each correction in its own gray card', () => {
+    const analysis = makeAnalysis({
+      data_corrections: [
+        makeCorrection({ field: 'zona', corrected_value: 'Palermo' }),
+        makeCorrection({ field: 'car_make', corrected_value: 'Volkswagen' }),
+      ],
+    })
+    const { container } = render(<CallAnalysisPanel analysis={analysis} />)
+
+    const list = screen.getByTestId('corrections-list')
+    const rows = list.querySelectorAll('li')
+    expect(rows).toHaveLength(2)
+    // No per-row card chrome (border + bg-pearl box) on the correction rows.
+    rows.forEach((row) => {
+      expect(row.className).not.toContain('bg-pearl')
+      expect(row.className).not.toContain('rounded-md')
+    })
+    expect(container).toBeTruthy()
+  })
+
+  it('does NOT render per-row sync/applied badges', () => {
+    const analysis = makeAnalysis({
+      data_corrections: [makeCorrection({ applied: true, crm_sync_status: 'in_sync' })],
+    })
+    render(<CallAnalysisPanel analysis={analysis} />)
+
+    expect(screen.queryByTestId('correction-applied-label')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('correction-pending-label')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('correction-crm-label')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('correction-crm-unknown-label')).not.toBeInTheDocument()
+    // No per-row "Applied to Qora" / "CRM unknown" text either.
+    expect(screen.queryByText(/Applied to Qora/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/CRM unknown/i)).not.toBeInTheDocument()
+  })
+
+  it('does NOT render a confidence percentage', () => {
     const analysis = makeAnalysis({
       data_corrections: [makeCorrection({ confidence: 1.0 })],
     })
@@ -404,124 +396,151 @@ describe('CallAnalysisPanel — DataCorrectionsCard CRM parity states', () => {
     expect(screen.queryByText(/100%/)).not.toBeInTheDocument()
   })
 
-  it('honors the per-call `applied` field for the Applied-to-Qora indicator', () => {
-    // Real per-call analysis payload uses `applied` (not `applied_to_qora`).
+  it('keeps evidence readable but compact under the row', () => {
     const analysis = makeAnalysis({
-      data_corrections: [{ field: 'car_make', corrected_value: 'Volkswagen', applied: true }],
+      data_corrections: [makeCorrection({ evidence: 'sí, vivo en Palermo' })],
     })
     render(<CallAnalysisPanel analysis={analysis} />)
 
-    expect(screen.getByTestId('correction-applied-label')).toBeInTheDocument()
+    expect(screen.getByTestId('correction-evidence').textContent).toContain('sí, vivo en Palermo')
   })
 
-  it('falls back to `applied_to_qora` when the `applied` key is absent', () => {
-    // Analytics-parity payloads omit `applied` entirely and carry only
-    // `applied_to_qora`. The nullish fallback must still surface the
-    // Applied-to-Qora indicator (not the Pending state) in that case.
+  it('shows the old value when present (for inspection)', () => {
     const analysis = makeAnalysis({
       data_corrections: [
-        { field: 'zona', corrected_value: 'Palermo', applied_to_qora: true },
+        { field: 'zona', corrected_value: 'Palermo', old_value: 'Caballito' },
       ],
     })
     render(<CallAnalysisPanel analysis={analysis} />)
 
-    expect(screen.getByTestId('correction-applied-label')).toBeInTheDocument()
-    expect(screen.queryByTestId('correction-pending-label')).not.toBeInTheDocument()
+    expect(screen.getByText(/Caballito/)).toBeInTheDocument()
   })
 
-  it('lets an explicit `applied: false` win over `applied_to_qora: true` (Pending)', () => {
-    // Precedence: the per-call `applied` field is primary. An explicit
-    // `applied: false` is a real signal and must NOT be overridden by a truthy
-    // `applied_to_qora` alias — the card shows Pending, not Applied.
+  it('shows a rejection reason when present', () => {
     const analysis = makeAnalysis({
       data_corrections: [
-        { field: 'zona', corrected_value: 'Palermo', applied: false, applied_to_qora: true },
+        { field: 'zona', corrected_value: 'Palermo', rejection_reason: 'Field locked in CRM' },
       ],
     })
     render(<CallAnalysisPanel analysis={analysis} />)
 
-    expect(screen.getByTestId('correction-pending-label')).toBeInTheDocument()
-    expect(screen.queryByTestId('correction-applied-label')).not.toBeInTheDocument()
+    expect(screen.getByTestId('correction-rejection-reason').textContent).toContain('Field locked in CRM')
   })
 
-  it('always renders a sync indicator on each correction card', () => {
-    // Even with no CRM info, a card must carry an honest sync indicator —
-    // either a real parity label or the "CRM unknown" badge, never nothing.
-    const analysis = makeAnalysis({
-      data_corrections: [{ field: 'car_make', corrected_value: 'Volkswagen', applied: true }],
-    })
-    render(<CallAnalysisPanel analysis={analysis} />)
-
-    expect(screen.getByTestId('correction-crm-unknown-label')).toBeInTheDocument()
-    expect(screen.getByTestId('correction-crm-unknown-label').textContent).toMatch(/CRM unknown/i)
-  })
-})
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Scenario: Older / stale corrections must not imply current sync state
-//
-// Spec: crm-parity — "Older Calls Do Not Imply Current Sync State" and
-// call-detail-inspection-ui — "Older Call Corrections Do Not Show Current Sync
-// State". An older call's correction shows the historical applied fact only.
-// A `stale` sync status is NOT a current-in-sync claim; a `superseded` flag MAY
-// surface an honest "superseded by a later call" note.
-// ──────────────────────────────────────────────────────────────────────────────
-
-describe('CallAnalysisPanel — stale / older-call correction behavior', () => {
-  it('shows the historical "Applied to Qora" fact for an older call correction', () => {
+  it('renders an honest superseded note when superseded=true', () => {
     const analysis = makeAnalysis({
       data_corrections: [
-        makeCorrection({ applied_to_qora: true, crm_sync_status: 'stale' }),
-      ],
-    })
-    render(<CallAnalysisPanel analysis={analysis} />)
-
-    expect(screen.getByTestId('correction-applied-label')).toBeInTheDocument()
-  })
-
-  it('does NOT show a current-sync / "Verified in CRM" claim when status is stale', () => {
-    const analysis = makeAnalysis({
-      data_corrections: [
-        makeCorrection({ applied_to_qora: true, crm_sync_status: 'stale' }),
-      ],
-    })
-    render(<CallAnalysisPanel analysis={analysis} />)
-
-    // No in-sync / verified label — stale is not a current sync state.
-    expect(screen.queryByTestId('correction-crm-label')).not.toBeInTheDocument()
-    expect(screen.queryByText(/Verified in CRM/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/in.?sync/i)).not.toBeInTheDocument()
-  })
-
-  it('renders an honest "superseded by a later call" note when superseded=true', () => {
-    const analysis = makeAnalysis({
-      data_corrections: [
-        makeCorrection({
-          field: 'zona',
-          corrected_value: 'Palermo',
-          applied_to_qora: true,
-          crm_sync_status: null,
-          superseded: true,
-        }),
+        makeCorrection({ field: 'zona', corrected_value: 'Palermo', superseded: true }),
       ],
     })
     render(<CallAnalysisPanel analysis={analysis} />)
 
     const note = screen.getByTestId('correction-superseded-note')
-    expect(note).toBeInTheDocument()
     expect(note.textContent).toMatch(/superseded|later call/i)
-    // Still must not imply current CRM sync.
-    expect(screen.queryByTestId('correction-crm-label')).not.toBeInTheDocument()
   })
 
-  it('does NOT render a superseded note for a current (non-superseded) correction', () => {
+  it('does NOT render a superseded note for a current correction', () => {
     const analysis = makeAnalysis({
-      data_corrections: [
-        makeCorrection({ applied_to_qora: true, crm_sync_status: null }),
-      ],
+      data_corrections: [makeCorrection({ applied: true, crm_sync_status: null })],
     })
     render(<CallAnalysisPanel analysis={analysis} />)
 
     expect(screen.queryByTestId('correction-superseded-note')).not.toBeInTheDocument()
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Scenario: Section-level (batch) Qora + CRM status badges
+//
+// Application and CRM sync are effectively batch-level for these corrections, so
+// the honest status lives ONCE in the section header — not per row. If one
+// correction is out of sync, the section CRM status reflects the issue.
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('CallAnalysisPanel — section-level correction status badges', () => {
+  it('renders the section-level status badges when corrections exist', () => {
+    const analysis = makeAnalysis({
+      data_corrections: [makeCorrection({ applied: true })],
+    })
+    render(<CallAnalysisPanel analysis={analysis} />)
+
+    expect(screen.getByTestId('corrections-status-badges')).toBeInTheDocument()
+    expect(screen.getByTestId('corrections-qora-status')).toBeInTheDocument()
+    expect(screen.getByTestId('corrections-crm-status')).toBeInTheDocument()
+  })
+
+  it('shows "Qora applied" when every correction is applied', () => {
+    const analysis = makeAnalysis({
+      data_corrections: [
+        makeCorrection({ field: 'zona', applied: true }),
+        makeCorrection({ field: 'car_make', applied: true }),
+      ],
+    })
+    render(<CallAnalysisPanel analysis={analysis} />)
+
+    expect(screen.getByTestId('corrections-qora-status').textContent).toMatch(/applied/i)
+  })
+
+  it('shows "Qora partial" when some corrections are applied and some are not', () => {
+    const analysis = makeAnalysis({
+      data_corrections: [
+        makeCorrection({ field: 'zona', applied: true }),
+        makeCorrection({ field: 'car_make', applied: false }),
+      ],
+    })
+    render(<CallAnalysisPanel analysis={analysis} />)
+
+    expect(screen.getByTestId('corrections-qora-status').textContent).toMatch(/partial/i)
+  })
+
+  it('shows "Qora pending" when no corrections are applied', () => {
+    const analysis = makeAnalysis({
+      data_corrections: [makeCorrection({ applied: false })],
+    })
+    render(<CallAnalysisPanel analysis={analysis} />)
+
+    expect(screen.getByTestId('corrections-qora-status').textContent).toMatch(/pending/i)
+  })
+
+  it('shows "CRM synced" only when every correction is in_sync', () => {
+    const analysis = makeAnalysis({
+      data_corrections: [
+        makeCorrection({ field: 'zona', applied: true, crm_sync_status: 'in_sync' }),
+        makeCorrection({ field: 'car_make', applied: true, crm_sync_status: 'in_sync' }),
+      ],
+    })
+    render(<CallAnalysisPanel analysis={analysis} />)
+
+    expect(screen.getByTestId('corrections-crm-status').textContent).toMatch(/synced/i)
+  })
+
+  it('shows "CRM out of sync" if any correction is out_of_sync (batch reflects the issue)', () => {
+    const analysis = makeAnalysis({
+      data_corrections: [
+        makeCorrection({ field: 'zona', applied: true, crm_sync_status: 'in_sync' }),
+        makeCorrection({ field: 'car_make', applied: true, crm_sync_status: 'out_of_sync' }),
+      ],
+    })
+    render(<CallAnalysisPanel analysis={analysis} />)
+
+    expect(screen.getByTestId('corrections-crm-status').textContent).toMatch(/out of sync/i)
+  })
+
+  it('shows an honest "CRM unknown" when sync status is null/unknown/stale (no fake sync)', () => {
+    const analysis = makeAnalysis({
+      data_corrections: [makeCorrection({ applied: true, crm_sync_status: 'stale' })],
+    })
+    render(<CallAnalysisPanel analysis={analysis} />)
+
+    expect(screen.getByTestId('corrections-crm-status').textContent).toMatch(/unknown/i)
+    // Never a fake current-sync claim from a stale status.
+    expect(screen.queryByText(/synced/i)).not.toBeInTheDocument()
+  })
+
+  it('does NOT render status badges when there are no corrections', () => {
+    const analysis = makeAnalysis({ data_corrections: [] })
+    render(<CallAnalysisPanel analysis={analysis} />)
+
+    expect(screen.queryByTestId('corrections-status-badges')).not.toBeInTheDocument()
   })
 })

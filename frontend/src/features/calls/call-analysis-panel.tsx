@@ -9,7 +9,8 @@
  *   - Shows "No analysis available" when null
  *   - Top summary: summary text, interest level bar, classification badge, next action
  *   - Structured dimension rows: objections, pain points, service issues
- *   - DataCorrectionsCard: applied_to_qora vs crm_sync_status as distinct states
+ *   - DataCorrectionsCard: light inline field→value rows with section-level
+ *     (batch) Qora-applied and CRM-sync status badges in the section header
  *   - Bottom audit section (collapsible): analysis_status, analysis_error, analyzed_at
  *
  * Spec: openspec/changes/post-call-analysis-bi-friendly/specs/call-detail-inspection-ui/spec.md
@@ -388,19 +389,28 @@ function MiscNotesCard({ miscNotes }: { miscNotes: Record<string, unknown> | Rec
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Dimension: Data Corrections — honest CRM parity states
+// Dimension: Data Corrections — honest, section-level CRM parity
 //
-// Layout: field → corrected value (clear, readable). No confidence percentage.
+// Per the latest UI feedback, corrections are shown as light inline rows
+// (`field → value`) without per-row cards or per-row sync badges. Application
+// and CRM sync are effectively batch-level for these corrections, so the honest
+// status lives ONCE at the section level (header badges):
 //
-// Each card carries a small, honest sync indicator that reflects current state:
-// - applied (or applied_to_qora) = true  → "Applied to Qora ✓"
-// - applied = false                       → "Pending" (not applied)
-// - crm_sync_status="in_sync"             → "Verified in CRM ✓" (separate state)
-// - crm_sync_status="out_of_sync"         → "Out of sync with CRM"
-// - crm_sync_status null/"unknown"/"stale"→ "CRM unknown" (never a fake sync claim)
+//   Qora badge:
+//     - every correction applied            → "Qora applied ✓"
+//     - some applied, some not               → "Qora partial"
+//     - none applied                         → "Qora pending"
+//
+//   CRM badge (batch parity — if one fails, the section reflects the issue):
+//     - any out_of_sync                      → "CRM out of sync"
+//     - all in_sync (and at least one)       → "CRM synced ✓"
+//     - otherwise (null/unknown/stale/mixed) → "CRM unknown" (never fake sync)
+//
+// Old value, rejection reason, evidence and superseded notes stay readable but
+// compact, inline under each row.
 // ──────────────────────────────────────────────────────────────────────────────
 
-// SyncDot — tiny inline status glyph for the correction sync indicator.
+// SyncDot — tiny inline status glyph for the section-level status badges.
 // Kept as plain markup (no icon dependency) to stay compact and visually calm.
 function SyncDot({ tone }: { tone: 'on' | 'off' | 'unknown' }) {
   const color =
@@ -413,94 +423,168 @@ function SyncDot({ tone }: { tone: 'on' | 'off' | 'unknown' }) {
   )
 }
 
+type AppliedState = 'applied' | 'partial' | 'pending'
+type CrmState = 'synced' | 'out_of_sync' | 'unknown'
+
+// Reduce the whole batch of corrections into a single honest applied state.
+function deriveAppliedState(corrections: Record<string, unknown>[]): AppliedState {
+  const flags = corrections.map((c) => {
+    // Per-call payload uses `applied`; analytics-parity uses `applied_to_qora`.
+    // The explicit per-call `applied` flag is primary.
+    const applied =
+      (c['applied'] as boolean | undefined) ??
+      (c['applied_to_qora'] as boolean | undefined)
+    return applied === true
+  })
+  if (flags.every((f) => f)) return 'applied'
+  if (flags.some((f) => f)) return 'partial'
+  return 'pending'
+}
+
+// Reduce the whole batch into a single honest CRM parity state.
+// A single out_of_sync poisons the batch; we never claim synced unless every
+// correction is in_sync. Anything else stays "unknown" (no fake sync claim).
+function deriveCrmState(corrections: Record<string, unknown>[]): CrmState {
+  const statuses = corrections.map(
+    (c) => c['crm_sync_status'] as string | null | undefined
+  )
+  if (statuses.some((s) => s === 'out_of_sync')) return 'out_of_sync'
+  if (statuses.length > 0 && statuses.every((s) => s === 'in_sync')) {
+    return 'synced'
+  }
+  return 'unknown'
+}
+
+function CorrectionsStatusBadges({
+  corrections,
+}: {
+  corrections: Record<string, unknown>[]
+}) {
+  const appliedState = deriveAppliedState(corrections)
+  const crmState = deriveCrmState(corrections)
+
+  const appliedLabel =
+    appliedState === 'applied'
+      ? 'Qora applied ✓'
+      : appliedState === 'partial'
+        ? 'Qora partial'
+        : 'Qora pending'
+  const appliedTone: 'on' | 'off' | 'unknown' =
+    appliedState === 'applied' ? 'on' : appliedState === 'partial' ? 'off' : 'unknown'
+  const appliedClass =
+    appliedState === 'applied'
+      ? 'text-teal bg-teal-faint border-teal-line'
+      : appliedState === 'partial'
+        ? 'text-coral bg-coral-faint border-coral-line'
+        : 'text-ink-3 bg-mist border-line'
+
+  const crmLabel =
+    crmState === 'synced'
+      ? 'CRM synced ✓'
+      : crmState === 'out_of_sync'
+        ? 'CRM out of sync'
+        : 'CRM unknown'
+  const crmTone: 'on' | 'off' | 'unknown' =
+    crmState === 'synced' ? 'on' : crmState === 'out_of_sync' ? 'off' : 'unknown'
+  const crmClass =
+    crmState === 'synced'
+      ? 'text-teal bg-teal-faint border-teal-line'
+      : crmState === 'out_of_sync'
+        ? 'text-coral bg-coral-faint border-coral-line'
+        : 'text-ink-3 bg-mist border-line'
+
+  return (
+    <div
+      data-testid="corrections-status-badges"
+      className="flex items-center gap-1.5"
+    >
+      <span
+        data-testid="corrections-qora-status"
+        className={[
+          'inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full border',
+          appliedClass,
+        ].join(' ')}
+      >
+        <SyncDot tone={appliedTone} />
+        {appliedLabel}
+      </span>
+      <span
+        data-testid="corrections-crm-status"
+        className={[
+          'inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full border',
+          crmClass,
+        ].join(' ')}
+        title={
+          crmState === 'unknown'
+            ? 'CRM sync state for these corrections is not known'
+            : undefined
+        }
+      >
+        <SyncDot tone={crmTone} />
+        {crmLabel}
+      </span>
+    </div>
+  )
+}
+
 function DataCorrectionsCard({ corrections }: { corrections: Record<string, unknown>[] | null }) {
   if (!corrections || corrections.length === 0) {
     return <EmptyState label="No data corrections" />
   }
   return (
-    <ul className="space-y-2">
+    <ul data-testid="corrections-list" className="divide-y divide-line">
       {corrections.map((c, idx) => {
         const field = (c['field'] ?? '') as string
         const correctedVal = (c['corrected_value'] ?? c['new_value'] ?? c['new'] ?? '') as string
-        // The per-call analysis payload uses `applied`; the analytics parity
-        // surface uses `applied_to_qora`. Honor both so the indicator is honest
-        // regardless of which surface produced the data.
-        const applied =
-          (c['applied'] as boolean | undefined) ??
-          (c['applied_to_qora'] as boolean | undefined)
-        const crmSyncStatus = c['crm_sync_status'] as string | null | undefined
+        const oldVal = (c['old_value'] ?? c['previous_value'] ?? c['old'] ?? '') as string
+        const rejectionReason = (c['rejection_reason'] ?? '') as string
+        const evidence = (c['evidence'] ?? null) as string | null
         const superseded = c['superseded'] === true
 
-        // A current CRM sync state only exists for in_sync / out_of_sync.
-        // null, 'unknown', '' and 'stale' are NOT current sync claims — an older
-        // call's correction must never imply the field is currently in sync.
-        const showCrmLabel =
-          crmSyncStatus === 'in_sync' || crmSyncStatus === 'out_of_sync'
-
         return (
-          <li key={idx} className="rounded-md border border-line bg-pearl px-3 py-2.5 space-y-1.5">
-            {/* Field name + corrected value */}
-            <div className="flex items-baseline gap-2">
+          <li key={idx} className="py-1.5 first:pt-0 last:pb-0 space-y-0.5">
+            {/* field → value — light inline row, value at field-key weight */}
+            <div className="flex items-baseline gap-1.5 flex-wrap">
               {field && (
                 <span className="text-xs font-mono text-ink-3">{field}</span>
               )}
               {correctedVal && (
-                <span className="text-sm text-ink font-medium">→ {correctedVal}</span>
+                <>
+                  <span aria-hidden="true" className="text-xs text-ink-4">→</span>
+                  <span
+                    data-testid="correction-value"
+                    className="text-xs font-mono text-ink"
+                  >
+                    {correctedVal}
+                  </span>
+                </>
               )}
-            </div>
-
-            {/* Sync indicator — honest, always present, compact */}
-            <div className="flex items-center gap-2 flex-wrap">
-              {applied === true ? (
-                <span
-                  data-testid="correction-applied-label"
-                  className="inline-flex items-center gap-1 text-[10px] font-mono text-teal bg-teal-faint border border-teal-line px-2 py-0.5 rounded-full"
-                >
-                  <SyncDot tone="on" />
-                  Applied to Qora ✓
-                </span>
-              ) : (
-                <span
-                  data-testid="correction-pending-label"
-                  className="inline-flex items-center gap-1 text-[10px] font-mono text-ink-3 bg-mist border border-line px-2 py-0.5 rounded-full"
-                >
-                  <SyncDot tone="unknown" />
-                  Pending
-                </span>
-              )}
-
-              {/* CRM sync status — real current parity states only,
-                  otherwise an honest "CRM unknown" indicator (never fake sync). */}
-              {showCrmLabel ? (
-                <span
-                  data-testid="correction-crm-label"
-                  className={[
-                    'inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full border',
-                    crmSyncStatus === 'in_sync'
-                      ? 'text-teal bg-teal-faint border-teal-line'
-                      : 'text-coral bg-coral-faint border-coral-line',
-                  ].join(' ')}
-                >
-                  <SyncDot tone={crmSyncStatus === 'in_sync' ? 'on' : 'off'} />
-                  {crmSyncStatus === 'in_sync'
-                    ? 'Verified in CRM ✓'
-                    : 'Out of sync with CRM'}
-                </span>
-              ) : (
-                <span
-                  data-testid="correction-crm-unknown-label"
-                  className="inline-flex items-center gap-1 text-[10px] font-mono text-ink-3 bg-mist border border-line px-2 py-0.5 rounded-full"
-                  title="CRM sync state for this field is not known"
-                >
-                  <SyncDot tone="unknown" />
-                  CRM unknown
+              {oldVal && (
+                <span className="text-[10px] font-mono text-ink-4 line-through">
+                  {oldVal}
                 </span>
               )}
             </div>
 
-            {/* Superseded note — honest historical treatment.
-                An older call's correction does not represent current lead state
-                once a newer call has changed the same field. */}
+            {/* Compact evidence / rejection reason — readable but secondary */}
+            {evidence && (
+              <p
+                data-testid="correction-evidence"
+                className="text-[10px] text-ink-3 italic break-words"
+              >
+                "{evidence}"
+              </p>
+            )}
+            {rejectionReason && (
+              <p
+                data-testid="correction-rejection-reason"
+                className="text-[10px] text-coral break-words"
+              >
+                {rejectionReason}
+              </p>
+            )}
+
+            {/* Superseded note — honest historical treatment. */}
             {superseded && (
               <p
                 data-testid="correction-superseded-note"
@@ -793,9 +877,16 @@ export function CallAnalysisPanel({ analysis, isLoading, locale = 'es' }: CallAn
           <MiscNotesCard miscNotes={analysis.misc_notes} />
         </Card>
 
-        {/* Data Corrections — honest CRM parity */}
+        {/* Data Corrections — light inline rows + section-level CRM parity */}
         <Card>
-          <SectionLabel>Data Corrections</SectionLabel>
+          <div className="flex items-start justify-between gap-2 mb-1.5">
+            <p className="text-xs text-ink-3 uppercase tracking-wider">
+              Data Corrections
+            </p>
+            {analysis.data_corrections && analysis.data_corrections.length > 0 && (
+              <CorrectionsStatusBadges corrections={analysis.data_corrections} />
+            )}
+          </div>
           <DataCorrectionsCard corrections={analysis.data_corrections} />
         </Card>
       </div>
