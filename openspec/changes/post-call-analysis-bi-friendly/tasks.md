@@ -47,14 +47,14 @@ Review first: migration/backfill safety, then summarizer writes, then exclusion 
 
 Review first: shared contracts (`crm_parity`, labels), then UI rendering. Do not implement CRM sync engine.
 
-- [ ] 3.1 **Test first:** Add `backend/tests/unit/test_crm_parity.py` for `unknown`, `in_sync`, `out_of_sync`, latest correction selection, and older-call non-current-state behavior. Acceptance: `crm-parity` scenarios.
-- [ ] 3.2 Create `backend/app/analytics/crm_parity.py` with `SyncState`, `resolve_sync_state()`, and `resolve_latest_correction()`; default unknown when CRM value is unavailable. Depends on 3.1.
-- [ ] 3.3 **Test first:** Add frontend tests for `resolveLabel()` known labels, fallback-to-code, and stable-code display behavior. Acceptance: `dimension-label-registry` scenarios.
-- [ ] 3.4 Create `frontend/src/config/dimension-labels.ts` and update `frontend/src/api/types.ts` with new call analysis fields; labels support `es`/`en` and never replace analytics codes. Depends on 3.3.
-- [ ] 3.5 **Test first:** Extend `frontend/src/features/leads/analysis-panel.test.tsx` or create call-analysis-panel tests for structured category/scalar/evidence rendering, separate entries, and raw per-call output. Acceptance: `call-detail-inspection-ui` dimension scenarios.
-- [ ] 3.6 Refactor `frontend/src/features/calls/call-analysis-panel.tsx` to show normalized variable/value rows, collapsible evidence, and raw per-call dimensions; use labels only for display. Depends on 3.4, 3.5.
-- [ ] 3.7 **Test first:** Extend UI tests for data corrections states: applied-only, applied+verified, unknown/null hides sync labels, unapplied pending state, and older-call no-current-sync indicator. Acceptance: CRM parity + call detail correction scenarios.
-- [ ] 3.8 Update `DataCorrectionsCard` in `frontend/src/features/calls/call-analysis-panel.tsx` and lead rollups in `frontend/src/features/leads/detail-page.tsx`; show `Applied to Qora` separately from CRM status and add drilldown counts. Depends on 3.2, 3.6, 3.7.
+- [x] 3.1 **Test first:** Add `backend/tests/unit/test_crm_parity.py` for `unknown`, `in_sync`, `out_of_sync`, latest correction selection, and older-call non-current-state behavior. Acceptance: `crm-parity` scenarios.
+- [x] 3.2 Create `backend/app/analytics/crm_parity.py` with `SyncState`, `resolve_sync_state()`, and `resolve_latest_correction()`; default unknown when CRM value is unavailable. Depends on 3.1.
+- [x] 3.3 **Test first:** Add frontend tests for `resolveLabel()` known labels, fallback-to-code, and stable-code display behavior. Acceptance: `dimension-label-registry` scenarios.
+- [x] 3.4 Create `frontend/src/config/dimension-labels.ts` and update `frontend/src/api/types.ts` with new call analysis fields; labels support `es`/`en` and never replace analytics codes. Depends on 3.3.
+- [x] 3.5 **Test first:** Extend `frontend/src/features/leads/analysis-panel.test.tsx` or create call-analysis-panel tests for structured category/scalar/evidence rendering, separate entries, and raw per-call output. Acceptance: `call-detail-inspection-ui` dimension scenarios.
+- [x] 3.6 Refactor `frontend/src/features/calls/call-analysis-panel.tsx` to show normalized variable/value rows, collapsible evidence, and raw per-call dimensions; use labels only for display. Depends on 3.4, 3.5.
+- [x] 3.7 **Test first:** Extend UI tests for data corrections states: applied-only, applied+verified, unknown/null hides sync labels, unapplied pending state, and older-call no-current-sync indicator. Acceptance: CRM parity + call detail correction scenarios.
+- [x] 3.8 Update `DataCorrectionsCard` in `frontend/src/features/calls/call-analysis-panel.tsx` and lead rollups in `frontend/src/features/leads/detail-page.tsx`; show `Applied to Qora` separately from CRM status and add drilldown counts. Depends on 3.2, 3.6, 3.7.
 
 ## Verification
 

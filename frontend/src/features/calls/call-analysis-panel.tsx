@@ -1,17 +1,24 @@
 /**
  * CallAnalysisPanel — Presentational component for full call analysis display
  *
- * Renders all 12 analysis dimensions for a single call session.
+ * PR 3 (post-call-analysis-bi-friendly): Refactored from decorative summary cards
+ * to structured inspection tables. Each dimension shows normalized variable/value
+ * rows with collapsible evidence. DataCorrectionsCard shows honest CRM parity states.
+ *
  * Design: Pure presentational — receives CallAnalysis | null
  *   - Shows "No analysis available" when null
  *   - Top summary: summary text, interest level bar, classification badge, next action
- *   - Grid of dimension cards: objections, pain points, service issues,
- *     detected interests, commitments, profile facts, misc notes, data corrections
+ *   - Structured dimension rows: objections, pain points, service issues
+ *   - DataCorrectionsCard: applied_to_qora vs crm_sync_status as distinct states
  *   - Bottom audit section (collapsible): analysis_status, analysis_error, analyzed_at
+ *
+ * Spec: openspec/changes/post-call-analysis-bi-friendly/specs/call-detail-inspection-ui/spec.md
+ * Spec: openspec/changes/post-call-analysis-bi-friendly/specs/crm-parity/spec.md
  */
 
 import { useState } from 'react'
 import type { CallAnalysis } from '@/api/types'
+import { resolveLabel } from '@/config/dimension-labels'
 import { Badge } from '@/design/components/badge'
 import { Card } from '@/design/components/card'
 
@@ -27,6 +34,15 @@ function classificationBadgeStatus(
   if (classification.includes('negative') || classification === 'hostile' || classification === 'do_not_contact') return 'error'
   if (classification === 'busy' || classification === 'confused' || classification === 'callback_requested') return 'warning'
   return 'neutral'
+}
+
+function strengthStyle(strength: string | null | undefined): string {
+  switch (strength) {
+    case 'high': return 'text-error font-semibold'
+    case 'medium': return 'text-warning font-medium'
+    case 'low': return 'text-ink-3'
+    default: return 'text-ink-3'
+  }
 }
 
 function urgencyStyle(urgency: string | null): string {
@@ -47,14 +63,6 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
     <p className="text-xs text-ink-3 uppercase tracking-wider mb-1.5">
       {children}
     </p>
-  )
-}
-
-function Chip({ label }: { label: string }) {
-  return (
-    <span className="inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-mist text-ink-3 border border-line">
-      {label}
-    </span>
   )
 }
 
@@ -91,25 +99,77 @@ function InterestBar({ level }: { level: number | null }) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Dimension: Objections
+// Dimension: Objections — structured inspection rows
 // ──────────────────────────────────────────────────────────────────────────────
 
-function ObjectionsCard({ objections }: { objections: Record<string, unknown>[] | null }) {
+// Evidence toggle wrapper for inline-visible evidence (tasks 3.5/3.6 spec requires it)
+function ObjectionEvidenceRow({ evidence }: { evidence: string }) {
+  return (
+    <div
+      data-testid="objection-evidence"
+      className="text-xs text-ink-3 italic border-l-2 border-line-2 pl-2 break-words"
+    >
+      "{evidence}"
+    </div>
+  )
+}
+
+// Augmented ObjectionsCard: evidence always visible inline per spec
+function ObjectionsCardFull({ objections }: { objections: Record<string, unknown>[] | null }) {
   if (!objections || objections.length === 0) {
     return <EmptyState label="No objections recorded" />
   }
   return (
-    <ul className="space-y-1.5">
+    <ul className="space-y-2">
       {objections.map((obj, idx) => {
-        const text = (obj['text'] ?? obj['objection'] ?? String(obj)) as string
-        const severity = obj['severity'] as string | undefined
+        const category = (obj['category'] ?? '') as string
+        const strength = (obj['strength'] ?? '') as string
+        const resolution = (obj['resolution_status'] ?? '') as string
+        const evidence = (obj['evidence'] ?? null) as string | null
+        const isPrimary = Boolean(obj['is_primary'])
+
         return (
-          <li key={idx} className="flex items-start gap-2">
-            <span className="text-sm text-ink">{text}</span>
-            {severity && (
-              <span className={['text-xs font-medium uppercase', urgencyStyle(severity)].join(' ')}>
-                {severity}
-              </span>
+          <li
+            key={idx}
+            className="rounded-md border border-line bg-pearl px-3 py-2.5 space-y-1.5"
+          >
+            {/* Structured fields */}
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span
+                  data-testid="objection-category"
+                  className="font-mono text-xs px-1.5 py-0.5 rounded bg-mist border border-line text-ink-2"
+                >
+                  {category || '—'}
+                </span>
+                {isPrimary && (
+                  <span className="text-[10px] font-mono text-teal bg-teal-faint border border-teal-line px-1.5 py-0.5 rounded">
+                    primary
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-ink-3 w-24 shrink-0">strength</span>
+                <span
+                  data-testid="objection-strength"
+                  className={['text-xs font-mono uppercase', strengthStyle(strength)].join(' ')}
+                >
+                  {strength || '—'}
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-ink-3 w-24 shrink-0">resolution</span>
+                <span
+                  data-testid="objection-resolution"
+                  className="text-xs font-mono text-ink-2"
+                >
+                  {resolution || '—'}
+                </span>
+              </div>
+            </div>
+            {/* Evidence inline */}
+            {evidence && (
+              <ObjectionEvidenceRow evidence={evidence} />
             )}
           </li>
         )
@@ -119,7 +179,7 @@ function ObjectionsCard({ objections }: { objections: Record<string, unknown>[] 
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Dimension: Pain Points
+// Dimension: Pain Points — structured rows
 // ──────────────────────────────────────────────────────────────────────────────
 
 function PainPointsCard({ painPoints }: { painPoints: Record<string, unknown>[] | null }) {
@@ -130,24 +190,43 @@ function PainPointsCard({ painPoints }: { painPoints: Record<string, unknown>[] 
     <ul className="space-y-2">
       {painPoints.map((pp, idx) => {
         const category = (pp['category'] ?? '') as string
-        const description = (pp['description'] ?? '') as string
         const urgency = (pp['urgency'] ?? '') as string
+        const description = (pp['description'] ?? null) as string | null
+        const evidence = (pp['evidence'] ?? null) as string | null
+        const isPrimary = Boolean(pp['is_primary'])
+
         return (
-          <li key={idx} className="space-y-0.5">
+          <li
+            key={idx}
+            className="rounded-md border border-line bg-pearl px-3 py-2.5 space-y-1.5"
+          >
             <div className="flex items-center gap-2 flex-wrap">
               {category && (
-                <span className="inline-flex items-center px-1.5 py-0.5 text-xs rounded bg-mist text-ink-3">
+                <span
+                  data-testid="pain-category"
+                  className="font-mono text-xs px-1.5 py-0.5 rounded bg-mist border border-line text-ink-2"
+                >
                   {category}
                 </span>
               )}
+              {isPrimary && (
+                <span className="text-[10px] font-mono text-teal bg-teal-faint border border-teal-line px-1.5 py-0.5 rounded">
+                  primary
+                </span>
+              )}
               {urgency && (
-                <span className={['text-xs font-medium uppercase', urgencyStyle(urgency)].join(' ')}>
+                <span className={['text-xs font-mono uppercase', urgencyStyle(urgency)].join(' ')}>
                   {urgency}
                 </span>
               )}
             </div>
             {description && (
               <p className="text-sm text-ink">{description}</p>
+            )}
+            {evidence && (
+              <p className="text-xs text-ink-3 italic border-l-2 border-line-2 pl-2 break-words">
+                "{evidence}"
+              </p>
             )}
           </li>
         )
@@ -165,12 +244,60 @@ function ServiceIssuesCard({ serviceIssues }: { serviceIssues: Record<string, un
     return <EmptyState label="No service issues detected" />
   }
   return (
-    <ul className="space-y-1">
+    <ul className="space-y-2">
       {serviceIssues.map((issue, idx) => {
-        const text = (issue['issue'] ?? issue['text'] ?? String(issue)) as string
+        // Normalized fields per ServiceIssue schema: category, source, severity,
+        // description, evidence, confidence. Render the structured values that
+        // exist; never drop available normalized data behind a prose-only line.
+        const category = (issue['category'] ?? '') as string
+        const source = (issue['source'] ?? '') as string
+        const severity = (issue['severity'] ?? '') as string
+        const description = (issue['description'] ?? issue['issue'] ?? issue['text'] ?? '') as string
+        const evidence = (issue['evidence'] ?? null) as string | null
+
         return (
-          <li key={idx} className="text-sm text-ink">
-            {text}
+          <li
+            key={idx}
+            className="rounded-md border border-line bg-pearl px-3 py-2.5 space-y-1.5"
+          >
+            {/* Normalized category / source / severity */}
+            <div className="flex items-center gap-2 flex-wrap">
+              {category && (
+                <span
+                  data-testid="service-issue-category"
+                  className="font-mono text-xs px-1.5 py-0.5 rounded bg-mist border border-line text-ink-2"
+                >
+                  {category}
+                </span>
+              )}
+              {source && (
+                <span
+                  data-testid="service-issue-source"
+                  className="text-[10px] font-mono uppercase tracking-wide text-ink-3"
+                >
+                  {source}
+                </span>
+              )}
+              {severity && (
+                <span
+                  data-testid="service-issue-severity"
+                  className={['text-xs font-mono uppercase', urgencyStyle(severity)].join(' ')}
+                >
+                  {severity}
+                </span>
+              )}
+            </div>
+            {description && (
+              <p className="text-sm text-ink">{description}</p>
+            )}
+            {evidence && (
+              <p
+                data-testid="service-issue-evidence"
+                className="text-xs text-ink-3 italic border-l-2 border-line-2 pl-2 break-words"
+              >
+                "{evidence}"
+              </p>
+            )}
           </li>
         )
       })}
@@ -261,7 +388,13 @@ function MiscNotesCard({ miscNotes }: { miscNotes: Record<string, unknown> | Rec
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Dimension: Data Corrections
+// Dimension: Data Corrections — honest CRM parity states
+//
+// Spec: applied_to_qora and crm_verified are SEPARATE states.
+// - applied_to_qora=true → show "Applied to Qora ✓"
+// - crm_sync_status="in_sync" → show "Verified in CRM ✓" (separately)
+// - crm_sync_status=null OR "unknown" → show NOTHING (no fake sync label)
+// - applied_to_qora=false → show pending/unapplied indicator
 // ──────────────────────────────────────────────────────────────────────────────
 
 function DataCorrectionsCard({ corrections }: { corrections: Record<string, unknown>[] | null }) {
@@ -269,18 +402,85 @@ function DataCorrectionsCard({ corrections }: { corrections: Record<string, unkn
     return <EmptyState label="No data corrections" />
   }
   return (
-    <ul className="space-y-1.5">
+    <ul className="space-y-2">
       {corrections.map((c, idx) => {
         const field = (c['field'] ?? '') as string
-        const oldVal = (c['old_value'] ?? c['old'] ?? '') as string
-        const newVal = (c['new_value'] ?? c['new'] ?? '') as string
+        const correctedVal = (c['corrected_value'] ?? c['new_value'] ?? c['new'] ?? '') as string
+        const confidence = c['confidence'] as number | undefined
+        const appliedToQora = c['applied_to_qora'] as boolean | undefined
+        const crmSyncStatus = c['crm_sync_status'] as string | null | undefined
+        const superseded = c['superseded'] === true
+
+        // A current CRM sync state only exists for in_sync / out_of_sync.
+        // null, 'unknown', '' and 'stale' are NOT current sync claims — an older
+        // call's correction must never imply the field is currently in sync.
+        const showCrmLabel =
+          crmSyncStatus === 'in_sync' || crmSyncStatus === 'out_of_sync'
+
         return (
-          <li key={idx} className="text-sm space-y-0.5">
-            {field && <span className="text-xs text-ink-3">{field}</span>}
-            <div className="flex items-center gap-2">
-              {oldVal && <span className="line-through text-ink-3">{oldVal}</span>}
-              {newVal && <span className="text-ink font-medium">→ {newVal}</span>}
+          <li key={idx} className="rounded-md border border-line bg-pearl px-3 py-2.5 space-y-1.5">
+            {/* Field name + corrected value */}
+            <div className="flex items-baseline gap-2">
+              {field && (
+                <span className="text-xs font-mono text-ink-3">{field}</span>
+              )}
+              {correctedVal && (
+                <span className="text-sm text-ink font-medium">→ {correctedVal}</span>
+              )}
+              {confidence != null && (
+                <span className="text-xs text-ink-4 font-mono">
+                  {(confidence * 100).toFixed(0)}% confidence
+                </span>
+              )}
             </div>
+
+            {/* Parity status labels — honest, separate states */}
+            <div className="flex items-center gap-2 flex-wrap">
+              {appliedToQora === true ? (
+                <span
+                  data-testid="correction-applied-label"
+                  className="inline-flex items-center gap-1 text-[10px] font-mono text-teal bg-teal-faint border border-teal-line px-2 py-0.5 rounded-full"
+                >
+                  Applied to Qora ✓
+                </span>
+              ) : (
+                <span
+                  data-testid="correction-pending-label"
+                  className="inline-flex items-center gap-1 text-[10px] font-mono text-ink-3 bg-mist border border-line px-2 py-0.5 rounded-full"
+                >
+                  Pending
+                </span>
+              )}
+
+              {/* CRM sync status — only for real current parity states */}
+              {showCrmLabel && (
+                <span
+                  data-testid="correction-crm-label"
+                  className={[
+                    'inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full border',
+                    crmSyncStatus === 'in_sync'
+                      ? 'text-teal bg-teal-faint border-teal-line'
+                      : 'text-coral bg-coral-faint border-coral-line',
+                  ].join(' ')}
+                >
+                  {crmSyncStatus === 'in_sync'
+                    ? 'Verified in CRM ✓'
+                    : 'Out of sync with CRM'}
+                </span>
+              )}
+            </div>
+
+            {/* Superseded note — honest historical treatment.
+                An older call's correction does not represent current lead state
+                once a newer call has changed the same field. */}
+            {superseded && (
+              <p
+                data-testid="correction-superseded-note"
+                className="text-[10px] text-ink-3 italic"
+              >
+                Superseded by a later call — this reflects only what happened in this call.
+              </p>
+            )}
           </li>
         )
       })}
@@ -342,13 +542,15 @@ function AuditSection({ analysis }: { analysis: CallAnalysis }) {
 interface CallAnalysisPanelProps {
   analysis: CallAnalysis | null | undefined
   isLoading?: boolean
+  /** Client locale for dimension label display (default: 'es') */
+  locale?: 'es' | 'en'
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
 // CallAnalysisPanel — main component
 // ──────────────────────────────────────────────────────────────────────────────
 
-export function CallAnalysisPanel({ analysis, isLoading }: CallAnalysisPanelProps) {
+export function CallAnalysisPanel({ analysis, isLoading, locale = 'es' }: CallAnalysisPanelProps) {
   if (isLoading) {
     return (
       <div data-testid="analysis-loading" className="py-6 text-center">
@@ -367,11 +569,26 @@ export function CallAnalysisPanel({ analysis, isLoading }: CallAnalysisPanelProp
     )
   }
 
-  // Combined detected interests (products + specific_needs)
-  const allInterests = [
-    ...(analysis.products ?? []),
-    ...(analysis.specific_needs ?? []),
+  // Combined detected interests (products + specific_needs).
+  // These arrive as flat normalized string codes at the API boundary — there is
+  // no per-item evidence/comment. Render each as a normalized value tagged with
+  // its source kind; do NOT fabricate fields the data does not carry.
+  const allInterests: Array<{ value: string; kind: 'product' | 'need' }> = [
+    ...(analysis.products ?? []).map((value) => ({
+      value: typeof value === 'string' ? value : JSON.stringify(value),
+      kind: 'product' as const,
+    })),
+    ...(analysis.specific_needs ?? []).map((value) => ({
+      value: typeof value === 'string' ? value : JSON.stringify(value),
+      kind: 'need' as const,
+    })),
   ]
+
+  // BI summary row: primary categories + counts from denormalized columns
+  const hasBiSummary =
+    analysis.primary_objection_category != null ||
+    analysis.primary_pain_category != null ||
+    analysis.objections_count != null
 
   return (
     <div data-testid="call-analysis-panel" className="space-y-5">
@@ -445,19 +662,53 @@ export function CallAnalysisPanel({ analysis, isLoading }: CallAnalysisPanelProp
               <p className="text-sm text-ink">{analysis.current_insurance}</p>
             </div>
           )}
+
+          {/* BI summary row — primary categories + counts */}
+          {hasBiSummary && (
+            <div className="pt-1 border-t border-line">
+              <SectionLabel>BI Summary</SectionLabel>
+              <div className="flex flex-wrap items-center gap-3 text-xs font-mono text-ink-3">
+                {analysis.primary_objection_category && (
+                  <span>
+                    primary objection:{' '}
+                    <span className="text-ink font-medium">
+                      {resolveLabel(analysis.primary_objection_category, locale)}
+                    </span>
+                  </span>
+                )}
+                {analysis.primary_pain_category && (
+                  <span>
+                    primary pain:{' '}
+                    <span className="text-ink font-medium">
+                      {resolveLabel(analysis.primary_pain_category, locale)}
+                    </span>
+                  </span>
+                )}
+                {analysis.objections_count != null && (
+                  <span>objections: <span className="text-ink">{analysis.objections_count}</span></span>
+                )}
+                {analysis.pain_points_count != null && (
+                  <span>pain points: <span className="text-ink">{analysis.pain_points_count}</span></span>
+                )}
+                {analysis.service_issues_count != null && (
+                  <span>service issues: <span className="text-ink">{analysis.service_issues_count}</span></span>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </Card>
 
       {/* ── Dimension Grid ── */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
-        {/* Objections */}
+        {/* Objections — structured inspection */}
         <Card>
           <SectionLabel>Objections</SectionLabel>
-          <ObjectionsCard objections={analysis.objections} />
+          <ObjectionsCardFull objections={analysis.objections} />
         </Card>
 
-        {/* Pain Points */}
+        {/* Pain Points — structured inspection */}
         <Card>
           <SectionLabel>Pain Points</SectionLabel>
           <PainPointsCard painPoints={analysis.pain_points} />
@@ -469,17 +720,30 @@ export function CallAnalysisPanel({ analysis, isLoading }: CallAnalysisPanelProp
           <ServiceIssuesCard serviceIssues={analysis.service_issues} />
         </Card>
 
-        {/* Detected Interests */}
+        {/* Detected Interests — normalized value + source kind (honest) */}
         <Card>
           <SectionLabel>Detected Interests</SectionLabel>
           {allInterests.length === 0 ? (
             <EmptyState label="No interests detected" />
           ) : (
-            <div className="flex flex-wrap gap-1.5">
+            <ul className="space-y-1.5">
               {allInterests.map((item, idx) => (
-                <Chip key={idx} label={typeof item === 'string' ? item : JSON.stringify(item)} />
+                <li
+                  key={idx}
+                  className="flex items-center gap-2 rounded-md border border-line bg-pearl px-3 py-1.5"
+                >
+                  <span
+                    data-testid="interest-value"
+                    className="text-sm text-ink font-mono flex-1 min-w-0 break-words"
+                  >
+                    {item.value}
+                  </span>
+                  <span className="text-[10px] font-mono uppercase tracking-wide text-ink-3 shrink-0">
+                    {item.kind}
+                  </span>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
         </Card>
 
@@ -501,7 +765,7 @@ export function CallAnalysisPanel({ analysis, isLoading }: CallAnalysisPanelProp
           <MiscNotesCard miscNotes={analysis.misc_notes} />
         </Card>
 
-        {/* Data Corrections */}
+        {/* Data Corrections — honest CRM parity */}
         <Card>
           <SectionLabel>Data Corrections</SectionLabel>
           <DataCorrectionsCard corrections={analysis.data_corrections} />

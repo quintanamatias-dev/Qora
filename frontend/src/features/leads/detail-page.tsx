@@ -18,10 +18,10 @@
  */
 
 import { useState } from 'react'
-import { useParams, useNavigate } from 'react-router'
+import { useParams, useNavigate, Link } from 'react-router'
 import { useLead, useCallSessions, useLeadContextPreview, useIntegrations } from '@/api/hooks'
 import { Badge } from '@/design/components/badge'
-import type { LeadStatus, QuoteField, LeadContextPreview } from '@/api/types'
+import type { LeadStatus, QuoteField, LeadContextPreview, CallSession } from '@/api/types'
 import { CallHistoryList } from './call-history-list'
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -559,6 +559,159 @@ function MemorySection({ lead }: { lead: NonNullable<ReturnType<typeof useLead>[
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Section D-bis: Dimension Rollup Counts (lead-level, left column)
+//
+// Shows per-category rollup counts for objections and pain points across all
+// calls for this lead. Each category links to the individual call detail view.
+//
+// Spec: call-detail-inspection-ui — "Lead view shows rollup counts with drilldown"
+// Design: AD-9 — uses primary_objection_category / primary_pain_category from
+//         sessions' extracted_facts if available, otherwise shows call list with links.
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build simple per-category counts from sessions' extracted_facts if available.
+ * Falls back to showing call links only when no extracted dimension data is present.
+ */
+export function buildCategoryRollup(
+  sessions: CallSession[],
+  factKey: string
+): Array<{ category: string; count: number; sessionIds: string[] }> {
+  const map = new Map<string, { count: number; sessionIds: string[] }>()
+
+  for (const session of sessions) {
+    const facts = session.extracted_facts as Record<string, unknown> | null
+    if (!facts) continue
+    const value = facts[factKey] as string | null | undefined
+    if (!value) continue
+    const existing = map.get(value)
+    if (existing) {
+      existing.count += 1
+      existing.sessionIds.push(session.id)
+    } else {
+      map.set(value, { count: 1, sessionIds: [session.id] })
+    }
+  }
+
+  return Array.from(map.entries())
+    .map(([category, { count, sessionIds }]) => ({ category, count, sessionIds }))
+    .sort((a, b) => b.count - a.count)
+}
+
+interface DimensionRollupsSectionProps {
+  sessions: CallSession[] | null | undefined
+  clientId: string
+}
+
+export function DimensionRollupsSection({ sessions, clientId }: DimensionRollupsSectionProps) {
+  const allSessions = sessions ?? []
+  if (allSessions.length === 0) return null
+
+  const objectionRollup = buildCategoryRollup(allSessions, 'primary_objection_category')
+  const painRollup = buildCategoryRollup(allSessions, 'primary_pain_category')
+
+  const hasRollupData = objectionRollup.length > 0 || painRollup.length > 0
+
+  return (
+    <Section
+      title="Dimension Rollups"
+      subtitle="Category frequency across all calls for this lead"
+      defaultOpen={hasRollupData}
+      data-testid="dimension-rollups-section"
+    >
+      {!hasRollupData ? (
+        <div className="space-y-3">
+          <Empty message="No dimension summary data available yet." />
+          <div>
+            <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">All Calls</p>
+            <div className="space-y-1">
+              {allSessions.map((session) => (
+                <div key={session.id} className="flex items-center gap-3 text-sm">
+                  <span className="text-ink-3 text-xs font-mono">
+                    {session.started_at ? new Date(session.started_at).toLocaleDateString() : '—'}
+                  </span>
+                  <Link
+                    to={`/app/${clientId}/calls/${session.id}`}
+                    data-testid="rollup-call-link"
+                    className="text-xs text-teal hover:underline"
+                  >
+                    View analysis →
+                  </Link>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {/* Objection rollup */}
+          {objectionRollup.length > 0 && (
+            <div>
+              <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Objections by Category</p>
+              <div className="space-y-1">
+                {objectionRollup.map(({ category, count, sessionIds }) => (
+                  <div
+                    key={category}
+                    data-testid="objection-rollup-row"
+                    className="flex items-center gap-3 rounded-md border border-line bg-pearl px-3 py-2"
+                  >
+                    <span className="text-xs font-mono text-ink-2 flex-1">{category}</span>
+                    <span className="text-xs font-mono text-ink font-medium w-8 text-right">{count}</span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {sessionIds.map((sid) => (
+                        <Link
+                          key={sid}
+                          to={`/app/${clientId}/calls/${sid}`}
+                          data-testid="rollup-call-link"
+                          className="text-[10px] text-teal hover:underline font-mono"
+                        >
+                          →
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Pain rollup */}
+          {painRollup.length > 0 && (
+            <div>
+              <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Pain Points by Category</p>
+              <div className="space-y-1">
+                {painRollup.map(({ category, count, sessionIds }) => (
+                  <div
+                    key={category}
+                    data-testid="pain-rollup-row"
+                    className="flex items-center gap-3 rounded-md border border-line bg-pearl px-3 py-2"
+                  >
+                    <span className="text-xs font-mono text-ink-2 flex-1">{category}</span>
+                    <span className="text-xs font-mono text-ink font-medium w-8 text-right">{count}</span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {sessionIds.map((sid) => (
+                        <Link
+                          key={sid}
+                          to={`/app/${clientId}/calls/${sid}`}
+                          data-testid="rollup-call-link"
+                          className="text-[10px] text-teal hover:underline font-mono"
+                        >
+                          →
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </Section>
+  )
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Section D: Call history (right column)
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -892,6 +1045,12 @@ export function LeadDetailPage() {
 
           {/* Section C: Qora memory */}
           <MemorySection lead={lead} />
+
+          {/* Section D-bis: Dimension rollup counts */}
+          <DimensionRollupsSection
+            sessions={sessions}
+            clientId={clientId ?? ''}
+          />
 
           {/* Section E: CRM / Airtable */}
           <CRMSection lead={lead} clientId={clientId ?? ''} />

@@ -1,0 +1,130 @@
+/**
+ * dimension-labels — Unit tests for resolveLabel()
+ *
+ * Spec: openspec/changes/post-call-analysis-bi-friendly/specs/dimension-label-registry/spec.md
+ *
+ * Tests cover:
+ * - Known code 'es' locale returns Spanish label
+ * - Known code 'en' locale returns English label
+ * - Unknown code falls back to the code itself (no error)
+ * - Empty code falls back to empty string (no error)
+ * - Codes do not contain localized text (stable English identifiers in keys)
+ * - DIMENSION_LABELS does not expose any Spanish strings at the code level
+ *
+ * TDD Layer: Unit (pure function, no side effects, no mocks needed)
+ */
+
+import { describe, it, expect } from 'vitest'
+import { resolveLabel, DIMENSION_LABELS } from './dimension-labels'
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Scenario: Spanish client sees Spanish display labels
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('resolveLabel — Spanish locale', () => {
+  it('returns Spanish label for current_provider in es', () => {
+    const result = resolveLabel('current_provider', 'es')
+    // Should be a Spanish label, NOT the code
+    expect(result).not.toBe('current_provider')
+    expect(result.length).toBeGreaterThan(0)
+  })
+
+  it('returns Spanish label for price in es', () => {
+    const result = resolveLabel('price', 'es')
+    expect(result).toBe('Precio')
+  })
+
+  it('returns Spanish label for service_quality in es', () => {
+    const result = resolveLabel('service_quality', 'es')
+    expect(result).not.toBe('service_quality')
+    expect(result.length).toBeGreaterThan(0)
+  })
+
+  it('returns Spanish label for active_comparison in es', () => {
+    const result = resolveLabel('active_comparison', 'es')
+    expect(result).not.toBe('active_comparison')
+    expect(result.length).toBeGreaterThan(0)
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Scenario: English client sees English display labels
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('resolveLabel — English locale', () => {
+  it('returns English label for current_provider in en', () => {
+    const result = resolveLabel('current_provider', 'en')
+    expect(result).toBe('Resistance from current provider')
+  })
+
+  it('returns English label for price in en', () => {
+    const result = resolveLabel('price', 'en')
+    expect(result).toBe('Price')
+  })
+
+  it('returns different labels for es vs en', () => {
+    const es = resolveLabel('current_provider', 'es')
+    const en = resolveLabel('current_provider', 'en')
+    // Spanish and English labels must differ
+    expect(es).not.toBe(en)
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Scenario: Missing label falls back to code
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('resolveLabel — fallback behavior', () => {
+  it('falls back to the code when code is not in registry', () => {
+    const result = resolveLabel('unknown_code_xyz', 'es')
+    expect(result).toBe('unknown_code_xyz')
+  })
+
+  it('falls back to the code for unknown code in English locale', () => {
+    const result = resolveLabel('no_such_dimension', 'en')
+    expect(result).toBe('no_such_dimension')
+  })
+
+  it('does not throw when code is not in registry', () => {
+    expect(() => resolveLabel('completely_unknown', 'es')).not.toThrow()
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Scenario: Analytics codes are stable English identifiers (not localized)
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('DIMENSION_LABELS — keys are stable English codes', () => {
+  it('all registry keys are lowercase_underscore English identifiers', () => {
+    const keys = Object.keys(DIMENSION_LABELS)
+    expect(keys.length).toBeGreaterThan(0)
+    for (const key of keys) {
+      // Must match stable code pattern: lowercase letters, digits, underscores
+      expect(key).toMatch(/^[a-z0-9_]+$/)
+    }
+  })
+
+  it('registry contains at minimum es and en for each entry', () => {
+    const keys = Object.keys(DIMENSION_LABELS)
+    expect(keys.length).toBeGreaterThan(0)
+    for (const key of keys) {
+      const entry = DIMENSION_LABELS[key]
+      expect(entry).toHaveProperty('es')
+      expect(entry).toHaveProperty('en')
+      expect(typeof entry.es).toBe('string')
+      expect(typeof entry.en).toBe('string')
+      expect(entry.es.length).toBeGreaterThan(0)
+      expect(entry.en.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('objection dimension codes present: current_provider, price', () => {
+    expect(DIMENSION_LABELS).toHaveProperty('current_provider')
+    expect(DIMENSION_LABELS).toHaveProperty('price')
+  })
+
+  it('pain dimension codes present: service_quality, bad_experience', () => {
+    expect(DIMENSION_LABELS).toHaveProperty('service_quality')
+    expect(DIMENSION_LABELS).toHaveProperty('bad_experience')
+  })
+})

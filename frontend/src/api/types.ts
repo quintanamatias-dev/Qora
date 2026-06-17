@@ -247,6 +247,13 @@ export interface CallAnalysis {
   analysis_status: string
   analysis_error: string | null
   analyzed_at: string
+  // BI-friendly denormalized columns (PR 2 — post-call-analysis-bi-friendly)
+  // Populated from JSON arrays at write time; indexed for GROUP BY queries.
+  primary_objection_category: string | null
+  primary_pain_category: string | null
+  objections_count: number | null
+  pain_points_count: number | null
+  service_issues_count: number | null
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
