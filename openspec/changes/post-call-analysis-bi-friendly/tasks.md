@@ -58,6 +58,6 @@ Review first: shared contracts (`crm_parity`, labels), then UI rendering. Do not
 
 ## Verification
 
-- [ ] V.1 Run backend verification after each backend PR: `cd backend && python3 -m pytest tests/ -q`.
-- [ ] V.2 Run relevant frontend test command for PR 3 using the project package script discovered during implementation.
-- [ ] V.3 Confirm no `.atl` files, application implementation outside the active PR scope, or unrelated artifacts changed.
+- [x] V.1 Run backend verification after each backend PR: `cd backend && python3 -m pytest tests/ -q`.
+- [x] V.2 Run relevant frontend test command for PR 3 using the project package script discovered during implementation.
+- [x] V.3 Confirm no `.atl` files, application implementation outside the active PR scope, or unrelated artifacts changed.

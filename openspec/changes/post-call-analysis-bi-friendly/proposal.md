@@ -155,7 +155,7 @@ CRM parity/sync is a **cross-cutting concern** that applies to two distinct surf
 | `backend/app/calls/models.py` | Modified | Add 5 denormalized columns to `CallAnalysis` |
 | `backend/app/summarizer.py` | Modified | Populate denormalized columns in `_upsert_call_analysis()` |
 | `backend/app/analytics/service.py` | Modified | Use indexed columns for primary/count queries |
-| `backend/migrations/` | New | Alembic migration for 5 new columns |
+| `backend/scripts/migrate_bi_columns.py` | New | Idempotent SQLite migration script for 5 new columns |
 | `frontend/` (call detail view) | Modified | Display normalized values + evidence; distinguish applied_to_qora vs crm_verified |
 | `backend/app/labels/` (new or config) | New | Client-language label registry for dimension/category codes |
 | `backend/app/analytics/crm_parity.py` (new or module) | New | Shared CRM parity resolution logic for lead-level and call-level surfaces |
@@ -279,7 +279,7 @@ Dimensions that mutate lead state (data corrections, profile facts) write to lea
 ## Dependencies
 
 - No external dependencies
-- Alembic migration tooling (already in use)
+- Existing idempotent SQLite migration script pattern under `backend/scripts/`
 - Existing `lead_custom_fields` table (already used by data corrections for `age`, `car_make`, etc.)
 - Frontend call detail view refactor requires design alignment before implementation
 - CRM parity shared module must exist before either Quote Readiness or Data Corrections surfaces implement sync indicators

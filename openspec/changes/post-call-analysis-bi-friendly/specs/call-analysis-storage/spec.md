@@ -20,7 +20,7 @@ The `call_analyses` table MUST include the following five denormalized columns:
 
 All five columns MUST be nullable. A `null` value means no data in that dimension for this call — not zero.
 
-An Alembic migration MUST create these columns. Indexes MUST be added on `primary_objection_category` and `primary_pain_category`.
+An idempotent Qora migration script MUST create these columns. Indexes MUST be added on `primary_objection_category` and `primary_pain_category`.
 
 #### Scenario: Call with objections and pain points
 
