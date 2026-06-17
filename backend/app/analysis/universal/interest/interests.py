@@ -17,11 +17,35 @@ from __future__ import annotations
 from typing import Literal
 
 from openai import AsyncOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.analysis.universal.interest.catalog import NEED_TAGS, PRODUCT_CATALOG
 
 DEFAULT_LANGUAGE = "Spanish"
+
+# Fallback tag for any need that is not in the NEED_TAGS allowlist.
+_OTHER_NEED_TAG = "other"
+_NEED_TAGS_SET = frozenset(NEED_TAGS)
+
+
+def _normalize_need_tags(needs: list[str]) -> list[str]:
+    """Normalize a needs list to the NEED_TAGS allowlist (pure function).
+
+    Any tag NOT in NEED_TAGS is replaced with the ``other`` fallback. The result
+    is de-duplicated while preserving first-seen order so that multiple invalid
+    near-duplicate tags (e.g. ``"buscando alternativas"``, ``"viendo precios"``)
+    collapse to a single ``other`` entry instead of inflating the list.
+
+    This is the BI-friendly controlled-output guarantee: after validation every
+    emitted need tag is guaranteed to be in the catalog, so arbitrary free-form
+    near-duplicates can never be stored or aggregated.
+    """
+    normalized: list[str] = []
+    for tag in needs:
+        mapped = tag if tag in _NEED_TAGS_SET else _OTHER_NEED_TAG
+        if mapped not in normalized:
+            normalized.append(mapped)
+    return normalized
 
 # ---------------------------------------------------------------------------
 # Pydantic models
@@ -52,6 +76,18 @@ class InterestItem(BaseModel):
     confidence: Literal["low", "medium", "high"] = Field(
         description="Confidence that the interest was genuinely expressed"
     )
+
+    @field_validator("needs", mode="after")
+    @classmethod
+    def _enforce_need_tags_allowlist(cls, needs: list[str]) -> list[str]:
+        """Normalize need tags to the NEED_TAGS allowlist.
+
+        Runs AFTER the ``max_length=3`` field constraint, so a raw list of more
+        than 3 items still fails validation. Any tag outside NEED_TAGS becomes
+        ``other`` and the result is de-duplicated, preventing arbitrary free-form
+        near-duplicates from surviving (spec: call-analysis-dimensions).
+        """
+        return _normalize_need_tags(needs)
 
 
 class InterestsAxis(BaseModel):

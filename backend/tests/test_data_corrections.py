@@ -285,8 +285,8 @@ def test_data_corrections_axis_empty_by_default() -> None:
     assert axis.corrections == []
 
 
-def test_correctable_fields_registry_has_all_8_fields() -> None:
-    """CORRECTABLE_FIELDS MUST contain all 8 allowed fields."""
+def test_correctable_fields_registry_has_all_9_fields() -> None:
+    """CORRECTABLE_FIELDS MUST contain all 9 allowed fields (zona added in PR 1)."""
     from app.analysis.universal.data_corrections import CORRECTABLE_FIELDS
 
     expected = {
@@ -298,6 +298,7 @@ def test_correctable_fields_registry_has_all_8_fields() -> None:
         "current_insurance",
         "email",
         "age",
+        "zona",  # Added: post-call-analysis-bi-friendly PR 1
     }
     assert (
         set(CORRECTABLE_FIELDS.keys()) == expected

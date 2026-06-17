@@ -560,6 +560,126 @@ async def test_name_correction_still_writes_to_lead_orm(cf_corr_db):
         )
 
 
+async def test_zona_correction_writes_to_custom_fields(cf_corr_db):
+    """Correction for zona MUST upsert to lead_custom_fields with field_key='zona'.
+
+    Blocker (fresh review): zona tests proved registry config but NOT persistence.
+    This exercises the summarizer custom-field write path end-to-end and asserts
+    field_key='zona' is upserted to lead_custom_fields. zona has storage='custom_field'
+    and no lead_attr column, so the custom_field write is the ONLY persistence path.
+
+    Spec: zona-data-correction — zona is a correctable field stored in lead_custom_fields.
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.leads.lead_custom_fields_service import get_all as get_custom_fields
+    from app.analysis.universal.data_corrections import DataCorrectionsAxis, DataCorrection
+
+    session_id = await _make_cf_session(
+        cf_corr_db,
+        turns=[("agent", "¿De qué zona es?"), ("user", "Vivo en Palermo")],
+    )
+
+    analysis = _base_cf_analysis()
+    mock_client = _make_cf_mock_client(analysis)
+
+    zona_correction = DataCorrectionsAxis(
+        corrections=[
+            DataCorrection(
+                field="zona",
+                current_value=None,
+                corrected_value="Palermo",
+                confidence=0.92,
+                evidence="Vivo en Palermo",
+                applied=True,
+            )
+        ]
+    )
+
+    async def _mock_pipeline(*args, **kwargs):
+        return zona_correction
+
+    with (
+        patch(
+            "app.summarizer._get_openai_client",
+            return_value=(mock_client, "gpt-4o-mini"),
+        ),
+        patch(
+            "app.summarizer.run_data_corrections_pipeline",
+            side_effect=_mock_pipeline,
+        ),
+    ):
+        assert cf_corr_db.async_session_factory is not None
+        async with cf_corr_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    # Verify: lead_custom_fields must have field_key 'zona' = "Palermo"
+    async with cf_corr_db.async_session_factory() as db:
+        cf = await get_custom_fields(db, "cf-corr-lead-001", "quintana-seguros")
+        assert "zona" in cf, (
+            "field_key 'zona' must be upserted to lead_custom_fields after correction"
+        )
+        assert cf["zona"] == "Palermo", (
+            f"zona correction must write 'Palermo' to lead_custom_fields, got {cf.get('zona')!r}"
+        )
+
+
+async def test_zona_correction_triangulate_zona_sur(cf_corr_db):
+    """Triangulation: a different zona value ('zona sur') also upserts to lead_custom_fields.
+
+    Different input → same persistence behavior, proving the write path is not
+    hardcoded to one value.
+    """
+    from app.summarizer import generate_summary_and_facts
+    from app.leads.lead_custom_fields_service import get_all as get_custom_fields
+    from app.analysis.universal.data_corrections import DataCorrectionsAxis, DataCorrection
+
+    session_id = await _make_cf_session(
+        cf_corr_db,
+        turns=[("agent", "¿De qué zona?"), ("user", "Soy de zona sur")],
+    )
+
+    analysis = _base_cf_analysis()
+    mock_client = _make_cf_mock_client(analysis)
+
+    zona_correction = DataCorrectionsAxis(
+        corrections=[
+            DataCorrection(
+                field="zona",
+                current_value=None,
+                corrected_value="zona sur",
+                confidence=0.88,
+                evidence="Soy de zona sur",
+                applied=True,
+            )
+        ]
+    )
+
+    async def _mock_pipeline(*args, **kwargs):
+        return zona_correction
+
+    with (
+        patch(
+            "app.summarizer._get_openai_client",
+            return_value=(mock_client, "gpt-4o-mini"),
+        ),
+        patch(
+            "app.summarizer.run_data_corrections_pipeline",
+            side_effect=_mock_pipeline,
+        ),
+    ):
+        assert cf_corr_db.async_session_factory is not None
+        async with cf_corr_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with cf_corr_db.async_session_factory() as db:
+        cf = await get_custom_fields(db, "cf-corr-lead-001", "quintana-seguros")
+        assert cf.get("zona") == "zona sur", (
+            f"zona must be 'zona sur' in lead_custom_fields after correction, got {cf.get('zona')!r}"
+        )
+
+
 async def test_custom_field_correction_also_dual_writes_to_lead_orm(cf_corr_db):
     """DUAL-WRITE: car_make correction writes to BOTH lead_custom_fields AND Lead.car_make column.
 

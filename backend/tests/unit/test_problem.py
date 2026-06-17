@@ -26,7 +26,8 @@ _VALID_CATEGORIES = [
     "lack_of_clarity",
     "new_need",
     "risk_exposure",
-    "comparison",
+    # "comparison" REMOVED — post-call-analysis-bi-friendly PR 1.
+    # Comparison behavior routes to interests as COMPARANDO_OPCIONES, not pain_points.
     "deadline",
     "dissatisfaction",
     "other",
@@ -59,8 +60,8 @@ def _make_pain_point(**overrides):
 
 
 @pytest.mark.parametrize("category", _VALID_CATEGORIES)
-def test_pain_point_accepts_all_11_categories(category):
-    """PainPoint model accepts each of the 11 valid category values."""
+def test_pain_point_accepts_all_10_categories(category):
+    """PainPoint model accepts each of the 10 valid category values (comparison removed)."""
     from app.analysis.universal.problem import PainPoint
 
     pp = PainPoint(**_make_pain_point(category=category))
@@ -68,11 +69,19 @@ def test_pain_point_accepts_all_11_categories(category):
 
 
 def test_pain_point_rejects_invalid_category():
-    """PainPoint raises ValidationError for a category not in the 11 valid values."""
+    """PainPoint raises ValidationError for a category not in the 10 valid values."""
     from app.analysis.universal.problem import PainPoint
 
     with pytest.raises(ValidationError):
         PainPoint(**_make_pain_point(category="unknown_cat"))
+
+
+def test_pain_point_rejects_comparison_after_pr1():
+    """'comparison' MUST NOT be a valid PainPointCategory (removed in PR 1)."""
+    from app.analysis.universal.problem import PainPoint
+
+    with pytest.raises(ValidationError):
+        PainPoint(**_make_pain_point(category="comparison"))
 
 
 # ---------------------------------------------------------------------------
@@ -278,8 +287,8 @@ def test_dimension_dict_contract():
 
 
 @pytest.mark.parametrize("category", _VALID_CATEGORIES)
-def test_prompt_contains_all_11_categories(category):
-    """DIMENSION['prompt'] contains each of the 11 category strings verbatim."""
+def test_prompt_contains_all_10_categories(category):
+    """DIMENSION['prompt'] contains each of the 10 category strings verbatim (comparison removed)."""
     from app.analysis.universal.problem import DIMENSION
 
     assert category in DIMENSION["prompt"], f"Prompt is missing category: {category}"

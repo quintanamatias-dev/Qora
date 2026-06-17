@@ -47,6 +47,9 @@ _EXPECTED_NEEDS = [
     "financiacion",
     "comparar_con_actual",
     "renovacion_proxima",
+    # post-call-analysis-bi-friendly PR 1: added for comparison signal + other fallback
+    "COMPARANDO_OPCIONES",
+    "other",
 ]
 
 
@@ -90,11 +93,11 @@ def test_product_catalog_contains_all_9_products(product):
     assert product in PRODUCT_CATALOG, f"PRODUCT_CATALOG is missing: {product}"
 
 
-def test_need_tags_contains_exactly_8_needs():
-    """NEED_TAGS must contain exactly the 8 need tags from Issue #51."""
+def test_need_tags_contains_exactly_10_needs():
+    """NEED_TAGS must contain exactly 10 need tags (8 original + COMPARANDO_OPCIONES + other)."""
     from app.analysis.universal.interest.catalog import NEED_TAGS
 
-    assert len(NEED_TAGS) == 8
+    assert len(NEED_TAGS) == 10
 
 
 @pytest.mark.parametrize("need", _EXPECTED_NEEDS)

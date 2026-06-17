@@ -51,4 +51,8 @@ NEED_TAGS: list[str] = [
     "financiacion",  # Lead needs financing / installment options
     "comparar_con_actual",  # Lead wants to compare with their current policy
     "renovacion_proxima",  # Lead's policy is expiring soon
+    # post-call-analysis-bi-friendly PR 1: comparison behavior reclassified from
+    # pain_points to interests. Use COMPARANDO_OPCIONES for shopping-around signals.
+    "COMPARANDO_OPCIONES",  # Lead is actively comparing options / shopping around
+    "other",  # Fallback for valid interests that match no specific allowlist tag
 ]

@@ -189,6 +189,26 @@ class CorrectableField:
     storage: str = "lead_attr"  # 'lead_attr' | 'custom_field'
 
 
+# ---------------------------------------------------------------------------
+# ADR: CORRECTABLE_FIELDS config-driven registry path
+#
+# CURRENT STATE: hardcoded dict below (8 → 9 fields). This is the interim
+# implementation. The authoritative long-term design calls for a config-driven
+# registry with three input sources:
+#
+#   1. Basic lead fields Qora may update from transcript evidence
+#      (zona, age, current_insurance, name, phone, email)
+#   2. Client CRM/CSV custom fields — any updatable field the client integration
+#      exposes (resolved at client-config load time)
+#   3. Quote/readiness required fields — fields the client expects Qora to
+#      collect or correct before a quote is ready
+#
+# The hardcoded 'zona' entry below is FLAGGED as interim. When the config-driven
+# registry ships, per-client configurable fields replace this dict.
+#
+# post-call-analysis-bi-friendly (PR 1): adds 'zona' as the 9th entry.
+# ---------------------------------------------------------------------------
+
 # Registry — hardcoded today, designed to be per-client configurable in future.
 # CRM_FUTURE: populate crm_field per client when CRM sync activates.
 # dynamic-lead-fields WU-4: storage='custom_field' for business-specific fields;
@@ -248,6 +268,16 @@ CORRECTABLE_FIELDS: dict[str, CorrectableField] = {
         type="str",
         crm_field=None,
         validator=None,
+        storage="custom_field",
+    ),
+    # INTERIM: 'zona' is hardcoded per ADR above. Future config-driven registry
+    # will make this per-client configurable. No validator initially — permissive:
+    # any non-empty string accepted (no format constraint or allowlist in Phase 1).
+    "zona": CorrectableField(
+        lead_attr="zona",
+        type="str",
+        crm_field=None,
+        validator=None,  # Permissive: non-empty string check via generic path
         storage="custom_field",
     ),
 }

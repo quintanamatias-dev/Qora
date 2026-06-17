@@ -29,7 +29,10 @@ PainPointCategory = Literal[
     "lack_of_clarity",
     "new_need",
     "risk_exposure",
-    "comparison",
+    # "comparison" REMOVED — post-call-analysis-bi-friendly PR 1.
+    # Comparison behavior (shopping around) is buying intent / action, not pain.
+    # Route comparison signals to interests with tag COMPARANDO_OPCIONES.
+    # Pre-change data that has comparison in pain_points is stale; do NOT modify it.
     "deadline",
     "dissatisfaction",
     "other",
@@ -84,10 +87,10 @@ _PROMPT_BODY = (
     "A pain point exists when the lead reveals a problem, dissatisfaction, fear, unmet need, or urgency "
     "that motivates their interest. Examples: cost concerns, missing coverage or capability, upcoming renewal "
     "deadlines, bad past experiences, lack of clarity about options, new needs they have identified, "
-    "risk exposure they want to address, active comparison with competitors, or general dissatisfaction.\n\n"
+    "risk exposure they want to address, or general dissatisfaction.\n\n"
     "For each pain point identify:\n"
     "- category: one of cost, coverage, renewal, bad_experience, lack_of_clarity, new_need, "
-    "risk_exposure, comparison, deadline, dissatisfaction, other\n"
+    "risk_exposure, deadline, dissatisfaction, other\n"
     "- description: brief 1-2 sentence description of the pain point\n"
     "- evidence: direct quote from the transcript that proves this pain point\n"
     "- urgency: how urgently the lead needs to resolve this pain — low, medium, high, or unknown\n"
@@ -102,7 +105,10 @@ _PROMPT_BODY = (
     "- Active objections to purchasing (price complaints during negotiation → use objections dimension)\n"
     "- General questions without underlying need\n"
     "- Polite expressions without substance\n"
-    "- Information requests that do not reveal a problem\n\n"
+    "- Information requests that do not reveal a problem\n"
+    "- Comparison behavior: a lead shopping around or requesting multiple quotes is NOT a pain point. "
+    "That is buying intent / action — route to the interests dimension as COMPARANDO_OPCIONES, "
+    "not to pain_points. 'comparison' is NOT a valid pain_points category.\n\n"
     "BOUNDARY RULES — avoid cross-dimension overlap:\n"
     "- bad_experience: a PAST bad experience that MOTIVATES the lead to search for alternatives IS a pain point "
     "(e.g. 'I had a terrible experience with insurance companies years ago'). "
