@@ -390,12 +390,28 @@ function MiscNotesCard({ miscNotes }: { miscNotes: Record<string, unknown> | Rec
 // ──────────────────────────────────────────────────────────────────────────────
 // Dimension: Data Corrections — honest CRM parity states
 //
-// Spec: applied_to_qora and crm_verified are SEPARATE states.
-// - applied_to_qora=true → show "Applied to Qora ✓"
-// - crm_sync_status="in_sync" → show "Verified in CRM ✓" (separately)
-// - crm_sync_status=null OR "unknown" → show NOTHING (no fake sync label)
-// - applied_to_qora=false → show pending/unapplied indicator
+// Layout: field → corrected value (clear, readable). No confidence percentage.
+//
+// Each card carries a small, honest sync indicator that reflects current state:
+// - applied (or applied_to_qora) = true  → "Applied to Qora ✓"
+// - applied = false                       → "Pending" (not applied)
+// - crm_sync_status="in_sync"             → "Verified in CRM ✓" (separate state)
+// - crm_sync_status="out_of_sync"         → "Out of sync with CRM"
+// - crm_sync_status null/"unknown"/"stale"→ "CRM unknown" (never a fake sync claim)
 // ──────────────────────────────────────────────────────────────────────────────
+
+// SyncDot — tiny inline status glyph for the correction sync indicator.
+// Kept as plain markup (no icon dependency) to stay compact and visually calm.
+function SyncDot({ tone }: { tone: 'on' | 'off' | 'unknown' }) {
+  const color =
+    tone === 'on' ? 'bg-teal' : tone === 'off' ? 'bg-coral' : 'bg-ink-4'
+  return (
+    <span
+      aria-hidden="true"
+      className={`inline-block h-1.5 w-1.5 rounded-full ${color}`}
+    />
+  )
+}
 
 function DataCorrectionsCard({ corrections }: { corrections: Record<string, unknown>[] | null }) {
   if (!corrections || corrections.length === 0) {
@@ -406,8 +422,12 @@ function DataCorrectionsCard({ corrections }: { corrections: Record<string, unkn
       {corrections.map((c, idx) => {
         const field = (c['field'] ?? '') as string
         const correctedVal = (c['corrected_value'] ?? c['new_value'] ?? c['new'] ?? '') as string
-        const confidence = c['confidence'] as number | undefined
-        const appliedToQora = c['applied_to_qora'] as boolean | undefined
+        // The per-call analysis payload uses `applied`; the analytics parity
+        // surface uses `applied_to_qora`. Honor both so the indicator is honest
+        // regardless of which surface produced the data.
+        const applied =
+          (c['applied'] as boolean | undefined) ??
+          (c['applied_to_qora'] as boolean | undefined)
         const crmSyncStatus = c['crm_sync_status'] as string | null | undefined
         const superseded = c['superseded'] === true
 
@@ -427,20 +447,16 @@ function DataCorrectionsCard({ corrections }: { corrections: Record<string, unkn
               {correctedVal && (
                 <span className="text-sm text-ink font-medium">→ {correctedVal}</span>
               )}
-              {confidence != null && (
-                <span className="text-xs text-ink-4 font-mono">
-                  {(confidence * 100).toFixed(0)}% confidence
-                </span>
-              )}
             </div>
 
-            {/* Parity status labels — honest, separate states */}
+            {/* Sync indicator — honest, always present, compact */}
             <div className="flex items-center gap-2 flex-wrap">
-              {appliedToQora === true ? (
+              {applied === true ? (
                 <span
                   data-testid="correction-applied-label"
                   className="inline-flex items-center gap-1 text-[10px] font-mono text-teal bg-teal-faint border border-teal-line px-2 py-0.5 rounded-full"
                 >
+                  <SyncDot tone="on" />
                   Applied to Qora ✓
                 </span>
               ) : (
@@ -448,12 +464,14 @@ function DataCorrectionsCard({ corrections }: { corrections: Record<string, unkn
                   data-testid="correction-pending-label"
                   className="inline-flex items-center gap-1 text-[10px] font-mono text-ink-3 bg-mist border border-line px-2 py-0.5 rounded-full"
                 >
+                  <SyncDot tone="unknown" />
                   Pending
                 </span>
               )}
 
-              {/* CRM sync status — only for real current parity states */}
-              {showCrmLabel && (
+              {/* CRM sync status — real current parity states only,
+                  otherwise an honest "CRM unknown" indicator (never fake sync). */}
+              {showCrmLabel ? (
                 <span
                   data-testid="correction-crm-label"
                   className={[
@@ -463,9 +481,19 @@ function DataCorrectionsCard({ corrections }: { corrections: Record<string, unkn
                       : 'text-coral bg-coral-faint border-coral-line',
                   ].join(' ')}
                 >
+                  <SyncDot tone={crmSyncStatus === 'in_sync' ? 'on' : 'off'} />
                   {crmSyncStatus === 'in_sync'
                     ? 'Verified in CRM ✓'
                     : 'Out of sync with CRM'}
+                </span>
+              ) : (
+                <span
+                  data-testid="correction-crm-unknown-label"
+                  className="inline-flex items-center gap-1 text-[10px] font-mono text-ink-3 bg-mist border border-line px-2 py-0.5 rounded-full"
+                  title="CRM sync state for this field is not known"
+                >
+                  <SyncDot tone="unknown" />
+                  CRM unknown
                 </span>
               )}
             </div>

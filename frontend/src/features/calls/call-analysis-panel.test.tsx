@@ -85,9 +85,10 @@ function makeCorrection(overrides: Record<string, unknown> = {}): Record<string,
   return {
     field: 'zona',
     corrected_value: 'Palermo',
-    confidence: 0.92,
     evidence: 'sí, vivo en Palermo',
-    applied_to_qora: true,
+    // `applied` is the per-call analysis field; `applied_to_qora` is the
+    // analytics-parity alias. Both map to the same honest "Applied" state.
+    applied: true,
     crm_sync_status: null,
     ...overrides,
   }
@@ -331,23 +332,26 @@ describe('CallAnalysisPanel — DataCorrectionsCard CRM parity states', () => {
     expect(screen.getByTestId('correction-applied-label')).toBeInTheDocument()
   })
 
-  it('does NOT show CRM sync label when crm_sync_status=null', () => {
+  it('does NOT show a current CRM sync label when crm_sync_status=null', () => {
     const analysis = makeAnalysis({
       data_corrections: [makeCorrection({ applied_to_qora: true, crm_sync_status: null })],
     })
     render(<CallAnalysisPanel analysis={analysis} />)
 
-    // No CRM sync indicator should appear
+    // No fake in-sync / out-of-sync claim should appear...
     expect(screen.queryByTestId('correction-crm-label')).not.toBeInTheDocument()
+    // ...but an honest "CRM unknown" indicator must be present instead.
+    expect(screen.getByTestId('correction-crm-unknown-label')).toBeInTheDocument()
   })
 
-  it('does NOT show CRM sync label when crm_sync_status="unknown"', () => {
+  it('shows an honest "CRM unknown" indicator when crm_sync_status="unknown"', () => {
     const analysis = makeAnalysis({
       data_corrections: [makeCorrection({ applied_to_qora: true, crm_sync_status: 'unknown' })],
     })
     render(<CallAnalysisPanel analysis={analysis} />)
 
     expect(screen.queryByTestId('correction-crm-label')).not.toBeInTheDocument()
+    expect(screen.getByTestId('correction-crm-unknown-label')).toBeInTheDocument()
   })
 
   it('shows both labels as distinct states when applied=true AND crm_sync_status=in_sync', () => {
@@ -360,18 +364,18 @@ describe('CallAnalysisPanel — DataCorrectionsCard CRM parity states', () => {
     expect(screen.getByTestId('correction-crm-label')).toBeInTheDocument()
   })
 
-  it('does NOT show "Applied" label when applied_to_qora=false', () => {
+  it('does NOT show "Applied" label when not applied', () => {
     const analysis = makeAnalysis({
-      data_corrections: [makeCorrection({ applied_to_qora: false, crm_sync_status: null })],
+      data_corrections: [makeCorrection({ applied: false, crm_sync_status: null })],
     })
     render(<CallAnalysisPanel analysis={analysis} />)
 
     expect(screen.queryByTestId('correction-applied-label')).not.toBeInTheDocument()
   })
 
-  it('shows unapplied/pending indicator when applied_to_qora=false', () => {
+  it('shows unapplied/pending indicator when not applied', () => {
     const analysis = makeAnalysis({
-      data_corrections: [makeCorrection({ applied_to_qora: false, crm_sync_status: null })],
+      data_corrections: [makeCorrection({ applied: false, crm_sync_status: null })],
     })
     render(<CallAnalysisPanel analysis={analysis} />)
 
@@ -388,6 +392,68 @@ describe('CallAnalysisPanel — DataCorrectionsCard CRM parity states', () => {
     expect(screen.getByText(/Palermo/)).toBeInTheDocument()
     // The field name must also appear
     expect(screen.getByText(/zona/)).toBeInTheDocument()
+  })
+
+  it('does NOT render a confidence percentage on the correction card', () => {
+    const analysis = makeAnalysis({
+      data_corrections: [makeCorrection({ confidence: 1.0 })],
+    })
+    render(<CallAnalysisPanel analysis={analysis} />)
+
+    expect(screen.queryByText(/confidence/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/100%/)).not.toBeInTheDocument()
+  })
+
+  it('honors the per-call `applied` field for the Applied-to-Qora indicator', () => {
+    // Real per-call analysis payload uses `applied` (not `applied_to_qora`).
+    const analysis = makeAnalysis({
+      data_corrections: [{ field: 'car_make', corrected_value: 'Volkswagen', applied: true }],
+    })
+    render(<CallAnalysisPanel analysis={analysis} />)
+
+    expect(screen.getByTestId('correction-applied-label')).toBeInTheDocument()
+  })
+
+  it('falls back to `applied_to_qora` when the `applied` key is absent', () => {
+    // Analytics-parity payloads omit `applied` entirely and carry only
+    // `applied_to_qora`. The nullish fallback must still surface the
+    // Applied-to-Qora indicator (not the Pending state) in that case.
+    const analysis = makeAnalysis({
+      data_corrections: [
+        { field: 'zona', corrected_value: 'Palermo', applied_to_qora: true },
+      ],
+    })
+    render(<CallAnalysisPanel analysis={analysis} />)
+
+    expect(screen.getByTestId('correction-applied-label')).toBeInTheDocument()
+    expect(screen.queryByTestId('correction-pending-label')).not.toBeInTheDocument()
+  })
+
+  it('lets an explicit `applied: false` win over `applied_to_qora: true` (Pending)', () => {
+    // Precedence: the per-call `applied` field is primary. An explicit
+    // `applied: false` is a real signal and must NOT be overridden by a truthy
+    // `applied_to_qora` alias — the card shows Pending, not Applied.
+    const analysis = makeAnalysis({
+      data_corrections: [
+        { field: 'zona', corrected_value: 'Palermo', applied: false, applied_to_qora: true },
+      ],
+    })
+    render(<CallAnalysisPanel analysis={analysis} />)
+
+    expect(screen.getByTestId('correction-pending-label')).toBeInTheDocument()
+    expect(screen.queryByTestId('correction-applied-label')).not.toBeInTheDocument()
+  })
+
+  it('always renders a sync indicator on each correction card', () => {
+    // Even with no CRM info, a card must carry an honest sync indicator —
+    // either a real parity label or the "CRM unknown" badge, never nothing.
+    const analysis = makeAnalysis({
+      data_corrections: [{ field: 'car_make', corrected_value: 'Volkswagen', applied: true }],
+    })
+    render(<CallAnalysisPanel analysis={analysis} />)
+
+    expect(screen.getByTestId('correction-crm-unknown-label')).toBeInTheDocument()
+    expect(screen.getByTestId('correction-crm-unknown-label').textContent).toMatch(/CRM unknown/i)
   })
 })
 

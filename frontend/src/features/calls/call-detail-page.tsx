@@ -25,6 +25,7 @@ export function CallDetailPage() {
   const {
     data: analysis,
     isLoading,
+    isError,
   } = useCallAnalysis(sessionId ?? '')
 
   const resolvedSessionId = sessionId ?? ''
@@ -78,7 +79,18 @@ export function CallDetailPage() {
         {/* Analysis column */}
         <section>
           <h2 className="text-base font-semibold text-ink mb-3">Analysis</h2>
-          <CallAnalysisPanel analysis={analysis} isLoading={isLoading} />
+          {isError ? (
+            <div
+              data-testid="analysis-error"
+              className="py-6 text-center border border-error/30 bg-error/5 rounded-md"
+            >
+              <p className="text-error text-sm">
+                Failed to load analysis. Please try again.
+              </p>
+            </div>
+          ) : (
+            <CallAnalysisPanel analysis={analysis} isLoading={isLoading} />
+          )}
         </section>
       </div>
     </div>

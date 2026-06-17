@@ -8,6 +8,7 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { ApiError } from './client'
 import { fetchMetrics, fetchCallSessions, fetchTranscript, fetchCallAnalysis } from './calls'
 import { fetchLeads, fetchLead, fetchLeadContextPreview } from './leads'
 import { fetchClient, fetchClients, createClient, updateClient, deactivateClient } from './clients'
@@ -155,7 +156,10 @@ export function useTranscript(sessionId: string) {
 /**
  * useCallAnalysis — fetches the full analysis (all 12 dimensions) for a session
  * queryKey: ['call-analysis', sessionId]
- * Returns undefined (not an error) when session has no analysis (404 is caught gracefully).
+ *
+ * Returns null (not an error) ONLY when the session genuinely has no analysis (404).
+ * Any other failure (500, network, etc.) is rethrown so the UI surfaces a real
+ * error state instead of masquerading a server fault as "No analysis available".
  */
 export function useCallAnalysis(sessionId: string) {
   return useQuery<CallAnalysis | null>({
@@ -163,9 +167,15 @@ export function useCallAnalysis(sessionId: string) {
     queryFn: async () => {
       try {
         return await fetchCallAnalysis(sessionId)
-      } catch {
-        // 404 means no analysis yet — return null instead of throwing
-        return null
+      } catch (err) {
+        // 404 means no analysis yet — return null instead of throwing.
+        // Every other status (e.g. 500 from a backend/DB fault) MUST surface
+        // as an error so we never silently hide existing analysis behind an
+        // empty state.
+        if (err instanceof ApiError && err.status === 404) {
+          return null
+        }
+        throw err
       }
     },
     enabled: Boolean(sessionId),

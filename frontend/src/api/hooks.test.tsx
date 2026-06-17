@@ -11,8 +11,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useMetrics, useLeads, useLead, useLeadContextPreview, useCallSessions, useTranscript, useClient } from './hooks'
+import { useMetrics, useLeads, useLead, useLeadContextPreview, useCallSessions, useTranscript, useClient, useCallAnalysis } from './hooks'
 import type { CallMetricsResponse, Lead, CallSession, SessionTranscript, Client, LeadContextPreview } from './types'
+import { ApiError } from './client'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Mocks — stub the fetchers so hooks don't make real HTTP calls
@@ -22,6 +23,7 @@ vi.mock('./calls', () => ({
   fetchMetrics: vi.fn(),
   fetchCallSessions: vi.fn(),
   fetchTranscript: vi.fn(),
+  fetchCallAnalysis: vi.fn(),
 }))
 
 vi.mock('./leads', () => ({
@@ -363,6 +365,74 @@ describe('useMetrics — staleTime', () => {
 
     // fetchCount must still be 1 — staleTime prevented the second fetch
     expect(fetchCount).toBe(1)
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
+// useCallAnalysis — must distinguish "no analysis" (404) from real server errors
+//
+// Bug: when the backend 500'd (e.g. a missing DB column), the hook swallowed the
+// error and returned null, so the UI rendered "No analysis available" even though
+// analysis data existed. A 404 means no analysis; any other status is a real error
+// and must surface as isError instead of masquerading as empty.
+// ──────────────────────────────────────────────────────────────────────────────
+describe('useCallAnalysis', () => {
+  it('returns analysis data when the fetch resolves', async () => {
+    vi.mocked(callsApi.fetchCallAnalysis).mockResolvedValue({
+      session_id: 'session-1',
+      summary: 'Lead is interested',
+      analysis_status: 'ok',
+      analyzed_at: '2026-01-01T00:00:00Z',
+    } as never)
+
+    function Comp() {
+      const { data, isLoading } = useCallAnalysis('session-1')
+      if (isLoading) return <span>loading</span>
+      return <span data-testid="summary">{data?.summary}</span>
+    }
+
+    render(<Wrapper><Comp /></Wrapper>)
+    await waitFor(() => expect(screen.getByTestId('summary')).toHaveTextContent('Lead is interested'))
+    expect(callsApi.fetchCallAnalysis).toHaveBeenCalledWith('session-1')
+  })
+
+  it('returns null (not an error) when the session has no analysis (404)', async () => {
+    vi.mocked(callsApi.fetchCallAnalysis).mockRejectedValue(
+      new ApiError(404, { detail: 'No analysis available for this call session' })
+    )
+
+    function Comp() {
+      const { data, isError, isLoading } = useCallAnalysis('session-1')
+      if (isLoading) return <span>loading</span>
+      return (
+        <span data-testid="state">
+          {isError ? 'error' : data === null ? 'null' : 'data'}
+        </span>
+      )
+    }
+
+    render(<Wrapper><Comp /></Wrapper>)
+    await waitFor(() => expect(screen.getByTestId('state')).toHaveTextContent('null'))
+  })
+
+  it('surfaces a real server error (500) instead of masquerading as empty', async () => {
+    vi.mocked(callsApi.fetchCallAnalysis).mockRejectedValue(
+      new ApiError(500, { detail: 'no such column: call_analyses.primary_objection_category' })
+    )
+
+    function Comp() {
+      const { data, isError, isLoading } = useCallAnalysis('session-1')
+      if (isLoading) return <span>loading</span>
+      return (
+        <span data-testid="state">
+          {isError ? 'error' : data === null ? 'null' : 'data'}
+        </span>
+      )
+    }
+
+    render(<Wrapper><Comp /></Wrapper>)
+    // A 500 must NOT be swallowed into null — it must surface as an error state.
+    await waitFor(() => expect(screen.getByTestId('state')).toHaveTextContent('error'))
   })
 })
 
