@@ -9,7 +9,7 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { fetchMetrics, fetchCallSessions, fetchTranscript, fetchCallAnalysis } from './calls'
-import { fetchLeads, fetchLead } from './leads'
+import { fetchLeads, fetchLead, fetchLeadContextPreview } from './leads'
 import { fetchClient, fetchClients, createClient, updateClient, deactivateClient } from './clients'
 import { fetchAgents, createAgent, updateAgent, deactivateAgent, makeAgentDefault } from './agents'
 import {
@@ -53,6 +53,7 @@ import type {
   DisconnectResult,
   AirtableFieldsResponse,
   SaveMappingsPayload,
+  LeadContextPreview,
 } from './types'
 
 interface MetricsParams {
@@ -94,6 +95,20 @@ export function useLead(clientId: string, leadId: string) {
     queryKey: ['lead', clientId, leadId],
     queryFn: () => fetchLead(clientId, leadId),
     enabled: Boolean(clientId) && Boolean(leadId),
+  })
+}
+
+/**
+ * useLeadContextPreview — fetches the next-call context preview for a lead (Phase A)
+ * queryKey: ['lead-context-preview', clientId, leadId]
+ * Only loads when leadId is explicitly provided (not auto-loaded with lead).
+ */
+export function useLeadContextPreview(clientId: string, leadId: string, enabled = true) {
+  return useQuery<LeadContextPreview>({
+    queryKey: ['lead-context-preview', clientId, leadId],
+    queryFn: () => fetchLeadContextPreview(clientId, leadId),
+    enabled: Boolean(clientId) && Boolean(leadId) && enabled,
+    staleTime: 30_000,
   })
 }
 

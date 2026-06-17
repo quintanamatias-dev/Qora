@@ -6,13 +6,16 @@ Provides endpoints for:
 - POST /api/v1/leads — create lead
 - PATCH /api/v1/leads/{id}/status — transition status
 - GET /api/v1/leads/{id}/history — call history for lead
+- GET /api/v1/leads/{id}/context-preview — structured next-call context preview (Phase A)
 
 Covers: T2.4 — GET/PATCH endpoints scope queries by client_id.
 """
 
 from __future__ import annotations
 
+import structlog
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
@@ -31,6 +34,8 @@ from app.leads.service import (
     transition_lead_status,
 )
 from app.scheduler.models import ScheduledCall
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 
@@ -111,6 +116,56 @@ async def _batch_next_scheduled_call_at(
     return {row.lead_id: row.earliest for row in result}
 
 
+def _compute_quote_fields(
+    custom_fields: dict[str, str],
+    crm_config: Any | None,
+) -> list[dict]:
+    """Compute quote-readiness fields with fill status from CRM config metadata.
+
+    Quote-readiness source of truth is ``crm_config.quote_ready_fields`` (from
+    crm.yaml), NOT the per-field ``required`` flag on ``custom_fields`` defs.
+    These two can diverge: ``required`` describes write-time validation for the
+    capture_data tool, while ``quote_ready_fields`` lists exactly the fields that
+    must be present for a lead to be "quoted". The UI must label and count
+    readiness from ``quote_ready_fields``.
+
+    Each field dict is annotated with:
+    - label, field_type, required (kept for backward compat / write validation)
+    - in_quote_ready_fields (bool): field is part of the quote-readiness set
+    - source ("quote_ready" | "crm_provided"): where the field belongs in the UI
+    - filled (bool): whether current_value is non-null/non-empty
+    - current_value: value stored in lead_custom_fields, or None
+
+    Returns list of field dicts sorted: quote-ready unfilled first, then
+    quote-ready filled, then additional CRM-provided fields.
+    When crm_config is None, returns empty list (no metadata available).
+    """
+    if crm_config is None:
+        return []
+
+    quote_ready_keys = set(getattr(crm_config, "quote_ready_fields", None) or [])
+
+    result: list[dict] = []
+    for fd in crm_config.custom_fields:
+        current_value = custom_fields.get(fd.field_key)
+        filled = bool(current_value)
+        in_quote_ready = fd.field_key in quote_ready_keys
+        result.append({
+            "field_key": fd.field_key,
+            "label": fd.label,
+            "field_type": fd.field_type,
+            "required": fd.required,
+            "in_quote_ready_fields": in_quote_ready,
+            "source": "quote_ready" if in_quote_ready else "crm_provided",
+            "filled": filled,
+            "current_value": current_value,
+        })
+
+    # Sort: quote-ready unfilled first, then quote-ready filled, then the rest
+    result.sort(key=lambda f: (not f["in_quote_ready_fields"], f["filled"]))
+    return result
+
+
 def _lead_to_dict(
     lead,
     *,
@@ -118,13 +173,14 @@ def _lead_to_dict(
     profile_facts: list | None = None,
     interest_history: list | None = None,
     custom_fields: dict[str, str] | None = None,
+    crm_config: Any | None = None,
 ) -> dict:
     """Serialize a Lead ORM object to a response dict.
 
     Includes Phase 2 CRM fields (summary_last_call, interest_level, etc.),
     Phase 7 enrichment field (next_scheduled_call_at), Issue #36 additive
-    fields (profile_facts, interest_history), and WU-6 custom_fields dict.
-    All optional fields are null-safe — returned as null if not set.
+    fields (profile_facts, interest_history), WU-6 custom_fields dict,
+    and Phase A fields: email, external_crm_id, external_lead_id, quote_fields.
 
     Args:
         lead: Lead ORM instance.
@@ -136,6 +192,8 @@ def _lead_to_dict(
             If None, defaults to empty list in the response.
         custom_fields: Pre-fetched {field_key: field_value} from lead_custom_fields (WU-6).
             If None, defaults to empty dict in the response.
+        crm_config: Optional CRMConfig instance for quote_fields metadata.
+            If None, quote_fields will be empty (no crm.yaml for this client).
     """
     # Group profile_facts by namespace prefix (strip trailing colon)
     grouped_profile_facts: dict = {}
@@ -147,11 +205,15 @@ def _lead_to_dict(
             value = row.get("fact_value") or fact_key[len(namespace) + 1 :]
             grouped_profile_facts.setdefault(namespace, []).append(value)
 
+    cf = custom_fields if custom_fields is not None else {}
+
     return {
         "id": lead.id,
         "client_id": lead.client_id,
         "name": lead.name,
         "phone": lead.phone,
+        # Phase A: email now included in detail response
+        "email": getattr(lead, "email", None),
         "status": lead.status,
         "notes": lead.notes,
         "call_count": lead.call_count,
@@ -184,7 +246,12 @@ def _lead_to_dict(
             for row in (interest_history or [])
         ],
         # WU-6: dynamic custom fields from lead_custom_fields table
-        "custom_fields": custom_fields if custom_fields is not None else {},
+        "custom_fields": cf,
+        # Phase A: external CRM linkage — null if lead not synced
+        "external_crm_id": getattr(lead, "external_crm_id", None),
+        "external_lead_id": getattr(lead, "external_lead_id", None),
+        # Phase A: quote fields with fill status from CRM metadata
+        "quote_fields": _compute_quote_fields(cf, crm_config),
     }
 
 
@@ -235,7 +302,8 @@ async def get_lead_by_id(
     """Get a single lead by its UUID.
 
     Returns:
-        Lead object with all fields including accumulated profile_facts and interest_history.
+        Lead object with all fields including accumulated profile_facts, interest_history,
+        email, external CRM IDs, and annotated quote_fields (Phase A).
 
     Raises:
         404: If lead_id does not exist.
@@ -250,11 +318,20 @@ async def get_lead_by_id(
     # WU-6: load custom fields scoped to this lead's client
     custom_fields = await cf_service.get_all(session, lead_id, lead.client_id)
 
+    # Phase A: load CRM config for quote_fields metadata (best-effort, None if no crm.yaml)
+    crm_config = None
+    try:
+        from app.integrations.crm_config import CRMConfigLoader
+        crm_config = CRMConfigLoader.load(lead.client_id)
+    except Exception:
+        logger.warning("lead_detail_crm_config_load_failed", lead_id=lead_id, client_id=lead.client_id)
+
     return _lead_to_dict(
         lead,
         profile_facts=profile_facts,
         interest_history=interest_history,
         custom_fields=custom_fields,
+        crm_config=crm_config,
     )
 
 
@@ -377,4 +454,153 @@ async def get_lead_history(
             }
             for cs in sessions
         ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase A: Context preview endpoint
+# ---------------------------------------------------------------------------
+
+
+def _tool_names_from_definitions(tools: "list[dict] | None") -> list[str] | None:
+    """Extract enabled tool names from build_voice_context() tool definitions.
+
+    build_voice_context() returns fully-built OpenAI tool definitions
+    (the same ones the agent receives). For the preview we surface only the
+    operator-relevant tool names. Returns None when no tools are enabled so the
+    UI can distinguish "no tools" from "empty tool list".
+    """
+    if not tools:
+        return None
+    names: list[str] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function")
+        name = None
+        if isinstance(fn, dict):
+            name = fn.get("name")
+        if not name:
+            name = tool.get("name")
+        if name:
+            names.append(str(name))
+    return names or None
+
+
+@router.get("/{lead_id}/context-preview")
+async def get_lead_context_preview(
+    lead_id: str,
+    session: AsyncSession = Depends(get_db_session),
+):
+    """Return structured next-call context preview for a lead (Phase A).
+
+    Shows the exact non-system-prompt context the agent will receive on next call.
+
+    Source of truth: this endpoint builds the preview from the SAME runtime path
+    the voice agent uses — get_default_agent() + build_voice_context(). The literal
+    context blocks (lead_profile, misc_notes, skills_index, tools, model config) are
+    read directly off the resulting VoiceSessionContext so the preview cannot diverge
+    from what the agent actually receives. Only the system prompt is redacted — its
+    presence is indicated but its content is never returned.
+
+    call_history / is_returning_caller / call_number come from build_memory_context()
+    — the same memory layer the runtime injects into the prompt at initiation.
+
+    Returns:
+        ContextPreview dict with:
+          - system_prompt_present: bool (presence only — content never returned)
+          - lead_profile: str (the [CONTEXTO DEL LEAD] block, or "" if none)
+          - call_history: str (last 3 completed sessions with summaries, or "" if none)
+          - misc_notes: str (operational notes from extracted_facts, or "" if none)
+          - skills_index: str | None (Available Skills block, or None if no registry)
+          - tools: list[str] | None (enabled tool names, or None)
+          - model: str | None (LLM model id from runtime context, or None on error)
+          - temperature: float | None (sampling temperature from runtime context)
+          - max_tokens: int | None (max tokens from runtime context)
+          - is_returning_caller: bool
+          - call_number: int (call_count + 1 — next call index)
+          - error: str | None (set when agent/context assembly failed gracefully)
+
+    Raises:
+        404: If lead_id does not exist.
+    """
+    lead = await get_lead(session, lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail={"error": "lead not found"})
+
+    # Memory layer — call_history, is_returning_caller, call_number. This is the
+    # same builder the runtime uses at initiation, so these values match the agent.
+    from app.memory import build_memory_context
+
+    memory_ctx = await build_memory_context(session, lead)
+
+    # Build the preview from the runtime context path so it cannot diverge from
+    # what the agent receives. Defaults are returned when no agent / build fails.
+    lead_profile: str = ""
+    misc_notes: str = ""
+    skills_index: str | None = None
+    tools: list[str] | None = None
+    system_prompt_present: bool = False
+    model: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    agent_error: str | None = None
+
+    try:
+        from app.tenants.service import get_client, get_default_agent
+        from app.voice.context import build_voice_context
+
+        agent = await get_default_agent(session, lead.client_id)
+        client = await get_client(session, lead.client_id)
+
+        if agent is None:
+            agent_error = "No active agent found for this client — context preview unavailable"
+        elif client is None:
+            agent_error = "Client not found — context preview unavailable"
+        else:
+            # Build context via the identical runtime factory. The literal,
+            # non-system-prompt fields below are read straight off the result.
+            ctx = await build_voice_context(
+                agent=agent,
+                lead=lead,
+                db=session,
+                client=client,
+            )
+
+            # system prompt: presence only — content is redacted from the preview.
+            system_prompt_present = bool(ctx.system_prompt and ctx.system_prompt.strip())
+
+            # Literal non-system-prompt context — faithful to runtime assembly.
+            # When the prompt template injects lead vars, the agent does NOT receive
+            # a separate lead_profile block (it's substituted into the prompt). Mirror
+            # that here so the preview reflects what the agent actually gets.
+            lead_profile = "" if ctx.skip_lead_profile_in_assembly else (ctx.lead_profile or "")
+            misc_notes = ctx.misc_notes or ""
+            skills_index = ctx.skills_index
+            tools = _tool_names_from_definitions(ctx.tools)
+
+            # Model config — operator-relevant runtime config. Only real values from
+            # the built context are returned; nothing is invented.
+            model = ctx.model
+            temperature = ctx.temperature
+            max_tokens = ctx.max_tokens
+
+    except Exception as exc:
+        agent_error = f"Context assembly failed: {exc}"
+        logger.warning("context_preview_assembly_failed", lead_id=lead_id, error=str(exc))
+
+    return {
+        "lead_id": lead_id,
+        "system_prompt_present": system_prompt_present,
+        "lead_profile": lead_profile,
+        "call_history": memory_ctx["call_history"],
+        "misc_notes": misc_notes,
+        "skills_index": skills_index,
+        "tools": tools,
+        "model": model,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "is_returning_caller": memory_ctx["is_returning_caller"],
+        "call_number": memory_ctx["call_number"],
+        "error": agent_error,
     }

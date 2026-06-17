@@ -9,7 +9,7 @@
  *   - Empty: "No calls yet"
  */
 
-import { useParams, useNavigate } from 'react-router'
+import { useParams, Link } from 'react-router'
 import type { CallSession, CallOutcome } from '@/api/types'
 import { Badge } from '@/design/components/badge'
 import { formatDuration } from '@/lib/format-duration'
@@ -60,7 +60,6 @@ export function CallHistoryList({
   onToggleSession,
 }: CallHistoryListProps) {
   const { clientId } = useParams<{ clientId: string }>()
-  const navigate = useNavigate()
 
   if (sessions.length === 0) {
     return (
@@ -81,61 +80,61 @@ export function CallHistoryList({
 
         return (
           <div key={session.id} className="border border-line rounded-md">
-            {/* Session row — clickable */}
+            {/* Session row — clickable, wraps gracefully on narrow right column */}
             <div
               data-testid="call-history-item"
               onClick={() => onToggleSession(session.id)}
-              className="flex items-center gap-4 px-4 py-3 cursor-pointer hover:bg-pearl/50 transition-colors rounded-t-md"
+              className="px-4 py-3 cursor-pointer hover:bg-pearl/50 transition-colors rounded-t-md space-y-1.5"
             >
-              {/* Date */}
-              <span className="text-sm text-ink min-w-[140px]">
-                {formatCallDate(session.started_at)}
-              </span>
-
-              {/* Duration */}
-              <span className="text-sm text-ink-3 min-w-[60px]">
-                {session.duration_seconds != null
-                  ? formatDuration(session.duration_seconds)
-                  : '—'}
-              </span>
-
-              {/* Status badge */}
-              <Badge status={statusBadge}>
-                {session.status}
-              </Badge>
-
-              {/* Phase 5: Call outcome badge (replaces/augments legacy outcome) */}
-              {callOutcome ? (
-                <CallOutcomeBadge outcome={callOutcome} />
-              ) : session.outcome ? (
-                <span className="text-xs text-ink-3">
-                  {session.outcome}
+              {/* Top row: date · duration · status · outcome · expand toggle */}
+              <div className="flex items-center gap-2 flex-wrap min-w-0">
+                {/* Date */}
+                <span className="text-sm text-ink shrink-0">
+                  {formatCallDate(session.started_at)}
                 </span>
-              ) : null}
 
-              {/* Summary snippet */}
-              {summarySnippet && (
-                <span className="text-xs text-ink-3 flex-1 truncate">
-                  {summarySnippet}
+                {/* Duration */}
+                <span className="text-sm text-ink-3 shrink-0">
+                  {session.duration_seconds != null
+                    ? formatDuration(session.duration_seconds)
+                    : '—'}
                 </span>
-              )}
 
-              {/* Detail link + expand indicator */}
-              <div className="ml-auto flex items-center gap-3">
-                <button
-                  type="button"
-                  data-testid="call-detail-link"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    navigate(`/app/${clientId}/calls/${session.id}`)
-                  }}
-                  className="text-xs text-teal hover:underline"
-                >
-                  View detail
-                </button>
-                <span className="text-ink-3 text-xs">
+                {/* Status badge */}
+                <Badge status={statusBadge}>
+                  {session.status}
+                </Badge>
+
+                {/* Call outcome badge */}
+                {callOutcome ? (
+                  <CallOutcomeBadge outcome={callOutcome} />
+                ) : session.outcome ? (
+                  <span className="text-xs text-ink-3 shrink-0">
+                    {session.outcome}
+                  </span>
+                ) : null}
+
+                {/* Expand indicator — pushed to end */}
+                <span className="text-ink-3 text-xs ml-auto shrink-0">
                   {isExpanded ? '▲' : '▼'}
                 </span>
+              </div>
+
+              {/* Bottom row: optional summary snippet + always-present detail link */}
+              <div className="flex items-center gap-3 min-w-0">
+                {summarySnippet && (
+                  <span className="text-xs text-ink-3 flex-1 truncate min-w-0">
+                    {summarySnippet}
+                  </span>
+                )}
+                <Link
+                  to={`/app/${clientId}/calls/${session.id}`}
+                  data-testid="call-detail-link"
+                  onClick={(e) => e.stopPropagation()}
+                  className="text-xs text-teal hover:underline shrink-0 ml-auto"
+                >
+                  View detail →
+                </Link>
               </div>
             </div>
 

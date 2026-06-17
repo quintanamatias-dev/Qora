@@ -22,6 +22,7 @@ import type {
   Agent,
   IntegrationConfig,
   AvailableIntegration,
+  LeadContextPreview,
 } from '../../src/api/types'
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -44,6 +45,7 @@ const leadsFixture: Lead[] = [
     client_id: 'demo-client',
     name: 'John Doe',
     phone: '+1-555-0100',
+    email: 'john@example.com',
     status: 'new',
     notes: null,
     call_count: 2,
@@ -62,12 +64,84 @@ const leadsFixture: Lead[] = [
     next_scheduled_call_at: null,
     // WU-6: custom fields from lead_custom_fields table
     custom_fields: { car_make: 'Toyota', car_model: 'Camry', car_year: '2022', current_insurance: 'State Farm' },
+    // Phase A: external CRM linkage
+    external_crm_id: 'recABC123',
+    external_lead_id: 1001,
+    // Phase A: annotated quote fields — required missing first, then required filled,
+    // then optional (CRM-provided context). Mirrors the backend _compute_quote_fields sort order.
+    quote_fields: [
+      {
+        field_key: 'car_model',
+        label: 'Car Model',
+        field_type: 'string',
+        required: true,
+        in_quote_ready_fields: true,
+        source: 'quote_ready',
+        filled: false,
+        current_value: null,
+      },
+      {
+        field_key: 'car_make',
+        label: 'Car Make',
+        field_type: 'string',
+        required: true,
+        in_quote_ready_fields: true,
+        source: 'quote_ready',
+        filled: true,
+        current_value: 'Toyota',
+      },
+      {
+        // zona IS configured for quoting but unfilled — this is exactly the case
+        // the zona mismatch warning targets (location fact in memory, no structured zona).
+        field_key: 'zona',
+        label: 'Zone',
+        field_type: 'string',
+        required: true,
+        in_quote_ready_fields: true,
+        source: 'quote_ready',
+        filled: false,
+        current_value: null,
+      },
+      {
+        // current_insurance is CRM-provided context — NOT a field the agent should collect.
+        // Absent from quote_ready_fields → in_quote_ready_fields:false marks it as
+        // "additional CRM-provided data" in the UI.
+        field_key: 'current_insurance',
+        label: 'Current Insurance',
+        field_type: 'string',
+        required: false,
+        in_quote_ready_fields: false,
+        source: 'crm_provided',
+        filled: true,
+        current_value: 'State Farm',
+      },
+    ],
+    // Issue #36: profile_facts from post-call analysis pipeline.
+    // Stored as namespace → [JSON strings from ProfileFactUpdate serialization].
+    // lifestyle facts may contain location-like text triggering zona mismatch warning.
+    profile_facts: {
+      profile: [
+        JSON.stringify({
+          category: 'lifestyle',
+          fact: 'Lives in Vicente López, prefers northern GBA',
+          evidence: 'Mencionó que vive en Vicente López al confirmar el domicilio',
+          confidence: 'high',
+        }),
+        JSON.stringify({
+          category: 'communication_preference',
+          fact: 'Prefers afternoon callbacks',
+          evidence: 'Pidió que lo llamen después de las 14',
+          confidence: 'medium',
+        }),
+      ],
+    },
   },
   {
     id: 'lead-2',
     client_id: 'demo-client',
     name: 'Jane Smith',
     phone: '+1-555-0200',
+    email: null,
     status: 'interested',
     notes: 'Callback requested',
     call_count: 1,
@@ -86,8 +160,100 @@ const leadsFixture: Lead[] = [
     next_scheduled_call_at: null,
     // WU-6: no custom fields
     custom_fields: {},
+    // Phase A: no external CRM link
+    external_crm_id: null,
+    external_lead_id: null,
+    quote_fields: [],
+  },
+  {
+    // lead-3: a client whose crm.yaml does NOT configure a `zona` quote field.
+    // It still has a location-like profile fact, so this proves the zona mismatch
+    // warning stays hidden when there is no zona field to be "not set".
+    id: 'lead-3',
+    client_id: 'no-zona-client',
+    name: 'No Zona Client',
+    phone: '+1-555-0300',
+    email: null,
+    status: 'new',
+    notes: null,
+    call_count: 1,
+    last_called_at: '2026-01-14T09:00:00Z',
+    created_at: '2026-01-06T00:00:00Z',
+    updated_at: null,
+    summary_last_call: null,
+    objections_heard: null,
+    interest_level: null,
+    extracted_facts: null,
+    do_not_call: false,
+    next_action: null,
+    next_action_at: null,
+    next_scheduled_call_at: null,
+    custom_fields: { car_make: 'Honda' },
+    external_crm_id: null,
+    external_lead_id: null,
+    // quote_ready set without `zona` — only car_make is configured for quoting.
+    quote_fields: [
+      {
+        field_key: 'car_make',
+        label: 'Car Make',
+        field_type: 'string',
+        required: true,
+        in_quote_ready_fields: true,
+        source: 'quote_ready',
+        filled: true,
+        current_value: 'Honda',
+      },
+    ],
+    // Location-like profile fact present — would trigger the warning if the guard
+    // were missing. With no zona field configured, the warning must NOT appear.
+    profile_facts: {
+      profile: [
+        JSON.stringify({
+          category: 'lifestyle',
+          fact: 'Lives in Vicente López, prefers northern GBA',
+          evidence: 'Mencionó que vive en Vicente López',
+          confidence: 'high',
+        }),
+      ],
+    },
   },
 ]
+
+// Phase A: context-preview fixtures keyed by leadId.
+// lead-1 is a returning caller with a present (redacted) system prompt and
+// fully-populated literal context blocks. lead-2 is a first call with sparse data.
+const contextPreviewFixtures: Record<string, LeadContextPreview> = {
+  'lead-1': {
+    lead_id: 'lead-1',
+    system_prompt_present: true,
+    lead_profile: '[CONTEXTO DEL LEAD]\nNombre: John Doe\nAuto: Toyota Camry 2022\nSeguro actual: State Farm',
+    call_history: 'Llamada del 10/01/2026: "Solicitó cotización para el Corolla"',
+    misc_notes: 'Prefers afternoon callbacks.',
+    skills_index: '## Available Skills\n- quote_assistant: helps build a quote',
+    tools: ['get_lead_details', 'capture_data'],
+    model: 'gpt-4o',
+    temperature: 0.7,
+    max_tokens: 300,
+    is_returning_caller: true,
+    call_number: 3,
+    error: null,
+  },
+  'lead-2': {
+    lead_id: 'lead-2',
+    system_prompt_present: true,
+    lead_profile: '',
+    call_history: '',
+    misc_notes: '',
+    skills_index: null,
+    tools: null,
+    model: 'gpt-4o',
+    temperature: 0.7,
+    max_tokens: 300,
+    is_returning_caller: false,
+    call_number: 1,
+    error: null,
+  },
+}
 
 const sessionsFixture: CallSession[] = [
   {
@@ -508,14 +674,25 @@ export const handlers = [
     return HttpResponse.json(metricsFixture)
   }),
 
-  // GET /api/v1/leads — returns fixture leads for demo-client
+  // GET /api/v1/leads — returns fixture leads scoped to the requested client_id,
+  // mirroring the backend list_leads tenant scoping.
   http.get('/api/v1/leads', ({ request }) => {
     const url = new URL(request.url)
     const clientId = url.searchParams.get('client_id')
     if (!clientId) {
       return HttpResponse.json({ detail: 'client_id required' }, { status: 422 })
     }
-    return HttpResponse.json(leadsFixture)
+    return HttpResponse.json(leadsFixture.filter((l) => l.client_id === clientId))
+  }),
+
+  // GET /api/v1/leads/:leadId/context-preview — Phase A next-call context preview
+  // NOTE: must come BEFORE /api/v1/leads/:leadId so the more specific path wins.
+  http.get('/api/v1/leads/:leadId/context-preview', ({ params }) => {
+    const preview = contextPreviewFixtures[params.leadId as string]
+    if (!preview) {
+      return HttpResponse.json({ detail: 'lead not found' }, { status: 404 })
+    }
+    return HttpResponse.json(preview)
   }),
 
   // GET /api/v1/leads/:leadId — returns single lead fixture

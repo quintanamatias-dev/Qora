@@ -11,11 +11,37 @@
 
 export type LeadStatus = 'new' | 'called' | 'quoted' | 'interested' | 'not_interested' | 'follow_up'
 
+// Phase A: Quote field with fill status (from CRM config metadata)
+//
+// Quote-readiness source of truth is the backend's quote_ready_fields (crm.yaml),
+// surfaced per-field as in_quote_ready_fields. The legacy `required` flag describes
+// capture_data write validation and can diverge from readiness — never use it to
+// decide what counts toward quoting in the UI.
+export interface QuoteField {
+  field_key: string
+  label: string
+  field_type: string
+  required: boolean
+  // True when this field is part of crm.yaml quote_ready_fields (readiness set).
+  in_quote_ready_fields: boolean
+  // "quote_ready" → counts toward quoting; "crm_provided" → additional known context.
+  source: 'quote_ready' | 'crm_provided'
+  filled: boolean
+  current_value: string | null
+}
+
+export interface InterestHistoryEntry {
+  interest_level: number
+  recorded_at: string | null
+}
+
 export interface Lead {
   id: string
   client_id: string
   name: string
   phone: string
+  // Phase A: email now included in detail response (null when not stored)
+  email?: string | null
   status: LeadStatus
   notes: string | null
   call_count: number
@@ -34,6 +60,36 @@ export interface Lead {
   next_scheduled_call_at: string | null
   // WU-6: dynamic custom fields from lead_custom_fields table
   custom_fields?: Record<string, string>
+  // Phase A: external CRM linkage (optional — not present on list responses)
+  external_crm_id?: string | null
+  external_lead_id?: number | null
+  // Phase A: annotated quote fields with fill status
+  quote_fields?: QuoteField[]
+  // Issue #36: accumulated profile facts by namespace, interest history
+  profile_facts?: Record<string, string[]>
+  interest_history?: InterestHistoryEntry[]
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Context Preview — Phase A
+// GET /api/v1/leads/{lead_id}/context-preview
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface LeadContextPreview {
+  lead_id: string
+  system_prompt_present: boolean
+  lead_profile: string
+  call_history: string
+  misc_notes: string
+  skills_index: string | null
+  tools: string[] | null
+  // Operator-relevant runtime model config — null when context assembly failed
+  model: string | null
+  temperature: number | null
+  max_tokens: number | null
+  is_returning_caller: boolean
+  call_number: number
+  error: string | null
 }
 
 export interface CreateLeadPayload {

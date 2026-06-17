@@ -11,8 +11,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useMetrics, useLeads, useLead, useCallSessions, useTranscript, useClient } from './hooks'
-import type { CallMetricsResponse, Lead, CallSession, SessionTranscript, Client } from './types'
+import { useMetrics, useLeads, useLead, useLeadContextPreview, useCallSessions, useTranscript, useClient } from './hooks'
+import type { CallMetricsResponse, Lead, CallSession, SessionTranscript, Client, LeadContextPreview } from './types'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Mocks — stub the fetchers so hooks don't make real HTTP calls
@@ -28,6 +28,7 @@ vi.mock('./leads', () => ({
   fetchLeads: vi.fn(),
   fetchLead: vi.fn(),
   createLead: vi.fn(),
+  fetchLeadContextPreview: vi.fn(),
 }))
 
 vi.mock('./clients', () => ({
@@ -74,6 +75,26 @@ const mockLead: Lead = {
   next_scheduled_call_at: null,
   // WU-6: custom fields
   custom_fields: {},
+  // Phase A
+  email: null,
+  external_crm_id: null,
+  external_lead_id: null,
+}
+
+const mockContextPreview: LeadContextPreview = {
+  lead_id: 'lead-1',
+  system_prompt_present: true,
+  lead_profile: '[CONTEXTO DEL LEAD]\nNombre: Jane Smith',
+  call_history: 'Llamada del 10/01/2026: "Interested"',
+  misc_notes: 'Prefers afternoon callbacks.',
+  skills_index: '## Available Skills\n- quote_assistant',
+  tools: ['get_lead_details', 'capture_data'],
+  model: 'gpt-4o',
+  temperature: 0.7,
+  max_tokens: 300,
+  is_returning_caller: true,
+  call_number: 3,
+  error: null,
 }
 
 const mockSession: CallSession = {
@@ -203,6 +224,39 @@ describe('useLead', () => {
     render(<Wrapper><Comp /></Wrapper>)
     await waitFor(() => expect(screen.getByTestId('name')).toHaveTextContent('Jane Smith'))
     expect(leadsApi.fetchLead).toHaveBeenCalledWith('demo-client', 'lead-1')
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
+// useLeadContextPreview — Phase A: lazy-loaded next-call context preview
+// ──────────────────────────────────────────────────────────────────────────────
+describe('useLeadContextPreview', () => {
+  it('returns the context preview from fetchLeadContextPreview when enabled', async () => {
+    vi.mocked(leadsApi.fetchLeadContextPreview).mockResolvedValue(mockContextPreview)
+
+    function Comp() {
+      const { data, isLoading } = useLeadContextPreview('demo-client', 'lead-1', true)
+      if (isLoading) return <span>loading</span>
+      return <span data-testid="model">{data?.model}</span>
+    }
+
+    render(<Wrapper><Comp /></Wrapper>)
+    await waitFor(() => expect(screen.getByTestId('model')).toHaveTextContent('gpt-4o'))
+    expect(leadsApi.fetchLeadContextPreview).toHaveBeenCalledWith('demo-client', 'lead-1')
+  })
+
+  it('does not fetch while disabled (lazy load gate)', async () => {
+    vi.mocked(leadsApi.fetchLeadContextPreview).mockResolvedValue(mockContextPreview)
+
+    function Comp() {
+      const { fetchStatus } = useLeadContextPreview('demo-client', 'lead-1', false)
+      return <span data-testid="status">{fetchStatus}</span>
+    }
+
+    render(<Wrapper><Comp /></Wrapper>)
+    await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('idle'))
+    // The fetcher must NOT be called while the preview is gated off.
+    expect(leadsApi.fetchLeadContextPreview).not.toHaveBeenCalled()
   })
 })
 

@@ -6,7 +6,7 @@
  */
 
 import { apiFetch } from './client'
-import type { Lead, CreateLeadPayload } from './types'
+import type { Lead, CreateLeadPayload, LeadContextPreview } from './types'
 
 /**
  * GET /api/v1/leads?client_id=<clientId>
@@ -38,4 +38,19 @@ export async function createLead(
     method: 'POST',
     body: JSON.stringify({ ...payload, client_id: clientId }),
   })
+}
+
+/**
+ * GET /api/v1/leads/:leadId/context-preview
+ * Returns structured next-call context preview for a lead (Phase A).
+ * Shows what the agent will literally receive — system prompt is not included,
+ * only its presence is indicated.
+ */
+export async function fetchLeadContextPreview(
+  _clientId: string,
+  leadId: string
+): Promise<LeadContextPreview> {
+  return apiFetch<LeadContextPreview>(
+    `/api/v1/leads/${encodeURIComponent(leadId)}/context-preview`
+  )
 }
