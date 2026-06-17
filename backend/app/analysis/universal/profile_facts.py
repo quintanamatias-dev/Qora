@@ -4,6 +4,9 @@ qora-profile-facts: Replaced flat list[str] facts with structured add/update/rem
 operations. ProfileFactsAxis now holds a list of ProfileFactUpdate items (max 5).
 The `run_profile_facts_pipeline()` standalone function is defined here (Phase 2).
 
+post-call-analysis-bi-friendly PR 2: Added EXCLUDED_STRUCTURED_FIELDS set and
+_filter_excluded_profile_facts() post-processing suppression (spec: profile-facts-exclusion).
+
 Locale-aware: `fact` and `evidence` are written in the client's configured
 analysis_language. `operation`, `category`, and `confidence` remain canonical codes.
 """
@@ -13,8 +16,13 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
+import logging
+import re
+
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 class ProfileFactCategory(str, Enum):
@@ -88,6 +96,130 @@ _CATEGORY_DESCRIPTIONS = {
 }
 
 DEFAULT_LANGUAGE = "Spanish"
+
+# ---------------------------------------------------------------------------
+# post-call-analysis-bi-friendly PR 2 — structured field exclusion
+# Spec: profile-facts-exclusion AD-4
+# ---------------------------------------------------------------------------
+
+EXCLUDED_STRUCTURED_FIELDS: frozenset[str] = frozenset(
+    {
+        "age",
+        "zona",
+        "car_make",
+        "car_model",
+        "car_year",
+        "current_insurance",
+        "name",
+        "phone",
+        "email",
+    }
+)
+
+# Regex patterns for structured field exclusion.
+# Each entry: (exclusion_reason, route_note, compiled_regex)
+# Patterns use word boundaries (\b) to avoid substring false positives.
+# Design: AD-4 — post-processing suppression; keeps boundary rules lightweight.
+_EXCLUSION_REGEX_PATTERNS: list[tuple[str, str, "re.Pattern[str]"]] = [
+    # Age fields: match "N años", "edad", "year old", "tengo N" (age statement)
+    (
+        "structured_field_exists",
+        "routed_to_corrections:age",
+        re.compile(r"\b(años|year\s+old|edad\b|tengo\s+\d)", re.IGNORECASE),
+    ),
+    # Zona / location: match "zona X", "vive en", "vivo en", "barrio", "localidad"
+    (
+        "structured_field_exists",
+        "routed_to_corrections:zona",
+        re.compile(
+            r"\b(zona\s+(sur|norte|oeste|este|centro|[a-záéíóúñ]+)|viv[eo]\s+en\s|"
+            r"barrio\b|localidad\b)",
+            re.IGNORECASE,
+        ),
+    ),
+    # Car fields: brand names and car-related terms
+    (
+        "structured_field_exists",
+        "routed_to_corrections:car",
+        re.compile(
+            r"\b(toyota|ford\b|chevrolet|volkswagen|renault|fiat\b|honda\b|peugeot|"
+            r"nissan|hyundai|kia\b|mazda\b|mitsubishi|bmw\b|mercedes|corolla|fiesta\b|"
+            r"golf\b|clio\b|sandero|veh[íi]culo\b)",
+            re.IGNORECASE,
+        ),
+    ),
+    # Current insurance: insurer names and insurance-related phrases
+    (
+        "structured_field_exists",
+        "routed_to_corrections:current_insurance",
+        re.compile(
+            r"\b(la\s+caja\b|federaci[oó]n\s+patronal|sancor\b|zurich\b|allianz\b|"
+            r"mapfre\b|galeno\b|swiss\s+medical|osde\b|seguro\s+(actual|en|con)\b|"
+            r"asegurad[oa]\s+(con|en)\b)",
+            re.IGNORECASE,
+        ),
+    ),
+    # Contact fields: email addresses, phone mentions, name statements
+    (
+        "structured_field_exists",
+        "routed_to_contact_fields",
+        re.compile(
+            r"(@|\b(tel[eé]fono|celular|n[uú]mero\s+de\s+tel|email\b|correo\b|"
+            r"su\s+nombre\s+es\b|se\s+llama\b))",
+            re.IGNORECASE,
+        ),
+    ),
+]
+
+
+def _filter_excluded_profile_facts(
+    updates: list["ProfileFactUpdate"],
+    *,
+    call_id: str | None = None,
+) -> tuple[list["ProfileFactUpdate"], list["ProfileFactUpdate"]]:
+    """Filter profile fact updates that correspond to known structured lead fields.
+
+    Applies regex-based exclusion on fact + evidence text using word boundaries
+    to avoid false-positive substring matches. If a pattern matches, the update
+    is suppressed and a structured audit log is emitted via logger.info
+    (AD-4 — internal QA/audit only, not user-visible).
+
+    Args:
+        updates: List of ProfileFactUpdate items from GPT or validation.
+        call_id: Source call ID for the audit log. Pass None if unavailable.
+
+    Returns:
+        Tuple of (allowed_updates, suppressed_updates).
+        allowed_updates: Updates that do NOT match any exclusion pattern.
+        suppressed_updates: Updates that were filtered out.
+    """
+    allowed: list[ProfileFactUpdate] = []
+    suppressed: list[ProfileFactUpdate] = []
+
+    for update in updates:
+        combined_text = f"{update.fact} {update.evidence}"
+        matched_reason: str | None = None
+
+        for reason, route, pattern in _EXCLUSION_REGEX_PATTERNS:
+            if pattern.search(combined_text):
+                matched_reason = reason
+                logger.info(
+                    "profile_fact_suppressed: category=%s reason=%s route=%s call_id=%s fact_preview=%r",
+                    str(update.category),
+                    reason,
+                    route,
+                    call_id,
+                    update.fact[:80] if update.fact else "",
+                )
+                break
+
+        if matched_reason is not None:
+            suppressed.append(update)
+        else:
+            allowed.append(update)
+
+    return allowed, suppressed
+
 
 _PIPELINE_SYSTEM_PROMPT = """\
 You are an expert at building a persistent personality profile from sales call transcripts.
@@ -204,6 +336,7 @@ async def run_profile_facts_pipeline(
     *,
     current_facts: list[dict] | None = None,
     language: str = DEFAULT_LANGUAGE,
+    call_id: str | None = None,
 ) -> ProfileFactsAxis:
     """Standalone async profile facts pipeline.
 
@@ -215,9 +348,12 @@ async def run_profile_facts_pipeline(
             Pass [] or None for the first call.
         language: Output language for the `fact` and `evidence` fields.
             `operation`, `category`, and `confidence` stay canonical English codes.
+        call_id: Source call session ID for suppression audit logging (AD-4).
+            Pass None if unavailable — log still emits but without call context.
 
     Returns:
-        ProfileFactsAxis with validated updates. Never raises — returns empty axis on failure.
+        ProfileFactsAxis with validated and excluded-filtered updates.
+        Never raises — returns empty axis on failure.
     """
     facts = current_facts or []
 
@@ -233,12 +369,20 @@ async def run_profile_facts_pipeline(
         )
         raw_axis: ProfileFactsAxis = response.choices[0].message.parsed
 
-        # Validate and filter updates against current facts
+        # Validate update/remove operations against current facts
         validated_updates = _validate_updates_against_current_facts(
             raw_axis.updates, facts
         )
 
-        return ProfileFactsAxis(updates=validated_updates)
+        # post-call-analysis-bi-friendly PR 2: apply structured field exclusion filter.
+        # Suppresses profile facts that duplicate known structured lead fields (age, zona,
+        # car fields, current_insurance, name, phone, email). Suppressed facts are logged
+        # for internal QA/audit via logger.info (AD-4 — not user-visible).
+        allowed_updates, _suppressed = _filter_excluded_profile_facts(
+            validated_updates, call_id=call_id
+        )
+
+        return ProfileFactsAxis(updates=allowed_updates)
 
     except Exception:
         # Profile facts are non-critical — return empty on any failure

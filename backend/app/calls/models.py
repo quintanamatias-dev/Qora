@@ -140,6 +140,15 @@ class CallAnalysis(Base):
     service_issues: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     profile_facts: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     commitment_signals: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    # post-call-analysis-bi-friendly PR 2 — 5 denormalized BI columns (AD-1/AD-2/AD-3)
+    # Populated by _upsert_call_analysis() in the same transaction as JSON arrays.
+    # Migration: backend/scripts/migrate_bi_columns.py (idempotent, adds + backfills).
+    primary_objection_category: Mapped[str | None] = mapped_column(String, nullable=True)
+    primary_pain_category: Mapped[str | None] = mapped_column(String, nullable=True)
+    objections_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pain_points_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    service_issues_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # DEPRECATED (qora-abandonment AD-4): abandonment_reason kept for backward compat,
     # receives NULL going forward. New records use was_abrupt + abandonment_trigger.
     abandonment_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -154,7 +163,12 @@ class CallAnalysis(Base):
     analysis_status: Mapped[str] = mapped_column(String, nullable=False, default="ok")
     analysis_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    __table_args__ = (Index("ix_call_analyses_classification", "classification"),)
+    __table_args__ = (
+        Index("ix_call_analyses_classification", "classification"),
+        # post-call-analysis-bi-friendly PR 2: B-tree indexes for BI GROUP BY / filter (AD-2)
+        Index("ix_ca_primary_objection_category", "primary_objection_category"),
+        Index("ix_ca_primary_pain_category", "primary_pain_category"),
+    )
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<CallAnalysis session={self.session_id!r} status={self.analysis_status!r}>"

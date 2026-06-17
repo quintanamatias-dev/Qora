@@ -354,6 +354,7 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
             lead_snapshot=lead_snapshot,
             client_rules=client_rules,
             analysis_language=analysis_language,
+            session_id=session_id,
         )
     except Exception as gpt_exc:
         error_msg = str(gpt_exc)
@@ -480,6 +481,7 @@ async def _call_gpt_summarize(
     lead_snapshot: "Any | None" = None,
     client_rules: "Any | None" = None,
     analysis_language: str = "Spanish",
+    session_id: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Run 6 universal dimensions, the 2-phase interest pipeline, profile facts pipeline,
     misc notes pipeline, data corrections pipeline, and post-analysis next_action pipeline.
@@ -507,6 +509,9 @@ async def _call_gpt_summarize(
         analysis_language: Output language for customer-facing text fields (summaries,
             descriptions, evidence, reasons, notes). Canonical enum/code fields stay in
             English regardless of this setting. Defaults to "Spanish" for backward compat.
+        session_id: Source call session ID, forwarded to run_profile_facts_pipeline as
+            call_id so profile-fact suppression audit logs carry the real call ID instead
+            of None. Pass None only when no call context exists.
 
     Returns:
         Tuple of (summary_text, extracted_facts_dict).
@@ -547,6 +552,7 @@ async def _call_gpt_summarize(
                 client,
                 current_facts=facts_list,
                 language=analysis_language,
+                call_id=session_id,
             ),
             run_misc_notes_pipeline(
                 transcript_text,
@@ -1429,6 +1435,35 @@ async def _upsert_call_analysis(
             for c in (facts.get("commitments") or {}).get("commitments") or []
         ]
     )
+    # post-call-analysis-bi-friendly PR 2 — 5 denormalized BI columns (AD-8)
+    # Derived from already-computed facts dict. Same transaction as JSON arrays (AD-1).
+    raw_objections_list = (facts.get("objections") or {}).get("objections") or []
+    raw_pain_list = identified_problem.get("pain_points") or []
+    raw_svc_list = (facts.get("service_issues") or {}).get("issues") or []
+
+    # primary_objection_category: category of the objection with is_primary=True
+    ca.primary_objection_category = next(
+        (
+            str(o.get("category"))
+            for o in raw_objections_list
+            if isinstance(o, dict) and o.get("is_primary") and o.get("category")
+        ),
+        None,
+    )
+    # primary_pain_category: category of the pain point with is_primary=True
+    ca.primary_pain_category = next(
+        (
+            str(p.get("category"))
+            for p in raw_pain_list
+            if isinstance(p, dict) and p.get("is_primary") and p.get("category")
+        ),
+        None,
+    )
+    # Counts — always an int (0 for empty lists), never null per spec (AD-3)
+    ca.objections_count = len(raw_objections_list) if isinstance(raw_objections_list, list) else 0
+    ca.pain_points_count = len(raw_pain_list) if isinstance(raw_pain_list, list) else 0
+    ca.service_issues_count = len(raw_svc_list) if isinstance(raw_svc_list, list) else 0
+
     # qora-abandonment: abandonment_reason is DEPRECATED (AD-4), set NULL for new records.
     # was_abrupt + abandonment_trigger are read from call_outcome dict.
     ca.abandonment_reason = None

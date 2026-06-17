@@ -34,14 +34,14 @@ Review first: backend extraction rules and tests. No schema/UI work in this PR.
 
 Review first: migration/backfill safety, then summarizer writes, then exclusion routing.
 
-- [ ] 2.1 **Test first:** Add migration tests for `backend/scripts/migrate_bi_columns.py`: idempotent double-run, 5 nullable columns, 2 indexes, JSON backfill correctness. Acceptance: `call-analysis-storage` denormalized column scenarios.
-- [ ] 2.2 Create `backend/scripts/migrate_bi_columns.py` using existing idempotent SQLite script pattern; add columns/indexes and backfill from `objections`, `pain_points`, `service_issues`. Depends on 2.1.
-- [ ] 2.3 **Test first:** Extend `backend/tests/unit/test_summarizer.py` for `_upsert_call_analysis()` atomic population of primary categories/counts, including empty objections. Acceptance: atomic population scenarios.
-- [ ] 2.4 Modify `backend/app/calls/models.py` and `backend/app/summarizer.py` to map and populate the five denormalized columns in the same transaction as JSON fields. Depends on 2.2, 2.3.
-- [ ] 2.5 **Test first:** Add/extend analytics service tests proving primary/count queries use indexed columns and do not require `json_each()` for new breakdowns. Acceptance: analytics service indexed-column scenario.
-- [ ] 2.6 Update `backend/app/analytics/service.py` to use `primary_objection_category`, `primary_pain_category`, and count columns for BI-friendly queries. Depends on 2.4, 2.5.
-- [ ] 2.7 **Test first:** Extend `backend/tests/unit/test_profile_facts_pipeline.py` and `backend/tests/integration/test_profile_facts_integration.py` for age, zona, vehicle, insurance, contact suppression, audit logging, and non-excluded passthrough. Acceptance: `profile-facts-exclusion` scenarios.
-- [ ] 2.8 Update `backend/app/analysis/universal/profile_facts.py` with `EXCLUDED_STRUCTURED_FIELDS`, prompt boundary rules, post-processing suppression, and structured `logger.info()` audit fields. Depends on 2.7.
+- [x] 2.1 **Test first:** Add migration tests for `backend/scripts/migrate_bi_columns.py`: idempotent double-run, 5 nullable columns, 2 indexes, JSON backfill correctness. Acceptance: `call-analysis-storage` denormalized column scenarios.
+- [x] 2.2 Create `backend/scripts/migrate_bi_columns.py` using existing idempotent SQLite script pattern; add columns/indexes and backfill from `objections`, `pain_points`, `service_issues`. Depends on 2.1.
+- [x] 2.3 **Test first:** Extend `backend/tests/unit/test_summarizer.py` for `_upsert_call_analysis()` atomic population of primary categories/counts, including empty objections. Acceptance: atomic population scenarios.
+- [x] 2.4 Modify `backend/app/calls/models.py` and `backend/app/summarizer.py` to map and populate the five denormalized columns in the same transaction as JSON fields. Depends on 2.2, 2.3.
+- [x] 2.5 **Test first:** Add/extend analytics service tests proving primary/count queries use indexed columns and do not require `json_each()` for new breakdowns. Acceptance: analytics service indexed-column scenario.
+- [x] 2.6 Update `backend/app/analytics/service.py` to use `primary_objection_category`, `primary_pain_category`, and count columns for BI-friendly queries. Depends on 2.4, 2.5.
+- [x] 2.7 **Test first:** Extend `backend/tests/unit/test_profile_facts_pipeline.py` and `backend/tests/integration/test_profile_facts_integration.py` for age, zona, vehicle, insurance, contact suppression, audit logging, and non-excluded passthrough. Acceptance: `profile-facts-exclusion` scenarios.
+- [x] 2.8 Update `backend/app/analysis/universal/profile_facts.py` with `EXCLUDED_STRUCTURED_FIELDS`, prompt boundary rules, post-processing suppression, and structured `logger.info()` audit fields. Depends on 2.7.
 
 ## PR 3 — Phase 5: Labels + Call Detail Inspection UI + CRM Parity (~180-240 lines)
 

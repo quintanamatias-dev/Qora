@@ -418,3 +418,184 @@ async def get_agent_stats(
         )
 
     return {"agents": agents}
+
+
+# ---------------------------------------------------------------------------
+# get_primary_objection_breakdown
+# post-call-analysis-bi-friendly PR 2: uses indexed primary_objection_category column
+# ---------------------------------------------------------------------------
+
+
+async def get_primary_objection_breakdown(
+    session: AsyncSession,
+    *,
+    client_id: str,
+    date_from: datetime,
+    date_to: datetime,
+    agent_id: str | None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Return breakdown of calls by primary_objection_category using indexed column.
+
+    Does NOT use json_each() — queries the denormalized primary_objection_category
+    column directly for BI-friendly GROUP BY performance (spec: AD-2).
+
+    Args:
+        session: Active async DB session.
+        client_id: Tenant filter.
+        date_from: Window start (UTC datetime).
+        date_to: Window end (UTC datetime).
+        agent_id: Optional agent filter.
+        limit: Max categories to return.
+
+    Returns:
+        dict with "breakdown": list of {category, count, rank} — excludes NULL rows.
+    """
+    stmt = (
+        select(
+            CallAnalysis.primary_objection_category,
+            func.count(CallAnalysis.id).label("cnt"),
+        )
+        .join(CallSession, CallSession.id == CallAnalysis.session_id)
+        .where(CallAnalysis.client_id == client_id)
+        .where(CallAnalysis.analyzed_at >= date_from)
+        .where(CallAnalysis.analyzed_at <= date_to)
+        .where(CallSession.merged_into_session_id.is_(None))
+        .where(CallAnalysis.primary_objection_category.is_not(None))
+        .group_by(CallAnalysis.primary_objection_category)
+        .order_by(func.count(CallAnalysis.id).desc())
+        .limit(limit)
+    )
+
+    if agent_id is not None:
+        stmt = stmt.where(CallSession.agent_id == agent_id)
+
+    rows = (await session.execute(stmt)).fetchall()
+
+    return {
+        "breakdown": [
+            {
+                "category": str(row.primary_objection_category),
+                "count": int(row.cnt),
+                "rank": rank,
+            }
+            for rank, row in enumerate(rows, start=1)
+        ]
+    }
+
+
+# ---------------------------------------------------------------------------
+# get_primary_pain_breakdown
+# post-call-analysis-bi-friendly PR 2: uses indexed primary_pain_category column
+# ---------------------------------------------------------------------------
+
+
+async def get_primary_pain_breakdown(
+    session: AsyncSession,
+    *,
+    client_id: str,
+    date_from: datetime,
+    date_to: datetime,
+    agent_id: str | None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Return breakdown of calls by primary_pain_category using indexed column.
+
+    Does NOT use json_each() — queries the denormalized primary_pain_category
+    column directly for BI-friendly GROUP BY performance (spec: AD-2).
+
+    Args:
+        session: Active async DB session.
+        client_id: Tenant filter.
+        date_from: Window start (UTC datetime).
+        date_to: Window end (UTC datetime).
+        agent_id: Optional agent filter.
+        limit: Max categories to return.
+
+    Returns:
+        dict with "breakdown": list of {category, count, rank} — excludes NULL rows.
+    """
+    stmt = (
+        select(
+            CallAnalysis.primary_pain_category,
+            func.count(CallAnalysis.id).label("cnt"),
+        )
+        .join(CallSession, CallSession.id == CallAnalysis.session_id)
+        .where(CallAnalysis.client_id == client_id)
+        .where(CallAnalysis.analyzed_at >= date_from)
+        .where(CallAnalysis.analyzed_at <= date_to)
+        .where(CallSession.merged_into_session_id.is_(None))
+        .where(CallAnalysis.primary_pain_category.is_not(None))
+        .group_by(CallAnalysis.primary_pain_category)
+        .order_by(func.count(CallAnalysis.id).desc())
+        .limit(limit)
+    )
+
+    if agent_id is not None:
+        stmt = stmt.where(CallSession.agent_id == agent_id)
+
+    rows = (await session.execute(stmt)).fetchall()
+
+    return {
+        "breakdown": [
+            {
+                "category": str(row.primary_pain_category),
+                "count": int(row.cnt),
+                "rank": rank,
+            }
+            for rank, row in enumerate(rows, start=1)
+        ]
+    }
+
+
+# ---------------------------------------------------------------------------
+# get_service_issues_count_total
+# post-call-analysis-bi-friendly PR 2: uses indexed service_issues_count column
+# ---------------------------------------------------------------------------
+
+
+async def get_service_issues_count_total(
+    session: AsyncSession,
+    *,
+    client_id: str,
+    date_from: datetime,
+    date_to: datetime,
+    agent_id: str | None,
+) -> dict[str, Any]:
+    """Return total service issue occurrences using the denormalized count column.
+
+    Does NOT use json_each() — queries service_issues_count directly (spec: AD-2).
+
+    Args:
+        session: Active async DB session.
+        client_id: Tenant filter.
+        date_from: Window start (UTC datetime).
+        date_to: Window end (UTC datetime).
+        agent_id: Optional agent filter.
+
+    Returns:
+        dict with "total_service_issues" (sum of counts) and
+        "calls_with_issues" (calls where service_issues_count > 0).
+    """
+    stmt = (
+        select(
+            func.sum(CallAnalysis.service_issues_count).label("total"),
+            func.count(CallAnalysis.id).label("calls_with_issues"),
+        )
+        .join(CallSession, CallSession.id == CallAnalysis.session_id)
+        .where(CallAnalysis.client_id == client_id)
+        .where(CallAnalysis.analyzed_at >= date_from)
+        .where(CallAnalysis.analyzed_at <= date_to)
+        .where(CallSession.merged_into_session_id.is_(None))
+        .where(CallAnalysis.service_issues_count > 0)
+    )
+
+    if agent_id is not None:
+        stmt = stmt.where(CallSession.agent_id == agent_id)
+
+    row = (await session.execute(stmt)).fetchone()
+
+    return {
+        "total_service_issues": int(row.total or 0) if row else 0,
+        "calls_with_issues": int(row.calls_with_issues or 0) if row else 0,
+    }
