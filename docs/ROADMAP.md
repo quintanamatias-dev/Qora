@@ -1,7 +1,7 @@
 # Qora Production Roadmap
 
 > Living document. Update as items are completed or scope changes.
-> Last updated: 2026-06-10
+> Last updated: 2026-06-18
 
 ## Current State
 
@@ -34,13 +34,13 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
-| A1 | Backend lead detail aggregate endpoint | - [ ] | Single endpoint returning lead + custom fields with labels + call history + analyses + profile facts + quote-ready status |
-| A2 | Next-call context preview endpoint | - [ ] | Returns what initiation/context.py would assemble: lead profile block, call history, misc notes, available tools, skills, model config |
-| A3 | Expose missing lead fields in API | - [ ] | `email`, `external_crm_id`, `external_lead_id`, `call_count`, `last_called_at`, `next_scheduled_call_at` |
-| A4 | Join CRM config metadata to custom fields | - [ ] | Return field label, type, required flag alongside each custom field value |
-| A5 | Frontend: collapsible lead detail sections | - [ ] | Header/status, CRM & quote readiness, lead intelligence, call history, next-call preview |
-| A6 | Frontend: quote-ready progress indicator | - [ ] | Show which quote-ready fields are filled vs missing |
-| A7 | Frontend: next-call context preview panel | - [ ] | Collapsible view of what the agent will receive |
+| A1 | Backend lead detail aggregate endpoint | - [x] | Lead detail now exposes lead fields, custom-field context, call history, analyses, accumulated facts, quote readiness, and dimension rollups/rankings |
+| A2 | Next-call context preview endpoint | - [x] | Returns what the agent context builder assembles, including lead profile, call history, misc notes, available skills/tools, and prompt/model context |
+| A3 | Expose missing lead fields in API | - [x] | `email`, `external_crm_id`, `external_lead_id`, `call_count`, `last_called_at`, `next_scheduled_call_at` available in lead detail flows |
+| A4 | Join CRM config metadata to custom fields | - [x] | Custom fields include display metadata needed by the lead detail and quote-readiness views |
+| A5 | Frontend: collapsible lead detail sections | - [x] | Lead detail includes organized inspection sections for record, readiness, accumulated facts, call history, CRM/Airtable, and next-call preview |
+| A6 | Frontend: quote-ready progress indicator | - [x] | Quote readiness shows filled vs missing quote fields |
+| A7 | Frontend: next-call context preview panel | - [x] | Lead detail includes a preview of what the agent will receive for the next call |
 
 ---
 
