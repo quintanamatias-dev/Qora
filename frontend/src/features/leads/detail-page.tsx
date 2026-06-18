@@ -580,7 +580,18 @@ function MemorySection({
   const hasInterest = interestHistory.length > 0
   const hasSummary = Boolean(lead.summary_last_call)
 
-  const { data: rollups } = useLeadDimensionRollups(clientId, lead.id)
+  const {
+    data: rollups,
+    isError: rollupsError,
+    isSuccess: rollupsSuccess,
+    isPending: rollupsPending,
+    isFetching: rollupsFetching,
+  } = useLeadDimensionRollups(clientId, lead.id)
+  // While the query has not yet succeeded (initial load OR a retry after a
+  // transient failure where isError is still false), we must NOT render empty
+  // rankings — that would falsely claim "No detected interests…". Show a
+  // lightweight loading state until the query succeeds or errors.
+  const rollupsLoading = !rollupsSuccess && !rollupsError && (rollupsPending || rollupsFetching)
 
   return (
     <Section
@@ -625,20 +636,46 @@ function MemorySection({
         )}
       </div>
 
-      {/* Sub-section: Detected Interests Ranking */}
-      <div className="mt-4">
-        <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Detected Interests</p>
-        <DetectedInterestsRanking interests={rollups?.detected_interests ?? []} />
-      </div>
+      {/* Rankings load failure — a failed /dimension-rollups request must NOT be
+          rendered as empty rankings. Surface one clear, non-noisy error instead
+          of repeating an empty-state message per ranking. Successful empty
+          arrays still render their normal empty states below. */}
+      {rollupsError ? (
+        <div className="mt-4">
+          <p
+            data-testid="rollups-error"
+            className="text-sm text-coral"
+          >
+            Failed to load accumulated rankings. Interests, service issues, objections, and pain points are unavailable right now.
+          </p>
+        </div>
+      ) : rollupsLoading ? (
+        <div className="mt-4">
+          <p
+            data-testid="rollups-loading"
+            className="text-sm text-ink-3 animate-pulse"
+          >
+            Loading accumulated rankings…
+          </p>
+        </div>
+      ) : (
+        <>
+          {/* Sub-section: Detected Interests Ranking */}
+          <div className="mt-4">
+            <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Detected Interests</p>
+            <DetectedInterestsRanking interests={rollups?.detected_interests ?? []} />
+          </div>
 
-      {/* Sub-section: Service Issues Ranking */}
-      <div className="mt-4">
-        <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Service Issues</p>
-        <ServiceIssuesRanking issues={rollups?.service_issues ?? []} />
-      </div>
+          {/* Sub-section: Service Issues Ranking */}
+          <div className="mt-4">
+            <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Service Issues</p>
+            <ServiceIssuesRanking issues={rollups?.service_issues ?? []} />
+          </div>
+        </>
+      )}
 
       {/* Sub-section: Objections Rollup (from call_analyses, not extracted_facts) */}
-      {rollups && rollups.objections.length > 0 && (
+      {!rollupsError && rollups && rollups.objections.length > 0 && (
         <div className="mt-4">
           <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Objections by Category</p>
           <div className="space-y-1">
@@ -657,7 +694,7 @@ function MemorySection({
       )}
 
       {/* Sub-section: Pain Points Rollup (from call_analyses, not extracted_facts) */}
-      {rollups && rollups.pain_points.length > 0 && (
+      {!rollupsError && rollups && rollups.pain_points.length > 0 && (
         <div className="mt-4">
           <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Pain Points by Category</p>
           <div className="space-y-1">

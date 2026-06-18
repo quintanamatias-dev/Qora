@@ -122,7 +122,6 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 |-------|--------------|-------|
 | Client CRM status vs Qora internal status conflated | A | `leads.status` serves both purposes; need separate fields |
 | Post-call extraction outputs prose instead of tags | A | `lead_profile_facts` gets sentences as `fact_key`; need structured extraction |
-| Lead API response omits useful fields | A | `email`, `external_crm_id`, `external_lead_id` not in `_lead_to_dict` |
 | `lead_profile_facts` polluted by CRM dual-write | A | `capture_data` writes `captured:*` facts for backward compat |
 | `data_corrections` merge-order bug in summarizer | A | `extracted_facts` merged before corrections applied |
 

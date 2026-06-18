@@ -211,6 +211,12 @@ export const DIMENSION_LABELS: Record<string, Record<LabelLocale, string>> = {
     es: 'Renovación próxima',
     en: 'Upcoming renewal',
   },
+  // COMPARANDO_OPCIONES is an uppercase NEED_TAG code (comparison/shopping-around
+  // signal) emitted by the interests pipeline. Without a label it rendered raw.
+  COMPARANDO_OPCIONES: {
+    es: 'Comparando opciones',
+    en: 'Comparing options',
+  },
 }
 
 /**

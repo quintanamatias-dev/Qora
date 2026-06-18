@@ -945,3 +945,89 @@ async def test_get_lead_by_id_existing_fields_unchanged(leads_client):
         assert legacy_field not in data, (
             f"Legacy field '{legacy_field}' must not be top-level (AC-1 / WU-7)"
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 parity — GET /leads/{id} detail must populate next_scheduled_call_at
+# (Issue #27 / A3): detail endpoint previously always returned null because it
+# never computed the schedule enrichment. It must match list/aggregate behavior.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_lead_by_id_next_scheduled_call_at_null_without_calls(leads_client):
+    """GET /leads/{id} — null when the lead has no pending scheduled calls."""
+    response = await leads_client.get("/api/v1/leads/lead-quintana-001")
+    assert response.status_code == 200
+    assert response.json()["next_scheduled_call_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_lead_by_id_next_scheduled_call_at_returns_earliest_pending(
+    leads_client,
+):
+    """GET /leads/{id} — returns MIN(scheduled_at) for pending/in_progress calls.
+
+    Regression for A3: the detail endpoint must NOT return null when a pending
+    scheduled call exists. It must surface the earliest pending/in_progress time,
+    consistent with the list endpoint.
+    """
+    from datetime import datetime, timezone, timedelta
+    from app.core import database as db_module
+    from app.scheduler.models import ScheduledCall
+    import uuid
+
+    lead_id = "lead-quintana-001"
+    now = datetime.now(timezone.utc)
+    earlier = now + timedelta(hours=1)
+    later = now + timedelta(hours=5)
+
+    async with db_module.async_session_factory() as sess:
+        # Two pending calls + one completed (must be ignored). Earliest pending wins.
+        sess.add(
+            ScheduledCall(
+                id=str(uuid.uuid4()),
+                client_id="quintana-seguros",
+                lead_id=lead_id,
+                status="pending",
+                scheduled_at=later,
+                trigger_reason="test",
+            )
+        )
+        sess.add(
+            ScheduledCall(
+                id=str(uuid.uuid4()),
+                client_id="quintana-seguros",
+                lead_id=lead_id,
+                status="in_progress",
+                scheduled_at=earlier,
+                trigger_reason="test",
+            )
+        )
+        sess.add(
+            ScheduledCall(
+                id=str(uuid.uuid4()),
+                client_id="quintana-seguros",
+                lead_id=lead_id,
+                status="completed",
+                scheduled_at=now,  # earliest overall but completed → must be skipped
+                trigger_reason="test",
+            )
+        )
+        await sess.commit()
+
+    response = await leads_client.get(f"/api/v1/leads/{lead_id}")
+    assert response.status_code == 200
+    data = response.json()
+
+    assert (
+        data["next_scheduled_call_at"] is not None
+    ), "detail endpoint must surface pending scheduled call, not null"
+
+    returned_dt = datetime.fromisoformat(data["next_scheduled_call_at"])
+    if returned_dt.tzinfo is None:
+        returned_dt = returned_dt.replace(tzinfo=timezone.utc)
+    delta = abs(
+        (returned_dt.replace(tzinfo=None) - earlier.replace(tzinfo=None)).total_seconds()
+    )
+    assert delta < 1, f"Expected earliest pending {earlier!r}, got {returned_dt!r}"

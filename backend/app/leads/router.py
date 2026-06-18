@@ -321,6 +321,10 @@ async def get_lead_by_id(
     interest_history = await get_interest_history(session, lead_id)
     # WU-6: load custom fields scoped to this lead's client
     custom_fields = await cf_service.get_all(session, lead_id, lead.client_id)
+    # Phase 7 parity: detail endpoint must populate next_scheduled_call_at for
+    # pending/in_progress scheduled calls, consistent with list_leads. Reuse the
+    # same batch helper (single-element id list) so list and detail agree.
+    schedule_map = await _batch_next_scheduled_call_at(session, [lead_id])
 
     # Phase A: load CRM config for quote_fields metadata (best-effort, None if no crm.yaml)
     crm_config = None
@@ -332,6 +336,7 @@ async def get_lead_by_id(
 
     return _lead_to_dict(
         lead,
+        next_scheduled_call_at=schedule_map.get(lead_id),
         profile_facts=profile_facts,
         interest_history=interest_history,
         custom_fields=custom_fields,
