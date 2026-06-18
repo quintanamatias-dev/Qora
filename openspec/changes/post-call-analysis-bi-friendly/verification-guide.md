@@ -14,13 +14,25 @@ Route: `/app/:clientId/calls/:sessionId`
 
 ### Layout
 
-- [ ] The page uses a 5-column grid: **Transcript** on the left (2/5),
-      **Analysis** on the right (3/5). Analysis is the wider region.
-- [ ] The transcript is **sticky** — scrolling the analysis cards keeps the
-      transcript in view instead of leaving a large empty gray area below it.
-- [ ] Analysis dimension cards **flow through balanced columns** (masonry):
-      1 column on small screens, 2 on `lg`, 3 on `2xl`. Short cards (e.g. empty
-      "Notes") do not leave tall gaps next to a long "Objections" card.
+- [ ] The Transcript and ALL analysis sections live in **ONE shared responsive
+      masonry flow** (CSS columns): 1 column on small screens, 2 on `lg`, 3 on
+      `2xl`, with `[column-fill:balance]`. There is **no** separate floated
+      transcript region and **no** separate analysis region — it is a single
+      card flow.
+- [ ] The **Transcript is the first card** in that flow, so it lands **top-left**.
+      Because it shares the same columns as the analysis cards, short analysis
+      cards (Profile Facts, Notes, Data Corrections, …) **fill the empty space
+      BELOW the transcript** in the left column — analysis is NOT confined to the
+      right side.
+- [ ] The transcript is **NOT sticky / fixed** and **NOT a floated aside** — there
+      is no frozen or pinned left column. Scrolling the page scrolls the
+      transcript away with everything else. (The transcript may still scroll
+      **internally** via its own `max-height` + `overflow-y-auto` for very long
+      transcripts, but it is never pinned.)
+- [ ] Each card (transcript included) uses `break-inside-avoid` so it never
+      splits across a column boundary. Short cards (e.g. empty "Notes") do not
+      leave tall gaps next to a long "Objections" card; they flow into the
+      nearest open space, including under the transcript.
 
 ### Data Corrections section
 
@@ -65,10 +77,14 @@ npx tsc --noEmit
 
 - [ ] `call-analysis-panel.test.tsx` — structured dimension rendering, minimal
       `Qora`/`CRM` badges (asserted via `data-state` + colour class), inline
-      correction rows, masonry `dimension-grid` columns.
-- [ ] `call-detail-page.test.tsx` — analysis region is wider
-      (`lg:col-span-3`) than transcript (`lg:col-span-2`) and transcript is
-      `lg:sticky`.
+      correction rows, and (via the standalone `CallAnalysisPanel` wrapper) the
+      masonry `dimension-grid` columns.
+- [ ] `call-detail-page.test.tsx` — transcript is **NOT** `sticky`/`fixed` and
+      **NOT** a separate floated aside (`float-*` / `w-2/5` absent); the
+      transcript is a `break-inside-avoid` card and is a **direct child of the
+      shared `call-detail-content` flow** alongside the analysis cards; that
+      content wrapper is the unified `columns-1 lg:columns-2 2xl:columns-3`
+      masonry (no `flow-root` float-containment wrapper).
 
 ### Backend / DB
 
@@ -142,3 +158,44 @@ script or admin action that takes one or more `session_id`s, re-runs
 exists, stale rows like Mora's `new_need` must be re-analyzed manually with the
 snippet above. Do not patch the value directly in the UI layer — keep the UI an
 honest mirror of persisted data.
+
+---
+
+## 4. Future taxonomy refinements (NOT implemented yet — design notes only)
+
+These are deliberately **out of scope** for the current change. They are recorded
+here so a future change can pick them up; do **not** implement them as part of the
+layout/UI work.
+
+### 4.1 `lack_of_clarity` vs `information_gap` distinction
+
+The current taxonomy blurs these. A future refinement should split the concept by
+**where the signal sits in the funnel**:
+
+- **pain** — when the signal is user **frustration** (the user is bothered /
+  struggling). Example surface: Pain Points.
+- **objection** — when the signal is a **sales blocker / traba** (it actively
+  stops the deal from advancing). Example surface: Objections.
+- **issue** — when the signal is a **product/service information problem**
+  (missing or wrong info about the product/service). Example surface: Service
+  Issues.
+
+So a single "lack of clarity" today may map to a pain, an objection, or an issue
+depending on intent. `information_gap` should be reserved for the **issue**
+(product/service information problem) reading, and `lack_of_clarity` re-scoped (or
+removed) so the three surfaces stop overlapping. Needs a migration + backfill plan
+for existing `call_analyses` rows before changing the prompts/normalizer.
+
+### 4.2 Split "Interests" into cross-sell vs product-strategy/need
+
+The Detected Interests dimension currently merges everything into `product` /
+`need` source tags. A future refinement should distinguish:
+
+- **cross-sell interests** — additional products the user could be sold.
+- **product-strategy / need interests** — signals about what the user actually
+  needs (feeds product strategy), not an immediate up/cross-sell.
+
+This split should be **configurable per client** (different clients care about
+different interest taxonomies), so it belongs with the per-client dimension/label
+config rather than hard-coded. Until then, the UI keeps showing the honest flat
+`product` / `need` tags.

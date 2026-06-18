@@ -85,15 +85,21 @@ describe('CallDetailPage — analysis error state', () => {
 })
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Scenario: wide layout — analysis takes the wider share, transcript is sticky
+// Scenario: unified masonry flow — transcript is the FIRST card in the SAME
+// column flow as the analysis cards, NOT a separate floated/sticky region.
 //
-// Feedback: the old even 2-column split left a large empty gray area below a
-// short transcript while analysis cards were cramped. The new layout gives the
-// analysis region the wider column and pins the transcript so it tracks the
-// analysis scroll instead of ending in dead space.
+// Correction history:
+//   1. sticky left column        → rejected (frozen column).
+//   2. floated transcript aside  → rejected (analysis still stayed to the right;
+//      empty space below a short transcript was left blank).
+//
+// Final intent: Transcript + analysis sections share ONE responsive CSS-columns
+// masonry flow. The transcript is just the first card (top-left); analysis cards
+// flow through the same columns and FILL the space below the transcript in the
+// left column. No separate float/sticky region, no fixed grid column.
 // ──────────────────────────────────────────────────────────────────────────────
 
-describe('CallDetailPage — wide analysis layout', () => {
+describe('CallDetailPage — unified masonry flow (transcript is a card in the flow)', () => {
   beforeEach(() => {
     useCallAnalysisMock.mockReturnValue({
       data: undefined,
@@ -102,21 +108,56 @@ describe('CallDetailPage — wide analysis layout', () => {
     })
   })
 
-  it('gives the analysis region more horizontal space than the transcript', () => {
+  it('does NOT pin the transcript (no sticky/fixed frozen column)', () => {
     renderCallDetail()
 
     const transcript = screen.getByTestId('transcript-region')
-    const analysis = screen.getByTestId('analysis-region')
-
-    // 5-col grid: transcript 2/5, analysis 3/5 — analysis is the wider region.
-    expect(transcript.className).toContain('lg:col-span-2')
-    expect(analysis.className).toContain('lg:col-span-3')
+    // The transcript scrolls away with the page — never pinned.
+    expect(transcript.className).not.toContain('sticky')
+    expect(transcript.className).not.toContain('fixed')
   })
 
-  it('pins the transcript so it tracks the analysis scroll (no empty gray gap)', () => {
+  it('does NOT make the transcript a separate floated aside region anymore', () => {
     renderCallDetail()
 
     const transcript = screen.getByTestId('transcript-region')
-    expect(transcript.className).toContain('lg:sticky')
+    // Rejected layouts: a dedicated floated/width-locked transcript column.
+    // The transcript now participates in the shared column flow instead.
+    expect(transcript.className).not.toContain('float-left')
+    expect(transcript.className).not.toContain('float-right')
+    expect(transcript.className).not.toMatch(/(^|\s|:)w-2\/5/)
+  })
+
+  it('makes the transcript a break-avoiding card in the shared flow', () => {
+    renderCallDetail()
+
+    const transcript = screen.getByTestId('transcript-region')
+    // As the first card in the CSS-columns flow it must avoid splitting across
+    // a column boundary, exactly like the analysis cards.
+    expect(transcript.className).toContain('break-inside-avoid')
+  })
+
+  it('wraps transcript and analysis in ONE shared responsive columns/masonry flow', () => {
+    renderCallDetail()
+
+    const content = screen.getByTestId('call-detail-content')
+    // Unified masonry: 1 col small, 2 on lg, 3 on 2xl — the same flow that
+    // holds both the transcript card and the analysis cards. This is what lets
+    // analysis cards fill space BELOW the transcript instead of only to the right.
+    expect(content.className).toContain('columns-1')
+    expect(content.className).toContain('lg:columns-2')
+    expect(content.className).toContain('2xl:columns-3')
+    // The rejected float-containment wrapper must be gone.
+    expect(content.className).not.toContain('flow-root')
+  })
+
+  it('renders the transcript inside the same flow container as the analysis cards', () => {
+    renderCallDetail()
+
+    const content = screen.getByTestId('call-detail-content')
+    const transcript = screen.getByTestId('transcript-region')
+    // Structural proof that transcript and analysis share one flow: the
+    // transcript card is a direct child of the unified columns container.
+    expect(transcript.parentElement).toBe(content)
   })
 })

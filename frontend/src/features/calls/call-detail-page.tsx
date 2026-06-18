@@ -3,16 +3,19 @@
  *
  * Shows full transcript + all 12 analysis dimensions for a specific call session.
  * Design: Container-presentational pattern — reads sessionId from URL params,
- *   fetches analysis + transcript, renders CallAnalysisPanel + TranscriptViewer.
+ *   fetches analysis + transcript, and composes the Transcript card together
+ *   with AnalysisSectionCards in ONE shared responsive masonry (CSS-columns)
+ *   flow so analysis cards fill the space below a short transcript.
  *
  * Route: /app/:clientId/calls/:sessionId
  */
 
 import { useParams, useNavigate } from 'react-router'
 import { useCallAnalysis } from '@/api/hooks'
-import { CallAnalysisPanel } from './call-analysis-panel'
+import { AnalysisSectionCards } from './call-analysis-panel'
 import { TranscriptViewer } from '../leads/transcript-viewer'
 import { Badge } from '@/design/components/badge'
+import { Card } from '@/design/components/card'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // CallDetailPage
@@ -67,28 +70,50 @@ export function CallDetailPage() {
       </div>
 
       {/*
-        Two-region layout: transcript (left, narrow, sticky) + analysis (right,
-        wide). The transcript is a self-contained sticky column so it stays in
-        view while the analysis region scrolls — this avoids the previous large
-        empty gray area below a short transcript. The analysis region takes the
-        wider share of the page (3/5 on lg) and flows its own dense card grid.
+        Unified masonry flow (NOT sticky, NOT a separate floated region):
+        the Transcript and ALL analysis sections live in ONE shared CSS-columns
+        area. The Transcript is simply the FIRST card in that flow, so it lands
+        top-left, and the analysis cards flow through the same balanced columns —
+        which means short analysis cards (Profile Facts, Notes, Data Corrections,
+        …) fill the empty space BELOW a short transcript in the left column
+        instead of all analysis staying to the right.
+
+        Columns: 1 on small, 2 on `lg`, 3 on `2xl`. `[column-fill:balance]`
+        keeps the columns roughly equal height so cards fan out evenly rather
+        than piling into one tall column. Each card uses `break-inside-avoid` so
+        it never splits across a column boundary.
+
+        The transcript stays internally scrollable (max-height + overflow) so a
+        very long transcript does not dominate the column, but it is never
+        `sticky`/`fixed` — it scrolls away with the rest of the page.
       */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 items-start">
-        {/* Transcript column — narrow + sticky so it tracks the analysis scroll */}
+      <div
+        data-testid="call-detail-content"
+        className="columns-1 lg:columns-2 2xl:columns-3 gap-4 [column-fill:balance]"
+      >
+        {/* Transcript — FIRST card in the shared flow (top-left), not pinned */}
         <section
           data-testid="transcript-region"
-          className="lg:col-span-2 lg:sticky lg:top-24"
+          className="mb-4 break-inside-avoid min-w-0"
         >
-          <h2 className="text-base font-semibold text-ink mb-3">Transcript</h2>
-          <div className="bg-mist rounded-md border border-line max-h-[calc(100vh-9rem)] overflow-y-auto">
-            <TranscriptViewer sessionId={resolvedSessionId} />
-          </div>
+          <Card className="p-0 overflow-hidden">
+            <h2 className="text-base font-semibold text-ink px-4 pt-4 pb-3">
+              Transcript
+            </h2>
+            <div className="bg-mist border-t border-line max-h-[calc(100vh-12rem)] overflow-y-auto">
+              <TranscriptViewer sessionId={resolvedSessionId} />
+            </div>
+          </Card>
         </section>
 
-        {/* Analysis region — wide, fills the page area alongside/below transcript */}
-        <section data-testid="analysis-region" className="lg:col-span-3 min-w-0">
-          <h2 className="text-base font-semibold text-ink mb-3">Analysis</h2>
-          {isError ? (
+        {/*
+          Analysis sections — flat cards in the SAME column flow as the
+          transcript above. No separate floated/sticky region and no fixed grid
+          column: the cards simply continue the masonry, filling space under the
+          transcript and across the remaining columns.
+        */}
+        {isError ? (
+          <section data-testid="analysis-region" className="mb-4 break-inside-avoid min-w-0">
             <div
               data-testid="analysis-error"
               className="py-6 text-center border border-error/30 bg-error/5 rounded-md"
@@ -97,10 +122,10 @@ export function CallDetailPage() {
                 Failed to load analysis. Please try again.
               </p>
             </div>
-          ) : (
-            <CallAnalysisPanel analysis={analysis} isLoading={isLoading} />
-          )}
-        </section>
+          </section>
+        ) : (
+          <AnalysisSectionCards analysis={analysis} isLoading={isLoading} />
+        )}
       </div>
     </div>
   )

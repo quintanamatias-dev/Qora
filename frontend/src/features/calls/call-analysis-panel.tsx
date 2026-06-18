@@ -665,25 +665,45 @@ interface CallAnalysisPanelProps {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// CallAnalysisPanel — main component
+// AnalysisSectionCards — composable analysis cards (no layout container)
+//
+// These are the analysis cards as FLAT siblings, intended to live inside a
+// shared masonry/CSS-columns flow owned by the page. CallDetailPage places the
+// Transcript card FIRST in that same column flow so analysis cards naturally
+// fill the space below a short transcript (top-left), not just to the right.
+//
+// Each card carries `mb-4 break-inside-avoid` so it survives the column break
+// and never splits across a column boundary. There is NO wrapping `columns-*`
+// container here on purpose — the page composes transcript + these cards into
+// ONE unified flow.
 // ──────────────────────────────────────────────────────────────────────────────
 
-export function CallAnalysisPanel({ analysis, isLoading, locale = 'es' }: CallAnalysisPanelProps) {
+export function AnalysisSectionCards({
+  analysis,
+  isLoading,
+  locale = 'es',
+}: CallAnalysisPanelProps) {
   if (isLoading) {
     return (
-      <div data-testid="analysis-loading" className="py-6 text-center">
+      <Card
+        data-testid="analysis-loading"
+        className="mb-4 break-inside-avoid py-6 text-center"
+      >
         <span className="text-ink-3 text-sm animate-pulse">
           Loading analysis…
         </span>
-      </div>
+      </Card>
     )
   }
 
   if (!analysis) {
     return (
-      <div data-testid="analysis-empty" className="py-6 text-center">
+      <Card
+        data-testid="analysis-empty"
+        className="mb-4 break-inside-avoid py-6 text-center"
+      >
         <p className="text-ink-3 text-sm">No analysis available for this call</p>
-      </div>
+      </Card>
     )
   }
 
@@ -709,10 +729,21 @@ export function CallAnalysisPanel({ analysis, isLoading, locale = 'es' }: CallAn
     analysis.objections_count != null
 
   return (
-    <div data-testid="call-analysis-panel" className="space-y-5">
+    <>
+      {/*
+        Pain Points is surfaced FIRST among the analysis cards — it is one of the
+        first things to read when entering call detail. The Transcript card is
+        still emitted ahead of <AnalysisSectionCards> by the page, so it remains
+        first/top-left; this only reorders the analysis cards.
+      */}
+      {/* Pain Points — structured inspection (top priority) */}
+      <Card className="mb-4 break-inside-avoid">
+        <SectionLabel>Pain Points</SectionLabel>
+        <PainPointsCard painPoints={analysis.pain_points} />
+      </Card>
 
       {/* ── Top Summary Section ── */}
-      <Card>
+      <Card data-testid="call-analysis-panel" className="mb-4 break-inside-avoid">
         <div className="space-y-4">
           {/* Summary text */}
           {analysis.summary && (
@@ -818,96 +849,111 @@ export function CallAnalysisPanel({ analysis, isLoading, locale = 'es' }: CallAn
       </Card>
 
       {/*
-        ── Dimension Grid (masonry flow) ──
-        Cards have very different heights (a 5-objection card vs an empty notes
-        card). A rigid 2-col CSS grid leaves tall gaps and feels cramped, so we
-        flow the cards through balanced CSS columns instead. Columns widen with
-        the (now wider) analysis region: 1 col on small, 2 on lg, 3 on 2xl.
+        ── Dimension cards — flat siblings in the page's unified column flow ──
+        These cards have very different heights (a 5-objection card vs an empty
+        notes card), so they are NOT wrapped in their own grid/columns container
+        anymore. They are emitted as flat siblings so the PAGE can flow them —
+        together with the Transcript card as the first item — through ONE shared
+        masonry/CSS-columns area. That lets short analysis cards (Profile Facts,
+        Notes, Data Corrections, …) fill the empty space BELOW a short transcript
+        in the left column, instead of all analysis staying to the right.
         `break-inside-avoid` keeps each card intact across the column break.
       */}
-      <div
-        data-testid="dimension-grid"
-        className="columns-1 lg:columns-2 2xl:columns-3 gap-4 [column-fill:balance]"
-      >
-        {/* Objections — structured inspection */}
-        <Card className="mb-4 break-inside-avoid">
-          <SectionLabel>Objections</SectionLabel>
-          <ObjectionsCardFull objections={analysis.objections} />
-        </Card>
 
-        {/* Pain Points — structured inspection */}
-        <Card className="mb-4 break-inside-avoid">
-          <SectionLabel>Pain Points</SectionLabel>
-          <PainPointsCard painPoints={analysis.pain_points} />
-        </Card>
+      {/* Objections — structured inspection */}
+      <Card className="mb-4 break-inside-avoid">
+        <SectionLabel>Objections</SectionLabel>
+        <ObjectionsCardFull objections={analysis.objections} />
+      </Card>
 
-        {/* Service Issues */}
-        <Card className="mb-4 break-inside-avoid">
-          <SectionLabel>Service Issues</SectionLabel>
-          <ServiceIssuesCard serviceIssues={analysis.service_issues} />
-        </Card>
+      {/* Service Issues */}
+      <Card className="mb-4 break-inside-avoid">
+        <SectionLabel>Service Issues</SectionLabel>
+        <ServiceIssuesCard serviceIssues={analysis.service_issues} />
+      </Card>
 
-        {/* Detected Interests — normalized value + source kind (honest) */}
-        <Card className="mb-4 break-inside-avoid">
-          <SectionLabel>Detected Interests</SectionLabel>
-          {allInterests.length === 0 ? (
-            <EmptyState label="No interests detected" />
-          ) : (
-            <ul className="space-y-1.5">
-              {allInterests.map((item, idx) => (
-                <li
-                  key={idx}
-                  className="flex items-center gap-2 rounded-md border border-line bg-pearl px-3 py-1.5"
+      {/* Detected Interests — normalized value + source kind (honest) */}
+      <Card className="mb-4 break-inside-avoid">
+        <SectionLabel>Detected Interests</SectionLabel>
+        {allInterests.length === 0 ? (
+          <EmptyState label="No interests detected" />
+        ) : (
+          <ul className="space-y-1.5">
+            {allInterests.map((item, idx) => (
+              <li
+                key={idx}
+                className="flex items-center gap-2 rounded-md border border-line bg-pearl px-3 py-1.5"
+              >
+                <span
+                  data-testid="interest-value"
+                  className="text-sm text-ink font-mono flex-1 min-w-0 break-words"
                 >
-                  <span
-                    data-testid="interest-value"
-                    className="text-sm text-ink font-mono flex-1 min-w-0 break-words"
-                  >
-                    {item.value}
-                  </span>
-                  <span className="text-[10px] font-mono uppercase tracking-wide text-ink-3 shrink-0">
-                    {item.kind}
-                  </span>
-                </li>
-              ))}
-            </ul>
+                  {item.value}
+                </span>
+                <span className="text-[10px] font-mono uppercase tracking-wide text-ink-3 shrink-0">
+                  {item.kind}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
+      {/* Commitment Signals */}
+      <Card className="mb-4 break-inside-avoid">
+        <SectionLabel>Commitment Signals</SectionLabel>
+        <CommitmentsCard commitments={analysis.commitment_signals} />
+      </Card>
+
+      {/* Profile Facts */}
+      <Card className="mb-4 break-inside-avoid">
+        <SectionLabel>Profile Facts</SectionLabel>
+        <ProfileFactsCard profileFacts={analysis.profile_facts} />
+      </Card>
+
+      {/* Misc Notes */}
+      <Card className="mb-4 break-inside-avoid">
+        <SectionLabel>Notes</SectionLabel>
+        <MiscNotesCard miscNotes={analysis.misc_notes} />
+      </Card>
+
+      {/* Data Corrections — light inline rows + section-level CRM parity */}
+      <Card className="mb-4 break-inside-avoid">
+        <div className="flex items-start justify-between gap-2 mb-1.5">
+          <p className="text-xs text-ink-3 uppercase tracking-wider">
+            Data Corrections
+          </p>
+          {analysis.data_corrections && analysis.data_corrections.length > 0 && (
+            <CorrectionsStatusBadges corrections={analysis.data_corrections} />
           )}
-        </Card>
+        </div>
+        <DataCorrectionsCard corrections={analysis.data_corrections} />
+      </Card>
 
-        {/* Commitment Signals */}
-        <Card className="mb-4 break-inside-avoid">
-          <SectionLabel>Commitment Signals</SectionLabel>
-          <CommitmentsCard commitments={analysis.commitment_signals} />
-        </Card>
-
-        {/* Profile Facts */}
-        <Card className="mb-4 break-inside-avoid">
-          <SectionLabel>Profile Facts</SectionLabel>
-          <ProfileFactsCard profileFacts={analysis.profile_facts} />
-        </Card>
-
-        {/* Misc Notes */}
-        <Card className="mb-4 break-inside-avoid">
-          <SectionLabel>Notes</SectionLabel>
-          <MiscNotesCard miscNotes={analysis.misc_notes} />
-        </Card>
-
-        {/* Data Corrections — light inline rows + section-level CRM parity */}
-        <Card className="mb-4 break-inside-avoid">
-          <div className="flex items-start justify-between gap-2 mb-1.5">
-            <p className="text-xs text-ink-3 uppercase tracking-wider">
-              Data Corrections
-            </p>
-            {analysis.data_corrections && analysis.data_corrections.length > 0 && (
-              <CorrectionsStatusBadges corrections={analysis.data_corrections} />
-            )}
-          </div>
-          <DataCorrectionsCard corrections={analysis.data_corrections} />
-        </Card>
+      {/* ── Audit Section — also a card in the same flow ── */}
+      <div className="mb-4 break-inside-avoid">
+        <AuditSection analysis={analysis} />
       </div>
+    </>
+  )
+}
 
-      {/* ── Audit Section ── */}
-      <AuditSection analysis={analysis} />
+// ──────────────────────────────────────────────────────────────────────────────
+// CallAnalysisPanel — backward-compatible wrapper
+//
+// Standalone usage (outside the unified call-detail column flow) still gets a
+// self-contained masonry container so the analysis cards flow through balanced
+// columns on their own. CallDetailPage does NOT use this wrapper — it composes
+// the Transcript card together with <AnalysisSectionCards> in one shared flow.
+// ──────────────────────────────────────────────────────────────────────────────
+
+export function CallAnalysisPanel(props: CallAnalysisPanelProps) {
+  return (
+    <div
+      data-testid="dimension-grid"
+      className="columns-1 lg:columns-2 2xl:columns-3 gap-4 [column-fill:balance]"
+    >
+      <AnalysisSectionCards {...props} />
     </div>
   )
 }
