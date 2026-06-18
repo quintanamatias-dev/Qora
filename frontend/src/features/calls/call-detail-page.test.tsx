@@ -83,3 +83,40 @@ describe('CallDetailPage — analysis error state', () => {
     expect(screen.queryByTestId('analysis-empty')).not.toBeInTheDocument()
   })
 })
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Scenario: wide layout — analysis takes the wider share, transcript is sticky
+//
+// Feedback: the old even 2-column split left a large empty gray area below a
+// short transcript while analysis cards were cramped. The new layout gives the
+// analysis region the wider column and pins the transcript so it tracks the
+// analysis scroll instead of ending in dead space.
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('CallDetailPage — wide analysis layout', () => {
+  beforeEach(() => {
+    useCallAnalysisMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: false,
+    })
+  })
+
+  it('gives the analysis region more horizontal space than the transcript', () => {
+    renderCallDetail()
+
+    const transcript = screen.getByTestId('transcript-region')
+    const analysis = screen.getByTestId('analysis-region')
+
+    // 5-col grid: transcript 2/5, analysis 3/5 — analysis is the wider region.
+    expect(transcript.className).toContain('lg:col-span-2')
+    expect(analysis.className).toContain('lg:col-span-3')
+  })
+
+  it('pins the transcript so it tracks the analysis scroll (no empty gray gap)', () => {
+    renderCallDetail()
+
+    const transcript = screen.getByTestId('transcript-region')
+    expect(transcript.className).toContain('lg:sticky')
+  })
+})

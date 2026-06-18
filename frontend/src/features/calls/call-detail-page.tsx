@@ -66,18 +66,27 @@ export function CallDetailPage() {
         )}
       </div>
 
-      {/* Two-column layout: transcript + analysis */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Transcript column */}
-        <section>
+      {/*
+        Two-region layout: transcript (left, narrow, sticky) + analysis (right,
+        wide). The transcript is a self-contained sticky column so it stays in
+        view while the analysis region scrolls — this avoids the previous large
+        empty gray area below a short transcript. The analysis region takes the
+        wider share of the page (3/5 on lg) and flows its own dense card grid.
+      */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 items-start">
+        {/* Transcript column — narrow + sticky so it tracks the analysis scroll */}
+        <section
+          data-testid="transcript-region"
+          className="lg:col-span-2 lg:sticky lg:top-24"
+        >
           <h2 className="text-base font-semibold text-ink mb-3">Transcript</h2>
-          <div className="bg-mist rounded-md border border-line max-h-[700px] overflow-y-auto">
+          <div className="bg-mist rounded-md border border-line max-h-[calc(100vh-9rem)] overflow-y-auto">
             <TranscriptViewer sessionId={resolvedSessionId} />
           </div>
         </section>
 
-        {/* Analysis column */}
-        <section>
+        {/* Analysis region — wide, fills the page area alongside/below transcript */}
+        <section data-testid="analysis-region" className="lg:col-span-3 min-w-0">
           <h2 className="text-base font-semibold text-ink mb-3">Analysis</h2>
           {isError ? (
             <div

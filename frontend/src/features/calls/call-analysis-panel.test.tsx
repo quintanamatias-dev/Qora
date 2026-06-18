@@ -19,11 +19,11 @@
  * - null analysis renders empty/no-analysis state
  *
  * === CRM parity / data corrections ===
- * - applied_to_qora=true, crm_sync_status=null → shows "Applied to Qora" label, NO CRM label
- * - applied_to_qora=true, crm_sync_status="in_sync" → shows both labels as distinct states
- * - applied_to_qora=false → shows pending/unapplied indicator (no "Applied" label)
- * - crm_sync_status=null → NO sync indicator/icon shown
- * - crm_sync_status="unknown" → NO sync indicator shown
+ * - Section header shows MINIMAL "Qora" / "CRM" badges; colour + data-state carry
+ *   the meaning (green=applied/synced, red=partial/out_of_sync, gray=pending/unknown)
+ * - Verbose wording ("applied ✓", "out of sync") is NOT rendered as visible text
+ * - Honest CRM: null/unknown/stale never claims a current synced state
+ * - Per-row sync/applied badges and confidence % are not rendered
  */
 
 import { describe, it, expect } from 'vitest'
@@ -119,6 +119,25 @@ describe('CallAnalysisPanel — null analysis', () => {
   it('shows loading state when isLoading=true', () => {
     render(<CallAnalysisPanel analysis={null} isLoading />)
     expect(screen.getByTestId('analysis-loading')).toBeInTheDocument()
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Scenario: dimension cards flow through balanced columns (masonry)
+//
+// Feedback: a rigid 2-col grid left tall gaps and cramped cards. The dimension
+// region now flows cards through CSS columns that widen with the (now wider)
+// analysis region, and each card avoids breaking across a column.
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('CallAnalysisPanel — dimension grid masonry flow', () => {
+  it('flows dimension cards through balanced columns that widen on large screens', () => {
+    render(<CallAnalysisPanel analysis={makeAnalysis()} />)
+
+    const grid = screen.getByTestId('dimension-grid')
+    expect(grid.className).toContain('columns-1')
+    expect(grid.className).toContain('lg:columns-2')
+    expect(grid.className).toContain('2xl:columns-3')
   })
 })
 
@@ -469,7 +488,19 @@ describe('CallAnalysisPanel — section-level correction status badges', () => {
     expect(screen.getByTestId('corrections-crm-status')).toBeInTheDocument()
   })
 
-  it('shows "Qora applied" when every correction is applied', () => {
+  it('uses a minimal "Qora" label (state carried by colour/data-state, not verbose text)', () => {
+    const analysis = makeAnalysis({
+      data_corrections: [makeCorrection({ applied: true })],
+    })
+    render(<CallAnalysisPanel analysis={analysis} />)
+
+    const badge = screen.getByTestId('corrections-qora-status')
+    // Minimal header: just the system word, no verbose "applied ✓" pill text.
+    expect(badge.textContent?.trim()).toBe('Qora')
+    expect(badge.textContent).not.toMatch(/applied|partial|pending/i)
+  })
+
+  it('marks Qora applied (green) when every correction is applied', () => {
     const analysis = makeAnalysis({
       data_corrections: [
         makeCorrection({ field: 'zona', applied: true }),
@@ -478,10 +509,12 @@ describe('CallAnalysisPanel — section-level correction status badges', () => {
     })
     render(<CallAnalysisPanel analysis={analysis} />)
 
-    expect(screen.getByTestId('corrections-qora-status').textContent).toMatch(/applied/i)
+    const badge = screen.getByTestId('corrections-qora-status')
+    expect(badge).toHaveAttribute('data-state', 'applied')
+    expect(badge.className).toContain('text-teal')
   })
 
-  it('shows "Qora partial" when some corrections are applied and some are not', () => {
+  it('marks Qora partial (red) when some corrections are applied and some are not', () => {
     const analysis = makeAnalysis({
       data_corrections: [
         makeCorrection({ field: 'zona', applied: true }),
@@ -490,19 +523,34 @@ describe('CallAnalysisPanel — section-level correction status badges', () => {
     })
     render(<CallAnalysisPanel analysis={analysis} />)
 
-    expect(screen.getByTestId('corrections-qora-status').textContent).toMatch(/partial/i)
+    const badge = screen.getByTestId('corrections-qora-status')
+    expect(badge).toHaveAttribute('data-state', 'partial')
+    expect(badge.className).toContain('text-coral')
   })
 
-  it('shows "Qora pending" when no corrections are applied', () => {
+  it('marks Qora pending (gray) when no corrections are applied', () => {
     const analysis = makeAnalysis({
       data_corrections: [makeCorrection({ applied: false })],
     })
     render(<CallAnalysisPanel analysis={analysis} />)
 
-    expect(screen.getByTestId('corrections-qora-status').textContent).toMatch(/pending/i)
+    const badge = screen.getByTestId('corrections-qora-status')
+    expect(badge).toHaveAttribute('data-state', 'pending')
+    expect(badge.className).toContain('text-ink-3')
   })
 
-  it('shows "CRM synced" only when every correction is in_sync', () => {
+  it('uses a minimal "CRM" label (state carried by colour/data-state, not verbose text)', () => {
+    const analysis = makeAnalysis({
+      data_corrections: [makeCorrection({ applied: true, crm_sync_status: 'in_sync' })],
+    })
+    render(<CallAnalysisPanel analysis={analysis} />)
+
+    const badge = screen.getByTestId('corrections-crm-status')
+    expect(badge.textContent?.trim()).toBe('CRM')
+    expect(badge.textContent).not.toMatch(/synced|out of sync|unknown/i)
+  })
+
+  it('marks CRM synced (green) only when every correction is in_sync', () => {
     const analysis = makeAnalysis({
       data_corrections: [
         makeCorrection({ field: 'zona', applied: true, crm_sync_status: 'in_sync' }),
@@ -511,10 +559,12 @@ describe('CallAnalysisPanel — section-level correction status badges', () => {
     })
     render(<CallAnalysisPanel analysis={analysis} />)
 
-    expect(screen.getByTestId('corrections-crm-status').textContent).toMatch(/synced/i)
+    const badge = screen.getByTestId('corrections-crm-status')
+    expect(badge).toHaveAttribute('data-state', 'synced')
+    expect(badge.className).toContain('text-teal')
   })
 
-  it('shows "CRM out of sync" if any correction is out_of_sync (batch reflects the issue)', () => {
+  it('marks CRM out_of_sync (red) if any correction is out_of_sync (batch reflects the issue)', () => {
     const analysis = makeAnalysis({
       data_corrections: [
         makeCorrection({ field: 'zona', applied: true, crm_sync_status: 'in_sync' }),
@@ -523,18 +573,22 @@ describe('CallAnalysisPanel — section-level correction status badges', () => {
     })
     render(<CallAnalysisPanel analysis={analysis} />)
 
-    expect(screen.getByTestId('corrections-crm-status').textContent).toMatch(/out of sync/i)
+    const badge = screen.getByTestId('corrections-crm-status')
+    expect(badge).toHaveAttribute('data-state', 'out_of_sync')
+    expect(badge.className).toContain('text-coral')
   })
 
-  it('shows an honest "CRM unknown" when sync status is null/unknown/stale (no fake sync)', () => {
+  it('marks CRM unknown (gray) when sync status is null/unknown/stale (no fake sync)', () => {
     const analysis = makeAnalysis({
       data_corrections: [makeCorrection({ applied: true, crm_sync_status: 'stale' })],
     })
     render(<CallAnalysisPanel analysis={analysis} />)
 
-    expect(screen.getByTestId('corrections-crm-status').textContent).toMatch(/unknown/i)
-    // Never a fake current-sync claim from a stale status.
-    expect(screen.queryByText(/synced/i)).not.toBeInTheDocument()
+    const badge = screen.getByTestId('corrections-crm-status')
+    // Honest: a stale status never claims current sync.
+    expect(badge).toHaveAttribute('data-state', 'unknown')
+    expect(badge).not.toHaveAttribute('data-state', 'synced')
+    expect(badge.className).toContain('text-ink-3')
   })
 
   it('does NOT render status badges when there are no corrections', () => {

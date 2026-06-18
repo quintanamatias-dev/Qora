@@ -396,15 +396,20 @@ function MiscNotesCard({ miscNotes }: { miscNotes: Record<string, unknown> | Rec
 // and CRM sync are effectively batch-level for these corrections, so the honest
 // status lives ONCE at the section level (header badges):
 //
-//   Qora badge:
-//     - every correction applied            → "Qora applied ✓"
-//     - some applied, some not               → "Qora partial"
-//     - none applied                         → "Qora pending"
+// Per the latest feedback the header badges are deliberately MINIMAL: a single
+// word ("Qora" / "CRM") whose colour carries the state, instead of verbose
+// "Qora applied ✓" / "CRM unknown" pills that dominated the header. The full
+// wording survives as a hover `title` so nothing is lost for inspection.
 //
-//   CRM badge (batch parity — if one fails, the section reflects the issue):
-//     - any out_of_sync                      → "CRM out of sync"
-//     - all in_sync (and at least one)       → "CRM synced ✓"
-//     - otherwise (null/unknown/stale/mixed) → "CRM unknown" (never fake sync)
+//   Qora badge (colour = applied state):
+//     - every correction applied            → green  (title "applied")
+//     - some applied, some not               → red    (title "partial")
+//     - none applied                         → gray   (title "pending")
+//
+//   CRM badge (colour = batch parity — if one fails the section reflects it):
+//     - any out_of_sync                      → red    (title "out of sync")
+//     - all in_sync (and at least one)       → green  (title "synced")
+//     - otherwise (null/unknown/stale/mixed) → gray   (title "unknown" — never fake sync)
 //
 // Old value, rejection reason, evidence and superseded notes stay readable but
 // compact, inline under each row.
@@ -463,14 +468,16 @@ function CorrectionsStatusBadges({
   const appliedState = deriveAppliedState(corrections)
   const crmState = deriveCrmState(corrections)
 
-  const appliedLabel =
-    appliedState === 'applied'
-      ? 'Qora applied ✓'
-      : appliedState === 'partial'
-        ? 'Qora partial'
-        : 'Qora pending'
+  // Minimal label = just the system name. Colour carries the state; the verbose
+  // wording lives in `title` so honesty/detail survives on hover.
   const appliedTone: 'on' | 'off' | 'unknown' =
     appliedState === 'applied' ? 'on' : appliedState === 'partial' ? 'off' : 'unknown'
+  const appliedTitle =
+    appliedState === 'applied'
+      ? 'Qora: all corrections applied'
+      : appliedState === 'partial'
+        ? 'Qora: some corrections applied, some pending'
+        : 'Qora: corrections pending'
   const appliedClass =
     appliedState === 'applied'
       ? 'text-teal bg-teal-faint border-teal-line'
@@ -478,14 +485,14 @@ function CorrectionsStatusBadges({
         ? 'text-coral bg-coral-faint border-coral-line'
         : 'text-ink-3 bg-mist border-line'
 
-  const crmLabel =
-    crmState === 'synced'
-      ? 'CRM synced ✓'
-      : crmState === 'out_of_sync'
-        ? 'CRM out of sync'
-        : 'CRM unknown'
   const crmTone: 'on' | 'off' | 'unknown' =
     crmState === 'synced' ? 'on' : crmState === 'out_of_sync' ? 'off' : 'unknown'
+  const crmTitle =
+    crmState === 'synced'
+      ? 'CRM: all corrections synced'
+      : crmState === 'out_of_sync'
+        ? 'CRM: one or more corrections out of sync'
+        : 'CRM: sync state unknown (no integration or not reported)'
   const crmClass =
     crmState === 'synced'
       ? 'text-teal bg-teal-faint border-teal-line'
@@ -500,28 +507,27 @@ function CorrectionsStatusBadges({
     >
       <span
         data-testid="corrections-qora-status"
+        data-state={appliedState}
+        title={appliedTitle}
         className={[
-          'inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full border',
+          'inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded-full border',
           appliedClass,
         ].join(' ')}
       >
         <SyncDot tone={appliedTone} />
-        {appliedLabel}
+        Qora
       </span>
       <span
         data-testid="corrections-crm-status"
+        data-state={crmState}
+        title={crmTitle}
         className={[
-          'inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full border',
+          'inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded-full border',
           crmClass,
         ].join(' ')}
-        title={
-          crmState === 'unknown'
-            ? 'CRM sync state for these corrections is not known'
-            : undefined
-        }
       >
         <SyncDot tone={crmTone} />
-        {crmLabel}
+        CRM
       </span>
     </div>
   )
@@ -811,29 +817,38 @@ export function CallAnalysisPanel({ analysis, isLoading, locale = 'es' }: CallAn
         </div>
       </Card>
 
-      {/* ── Dimension Grid ── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-
+      {/*
+        ── Dimension Grid (masonry flow) ──
+        Cards have very different heights (a 5-objection card vs an empty notes
+        card). A rigid 2-col CSS grid leaves tall gaps and feels cramped, so we
+        flow the cards through balanced CSS columns instead. Columns widen with
+        the (now wider) analysis region: 1 col on small, 2 on lg, 3 on 2xl.
+        `break-inside-avoid` keeps each card intact across the column break.
+      */}
+      <div
+        data-testid="dimension-grid"
+        className="columns-1 lg:columns-2 2xl:columns-3 gap-4 [column-fill:balance]"
+      >
         {/* Objections — structured inspection */}
-        <Card>
+        <Card className="mb-4 break-inside-avoid">
           <SectionLabel>Objections</SectionLabel>
           <ObjectionsCardFull objections={analysis.objections} />
         </Card>
 
         {/* Pain Points — structured inspection */}
-        <Card>
+        <Card className="mb-4 break-inside-avoid">
           <SectionLabel>Pain Points</SectionLabel>
           <PainPointsCard painPoints={analysis.pain_points} />
         </Card>
 
         {/* Service Issues */}
-        <Card>
+        <Card className="mb-4 break-inside-avoid">
           <SectionLabel>Service Issues</SectionLabel>
           <ServiceIssuesCard serviceIssues={analysis.service_issues} />
         </Card>
 
         {/* Detected Interests — normalized value + source kind (honest) */}
-        <Card>
+        <Card className="mb-4 break-inside-avoid">
           <SectionLabel>Detected Interests</SectionLabel>
           {allInterests.length === 0 ? (
             <EmptyState label="No interests detected" />
@@ -860,25 +875,25 @@ export function CallAnalysisPanel({ analysis, isLoading, locale = 'es' }: CallAn
         </Card>
 
         {/* Commitment Signals */}
-        <Card>
+        <Card className="mb-4 break-inside-avoid">
           <SectionLabel>Commitment Signals</SectionLabel>
           <CommitmentsCard commitments={analysis.commitment_signals} />
         </Card>
 
         {/* Profile Facts */}
-        <Card>
+        <Card className="mb-4 break-inside-avoid">
           <SectionLabel>Profile Facts</SectionLabel>
           <ProfileFactsCard profileFacts={analysis.profile_facts} />
         </Card>
 
         {/* Misc Notes */}
-        <Card>
+        <Card className="mb-4 break-inside-avoid">
           <SectionLabel>Notes</SectionLabel>
           <MiscNotesCard miscNotes={analysis.misc_notes} />
         </Card>
 
         {/* Data Corrections — light inline rows + section-level CRM parity */}
-        <Card>
+        <Card className="mb-4 break-inside-avoid">
           <div className="flex items-start justify-between gap-2 mb-1.5">
             <p className="text-xs text-ink-3 uppercase tracking-wider">
               Data Corrections
