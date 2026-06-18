@@ -128,3 +128,106 @@ describe('DIMENSION_LABELS — keys are stable English codes', () => {
     expect(DIMENSION_LABELS).toHaveProperty('bad_experience')
   })
 })
+
+// ──────────────────────────────────────────────────────────────────────────────
+// IssueCategoryType labels — cubora-accumulated-dimension-rankings
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('DIMENSION_LABELS — IssueCategoryType codes registered', () => {
+  const issueCodes = [
+    'poor_attention',
+    'delay',
+    'lack_of_response',
+    'lack_of_clarity',
+    'claim_problem',
+    'billing_issue',
+    'administrative_problem',
+    'communication_problem',
+  ]
+
+  for (const code of issueCodes) {
+    it(`resolves Spanish label for issue code: ${code}`, () => {
+      const result = resolveLabel(code, 'es')
+      // Must be a real label, not the code falling back
+      expect(result).not.toBe(code)
+      expect(result.length).toBeGreaterThan(0)
+    })
+
+    it(`resolves English label for issue code: ${code}`, () => {
+      const result = resolveLabel(code, 'en')
+      expect(result).not.toBe(code)
+      expect(result.length).toBeGreaterThan(0)
+    })
+  }
+
+  it('all issue codes are present in DIMENSION_LABELS', () => {
+    for (const code of issueCodes) {
+      expect(DIMENSION_LABELS).toHaveProperty(code)
+    }
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Product catalog labels — cubora-accumulated-dimension-rankings
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('DIMENSION_LABELS — PRODUCT_CATALOG codes registered', () => {
+  const productCodes = [
+    'auto_todo_riesgo',
+    'auto_terceros_completo',
+    'auto_terceros',
+    'moto',
+    'hogar',
+    'vida',
+    'comercio',
+    'art',
+    'caucion',
+  ]
+
+  it('all product catalog codes are present in DIMENSION_LABELS', () => {
+    for (const code of productCodes) {
+      expect(DIMENSION_LABELS).toHaveProperty(code)
+    }
+  })
+
+  it('product codes each have non-empty es and en labels', () => {
+    for (const code of productCodes) {
+      const entry = DIMENSION_LABELS[code]
+      expect(entry).toBeDefined()
+      expect(entry.es.length).toBeGreaterThan(0)
+      expect(entry.en.length).toBeGreaterThan(0)
+    }
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Need tag labels — cubora-accumulated-dimension-rankings
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('DIMENSION_LABELS — NEED_TAGS codes registered', () => {
+  const needCodes = [
+    'precio_competitivo',
+    'mayor_cobertura',
+    'menor_franquicia',
+    'atencion_personalizada',
+    'rapidez',
+    'financiacion',
+    'comparar_con_actual',
+    'renovacion_proxima',
+  ]
+
+  it('all need tag codes are present in DIMENSION_LABELS', () => {
+    for (const code of needCodes) {
+      expect(DIMENSION_LABELS).toHaveProperty(code)
+    }
+  })
+
+  it('need tag codes each have non-empty es and en labels', () => {
+    for (const code of needCodes) {
+      const entry = DIMENSION_LABELS[code]
+      expect(entry).toBeDefined()
+      expect(entry.es.length).toBeGreaterThan(0)
+      expect(entry.en.length).toBeGreaterThan(0)
+    }
+  })
+})

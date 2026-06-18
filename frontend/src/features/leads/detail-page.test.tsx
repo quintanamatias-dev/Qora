@@ -584,6 +584,54 @@ describe('LeadDetailPage — context preview', () => {
 })
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Accumulated Facts section — cubora-accumulated-dimension-rankings
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('LeadDetailPage — Accumulated Facts section', () => {
+  it('shows "Accumulated Facts" section heading (not "Accumulated Profile Facts")', async () => {
+    renderDetailPage()
+    await waitFor(() =>
+      expect(screen.getByText('Accumulated Facts')).toBeInTheDocument()
+    )
+    // Old label must be gone
+    expect(screen.queryByText('Accumulated Profile Facts')).not.toBeInTheDocument()
+  })
+
+  it('renders Detected Interests sub-section heading', async () => {
+    renderDetailPage()
+    await waitFor(() =>
+      expect(screen.getByText(/Detected Interests/i)).toBeInTheDocument()
+    )
+  })
+
+  it('renders Service Issues sub-section heading', async () => {
+    renderDetailPage()
+    await waitFor(() => {
+      // "Service Issues" appears as a sub-section header (may also appear in subtitle)
+      const els = screen.getAllByText(/Service Issues/i)
+      expect(els.length).toBeGreaterThanOrEqual(1)
+    })
+  })
+
+  it('renders Profile sub-section inside Accumulated Facts', async () => {
+    renderDetailPage()
+    await waitFor(() => {
+      // "Profile" appears as a sub-section header inside Accumulated Facts
+      const els = screen.getAllByText(/^Profile$/i)
+      expect(els.length).toBeGreaterThanOrEqual(1)
+    })
+  })
+
+  it('does NOT render a standalone Dimension Rollups section', async () => {
+    renderDetailPage()
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { level: 1, name: /John Doe/i })).toBeInTheDocument()
+    )
+    expect(screen.queryByText('Dimension Rollups')).not.toBeInTheDocument()
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Loading states
 // ──────────────────────────────────────────────────────────────────────────────
 

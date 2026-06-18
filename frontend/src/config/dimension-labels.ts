@@ -112,6 +112,105 @@ export const DIMENSION_LABELS: Record<string, Record<LabelLocale, string>> = {
     es: 'Desconocido',
     en: 'Unknown',
   },
+  // ── IssueCategoryType — service issue tags (cubora-accumulated-dimension-rankings)
+  poor_attention: {
+    es: 'Mala atención',
+    en: 'Poor attention',
+  },
+  delay: {
+    es: 'Demora',
+    en: 'Delay',
+  },
+  lack_of_response: {
+    es: 'Falta de respuesta',
+    en: 'Lack of response',
+  },
+  claim_problem: {
+    es: 'Problema con siniestro',
+    en: 'Claim problem',
+  },
+  billing_issue: {
+    es: 'Problema de facturación',
+    en: 'Billing issue',
+  },
+  administrative_problem: {
+    es: 'Problema administrativo',
+    en: 'Administrative problem',
+  },
+  communication_problem: {
+    es: 'Problema de comunicación',
+    en: 'Communication problem',
+  },
+  // ── PRODUCT_CATALOG — insurance product IDs (cubora-accumulated-dimension-rankings)
+  auto_todo_riesgo: {
+    es: 'Auto todo riesgo',
+    en: 'Comprehensive auto',
+  },
+  auto_terceros_completo: {
+    es: 'Auto terceros completo',
+    en: 'Auto third-party complete',
+  },
+  auto_terceros: {
+    es: 'Auto terceros',
+    en: 'Auto third-party',
+  },
+  moto: {
+    es: 'Moto',
+    en: 'Motorcycle',
+  },
+  hogar: {
+    es: 'Hogar',
+    en: 'Home',
+  },
+  vida: {
+    es: 'Vida',
+    en: 'Life',
+  },
+  comercio: {
+    es: 'Comercio',
+    en: 'Commercial',
+  },
+  art: {
+    es: 'ART',
+    en: 'Personal accident (ART)',
+  },
+  caucion: {
+    es: 'Caución',
+    en: 'Surety bond',
+  },
+  // ── NEED_TAGS — detected lead needs (cubora-accumulated-dimension-rankings)
+  precio_competitivo: {
+    es: 'Precio competitivo',
+    en: 'Competitive price',
+  },
+  mayor_cobertura: {
+    es: 'Mayor cobertura',
+    en: 'More coverage',
+  },
+  menor_franquicia: {
+    es: 'Menor franquicia',
+    en: 'Lower deductible',
+  },
+  atencion_personalizada: {
+    es: 'Atención personalizada',
+    en: 'Personalized service',
+  },
+  rapidez: {
+    es: 'Rapidez',
+    en: 'Speed',
+  },
+  financiacion: {
+    es: 'Financiación',
+    en: 'Financing',
+  },
+  comparar_con_actual: {
+    es: 'Comparar con actual',
+    en: 'Compare with current',
+  },
+  renovacion_proxima: {
+    es: 'Renovación próxima',
+    en: 'Upcoming renewal',
+  },
 }
 
 /**

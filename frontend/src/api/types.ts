@@ -101,6 +101,35 @@ export interface CreateLeadPayload {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Dimension Rollups — cubora-accumulated-dimension-rankings
+// GET /api/v1/leads/{lead_id}/dimension-rollups
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface DetectedInterestRollup {
+  interest: string
+  count: number
+  category: 'product' | 'need'
+}
+
+export interface ServiceIssueRollup {
+  issue: string
+  count: number
+  strength: 'high' | 'medium' | 'low'
+}
+
+export interface CategoryRollup {
+  category: string
+  count: number
+}
+
+export interface DimensionRollups {
+  detected_interests: DetectedInterestRollup[]
+  service_issues: ServiceIssueRollup[]
+  objections: CategoryRollup[]
+  pain_points: CategoryRollup[]
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Call Sessions
 // ──────────────────────────────────────────────────────────────────────────────
 

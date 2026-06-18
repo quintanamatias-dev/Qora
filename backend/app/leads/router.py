@@ -7,13 +7,17 @@ Provides endpoints for:
 - PATCH /api/v1/leads/{id}/status — transition status
 - GET /api/v1/leads/{id}/history — call history for lead
 - GET /api/v1/leads/{id}/context-preview — structured next-call context preview (Phase A)
+- GET /api/v1/leads/{id}/dimension-rollups?client_id={id} — lead-level rollup counts (cubora)
 
 Covers: T2.4 — GET/PATCH endpoints scope queries by client_id.
+Security: dimension-rollups endpoint requires client_id and verifies tenant ownership.
 """
 
 from __future__ import annotations
 
+import json
 import structlog
+from collections import Counter
 from datetime import datetime
 from typing import Any
 
@@ -455,6 +459,232 @@ async def get_lead_history(
             for cs in sessions
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Dimension rollups endpoint (cubora-accumulated-dimension-rankings)
+# ---------------------------------------------------------------------------
+
+# Strength thresholds: count >= 3 → high, count == 2 → medium, count == 1 → low
+def _issue_strength(count: int) -> str:
+    """Derive service issue strength label from mention count."""
+    if count >= 3:
+        return "high"
+    if count == 2:
+        return "medium"
+    return "low"
+
+
+async def _build_dimension_rollups(
+    session: AsyncSession,
+    lead_id: str,
+    client_id: str,
+) -> dict:
+    """Build dimension rollup counts from call_analyses for a lead scoped to a tenant.
+
+    Queries ONLY call_analyses — does NOT read CallSession.extracted_facts.
+    All queries filter by BOTH lead_id AND client_id to prevent cross-tenant
+    data leakage even if lead_id is guessed by an attacker from another tenant.
+
+    Performance strategy:
+    - Scalar BI columns (primary_objection_category, primary_pain_category):
+      aggregated entirely in SQL via GROUP BY + COUNT — zero Python iteration.
+      These columns are indexed (ix_ca_primary_objection_category,
+      ix_ca_primary_pain_category) and populated at write time.
+    - JSON TEXT columns (products, specific_needs, service_issues):
+      SQLite stores JSON as opaque TEXT with no native array aggregation that
+      is portable across SQLite/Postgres via SQLAlchemy Core. Python parsing
+      is kept but the query selects ONLY those three columns, avoiding the
+      load of large TEXT blobs (summary, profile_facts, commitment_signals,
+      objections, buying_signals, etc.) that are never needed here.
+
+    Args:
+        session: Async DB session.
+        lead_id: Lead UUID to aggregate analyses for.
+        client_id: Tenant client ID — all queries are scoped to this value to
+            prevent cross-tenant exposure.
+
+    Returns:
+        Dict with detected_interests, service_issues, objections, pain_points arrays.
+        All arrays sorted by count descending.
+    """
+    from app.calls.models import CallAnalysis
+    from app.analysis.universal.interest.catalog import PRODUCT_CATALOG, NEED_TAGS
+
+    # Authoritative allowlists for interest filtering
+    product_set = set(PRODUCT_CATALOG)
+    need_set = set(NEED_TAGS)
+
+    # --- Objections (SQL GROUP BY on indexed scalar BI column) ---
+    # primary_objection_category is a denormalized scalar — no Python needed.
+    # Filters by BOTH lead_id AND client_id to prevent cross-tenant leakage.
+    obj_stmt = (
+        select(
+            CallAnalysis.primary_objection_category,
+            func.count().label("cnt"),
+        )
+        .where(
+            CallAnalysis.lead_id == lead_id,
+            CallAnalysis.client_id == client_id,
+            CallAnalysis.primary_objection_category.isnot(None),
+        )
+        .group_by(CallAnalysis.primary_objection_category)
+        .order_by(func.count().desc())
+    )
+    obj_result = await session.execute(obj_stmt)
+    objections = [
+        {"category": row.primary_objection_category, "count": row.cnt}
+        for row in obj_result
+    ]
+
+    # --- Pain Points (SQL GROUP BY on indexed scalar BI column) ---
+    # primary_pain_category is a denormalized scalar — no Python needed.
+    # Filters by BOTH lead_id AND client_id to prevent cross-tenant leakage.
+    pain_stmt = (
+        select(
+            CallAnalysis.primary_pain_category,
+            func.count().label("cnt"),
+        )
+        .where(
+            CallAnalysis.lead_id == lead_id,
+            CallAnalysis.client_id == client_id,
+            CallAnalysis.primary_pain_category.isnot(None),
+        )
+        .group_by(CallAnalysis.primary_pain_category)
+        .order_by(func.count().desc())
+    )
+    pain_result = await session.execute(pain_stmt)
+    pain_points = [
+        {"category": row.primary_pain_category, "count": row.cnt}
+        for row in pain_result
+    ]
+
+    # --- JSON dimensions: select only the three required TEXT columns ---
+    # SQLite stores JSON as opaque TEXT; json_each() is not portable via
+    # SQLAlchemy Core across SQLite/Postgres. Python parsing is kept but we
+    # avoid loading all other columns (summary, profile_facts, objections, etc.)
+    # by selecting only the columns we actually parse.
+    # Filters by BOTH lead_id AND client_id to prevent cross-tenant leakage.
+    json_stmt = (
+        select(
+            CallAnalysis.products,
+            CallAnalysis.specific_needs,
+            CallAnalysis.service_issues,
+        )
+        .where(
+            CallAnalysis.lead_id == lead_id,
+            CallAnalysis.client_id == client_id,
+        )
+    )
+    json_result = await session.execute(json_stmt)
+    rows = json_result.all()
+
+    # --- Detected Interests ---
+    # Aggregate products (PRODUCT_CATALOG) and specific_needs (NEED_TAGS)
+    interest_counter: Counter = Counter()
+    interest_category: dict[str, str] = {}
+
+    # --- Service Issues ---
+    issue_counter: Counter = Counter()
+
+    for row in rows:
+        # Products from PRODUCT_CATALOG
+        try:
+            products = json.loads(row.products or "[]")
+        except (json.JSONDecodeError, TypeError):
+            products = []
+        for product in products:
+            if isinstance(product, str) and product in product_set:
+                interest_counter[product] += 1
+                interest_category[product] = "product"
+
+        # Need tags from specific_needs column
+        try:
+            specific_needs = json.loads(row.specific_needs or "[]")
+        except (json.JSONDecodeError, TypeError):
+            specific_needs = []
+        for need in specific_needs:
+            if isinstance(need, str) and need in need_set:
+                interest_counter[need] += 1
+                interest_category[need] = "need"
+
+        # Service issues — count by category from JSON objects
+        try:
+            issues = json.loads(row.service_issues or "[]")
+        except (json.JSONDecodeError, TypeError):
+            issues = []
+        for issue in issues:
+            if isinstance(issue, dict) and isinstance(issue.get("category"), str):
+                category = issue["category"]
+                if category:
+                    issue_counter[category] += 1
+
+    detected_interests = [
+        {"interest": code, "count": cnt, "category": interest_category[code]}
+        for code, cnt in interest_counter.most_common()
+    ]
+
+    service_issues = [
+        {"issue": cat, "count": cnt, "strength": _issue_strength(cnt)}
+        for cat, cnt in issue_counter.most_common()
+    ]
+
+    return {
+        "detected_interests": detected_interests,
+        "service_issues": service_issues,
+        "objections": objections,
+        "pain_points": pain_points,
+    }
+
+
+@router.get("/{lead_id}/dimension-rollups")
+async def get_dimension_rollups(
+    lead_id: str,
+    client_id: str = Query(..., description="Tenant client ID — required for tenant scoping"),
+    session: AsyncSession = Depends(get_db_session),
+):
+    """Return lead-level dimension rollup counts from call_analyses.
+
+    Requires client_id to prevent cross-tenant data exposure (IDOR).
+    Verifies the lead belongs to the requesting tenant before returning data.
+    All rollup queries filter CallAnalysis by both lead_id AND client_id.
+
+    Queries call_analyses with aggregation per dimension — does NOT use
+    CallSession.extracted_facts (which is deprecated for rollup purposes).
+
+    Args:
+        lead_id: Lead UUID to aggregate analyses for.
+        client_id: Tenant client ID — mandatory, used to verify ownership and
+            scope all CallAnalysis queries. Returns 404 for both unknown leads
+            and leads that belong to a different tenant (oracle-safe: callers
+            cannot distinguish between "does not exist" and "not yours").
+
+    Returns:
+        Dict with:
+          - detected_interests: [{interest, count, category}] sorted by count desc
+          - service_issues: [{issue, count, strength}] sorted by count desc
+          - objections: [{category, count}] sorted by count desc
+          - pain_points: [{category, count}] sorted by count desc
+          All arrays are empty when no analyses exist for the lead.
+
+    Raises:
+        404: If lead_id does not exist OR if the lead belongs to a different tenant.
+        422: If client_id query parameter is missing.
+    """
+    resolved_client_id = client_id.lower()
+
+    lead = await get_lead(session, lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail={"error": "lead not found"})
+
+    # Tenant ownership verification — prevent IDOR cross-tenant exposure.
+    # Returns 404 (same as missing lead) to avoid leaking lead existence to
+    # foreign tenants — oracle-safe: callers cannot distinguish "not found"
+    # from "not yours".
+    if lead.client_id != resolved_client_id:
+        raise HTTPException(status_code=404, detail={"error": "lead not found"})
+
+    return await _build_dimension_rollups(session, lead_id, resolved_client_id)
 
 
 # ---------------------------------------------------------------------------

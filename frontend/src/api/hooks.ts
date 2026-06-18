@@ -10,7 +10,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ApiError } from './client'
 import { fetchMetrics, fetchCallSessions, fetchTranscript, fetchCallAnalysis } from './calls'
-import { fetchLeads, fetchLead, fetchLeadContextPreview } from './leads'
+import { fetchLeads, fetchLead, fetchLeadContextPreview, fetchLeadDimensionRollups } from './leads'
 import { fetchClient, fetchClients, createClient, updateClient, deactivateClient } from './clients'
 import { fetchAgents, createAgent, updateAgent, deactivateAgent, makeAgentDefault } from './agents'
 import {
@@ -55,6 +55,7 @@ import type {
   AirtableFieldsResponse,
   SaveMappingsPayload,
   LeadContextPreview,
+  DimensionRollups,
 } from './types'
 
 interface MetricsParams {
@@ -109,6 +110,23 @@ export function useLeadContextPreview(clientId: string, leadId: string, enabled 
     queryKey: ['lead-context-preview', clientId, leadId],
     queryFn: () => fetchLeadContextPreview(clientId, leadId),
     enabled: Boolean(clientId) && Boolean(leadId) && enabled,
+    staleTime: 30_000,
+  })
+}
+
+/**
+ * useLeadDimensionRollups — fetches lead-level dimension rollup counts
+ * queryKey: ['lead-dimension-rollups', clientId, leadId]
+ *
+ * Provides ranked lists for detected interests (interest, #, category),
+ * service issues (issue, #, strength), objections, and pain points.
+ * All sourced from call_analyses — not CallSession.extracted_facts.
+ */
+export function useLeadDimensionRollups(clientId: string, leadId: string) {
+  return useQuery<DimensionRollups>({
+    queryKey: ['lead-dimension-rollups', clientId, leadId],
+    queryFn: () => fetchLeadDimensionRollups(clientId, leadId),
+    enabled: Boolean(clientId) && Boolean(leadId),
     staleTime: 30_000,
   })
 }
