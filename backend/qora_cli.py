@@ -139,6 +139,11 @@ async def _upsert_client_db(
     from app.core.config import Settings
     from app.core import database as db_module
     from app.tenants.service import get_client, create_client as svc_create_client
+    from scripts.migrate import run_migrations
+
+    # Ensure schema exists before opening a session.
+    # init_db() no longer calls create_all() (PR2 cutover); migrations must run first.
+    run_migrations()
 
     settings = Settings()
     await db_module.init_db(settings)
@@ -188,6 +193,11 @@ async def _list_clients_db() -> None:
     from app.core import database as db_module
     from sqlalchemy import select
     from app.tenants.models import Client
+    from scripts.migrate import run_migrations
+
+    # Ensure schema exists before opening a session.
+    # init_db() no longer calls create_all() (PR2 cutover); migrations must run first.
+    run_migrations()
 
     settings = Settings()
     await db_module.init_db(settings)

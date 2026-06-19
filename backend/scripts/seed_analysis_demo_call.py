@@ -84,11 +84,16 @@ async def seed_demo_call(scenario: str) -> None:
     from app.leads.models import Lead, LeadStatus
     from app.summarizer import generate_summary_and_facts
     from app.tenants.service import get_default_agent, seed_quintana
+    from scripts.migrate import run_migrations
 
     transcript = TRANSCRIPT_POSITIVE if scenario == "positive" else TRANSCRIPT_NEGATIVE
     turns = _parse_transcript(transcript)
     if not turns:
         raise RuntimeError("Synthetic transcript did not produce any turns")
+
+    # Ensure schema exists before opening a session.
+    # init_db() no longer calls create_all() (PR2 cutover); migrations must run first.
+    run_migrations()
 
     settings = Settings()
     await db_module.init_db(settings)

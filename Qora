@@ -267,42 +267,17 @@ stop_port_if_busy 8000 "QORA backend"
 stop_port_if_busy 5173 "QORA frontend"
 stop_port_if_busy 4040 "ngrok web interface"
 
-info "Ensuring local database schema is up to date"
+info "Ensuring local database schema is up to date (Alembic)"
 (
   cd "$BACKEND_DIR"
 
-  # SQLAlchemy create_all creates missing tables on a fresh DB. It does NOT alter
-  # existing tables, so the idempotent migration scripts below handle schema drift
-  # from older local databases.
-  "$PYTHON_BIN" - <<'PY'
-import asyncio
-
-from app.core.config import Settings
-from app.core import database as db
-
-
-async def main() -> None:
-    settings = Settings()
-    await db.init_db(settings)
-    await db.close_db()
-
-
-asyncio.run(main())
-PY
-
-  "$PYTHON_BIN" "scripts/migrate_phase2.py"
-  "$PYTHON_BIN" "scripts/migrate_lead_id_nullable.py"
-  "$PYTHON_BIN" "scripts/migrate_session_reconciliation.py"
-  "$PYTHON_BIN" "scripts/migrate_call_scheduler.py"
-  "$PYTHON_BIN" "scripts/migrate_analysis_v2.py"
-  "$PYTHON_BIN" "scripts/migrate_extraction_v2.py"
-  "$PYTHON_BIN" "scripts/migrate_add_agents.py"
-  "$PYTHON_BIN" "scripts/migrate_add_agent_id_fks.py"
-  "$PYTHON_BIN" "scripts/migrate_data_corrections.py"
-  "$PYTHON_BIN" "scripts/migrate_drop_engagement_quality.py"
-  "$PYTHON_BIN" "scripts/migrate_abandonment_to_outcome.py"
-  "$PYTHON_BIN" "scripts/migrate_next_action_engine.py"
-  "$PYTHON_BIN" "scripts/migrate_analysis_language.py"
+  # Phase B migration foundation: schema is managed by Alembic.
+  # scripts/migrate.py runs alembic upgrade head — idempotent, cwd-independent.
+  # Fresh DBs: creates full schema + stamps alembic_version.
+  # Existing unstamped Qora-compatible DBs: stamps head (no DDL).
+  # Already-stamped DBs: applies any pending migrations (no-op at head).
+  # Design: phase-b-db-migration-foundation/design.md
+  "$PYTHON_BIN" "scripts/migrate.py"
 )
 
 info "Starting backend on http://localhost:8000"
