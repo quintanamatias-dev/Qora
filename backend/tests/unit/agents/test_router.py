@@ -65,7 +65,8 @@ async def agents_app(tmp_path: Path):
         elevenlabs_api_key=SecretStr("el-test"),
         database_url=f"sqlite+aiosqlite:///{tmp_path}/agents_router_test.db",
     )
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     # Seed a test client (auto-creates default agent with slug 'test-client-agent')
     async with db_module.async_session_factory() as session:
@@ -107,7 +108,8 @@ async def agents_app_empty(tmp_path: Path):
         elevenlabs_api_key=SecretStr("el-test"),
         database_url=f"sqlite+aiosqlite:///{tmp_path}/agents_empty_test.db",
     )
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     from app.agents.router import router as agents_router
     from fastapi import FastAPI

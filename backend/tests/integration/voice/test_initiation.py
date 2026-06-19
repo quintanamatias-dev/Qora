@@ -36,7 +36,8 @@ async def app_client(tmp_path: Path):
         database_url=f"sqlite+aiosqlite:///{tmp_path}/initiation_test.db",
     )
 
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     # Seed tenant + leads
     assert db_module.async_session_factory is not None
@@ -241,7 +242,8 @@ async def returning_lead_client(tmp_path: Path):
         database_url=f"sqlite+aiosqlite:///{tmp_path}/initiation_returning_test.db",
     )
 
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     LEAD_ID = "lead-returning-001"
 

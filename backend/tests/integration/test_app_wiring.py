@@ -36,7 +36,8 @@ async def full_app_client(tmp_path: Path):
     )
 
     # Initialize DB directly (bypass lifespan for isolation)
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
     async with db_module.async_session_factory() as sess:
         from app.tenants.service import seed_quintana
         from app.leads.service import seed_leads

@@ -31,7 +31,8 @@ async def seeded_db(tmp_path: Path):
         elevenlabs_api_key=SecretStr("el-test"),
         database_url=f"sqlite+aiosqlite:///{tmp_path}/agent_calls_test.db",
     )
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     async with db_module.async_session_factory() as sess:
         from app.tenants.service import seed_quintana
@@ -116,7 +117,8 @@ async def test_create_session_no_default_agent_raises(tmp_path: Path):
         elevenlabs_api_key=SecretStr("el-test"),
         database_url=f"sqlite+aiosqlite:///{tmp_path}/no_agent_test.db",
     )
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     async with db_module.async_session_factory() as sess:
         from app.tenants.service import create_client, get_default_agent

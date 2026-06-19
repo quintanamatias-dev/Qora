@@ -90,7 +90,8 @@ async def frag_app_client(tmp_path: Path):
         database_url=f"sqlite+aiosqlite:///{tmp_path}/frag_test.db",
     )
 
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     assert db_module.async_session_factory is not None
     async with db_module.async_session_factory() as sess:

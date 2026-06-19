@@ -85,7 +85,8 @@ async def e2e_app_client(tmp_path: Path):
         database_url=f"sqlite+aiosqlite:///{tmp_path}/e2e_continuity_test.db",
     )
 
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     assert db_module.async_session_factory is not None
     async with db_module.async_session_factory() as sess:
@@ -393,7 +394,8 @@ async def e2e_memory_prompt_client(tmp_path: Path):
         database_url=f"sqlite+aiosqlite:///{tmp_path}/e2e_memory_prompt_test.db",
     )
 
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     LEAD_ID = "lead-e2e-prompt-001"
 
@@ -731,7 +733,8 @@ async def e2e_first_call_client(tmp_path: Path):
         database_url=f"sqlite+aiosqlite:///{tmp_path}/e2e_first_call_test.db",
     )
 
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     LEAD_ID = "lead-e2e-first-001"
 
