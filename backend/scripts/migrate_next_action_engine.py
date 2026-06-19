@@ -1,3 +1,8 @@
+# DEPRECATED — This script is superseded by Alembic migrations (phase-b-db-migration-foundation).
+# All schema changes are now managed via: python scripts/migrate.py (alembic upgrade head).
+# This file is kept for audit trail only. Do NOT run it against production databases.
+# See docs/MIGRATIONS.md for the current migration workflow.
+
 """QORA Next Action Engine — Idempotent migration (qora-next-action, Issue #47).
 
 Adds 3 new columns to the clients table and updates the scheduler_retry_on_outcomes

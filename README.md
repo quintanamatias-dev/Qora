@@ -224,10 +224,13 @@ pip install -e .
 cp .env.example .env
 # Fill in: OPENAI_API_KEY, ELEVENLABS_API_KEY, ELEVENLABS_AGENT_ID
 
-# 3. Run
+# 3. Run migrations first (required — init_db no longer auto-creates schema)
+python scripts/migrate.py
+
+# 4. Run
 uvicorn app.main:app --reload
 
-# 4. Open demo
+# 5. Open demo
 open http://localhost:8000/demo/
 ```
 

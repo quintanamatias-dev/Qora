@@ -70,7 +70,8 @@ async def memory_app_client(tmp_path: Path):
         database_url=f"sqlite+aiosqlite:///{tmp_path}/custom_llm_memory_test.db",
     )
 
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     LEAD_ID = "lead-memory-test-001"
 
@@ -437,7 +438,8 @@ async def override_app_client(tmp_path: Path):
         database_url=f"sqlite+aiosqlite:///{tmp_path}/custom_llm_override_test.db",
     )
 
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     LEAD_ID = "lead-override-test-001"
 

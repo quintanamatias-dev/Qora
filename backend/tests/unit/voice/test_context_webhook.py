@@ -81,6 +81,7 @@ async def webhook_app_client(tmp_path: Path):
     """Test app with isolated SQLite and seeded quintana-seguros data."""
     from app.core.config import Settings
     from app.core import database as db_module
+    from tests.helpers.migrations import init_db_with_migrations
 
     settings = Settings(
         openai_api_key=SecretStr("sk-test-openai"),
@@ -88,7 +89,8 @@ async def webhook_app_client(tmp_path: Path):
         database_url=f"sqlite+aiosqlite:///{tmp_path}/webhook_context_test.db",
     )
 
-    await db_module.init_db(settings)
+    # Phase B cutover: apply Alembic migrations first so schema exists before seeding
+    await init_db_with_migrations(db_module, settings)
 
     assert db_module.async_session_factory is not None
     async with db_module.async_session_factory() as sess:

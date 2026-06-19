@@ -95,12 +95,14 @@ describe('resolveLabel — fallback behavior', () => {
 // ──────────────────────────────────────────────────────────────────────────────
 
 describe('DIMENSION_LABELS — keys are stable English codes', () => {
-  it('all registry keys are lowercase_underscore English identifiers', () => {
+  it('all registry keys are stable underscore English identifiers', () => {
     const keys = Object.keys(DIMENSION_LABELS)
     expect(keys.length).toBeGreaterThan(0)
     for (const key of keys) {
-      // Must match stable code pattern: lowercase letters, digits, underscores
-      expect(key).toMatch(/^[a-z0-9_]+$/)
+      // Must match stable code pattern: ASCII letters, digits, underscores.
+      // Keys MUST equal the backend code verbatim (resolveLabel does a direct
+      // lookup), so uppercase need-tag codes like COMPARANDO_OPCIONES are valid.
+      expect(key).toMatch(/^[A-Za-z0-9_]+$/)
     }
   })
 
@@ -126,5 +128,153 @@ describe('DIMENSION_LABELS — keys are stable English codes', () => {
   it('pain dimension codes present: service_quality, bad_experience', () => {
     expect(DIMENSION_LABELS).toHaveProperty('service_quality')
     expect(DIMENSION_LABELS).toHaveProperty('bad_experience')
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
+// IssueCategoryType labels — cubora-accumulated-dimension-rankings
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('DIMENSION_LABELS — IssueCategoryType codes registered', () => {
+  const issueCodes = [
+    'poor_attention',
+    'delay',
+    'lack_of_response',
+    'lack_of_clarity',
+    'claim_problem',
+    'billing_issue',
+    'administrative_problem',
+    'communication_problem',
+  ]
+
+  for (const code of issueCodes) {
+    it(`resolves Spanish label for issue code: ${code}`, () => {
+      const result = resolveLabel(code, 'es')
+      // Must be a real label, not the code falling back
+      expect(result).not.toBe(code)
+      expect(result.length).toBeGreaterThan(0)
+    })
+
+    it(`resolves English label for issue code: ${code}`, () => {
+      const result = resolveLabel(code, 'en')
+      expect(result).not.toBe(code)
+      expect(result.length).toBeGreaterThan(0)
+    })
+  }
+
+  it('all issue codes are present in DIMENSION_LABELS', () => {
+    for (const code of issueCodes) {
+      expect(DIMENSION_LABELS).toHaveProperty(code)
+    }
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Product catalog labels — cubora-accumulated-dimension-rankings
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('DIMENSION_LABELS — PRODUCT_CATALOG codes registered', () => {
+  const productCodes = [
+    'auto_todo_riesgo',
+    'auto_terceros_completo',
+    'auto_terceros',
+    'moto',
+    'hogar',
+    'vida',
+    'comercio',
+    'art',
+    'caucion',
+  ]
+
+  it('all product catalog codes are present in DIMENSION_LABELS', () => {
+    for (const code of productCodes) {
+      expect(DIMENSION_LABELS).toHaveProperty(code)
+    }
+  })
+
+  it('product codes each have non-empty es and en labels', () => {
+    for (const code of productCodes) {
+      const entry = DIMENSION_LABELS[code]
+      expect(entry).toBeDefined()
+      expect(entry.es.length).toBeGreaterThan(0)
+      expect(entry.en.length).toBeGreaterThan(0)
+    }
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Need tag labels — cubora-accumulated-dimension-rankings
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('DIMENSION_LABELS — NEED_TAGS codes registered', () => {
+  const needCodes = [
+    'precio_competitivo',
+    'mayor_cobertura',
+    'menor_franquicia',
+    'atencion_personalizada',
+    'rapidez',
+    'financiacion',
+    'comparar_con_actual',
+    'renovacion_proxima',
+  ]
+
+  it('all need tag codes are present in DIMENSION_LABELS', () => {
+    for (const code of needCodes) {
+      expect(DIMENSION_LABELS).toHaveProperty(code)
+    }
+  })
+
+  it('need tag codes each have non-empty es and en labels', () => {
+    for (const code of needCodes) {
+      const entry = DIMENSION_LABELS[code]
+      expect(entry).toBeDefined()
+      expect(entry.es.length).toBeGreaterThan(0)
+      expect(entry.en.length).toBeGreaterThan(0)
+    }
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Regression: every backend NEED_TAG resolves to a real label (no raw codes)
+//
+// Backend allowlist: app/analysis/universal/interest/catalog.py NEED_TAGS.
+// COMPARANDO_OPCIONES previously had no label and rendered raw in the UI.
+// This list MUST stay in sync with the backend NEED_TAGS allowlist.
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('DIMENSION_LABELS — backend NEED_TAGS allowlist fully covered', () => {
+  // Mirrors backend NEED_TAGS (catalog.py). Includes the uppercase comparison
+  // signal code and the 'other' fallback.
+  const backendNeedTags = [
+    'precio_competitivo',
+    'mayor_cobertura',
+    'menor_franquicia',
+    'atencion_personalizada',
+    'rapidez',
+    'financiacion',
+    'comparar_con_actual',
+    'renovacion_proxima',
+    'COMPARANDO_OPCIONES',
+    'other',
+  ]
+
+  it('resolves COMPARANDO_OPCIONES to a Spanish label (not the raw code)', () => {
+    const result = resolveLabel('COMPARANDO_OPCIONES', 'es')
+    expect(result).not.toBe('COMPARANDO_OPCIONES')
+    expect(result).toBe('Comparando opciones')
+  })
+
+  it('resolves COMPARANDO_OPCIONES to an English label (not the raw code)', () => {
+    const result = resolveLabel('COMPARANDO_OPCIONES', 'en')
+    expect(result).not.toBe('COMPARANDO_OPCIONES')
+    expect(result.length).toBeGreaterThan(0)
+  })
+
+  it('every backend NEED_TAG code has a registered, non-raw label in both locales', () => {
+    for (const code of backendNeedTags) {
+      expect(DIMENSION_LABELS).toHaveProperty(code)
+      expect(resolveLabel(code, 'es')).not.toBe(code)
+      expect(resolveLabel(code, 'en')).not.toBe(code)
+    }
   })
 })

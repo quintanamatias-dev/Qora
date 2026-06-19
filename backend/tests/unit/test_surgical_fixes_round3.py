@@ -32,7 +32,8 @@ async def clients_app(tmp_path: Path):
         elevenlabs_api_key=SecretStr("el-test"),
         database_url=f"sqlite+aiosqlite:///{tmp_path}/r3_clients_test.db",
     )
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     from app.clients.router import router as clients_router
     from fastapi import FastAPI

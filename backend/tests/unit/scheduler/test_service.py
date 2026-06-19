@@ -133,7 +133,8 @@ async def sched_db(tmp_path: Path):
         elevenlabs_api_key=SecretStr("el-test"),
         database_url=f"sqlite+aiosqlite:///{tmp_path}/scheduler_service_test.db",
     )
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     async with db_module.async_session_factory() as sess:
         from app.tenants.service import seed_quintana
@@ -620,7 +621,8 @@ async def test_auto_schedule_triggers_with_follow_up_on_fresh_client(tmp_path):
         elevenlabs_api_key=SecretStr("el-test"),
         database_url=f"sqlite+aiosqlite:///{tmp_path}/default_retry_test.db",
     )
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     async with db_module.async_session_factory() as sess:
         from app.tenants.service import seed_quintana

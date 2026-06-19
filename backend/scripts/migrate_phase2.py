@@ -1,3 +1,8 @@
+# DEPRECATED — This script is superseded by Alembic migrations (phase-b-db-migration-foundation).
+# All schema changes are now managed via: python scripts/migrate.py (alembic upgrade head).
+# This file is kept for audit trail only. Do NOT run it against production databases.
+# See docs/MIGRATIONS.md for the current migration workflow.
+
 """QORA Phase 2 — Idempotent migration script for existing SQLite databases.
 
 Adds new Phase 2 columns to `call_sessions` and `leads` tables.

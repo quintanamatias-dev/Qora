@@ -51,7 +51,19 @@ Edit `.env` and fill in:
 
 ## 3. Initialize the Database
 
-On first run, QORA initializes the database automatically. You can also seed it manually:
+Run Alembic migrations before starting the server. The application no longer
+auto-creates the schema on startup — `python scripts/migrate.py` must run first.
+
+```bash
+cd backend
+python scripts/migrate.py
+```
+
+This is idempotent: safe to run on a fresh DB (creates schema) or an existing one
+(stamps or applies pending migrations). The `Qora` launcher (step 4) does this
+automatically for you.
+
+To also seed demo data after migrating:
 
 ```bash
 python -c "
@@ -75,6 +87,9 @@ asyncio.run(main())
 "
 ```
 
+> **Important**: the seed snippet above requires migrations to have already run
+> (`python scripts/migrate.py`). It does not create schema itself.
+
 ---
 
 ## 4. Run the Dev Server
@@ -86,12 +101,17 @@ From the repository root, you can start the backend, ngrok tunnel, and frontend 
 ```
 
 This keeps all local processes attached to the same terminal. Press `Ctrl+C` to stop everything.
+The `Qora` launcher automatically runs `python scripts/migrate.py` before starting uvicorn.
 
-If you only want the backend, run it manually from `backend/`:
+If you only want the backend, **always run migrations first**:
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+cd backend
+python scripts/migrate.py && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+Starting uvicorn directly without migrations on a fresh database will fail —
+the schema does not exist yet.
 
 Verify it's running:
 

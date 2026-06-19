@@ -1,3 +1,8 @@
+# DEPRECATED — This script is superseded by Alembic migrations (phase-b-db-migration-foundation).
+# All schema changes are now managed via: python scripts/migrate.py (alembic upgrade head).
+# This file is kept for audit trail only. Do NOT run it against production databases.
+# See docs/MIGRATIONS.md for the current migration workflow.
+
 """Migration: Relax NOT NULL constraint on call_sessions.lead_id.
 
 SQLite doesn't support ALTER COLUMN, so we rebuild the table:

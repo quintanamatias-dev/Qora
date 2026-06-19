@@ -584,6 +584,125 @@ describe('LeadDetailPage — context preview', () => {
 })
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Accumulated Facts section — cubora-accumulated-dimension-rankings
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('LeadDetailPage — Accumulated Facts section', () => {
+  it('shows "Accumulated Facts" section heading (not "Accumulated Profile Facts")', async () => {
+    renderDetailPage()
+    await waitFor(() =>
+      expect(screen.getByText('Accumulated Facts')).toBeInTheDocument()
+    )
+    // Old label must be gone
+    expect(screen.queryByText('Accumulated Profile Facts')).not.toBeInTheDocument()
+  })
+
+  it('renders Detected Interests sub-section heading', async () => {
+    renderDetailPage()
+    await waitFor(() =>
+      expect(screen.getByText(/Detected Interests/i)).toBeInTheDocument()
+    )
+  })
+
+  it('renders Service Issues sub-section heading', async () => {
+    renderDetailPage()
+    await waitFor(() => {
+      // "Service Issues" appears as a sub-section header (may also appear in subtitle)
+      const els = screen.getAllByText(/Service Issues/i)
+      expect(els.length).toBeGreaterThanOrEqual(1)
+    })
+  })
+
+  it('renders Profile sub-section inside Accumulated Facts', async () => {
+    renderDetailPage()
+    await waitFor(() => {
+      // "Profile" appears as a sub-section header inside Accumulated Facts
+      const els = screen.getAllByText(/^Profile$/i)
+      expect(els.length).toBeGreaterThanOrEqual(1)
+    })
+  })
+
+  it('does NOT render a standalone Dimension Rollups section', async () => {
+    renderDetailPage()
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { level: 1, name: /John Doe/i })).toBeInTheDocument()
+    )
+    expect(screen.queryByText('Dimension Rollups')).not.toBeInTheDocument()
+  })
+
+  it('surfaces a rollups error instead of empty rankings when /dimension-rollups fails', async () => {
+    server.use(
+      http.get('/api/v1/leads/:leadId/dimension-rollups', () =>
+        HttpResponse.json({ detail: 'boom' }, { status: 500 })
+      )
+    )
+
+    renderDetailPage()
+
+    await waitFor(
+      () => expect(screen.getByTestId('rollups-error')).toBeInTheDocument(),
+      { timeout: 5000 }
+    )
+
+    // A failed query must NOT masquerade as "no interests / no service issues".
+    expect(screen.queryByText('No detected interests across calls yet.')).not.toBeInTheDocument()
+    expect(screen.queryByText('No service issues recorded across calls yet.')).not.toBeInTheDocument()
+  })
+
+  it('keeps empty-state messages (not an error) when rollups load successfully but are empty', async () => {
+    // lead-2 fixture returns successful, fully-empty rollup arrays. Its
+    // Accumulated Facts section is collapsed by default (no profile/summary),
+    // so expand it before asserting the ranking children.
+    const user = userEvent.setup()
+    renderDetailPage('demo-client', 'lead-2')
+
+    const header = await screen.findByRole('button', { name: /Accumulated Facts/i })
+    await user.click(header)
+
+    await waitFor(() =>
+      expect(screen.getByText('No detected interests across calls yet.')).toBeInTheDocument()
+    )
+    expect(screen.getByText('No service issues recorded across calls yet.')).toBeInTheDocument()
+    expect(screen.queryByTestId('rollups-error')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('rollups-loading')).not.toBeInTheDocument()
+  })
+
+  it('shows a loading state (not empty rankings) while /dimension-rollups is in flight', async () => {
+    // Delay the rollups response so the query is observably pending. During
+    // this window the component must NOT render "No detected interests…" —
+    // that would falsely claim emptiness while the request (or a retry) is
+    // still resolving.
+    server.use(
+      http.get('/api/v1/leads/:leadId/dimension-rollups', async () => {
+        await new Promise(r => setTimeout(r, 200))
+        return HttpResponse.json({
+          detected_interests: [],
+          service_issues: [],
+          objections: [],
+          pain_points: [],
+        })
+      })
+    )
+
+    renderDetailPage()
+
+    // Loading indicator appears and empty-state is suppressed while pending.
+    await waitFor(() =>
+      expect(screen.getByTestId('rollups-loading')).toBeInTheDocument()
+    )
+    expect(screen.queryByText('No detected interests across calls yet.')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('rollups-error')).not.toBeInTheDocument()
+
+    // Once resolved, the loading indicator goes away and the empty state shows.
+    await waitFor(
+      () => expect(screen.queryByTestId('rollups-loading')).not.toBeInTheDocument(),
+      { timeout: 5000 }
+    )
+    expect(screen.getByText('No detected interests across calls yet.')).toBeInTheDocument()
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Loading states
 // ──────────────────────────────────────────────────────────────────────────────
 

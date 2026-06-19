@@ -18,10 +18,11 @@
  */
 
 import { useState } from 'react'
-import { useParams, useNavigate, Link } from 'react-router'
-import { useLead, useCallSessions, useLeadContextPreview, useIntegrations } from '@/api/hooks'
+import { useParams, useNavigate } from 'react-router'
+import { useLead, useCallSessions, useLeadContextPreview, useIntegrations, useLeadDimensionRollups } from '@/api/hooks'
 import { Badge } from '@/design/components/badge'
-import type { LeadStatus, QuoteField, LeadContextPreview, CallSession } from '@/api/types'
+import type { LeadStatus, QuoteField, LeadContextPreview, DetectedInterestRollup, ServiceIssueRollup } from '@/api/types'
+import { resolveLabel } from '@/config/dimension-labels'
 import { CallHistoryList } from './call-history-list'
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -470,7 +471,108 @@ function ProfileFactItem({ raw }: { raw: string }) {
   )
 }
 
-function MemorySection({ lead }: { lead: NonNullable<ReturnType<typeof useLead>['data']> }) {
+// ──────────────────────────────────────────────────────────────────────────────
+// DetectedInterestsRanking — table: interest, #, category
+// Spec: cubora-accumulated-dimension-rankings
+// ──────────────────────────────────────────────────────────────────────────────
+
+export function DetectedInterestsRanking({ interests }: { interests: DetectedInterestRollup[] }) {
+  if (interests.length === 0) {
+    return <Empty message="No detected interests across calls yet." />
+  }
+
+  return (
+    <div>
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-ink-3 uppercase tracking-wide border-b border-line">
+            <th className="text-left pb-1.5 font-medium">Interest</th>
+            <th className="text-right pb-1.5 font-medium w-10">#</th>
+            <th className="text-left pb-1.5 font-medium pl-3">Category</th>
+          </tr>
+        </thead>
+        <tbody>
+          {interests.map((row) => (
+            <tr
+              key={row.interest}
+              data-testid="interest-ranking-row"
+              className="border-b border-line last:border-0"
+            >
+              <td className="py-1.5 font-mono text-ink-2">{resolveLabel(row.interest, 'es')}</td>
+              <td className="py-1.5 text-right font-mono font-medium text-ink">{row.count}</td>
+              <td className="py-1.5 pl-3">
+                <span className="text-[10px] font-mono uppercase tracking-wide text-ink-3 px-1.5 py-0.5 rounded bg-mist border border-line">
+                  {row.category}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// ServiceIssuesRanking — table: issue, #, strength
+// Spec: cubora-accumulated-dimension-rankings
+// ──────────────────────────────────────────────────────────────────────────────
+
+const STRENGTH_STYLES: Record<string, string> = {
+  high: 'text-coral bg-coral-faint border-coral-line',
+  medium: 'text-amber-600 bg-amber-50 border-amber-200',
+  low: 'text-ink-3 bg-mist border-line',
+}
+
+export function ServiceIssuesRanking({ issues }: { issues: ServiceIssueRollup[] }) {
+  if (issues.length === 0) {
+    return <Empty message="No service issues recorded across calls yet." />
+  }
+
+  return (
+    <div>
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-ink-3 uppercase tracking-wide border-b border-line">
+            <th className="text-left pb-1.5 font-medium">Issue</th>
+            <th className="text-right pb-1.5 font-medium w-10">#</th>
+            <th className="text-left pb-1.5 font-medium pl-3">Strength</th>
+          </tr>
+        </thead>
+        <tbody>
+          {issues.map((row) => (
+            <tr
+              key={row.issue}
+              data-testid="issue-ranking-row"
+              className="border-b border-line last:border-0"
+            >
+              <td className="py-1.5 font-mono text-ink-2">{resolveLabel(row.issue, 'es')}</td>
+              <td className="py-1.5 text-right font-mono font-medium text-ink">{row.count}</td>
+              <td className="py-1.5 pl-3">
+                <span
+                  className={[
+                    'text-[10px] font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border',
+                    STRENGTH_STYLES[row.strength] ?? STRENGTH_STYLES.low,
+                  ].join(' ')}
+                >
+                  {row.strength}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function MemorySection({
+  lead,
+  clientId,
+}: {
+  lead: NonNullable<ReturnType<typeof useLead>['data']>
+  clientId: string
+}) {
   const profileFacts = lead.profile_facts ?? {}
   const interestHistory = lead.interest_history ?? []
   const quoteFields = lead.quote_fields ?? []
@@ -478,48 +580,139 @@ function MemorySection({ lead }: { lead: NonNullable<ReturnType<typeof useLead>[
   const hasInterest = interestHistory.length > 0
   const hasSummary = Boolean(lead.summary_last_call)
 
+  const {
+    data: rollups,
+    isError: rollupsError,
+    isSuccess: rollupsSuccess,
+    isPending: rollupsPending,
+    isFetching: rollupsFetching,
+  } = useLeadDimensionRollups(clientId, lead.id)
+  // While the query has not yet succeeded (initial load OR a retry after a
+  // transient failure where isError is still false), we must NOT render empty
+  // rankings — that would falsely claim "No detected interests…". Show a
+  // lightweight loading state until the query succeeds or errors.
+  const rollupsLoading = !rollupsSuccess && !rollupsError && (rollupsPending || rollupsFetching)
+
   return (
     <Section
-      title="Qora Memory"
-      subtitle="Profile facts and interest history from calls"
+      title="Accumulated Facts"
+      subtitle="Profile, interests, service issues, and history from calls"
       defaultOpen={hasProfile || hasInterest || hasSummary}
     >
       {/* Mismatch warning */}
       <ZonaMismatchWarning profileFacts={profileFacts} quoteFields={quoteFields} />
 
-      {/* Profile facts by namespace — structured rendering
+      {/* Sub-section: Profile — profile facts by namespace (structured rendering)
           Source is stated once at group header, not repeated per item. */}
-      {hasProfile ? (
-        <div className="space-y-3 mt-3">
-          <div className="flex items-center gap-2 mb-1">
-            <p className="text-xs text-ink-3 uppercase tracking-wide">Accumulated Profile Facts</p>
-            {/* Single group-level source label — not repeated per item */}
-            <span
-              data-testid="fact-dimension-source"
-              className="text-[10px] text-ink-4 font-mono"
-              title="All facts below come from the post-call analysis pipeline, stored under profile_facts"
-            >
-              source: post-call analysis · profile_facts
-            </span>
-          </div>
-          {Object.entries(profileFacts).map(([namespace, facts]) => (
-            <div key={namespace}>
-              <p className="text-[10px] font-mono uppercase tracking-widest text-ink-3 mb-1.5">
-                {namespace}
-              </p>
-              <div className="space-y-1.5">
-                {(Array.isArray(facts) ? facts : [facts]).map((fact: unknown, i: number) => (
-                  <ProfileFactItem key={i} raw={String(fact)} />
-                ))}
+      <div className="mt-3">
+        <div className="flex items-center gap-2 mb-1">
+          <p className="text-xs text-ink-3 uppercase tracking-wide">Profile</p>
+          {/* Single group-level source label — not repeated per item */}
+          <span
+            data-testid="fact-dimension-source"
+            className="text-[10px] text-ink-4 font-mono"
+            title="All facts below come from the post-call analysis pipeline, stored under profile_facts"
+          >
+            source: post-call analysis · profile_facts
+          </span>
+        </div>
+        {hasProfile ? (
+          <div className="space-y-3">
+            {Object.entries(profileFacts).map(([namespace, facts]) => (
+              <div key={namespace}>
+                <p className="text-[10px] font-mono uppercase tracking-widest text-ink-3 mb-1.5">
+                  {namespace}
+                </p>
+                <div className="space-y-1.5">
+                  {(Array.isArray(facts) ? facts : [facts]).map((fact: unknown, i: number) => (
+                    <ProfileFactItem key={i} raw={String(fact)} />
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
+        ) : (
+          <Empty message="No profile facts stored yet." />
+        )}
+      </div>
+
+      {/* Rankings load failure — a failed /dimension-rollups request must NOT be
+          rendered as empty rankings. Surface one clear, non-noisy error instead
+          of repeating an empty-state message per ranking. Successful empty
+          arrays still render their normal empty states below. */}
+      {rollupsError ? (
+        <div className="mt-4">
+          <p
+            data-testid="rollups-error"
+            className="text-sm text-coral"
+          >
+            Failed to load accumulated rankings. Interests, service issues, objections, and pain points are unavailable right now.
+          </p>
+        </div>
+      ) : rollupsLoading ? (
+        <div className="mt-4">
+          <p
+            data-testid="rollups-loading"
+            className="text-sm text-ink-3 animate-pulse"
+          >
+            Loading accumulated rankings…
+          </p>
         </div>
       ) : (
-        <Empty message="No profile facts stored yet." />
+        <>
+          {/* Sub-section: Detected Interests Ranking */}
+          <div className="mt-4">
+            <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Detected Interests</p>
+            <DetectedInterestsRanking interests={rollups?.detected_interests ?? []} />
+          </div>
+
+          {/* Sub-section: Service Issues Ranking */}
+          <div className="mt-4">
+            <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Service Issues</p>
+            <ServiceIssuesRanking issues={rollups?.service_issues ?? []} />
+          </div>
+        </>
       )}
 
-      {/* Interest history */}
+      {/* Sub-section: Objections Rollup (from call_analyses, not extracted_facts) */}
+      {!rollupsError && rollups && rollups.objections.length > 0 && (
+        <div className="mt-4">
+          <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Objections by Category</p>
+          <div className="space-y-1">
+            {rollups.objections.map(({ category, count }) => (
+              <div
+                key={category}
+                data-testid="objection-rollup-row"
+                className="flex items-center gap-3 rounded-md border border-line bg-pearl px-3 py-2"
+              >
+                <span className="text-xs font-mono text-ink-2 flex-1">{resolveLabel(category, 'es')}</span>
+                <span className="text-xs font-mono text-ink font-medium w-8 text-right">{count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Sub-section: Pain Points Rollup (from call_analyses, not extracted_facts) */}
+      {!rollupsError && rollups && rollups.pain_points.length > 0 && (
+        <div className="mt-4">
+          <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Pain Points by Category</p>
+          <div className="space-y-1">
+            {rollups.pain_points.map(({ category, count }) => (
+              <div
+                key={category}
+                data-testid="pain-rollup-row"
+                className="flex items-center gap-3 rounded-md border border-line bg-pearl px-3 py-2"
+              >
+                <span className="text-xs font-mono text-ink-2 flex-1">{resolveLabel(category, 'es')}</span>
+                <span className="text-xs font-mono text-ink font-medium w-8 text-right">{count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Sub-section: Interest history */}
       {hasInterest && (
         <div className="mt-4">
           <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Interest History</p>
@@ -558,158 +751,10 @@ function MemorySection({ lead }: { lead: NonNullable<ReturnType<typeof useLead>[
   )
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Section D-bis: Dimension Rollup Counts (lead-level, left column)
-//
-// Shows per-category rollup counts for objections and pain points across all
-// calls for this lead. Each category links to the individual call detail view.
-//
-// Spec: call-detail-inspection-ui — "Lead view shows rollup counts with drilldown"
-// Design: AD-9 — uses primary_objection_category / primary_pain_category from
-//         sessions' extracted_facts if available, otherwise shows call list with links.
-// ──────────────────────────────────────────────────────────────────────────────
-
-/**
- * Build simple per-category counts from sessions' extracted_facts if available.
- * Falls back to showing call links only when no extracted dimension data is present.
- */
-export function buildCategoryRollup(
-  sessions: CallSession[],
-  factKey: string
-): Array<{ category: string; count: number; sessionIds: string[] }> {
-  const map = new Map<string, { count: number; sessionIds: string[] }>()
-
-  for (const session of sessions) {
-    const facts = session.extracted_facts as Record<string, unknown> | null
-    if (!facts) continue
-    const value = facts[factKey] as string | null | undefined
-    if (!value) continue
-    const existing = map.get(value)
-    if (existing) {
-      existing.count += 1
-      existing.sessionIds.push(session.id)
-    } else {
-      map.set(value, { count: 1, sessionIds: [session.id] })
-    }
-  }
-
-  return Array.from(map.entries())
-    .map(([category, { count, sessionIds }]) => ({ category, count, sessionIds }))
-    .sort((a, b) => b.count - a.count)
-}
-
-interface DimensionRollupsSectionProps {
-  sessions: CallSession[] | null | undefined
-  clientId: string
-}
-
-export function DimensionRollupsSection({ sessions, clientId }: DimensionRollupsSectionProps) {
-  const allSessions = sessions ?? []
-  if (allSessions.length === 0) return null
-
-  const objectionRollup = buildCategoryRollup(allSessions, 'primary_objection_category')
-  const painRollup = buildCategoryRollup(allSessions, 'primary_pain_category')
-
-  const hasRollupData = objectionRollup.length > 0 || painRollup.length > 0
-
-  return (
-    <Section
-      title="Dimension Rollups"
-      subtitle="Category frequency across all calls for this lead"
-      defaultOpen={hasRollupData}
-      data-testid="dimension-rollups-section"
-    >
-      {!hasRollupData ? (
-        <div className="space-y-3">
-          <Empty message="No dimension summary data available yet." />
-          <div>
-            <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">All Calls</p>
-            <div className="space-y-1">
-              {allSessions.map((session) => (
-                <div key={session.id} className="flex items-center gap-3 text-sm">
-                  <span className="text-ink-3 text-xs font-mono">
-                    {session.started_at ? new Date(session.started_at).toLocaleDateString() : '—'}
-                  </span>
-                  <Link
-                    to={`/app/${clientId}/calls/${session.id}`}
-                    data-testid="rollup-call-link"
-                    className="text-xs text-teal hover:underline"
-                  >
-                    View analysis →
-                  </Link>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {/* Objection rollup */}
-          {objectionRollup.length > 0 && (
-            <div>
-              <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Objections by Category</p>
-              <div className="space-y-1">
-                {objectionRollup.map(({ category, count, sessionIds }) => (
-                  <div
-                    key={category}
-                    data-testid="objection-rollup-row"
-                    className="flex items-center gap-3 rounded-md border border-line bg-pearl px-3 py-2"
-                  >
-                    <span className="text-xs font-mono text-ink-2 flex-1">{category}</span>
-                    <span className="text-xs font-mono text-ink font-medium w-8 text-right">{count}</span>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {sessionIds.map((sid) => (
-                        <Link
-                          key={sid}
-                          to={`/app/${clientId}/calls/${sid}`}
-                          data-testid="rollup-call-link"
-                          className="text-[10px] text-teal hover:underline font-mono"
-                        >
-                          →
-                        </Link>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Pain rollup */}
-          {painRollup.length > 0 && (
-            <div>
-              <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Pain Points by Category</p>
-              <div className="space-y-1">
-                {painRollup.map(({ category, count, sessionIds }) => (
-                  <div
-                    key={category}
-                    data-testid="pain-rollup-row"
-                    className="flex items-center gap-3 rounded-md border border-line bg-pearl px-3 py-2"
-                  >
-                    <span className="text-xs font-mono text-ink-2 flex-1">{category}</span>
-                    <span className="text-xs font-mono text-ink font-medium w-8 text-right">{count}</span>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {sessionIds.map((sid) => (
-                        <Link
-                          key={sid}
-                          to={`/app/${clientId}/calls/${sid}`}
-                          data-testid="rollup-call-link"
-                          className="text-[10px] text-teal hover:underline font-mono"
-                        >
-                          →
-                        </Link>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </Section>
-  )
-}
+// DimensionRollupsSection and buildCategoryRollup removed.
+// Rollup data is now sourced from call_analyses via useLeadDimensionRollups hook
+// and embedded inside MemorySection (Accumulated Facts).
+// See: cubora-accumulated-dimension-rankings
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Section D: Call history (right column)
@@ -1043,14 +1088,8 @@ export function LeadDetailPage() {
           {/* Section B: Quote readiness fields */}
           <QuoteReadinessSection lead={lead} />
 
-          {/* Section C: Qora memory */}
-          <MemorySection lead={lead} />
-
-          {/* Section D-bis: Dimension rollup counts */}
-          <DimensionRollupsSection
-            sessions={sessions}
-            clientId={clientId ?? ''}
-          />
+          {/* Section C: Accumulated Facts (profile, rankings, rollups) */}
+          <MemorySection lead={lead} clientId={clientId ?? ''} />
 
           {/* Section E: CRM / Airtable */}
           <CRMSection lead={lead} clientId={clientId ?? ''} />

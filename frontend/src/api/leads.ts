@@ -6,7 +6,7 @@
  */
 
 import { apiFetch } from './client'
-import type { Lead, CreateLeadPayload, LeadContextPreview } from './types'
+import type { Lead, CreateLeadPayload, LeadContextPreview, DimensionRollups } from './types'
 
 /**
  * GET /api/v1/leads?client_id=<clientId>
@@ -52,5 +52,20 @@ export async function fetchLeadContextPreview(
 ): Promise<LeadContextPreview> {
   return apiFetch<LeadContextPreview>(
     `/api/v1/leads/${encodeURIComponent(leadId)}/context-preview`
+  )
+}
+
+/**
+ * GET /api/v1/leads/:leadId/dimension-rollups?client_id=<clientId>
+ * Returns lead-level dimension rollup counts from call_analyses.
+ * Provides ranked lists for detected interests, service issues, objections, and pain points.
+ * client_id is required by the backend for tenant scoping and ownership verification.
+ */
+export async function fetchLeadDimensionRollups(
+  clientId: string,
+  leadId: string
+): Promise<DimensionRollups> {
+  return apiFetch<DimensionRollups>(
+    `/api/v1/leads/${encodeURIComponent(leadId)}/dimension-rollups?client_id=${encodeURIComponent(clientId)}`
   )
 }

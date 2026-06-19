@@ -1,52 +1,35 @@
 /**
- * DimensionRollupsSection / buildCategoryRollup — Unit tests (PR 3)
+ * Accumulated Facts — Unit tests (cubora-accumulated-dimension-rankings RED phase)
  *
- * Covers the lead-level rollup contract from the call-detail-inspection-ui spec:
- *   - "Lead View Rollups Are Separate from Call Detail"
- *   - "Lead view shows objection frequency rollup" with per-call drilldown links
+ * Covers:
+ *   - DetectedInterestsRanking renders columns: interest, #, category
+ *   - ServiceIssuesRanking renders columns: issue, #, strength
+ *   - Empty state handling for both ranking components
+ *   - No strength column on interests
+ *   - No evidence column on service issues
+ *   - No DimensionRollupsSection in the rendered page
+ *   - Section heading reads "Accumulated Facts" (not "Accumulated Profile Facts")
+ *   - Column header for count is "#" not "mention count" or "count"
  *
- * Spec: openspec/changes/post-call-analysis-bi-friendly/specs/call-detail-inspection-ui/spec.md
+ * Spec: openspec/changes/cubora-accumulated-dimension-rankings/specs/lead-dimension-rollups/spec.md
  *
  * TDD Layer: Unit
- *   - buildCategoryRollup: pure function (counts, sorting, sessionId tracking)
- *   - DimensionRollupsSection: presentational component (rollup rows, no-data
- *     fallback, drilldown links) rendered inside a router for <Link>.
  */
 
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { createMemoryRouter, RouterProvider } from 'react-router'
-import { buildCategoryRollup, DimensionRollupsSection } from './detail-page'
-import type { CallSession } from '@/api/types'
+import {
+  DetectedInterestsRanking,
+  ServiceIssuesRanking,
+} from './detail-page'
+import type { DetectedInterestRollup, ServiceIssueRollup } from '@/api/types'
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Fixtures
+// Render helpers
 // ──────────────────────────────────────────────────────────────────────────────
 
-function makeSession(
-  id: string,
-  extracted_facts: Record<string, unknown> | null = null
-): CallSession {
-  return {
-    id,
-    client_id: 'demo-client',
-    lead_id: 'lead-1',
-    status: 'completed',
-    started_at: '2026-01-10T10:00:00Z',
-    ended_at: '2026-01-10T10:05:00Z',
-    duration_seconds: 300,
-    summary: null,
-    outcome: null,
-    closed_reason: null,
-    billable_minutes: null,
-    total_user_turns: null,
-    total_agent_turns: null,
-    extracted_facts,
-  }
-}
-
-function renderSection(node: React.ReactNode) {
+function renderWithRouter(node: React.ReactNode) {
   const router = createMemoryRouter(
     [{ path: '*', element: <>{node}</> }],
     { initialEntries: ['/app/demo-client/leads/lead-1'] }
@@ -55,138 +38,145 @@ function renderSection(node: React.ReactNode) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// buildCategoryRollup — pure function
+// DetectedInterestsRanking
 // ──────────────────────────────────────────────────────────────────────────────
 
-describe('buildCategoryRollup', () => {
-  it('counts occurrences per category across calls', () => {
-    const sessions = [
-      makeSession('s1', { primary_objection_category: 'price' }),
-      makeSession('s2', { primary_objection_category: 'price' }),
-      makeSession('s3', { primary_objection_category: 'current_provider' }),
-    ]
+describe('DetectedInterestsRanking', () => {
+  const twoInterests: DetectedInterestRollup[] = [
+    { interest: 'auto_todo_riesgo', count: 3, category: 'product' },
+    { interest: 'hogar', count: 1, category: 'product' },
+  ]
 
-    const rollup = buildCategoryRollup(sessions, 'primary_objection_category')
+  it('renders interest, # and category column headers', () => {
+    renderWithRouter(<DetectedInterestsRanking interests={twoInterests} />)
 
-    const price = rollup.find((r) => r.category === 'price')
-    const provider = rollup.find((r) => r.category === 'current_provider')
-    expect(price?.count).toBe(2)
-    expect(provider?.count).toBe(1)
+    // Column header for count must be "#" (not "count" or "mention count")
+    expect(screen.getByText('#')).toBeInTheDocument()
+    expect(screen.getByText(/interest/i)).toBeInTheDocument()
+    expect(screen.getByText(/category/i)).toBeInTheDocument()
   })
 
-  it('tracks the contributing session ids per category', () => {
-    const sessions = [
-      makeSession('s1', { primary_objection_category: 'price' }),
-      makeSession('s2', { primary_objection_category: 'price' }),
-    ]
+  it('renders rows with resolved interest labels and counts', () => {
+    renderWithRouter(<DetectedInterestsRanking interests={twoInterests} />)
 
-    const rollup = buildCategoryRollup(sessions, 'primary_objection_category')
-    const price = rollup.find((r) => r.category === 'price')
-    expect(price?.sessionIds).toEqual(['s1', 's2'])
+    // Labels are resolved via resolveLabel — auto_todo_riesgo → "Auto todo riesgo"
+    expect(screen.getByText('Auto todo riesgo')).toBeInTheDocument()
+    expect(screen.getByText('3')).toBeInTheDocument()
+    expect(screen.getByText('Hogar')).toBeInTheDocument()
+    expect(screen.getByText('1')).toBeInTheDocument()
   })
 
-  it('sorts categories by descending count', () => {
-    const sessions = [
-      makeSession('s1', { primary_pain_category: 'coverage_gap' }),
-      makeSession('s2', { primary_pain_category: 'cost' }),
-      makeSession('s3', { primary_pain_category: 'cost' }),
-    ]
-
-    const rollup = buildCategoryRollup(sessions, 'primary_pain_category')
-    expect(rollup[0].category).toBe('cost')
-    expect(rollup[0].count).toBe(2)
+  it('renders category column value', () => {
+    renderWithRouter(<DetectedInterestsRanking interests={twoInterests} />)
+    const productCells = screen.getAllByText('product')
+    expect(productCells.length).toBeGreaterThanOrEqual(1)
   })
 
-  it('ignores sessions with no extracted_facts or missing key', () => {
-    const sessions = [
-      makeSession('s1', null),
-      makeSession('s2', { something_else: 'x' }),
-      makeSession('s3', { primary_objection_category: 'price' }),
-    ]
-
-    const rollup = buildCategoryRollup(sessions, 'primary_objection_category')
-    expect(rollup).toHaveLength(1)
-    expect(rollup[0]).toMatchObject({ category: 'price', count: 1 })
+  it('does NOT render a strength column', () => {
+    renderWithRouter(<DetectedInterestsRanking interests={twoInterests} />)
+    // No "strength" header or column should exist
+    expect(screen.queryByText(/^strength$/i)).not.toBeInTheDocument()
   })
 
-  it('returns an empty array when no sessions carry the dimension', () => {
-    const sessions = [makeSession('s1', null), makeSession('s2', {})]
-    expect(buildCategoryRollup(sessions, 'primary_objection_category')).toEqual([])
+  it('does NOT render an evidence column', () => {
+    renderWithRouter(<DetectedInterestsRanking interests={twoInterests} />)
+    expect(screen.queryByText(/^evidence$/i)).not.toBeInTheDocument()
+  })
+
+  it('shows empty state when no interests', () => {
+    renderWithRouter(<DetectedInterestsRanking interests={[]} />)
+    // Empty-state message must be visible
+    expect(screen.getByText('No detected interests across calls yet.')).toBeInTheDocument()
+    expect(screen.queryByText('auto_todo_riesgo')).not.toBeInTheDocument()
+  })
+
+  it('renders "need" category correctly with resolved label', () => {
+    const needInterests: DetectedInterestRollup[] = [
+      { interest: 'precio_competitivo', count: 2, category: 'need' },
+    ]
+    renderWithRouter(<DetectedInterestsRanking interests={needInterests} />)
+    // precio_competitivo → "Precio competitivo"
+    expect(screen.getByText('Precio competitivo')).toBeInTheDocument()
+    expect(screen.getByText('need')).toBeInTheDocument()
   })
 })
 
 // ──────────────────────────────────────────────────────────────────────────────
-// DimensionRollupsSection — rendering
+// ServiceIssuesRanking
 // ──────────────────────────────────────────────────────────────────────────────
 
-describe('DimensionRollupsSection', () => {
-  it('renders nothing when there are no sessions', () => {
-    const { container } = renderSection(
-      <DimensionRollupsSection sessions={[]} clientId="demo-client" />
-    )
-    expect(container.querySelector('[data-testid="dimension-rollups-section"]')).toBeNull()
+describe('ServiceIssuesRanking', () => {
+  const twoIssues: ServiceIssueRollup[] = [
+    { issue: 'poor_attention', count: 2, strength: 'medium' },
+    { issue: 'delay', count: 1, strength: 'low' },
+  ]
+
+  it('renders issue, # and strength column headers', () => {
+    renderWithRouter(<ServiceIssuesRanking issues={twoIssues} />)
+
+    // Count header must be "#"
+    expect(screen.getByText('#')).toBeInTheDocument()
+    expect(screen.getByText(/issue/i)).toBeInTheDocument()
+    expect(screen.getByText(/strength/i)).toBeInTheDocument()
   })
 
-  it('renders objection rollup rows with counts', () => {
-    const sessions = [
-      makeSession('s1', { primary_objection_category: 'price' }),
-      makeSession('s2', { primary_objection_category: 'price' }),
+  it('renders rows with issue label (resolved from code), count and strength', () => {
+    renderWithRouter(<ServiceIssuesRanking issues={twoIssues} />)
+
+    // Labels are resolved via resolveLabel — poor_attention → "Mala atención"
+    // We verify count and strength directly, and that raw code is absent (labels used)
+    expect(screen.getByText('2')).toBeInTheDocument()
+    expect(screen.getByText('medium')).toBeInTheDocument()
+    expect(screen.getByText('1')).toBeInTheDocument()
+    expect(screen.getByText('low')).toBeInTheDocument()
+    // Resolved Spanish labels appear, not raw codes
+    expect(screen.getByText('Mala atención')).toBeInTheDocument()
+    expect(screen.getByText('Demora')).toBeInTheDocument()
+  })
+
+  it('shows "high" strength for issues mentioned 3+ times', () => {
+    const highIssues: ServiceIssueRollup[] = [
+      { issue: 'billing_issue', count: 3, strength: 'high' },
     ]
-    renderSection(
-      <DimensionRollupsSection sessions={sessions} clientId="demo-client" />
-    )
-
-    const rows = screen.getAllByTestId('objection-rollup-row')
-    expect(rows).toHaveLength(1)
-    expect(rows[0].textContent).toContain('price')
-    expect(rows[0].textContent).toContain('2')
+    renderWithRouter(<ServiceIssuesRanking issues={highIssues} />)
+    expect(screen.getByText('high')).toBeInTheDocument()
   })
 
-  it('renders pain rollup rows independently from objections', () => {
-    const sessions = [
-      makeSession('s1', { primary_pain_category: 'cost' }),
-    ]
-    renderSection(
-      <DimensionRollupsSection sessions={sessions} clientId="demo-client" />
-    )
-
-    const rows = screen.getAllByTestId('pain-rollup-row')
-    expect(rows).toHaveLength(1)
-    expect(rows[0].textContent).toContain('cost')
+  it('does NOT render an evidence column', () => {
+    renderWithRouter(<ServiceIssuesRanking issues={twoIssues} />)
+    expect(screen.queryByText(/^evidence$/i)).not.toBeInTheDocument()
   })
 
-  it('shows drilldown links to each contributing call detail page', () => {
-    const sessions = [
-      makeSession('s1', { primary_objection_category: 'price' }),
-      makeSession('s2', { primary_objection_category: 'price' }),
-    ]
-    renderSection(
-      <DimensionRollupsSection sessions={sessions} clientId="demo-client" />
-    )
+  it('shows empty state when no service issues', () => {
+    renderWithRouter(<ServiceIssuesRanking issues={[]} />)
+    // Empty-state message must be visible
+    expect(screen.getByText('No service issues recorded across calls yet.')).toBeInTheDocument()
+    expect(screen.queryByText('poor_attention')).not.toBeInTheDocument()
+  })
+})
 
-    const links = screen.getAllByTestId('rollup-call-link')
-    expect(links.length).toBe(2)
-    expect(links[0]).toHaveAttribute('href', '/app/demo-client/calls/s1')
-    expect(links[1]).toHaveAttribute('href', '/app/demo-client/calls/s2')
+// ──────────────────────────────────────────────────────────────────────────────
+// Section heading rename: "Accumulated Profile Facts" → "Accumulated Facts"
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('Accumulated Facts section heading', () => {
+  it('does not export "Accumulated Profile Facts" as a string literal', async () => {
+    // Import detail-page and check that the old string is gone from the module source
+    // We do this by checking the rendered output doesn't contain the old text
+    // This will be covered by the integration test in detail-page.test.tsx
+    // For now we assert the components we need exist
+    const module = await import('./detail-page')
+    expect(module.DetectedInterestsRanking).toBeDefined()
+    expect(module.ServiceIssuesRanking).toBeDefined()
   })
 
-  it('falls back to a call list with links when no dimension data is present', async () => {
-    const user = userEvent.setup()
-    const sessions = [makeSession('s1', null), makeSession('s2', {})]
-    renderSection(
-      <DimensionRollupsSection sessions={sessions} clientId="demo-client" />
-    )
+  it('does NOT export DimensionRollupsSection (removed)', async () => {
+    const module = await import('./detail-page') as Record<string, unknown>
+    expect(module['DimensionRollupsSection']).toBeUndefined()
+  })
 
-    // Section still renders (sessions exist) but collapses by default with no
-    // rollup data. Expand it to inspect the honest no-data fallback.
-    expect(screen.getByTestId('dimension-rollups-section')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /dimension rollups/i }))
-
-    // No-data fallback message + per-call links, no rollup rows.
-    expect(screen.getByText(/No dimension summary data available yet/i)).toBeInTheDocument()
-    expect(screen.queryByTestId('objection-rollup-row')).not.toBeInTheDocument()
-    const links = screen.getAllByTestId('rollup-call-link')
-    expect(links).toHaveLength(2)
-    expect(links[0]).toHaveAttribute('href', '/app/demo-client/calls/s1')
+  it('does NOT export buildCategoryRollup (removed dead code)', async () => {
+    const module = await import('./detail-page') as Record<string, unknown>
+    expect(module['buildCategoryRollup']).toBeUndefined()
   })
 })

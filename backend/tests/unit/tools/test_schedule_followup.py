@@ -28,7 +28,8 @@ async def db(tmp_path: Path):
         elevenlabs_api_key=SecretStr("el-test"),
         database_url=f"sqlite+aiosqlite:///{tmp_path}/followup_test.db",
     )
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     async with db_module.async_session_factory() as sess:
         from app.tenants.service import seed_quintana
@@ -144,7 +145,8 @@ async def db_with_scheduler(tmp_path: Path):
         elevenlabs_api_key=SecretStr("el-test"),
         database_url=f"sqlite+aiosqlite:///{tmp_path}/followup_sched_test.db",
     )
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     async with db_module.async_session_factory() as sess:
         from app.tenants.service import seed_quintana

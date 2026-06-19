@@ -98,7 +98,8 @@ async def app_client(tmp_path: Path):
         database_url=f"sqlite+aiosqlite:///{tmp_path}/path_route_test.db",
     )
 
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     assert db_module.async_session_factory is not None
     async with db_module.async_session_factory() as sess:
@@ -137,7 +138,8 @@ async def app_client_with_inactive(tmp_path: Path):
         database_url=f"sqlite+aiosqlite:///{tmp_path}/inactive_test.db",
     )
 
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     assert db_module.async_session_factory is not None
     async with db_module.async_session_factory() as sess:
@@ -485,7 +487,8 @@ async def two_tenant_app_client(tmp_path: Path):
         database_url=f"sqlite+aiosqlite:///{tmp_path}/two_tenant_test.db",
     )
 
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     assert db_module.async_session_factory is not None
     async with db_module.async_session_factory() as sess:

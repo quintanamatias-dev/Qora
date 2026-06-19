@@ -30,7 +30,8 @@ async def migration_db(tmp_path: Path):
         elevenlabs_api_key=SecretStr("el-test"),
         database_url=f"sqlite+aiosqlite:///{tmp_path}/migration_test.db",
     )
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     assert db_module.async_session_factory is not None
     async with db_module.async_session_factory() as sess:
@@ -110,7 +111,8 @@ async def migration_db_malformed(tmp_path: Path):
         elevenlabs_api_key=SecretStr("el-test"),
         database_url=f"sqlite+aiosqlite:///{tmp_path}/migration_malformed_test.db",
     )
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     assert db_module.async_session_factory is not None
     async with db_module.async_session_factory() as sess:
@@ -437,7 +439,8 @@ async def fresh_db_with_engagement_quality(tmp_path: Path):
         elevenlabs_api_key=SecretStr("el-test"),
         database_url=f"sqlite+aiosqlite:///{tmp_path}/drop_eq_test.db",
     )
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     # Add engagement_quality column back (simulates pre-migration state)
     engine = db_module.engine
@@ -467,7 +470,8 @@ async def fresh_db_without_engagement_quality(tmp_path: Path):
         elevenlabs_api_key=SecretStr("el-test"),
         database_url=f"sqlite+aiosqlite:///{tmp_path}/no_eq_test.db",
     )
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     # Verify column doesn't exist (post-migration state from updated model)
     from sqlalchemy import text
@@ -541,7 +545,8 @@ async def fresh_db_for_abandonment_migration(tmp_path: Path):
         elevenlabs_api_key=SecretStr("el-test"),
         database_url=f"sqlite+aiosqlite:///{tmp_path}/abandonment_migration_test.db",
     )
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     yield settings.database_url, db_module
 

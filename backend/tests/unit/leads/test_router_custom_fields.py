@@ -44,7 +44,8 @@ async def custom_fields_client(tmp_path: Path):
         elevenlabs_api_key=SecretStr("el-test"),
         database_url=f"sqlite+aiosqlite:///{tmp_path}/leads_cf_test.db",
     )
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     async with db_module.async_session_factory() as sess:
         from app.tenants.service import seed_quintana
@@ -78,7 +79,8 @@ async def lead_with_custom_fields_client(tmp_path: Path):
         elevenlabs_api_key=SecretStr("el-test"),
         database_url=f"sqlite+aiosqlite:///{tmp_path}/leads_cf_seeded.db",
     )
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     async with db_module.async_session_factory() as sess:
         from app.tenants.service import seed_quintana

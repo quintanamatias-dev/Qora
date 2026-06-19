@@ -23,6 +23,7 @@ import type {
   IntegrationConfig,
   AvailableIntegration,
   LeadContextPreview,
+  DimensionRollups,
 } from '../../src/api/types'
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -683,6 +684,33 @@ export const handlers = [
       return HttpResponse.json({ detail: 'client_id required' }, { status: 422 })
     }
     return HttpResponse.json(leadsFixture.filter((l) => l.client_id === clientId))
+  }),
+
+  // GET /api/v1/leads/:leadId/dimension-rollups — cubora dimension rollups
+  // NOTE: must come BEFORE /api/v1/leads/:leadId so the more specific path wins.
+  http.get('/api/v1/leads/:leadId/dimension-rollups', ({ params }) => {
+    const leadId = params.leadId as string
+    const fixture: DimensionRollups = leadId === 'lead-1'
+      ? {
+          detected_interests: [
+            { interest: 'auto_todo_riesgo', count: 2, category: 'product' },
+            { interest: 'hogar', count: 1, category: 'product' },
+          ],
+          service_issues: [
+            { issue: 'poor_attention', count: 1, strength: 'low' },
+          ],
+          objections: [
+            { category: 'price', count: 1 },
+          ],
+          pain_points: [],
+        }
+      : {
+          detected_interests: [],
+          service_issues: [],
+          objections: [],
+          pain_points: [],
+        }
+    return HttpResponse.json(fixture)
   }),
 
   // GET /api/v1/leads/:leadId/context-preview — Phase A next-call context preview
