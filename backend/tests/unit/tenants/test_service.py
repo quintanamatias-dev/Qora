@@ -30,7 +30,8 @@ async def session(tmp_path: Path):
         elevenlabs_api_key=SecretStr("el-test"),
         database_url=f"sqlite+aiosqlite:///{tmp_path}/tenants_test.db",
     )
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     assert db_module.async_session_factory is not None
     async with db_module.async_session_factory() as sess:
@@ -778,36 +779,8 @@ async def test_seed_qora_demo_el_agent_id_matches_settings_when_configured(
 
 
 # ---------------------------------------------------------------------------
-# Task 1.3 (NEW) — startup schema compat for elevenlabs_agent_id on agents table
+# elevenlabs_agent_id is part of the Alembic baseline migration (PR 2 cutover).
+# The startup compat test below was removed when _ensure_startup_schema_compat
+# was deleted from app.main (phase-b-db-migration-foundation/design.md).
+# The column is verified to exist in tests/unit/test_alembic_tooling.py instead.
 # ---------------------------------------------------------------------------
-
-
-async def test_startup_schema_compat_adds_elevenlabs_agent_id_to_agents(
-    session: AsyncSession,
-):
-    """_ensure_startup_schema_compat adds elevenlabs_agent_id to existing agents table.
-
-    Simulates an older DB that doesn't have the column yet.
-    After the compat function runs, PRAGMA table_info(agents) must include the column.
-    """
-    from app.core import database as db_module
-    import sqlalchemy
-
-    assert db_module.engine is not None
-
-    # If column already exists from ORM create_all, we can still test that the compat
-    # function is idempotent and does not crash
-    from app.main import _ensure_startup_schema_compat
-
-    # Should not raise even if column already exists
-    await _ensure_startup_schema_compat(db_module)
-
-    # Column must now exist (either was there before or was added by compat)
-    async with db_module.engine.begin() as conn:
-        result = await conn.execute(sqlalchemy.text("PRAGMA table_info(agents)"))
-        columns_after = {row[1] for row in result.fetchall()}
-
-    assert "elevenlabs_agent_id" in columns_after, (
-        f"elevenlabs_agent_id column must exist after startup compat. "
-        f"Columns found: {sorted(columns_after)}"
-    )

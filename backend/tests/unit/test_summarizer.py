@@ -41,7 +41,8 @@ async def seeded_db(tmp_path: Path):
         elevenlabs_api_key=SecretStr("el-test"),
         database_url=f"sqlite+aiosqlite:///{tmp_path}/summarizer_test.db",
     )
-    await db_module.init_db(settings)
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
 
     assert db_module.async_session_factory is not None
     async with db_module.async_session_factory() as sess:
@@ -2868,11 +2869,15 @@ async def test_list_facts_all_5_axes_persisted(seeded_db):
 # ===========================================================================
 
 
-def test_merge_facts_into_lead_extracts_category_from_ObjectionsAxis():
+@pytest.mark.asyncio
+async def test_merge_facts_into_lead_extracts_category_from_ObjectionsAxis():
     """_merge_facts_into_lead: structured ObjectionsAxis → lead.objections_heard gets flat categories.
 
     Site 1: When facts['objections'] is a model_dump() of ObjectionsAxis,
     lead.objections_heard must receive the category strings, NOT dicts.
+
+    Fixed: converted from asyncio.get_event_loop().run_until_complete() to native
+    async test to avoid event-loop isolation failures in the full test suite.
     """
     from app.summarizer import _merge_facts_into_lead
     from unittest.mock import MagicMock, AsyncMock, patch
@@ -2905,30 +2910,25 @@ def test_merge_facts_into_lead_extracts_category_from_ObjectionsAxis():
     lead.objections_heard = None
     lead.extracted_facts = None
 
-    import asyncio
+    with patch("app.summarizer._write_lead_profile_facts", new_callable=AsyncMock):
+        with patch("app.summarizer._write_interest_history"):
+            with patch(
+                "app.summarizer._write_correction_facts", new_callable=AsyncMock
+            ):
+                from sqlalchemy.ext.asyncio import AsyncSession
 
-    async def run():
-        with patch("app.summarizer._write_lead_profile_facts", new_callable=AsyncMock):
-            with patch("app.summarizer._write_interest_history"):
-                with patch(
-                    "app.summarizer._write_correction_facts", new_callable=AsyncMock
+                db = AsyncMock(spec=AsyncSession)
+                with (
+                    patch("sqlalchemy.future.select"),
+                    patch("app.summarizer.select") as mock_select,
                 ):
-                    from sqlalchemy.ext.asyncio import AsyncSession
-
-                    db = AsyncMock(spec=AsyncSession)
-                    with (
-                        patch("sqlalchemy.future.select"),
-                        patch("app.summarizer.select") as mock_select,
-                    ):
-                        mock_select.return_value = MagicMock()
-                        db.execute = AsyncMock(
-                            return_value=MagicMock(
-                                scalar_one_or_none=MagicMock(return_value=lead)
-                            )
+                    mock_select.return_value = MagicMock()
+                    db.execute = AsyncMock(
+                        return_value=MagicMock(
+                            scalar_one_or_none=MagicMock(return_value=lead)
                         )
-                        await _merge_facts_into_lead(db, "lead-id", "summary", facts)
-
-    asyncio.get_event_loop().run_until_complete(run())
+                    )
+                    await _merge_facts_into_lead(db, "lead-id", "summary", facts)
 
     # lead.objections_heard must contain flat category strings
     assert lead.objections_heard is not None
