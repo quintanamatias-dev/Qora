@@ -1,3 +1,8 @@
+# DEPRECATED — This script is superseded by Alembic migrations (phase-b-db-migration-foundation).
+# All schema changes are now managed via: python scripts/migrate.py (alembic upgrade head).
+# This file is kept for audit trail only. Do NOT run it against production databases.
+# See docs/MIGRATIONS.md for the current migration workflow.
+
 """QORA BI Columns — Idempotent migration: adds 5 denormalized columns to call_analyses.
 
 Adds to call_analyses:

@@ -1,3 +1,8 @@
+# DEPRECATED — This script is superseded by Alembic migrations (phase-b-db-migration-foundation).
+# All schema changes are now managed via: python scripts/migrate.py (alembic upgrade head).
+# This file is kept for audit trail only. Do NOT run it against production databases.
+# See docs/MIGRATIONS.md for the current migration workflow.
+
 """QORA — Idempotent migration: drop engagement_quality column from call_analyses.
 
 Issue #50 (qora-outcome): The engagement_quality field was removed from the

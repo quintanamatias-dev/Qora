@@ -95,13 +95,24 @@ Browser (Demo UI)
    | `ELEVENLABS_AGENT_ID` | Your ElevenLabs agent ID |
    | `DATABASE_URL` | SQLite path (default: `sqlite+aiosqlite:///./qora.db`) |
 
-5. **Run the server**
+5. **Run database migrations (required before first start)**
+
+   ```bash
+   python scripts/migrate.py
+   ```
+
+   This runs `alembic upgrade head` to create or migrate the SQLite schema.
+   The application no longer auto-creates tables on startup — migrations must
+   run first. The `Qora` launcher does this automatically; only manual
+   `uvicorn` starts require this step.
+
+6. **Run the server**
 
    ```bash
    uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
    ```
 
-6. **Expose via ngrok** (required for ElevenLabs to reach your webhook)
+7. **Expose via ngrok** (required for ElevenLabs to reach your webhook)
 
    ```bash
    ngrok http 8000
