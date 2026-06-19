@@ -59,25 +59,27 @@ def create_engine_and_session(database_url: str) -> tuple:
 
 
 async def init_db(settings) -> None:
-    """Initialize database engine, session factory, and create all tables.
+    """Initialize database engine and session factory.
 
-    Imports all domain models so they register with Base.metadata before
-    create_all is called.
+    Schema creation is handled by the pre-start migration command
+    (python scripts/migrate.py) via Alembic upgrade head. This function
+    only creates the async engine, session factory, and enables SQLite pragmas.
+
+    Design: phase-b-db-migration-foundation/design.md — init_db no longer
+    calls create_all; the migration path guarantees the schema before startup.
     """
     global engine, async_session_factory
 
     create_engine_and_session(settings.database_url)
 
-    # Import models to register them with Base.metadata
+    # Import models to register them with Base.metadata (needed for ORM queries)
     import app.tenants.models  # noqa: F401
     import app.leads.models  # noqa: F401
     import app.calls.models  # noqa: F401
     import app.scheduler.models  # noqa: F401
 
-    async with engine.begin() as conn:  # type: ignore[union-attr]
-        await conn.run_sync(Base.metadata.create_all)
-
-    # Enable WAL mode for concurrent read/write support and set busy timeout
+    # Enable WAL mode for concurrent read/write support and set busy timeout.
+    # Schema must already exist (from pre-start migration) before these pragmas run.
     async with engine.connect() as raw_conn:  # type: ignore[union-attr]
         await raw_conn.execute(text("PRAGMA journal_mode=WAL"))
         await raw_conn.execute(text("PRAGMA busy_timeout=5000"))

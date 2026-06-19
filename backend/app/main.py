@@ -3,9 +3,15 @@
 Initializes all QORA components during lifespan startup:
 1. Settings (pydantic-settings from .env)
 2. Structured logging (structlog JSON)
-3. Database engine + tables (SQLAlchemy async)
+3. Database engine + WAL pragmas (schema guaranteed by pre-start migration)
 4. Seed data (Quintana Seguros client + 5 test leads)
 5. Background TTL cleanup for in-memory session store
+
+Pre-start migration:
+  Schema creation and backward-compatible DDL changes are handled by Alembic
+  (python scripts/migrate.py) before the app process starts. The lifespan no
+  longer calls Base.metadata.create_all() or _ensure_startup_schema_compat().
+  Design: phase-b-db-migration-foundation/design.md
 
 Registers all domain routers:
 - /api/v1/clients (clients full CRUD router)
@@ -48,288 +54,6 @@ logger = get_logger(__name__)
 
 # Track app start time for health uptime
 _APP_START_TIME: float = 0.0
-
-
-async def _ensure_startup_schema_compat(db_module) -> None:
-    """Apply tiny backward-compatible DDL needed before ORM seed queries.
-
-    SQLite ``create_all`` creates missing tables but does not ALTER existing ones.
-    If the SQLAlchemy model has a new column, a normal ORM ``select(Client)`` will
-    include that column and crash before standalone migrations can be run manually.
-
-    Keep this limited to startup-safe, idempotent compatibility columns only; the
-    full migration script remains the authoritative production migration path.
-    """
-    import sqlalchemy
-
-    if db_module.engine is None:
-        return
-
-    async with db_module.engine.begin() as conn:
-        result = await conn.execute(sqlalchemy.text("PRAGMA table_info(clients)"))
-        columns = {row[1] for row in result.fetchall()}
-
-        if "analysis_language" not in columns:
-            await conn.execute(
-                sqlalchemy.text(
-                    "ALTER TABLE clients "
-                    "ADD COLUMN analysis_language TEXT NOT NULL DEFAULT 'Spanish'"
-                )
-            )
-            logger.info(
-                "startup_schema_compat_added", column="clients.analysis_language"
-            )
-
-        # agents table — elevenlabs_agent_id (qora-agent-studio-demo)
-        result = await conn.execute(sqlalchemy.text("PRAGMA table_info(agents)"))
-        agent_columns = {row[1] for row in result.fetchall()}
-
-        if "elevenlabs_agent_id" not in agent_columns:
-            await conn.execute(
-                sqlalchemy.text(
-                    "ALTER TABLE agents "
-                    "ADD COLUMN elevenlabs_agent_id TEXT DEFAULT NULL"
-                )
-            )
-            logger.info(
-                "startup_schema_compat_added", column="agents.elevenlabs_agent_id"
-            )
-
-        if "tool_config" not in agent_columns:
-            await conn.execute(
-                sqlalchemy.text(
-                    "ALTER TABLE agents "
-                    "ADD COLUMN tool_config TEXT DEFAULT NULL"
-                )
-            )
-            logger.info("startup_schema_compat_added", column="agents.tool_config")
-
-        # TTS runtime config columns (unify-qora-agent-runtime-config)
-        if "tts_speed" not in agent_columns:
-            await conn.execute(
-                sqlalchemy.text(
-                    "ALTER TABLE agents "
-                    "ADD COLUMN tts_speed REAL NOT NULL DEFAULT 0.95"
-                )
-            )
-            logger.info("startup_schema_compat_added", column="agents.tts_speed")
-
-        if "tts_stability" not in agent_columns:
-            await conn.execute(
-                sqlalchemy.text(
-                    "ALTER TABLE agents "
-                    "ADD COLUMN tts_stability REAL NOT NULL DEFAULT 0.4"
-                )
-            )
-            logger.info("startup_schema_compat_added", column="agents.tts_stability")
-
-        if "tts_similarity_boost" not in agent_columns:
-            await conn.execute(
-                sqlalchemy.text(
-                    "ALTER TABLE agents "
-                    "ADD COLUMN tts_similarity_boost REAL NOT NULL DEFAULT 0.75"
-                )
-            )
-            logger.info(
-                "startup_schema_compat_added", column="agents.tts_similarity_boost"
-            )
-
-        # ElevenLabs soft timeout columns (sdd/elevenlabs-provisioning)
-        if "soft_timeout_seconds" not in agent_columns:
-            await conn.execute(
-                sqlalchemy.text(
-                    "ALTER TABLE agents "
-                    "ADD COLUMN soft_timeout_seconds REAL DEFAULT NULL"
-                )
-            )
-            logger.info(
-                "startup_schema_compat_added", column="agents.soft_timeout_seconds"
-            )
-
-        if "soft_timeout_message" not in agent_columns:
-            await conn.execute(
-                sqlalchemy.text(
-                    "ALTER TABLE agents "
-                    "ADD COLUMN soft_timeout_message TEXT DEFAULT NULL"
-                )
-            )
-            logger.info(
-                "startup_schema_compat_added", column="agents.soft_timeout_message"
-            )
-
-        if "soft_timeout_use_llm" not in agent_columns:
-            await conn.execute(
-                sqlalchemy.text(
-                    "ALTER TABLE agents "
-                    "ADD COLUMN soft_timeout_use_llm INTEGER DEFAULT NULL"
-                )
-            )
-            logger.info(
-                "startup_schema_compat_added", column="agents.soft_timeout_use_llm"
-            )
-
-        # leads table — zona column (quote-ready-status)
-        result_leads = await conn.execute(
-            sqlalchemy.text("PRAGMA table_info(leads)")
-        )
-        lead_columns = {row[1] for row in result_leads.fetchall()}
-
-        if lead_columns and "zona" not in lead_columns:
-            await conn.execute(
-                sqlalchemy.text(
-                    "ALTER TABLE leads ADD COLUMN zona TEXT DEFAULT NULL"
-                )
-            )
-            logger.info("startup_schema_compat_added", column="leads.zona")
-
-        if lead_columns and "external_crm_id" not in lead_columns:
-            await conn.execute(
-                sqlalchemy.text(
-                    "ALTER TABLE leads ADD COLUMN external_crm_id TEXT DEFAULT NULL"
-                )
-            )
-            logger.info("startup_schema_compat_added", column="leads.external_crm_id")
-
-        if lead_columns and "external_lead_id" not in lead_columns:
-            await conn.execute(
-                sqlalchemy.text(
-                    "ALTER TABLE leads ADD COLUMN external_lead_id INTEGER DEFAULT NULL"
-                )
-            )
-            logger.info("startup_schema_compat_added", column="leads.external_lead_id")
-
-        if "tts_model" not in agent_columns:
-            await conn.execute(
-                sqlalchemy.text(
-                    "ALTER TABLE agents "
-                    "ADD COLUMN tts_model TEXT NOT NULL DEFAULT 'eleven_flash_v2_5'"
-                )
-            )
-            logger.info("startup_schema_compat_added", column="agents.tts_model")
-
-        if "elevenlabs_sync_status" not in agent_columns:
-            await conn.execute(
-                sqlalchemy.text(
-                    "ALTER TABLE agents "
-                    "ADD COLUMN elevenlabs_sync_status TEXT DEFAULT NULL"
-                )
-            )
-            logger.info(
-                "startup_schema_compat_added", column="agents.elevenlabs_sync_status"
-            )
-
-        if "elevenlabs_last_synced_at" not in agent_columns:
-            await conn.execute(
-                sqlalchemy.text(
-                    "ALTER TABLE agents "
-                    "ADD COLUMN elevenlabs_last_synced_at DATETIME DEFAULT NULL"
-                )
-            )
-            logger.info(
-                "startup_schema_compat_added", column="agents.elevenlabs_last_synced_at"
-            )
-
-        # -----------------------------------------------------------------------
-        # dynamic-lead-fields WU-1: lead_custom_fields table + data migration
-        # -----------------------------------------------------------------------
-        # Phase A: CREATE TABLE IF NOT EXISTS (idempotent — CF-10)
-        await conn.execute(sqlalchemy.text("""
-            CREATE TABLE IF NOT EXISTS lead_custom_fields (
-                id TEXT PRIMARY KEY,
-                lead_id TEXT NOT NULL REFERENCES leads(id),
-                client_id TEXT NOT NULL REFERENCES clients(id),
-                field_key TEXT NOT NULL,
-                field_value TEXT,
-                field_type TEXT NOT NULL DEFAULT 'string',
-                created_at DATETIME NOT NULL DEFAULT (datetime('now')),
-                updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
-            )
-        """))
-        # Indexes (IF NOT EXISTS guards make these idempotent in SQLite)
-        await conn.execute(sqlalchemy.text(
-            "CREATE INDEX IF NOT EXISTS ix_lcf_lead_client "
-            "ON lead_custom_fields(lead_id, client_id)"
-        ))
-        # Drop stale index from pre-dynamic-lead-fields schema if it exists (idempotent)
-        await conn.execute(sqlalchemy.text(
-            "DROP INDEX IF EXISTS ix_lcf_lead_key"
-        ))
-        await conn.execute(sqlalchemy.text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS ix_lcf_lead_client_key "
-            "ON lead_custom_fields(lead_id, client_id, field_key)"
-        ))
-
-        # Phase B: One-time data copy from legacy columns (CF-11, AC-2, AC-3)
-        # Guard: check for migration marker row.
-        # Marker is a row with field_key='_migration_v1' (no real lead_id FK — uses
-        # a sentinel value that won't conflict with real data).
-        marker_result = await conn.execute(sqlalchemy.text(
-            "SELECT COUNT(*) FROM lead_custom_fields WHERE field_key='_migration_v1'"
-        ))
-        marker_count = marker_result.scalar()
-
-        if marker_count == 0:
-            # Migration has not run yet — copy legacy column data.
-            # Only copies non-NULL values. Uses leads.client_id to populate client_id.
-            legacy_columns = [
-                ("car_make", "string"),
-                ("car_model", "string"),
-                ("car_year", "integer"),
-                ("current_insurance", "string"),
-                ("age", "integer"),
-                ("zona", "string"),
-            ]
-
-            # Check which legacy columns actually exist (defensive — avoids crash
-            # if this runs on a DB that already dropped them).
-            leads_cols_result = await conn.execute(
-                sqlalchemy.text("PRAGMA table_info(leads)")
-            )
-            existing_lead_cols = {row[1] for row in leads_cols_result.fetchall()}
-
-            import uuid as _uuid
-            from datetime import datetime as _dt, timezone as _tz
-
-            now_iso = _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%S")
-
-            for col_name, col_type in legacy_columns:
-                if col_name not in existing_lead_cols:
-                    continue  # Column was already dropped — skip
-
-                # Fetch all leads with a non-null value for this column
-                rows_result = await conn.execute(sqlalchemy.text(
-                    f"SELECT id, client_id, {col_name} FROM leads WHERE {col_name} IS NOT NULL"
-                ))
-                rows_to_copy = rows_result.fetchall()
-
-                for lead_id, client_id, raw_value in rows_to_copy:
-                    row_id = str(_uuid.uuid4())
-                    str_value = str(raw_value)
-                    # INSERT OR IGNORE protects against the unique constraint on
-                    # (lead_id, field_key) if the row somehow already exists.
-                    await conn.execute(sqlalchemy.text(
-                        "INSERT OR IGNORE INTO lead_custom_fields "
-                        "(id, lead_id, client_id, field_key, field_value, field_type, created_at, updated_at) "
-                        "VALUES (:id, :lead_id, :client_id, :field_key, :field_value, :field_type, :now, :now)"
-                    ), {
-                        "id": row_id,
-                        "lead_id": lead_id,
-                        "client_id": client_id,
-                        "field_key": col_name,
-                        "field_value": str_value,
-                        "field_type": col_type,
-                        "now": now_iso,
-                    })
-
-            # Write migration marker — sentinel uses a special ID that won't collide
-            # with real UUIDs. No lead_id FK needed here; client_id='_system'.
-            await conn.execute(sqlalchemy.text(
-                "INSERT OR IGNORE INTO lead_custom_fields "
-                "(id, lead_id, client_id, field_key, field_value, field_type, created_at, updated_at) "
-                "VALUES (:id, '_migration_sentinel', '_system', '_migration_v1', 'done', 'string', :now, :now)"
-            ), {"id": str(_uuid.uuid4()), "now": now_iso})
-
-            logger.info("startup_migration_custom_fields_done")
 
 
 # ---------------------------------------------------------------------------
@@ -409,7 +133,7 @@ async def lifespan(app: FastAPI):
     Startup:
     1. Load settings
     2. Configure logging
-    3. Init database + create tables
+    3. Init database engine + WAL pragmas (schema from pre-start migration)
     4. Seed tenant + leads data
     5. Start session store TTL cleanup background task
 
@@ -433,13 +157,13 @@ async def lifespan(app: FastAPI):
     )
 
     # 3. Init database
+    # Schema is guaranteed by the pre-start migration command
+    # (python scripts/migrate.py / alembic upgrade head).
+    # init_db() only initializes the async engine, session factory, and WAL pragmas.
     from app.core import database as db_module
 
     await db_module.init_db(settings)
     logger.info("db_initialized", url=settings.database_url)
-
-    # Existing SQLite DBs need additive columns before ORM seed queries run.
-    await _ensure_startup_schema_compat(db_module)
 
     # 4. Seed data
     async with db_module.async_session_factory() as session:
