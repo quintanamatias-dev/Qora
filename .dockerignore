@@ -1,0 +1,79 @@
+# =============================================================================
+# .dockerignore — Docker build context exclusions for Qora
+# =============================================================================
+# Keeps secrets, databases, dev tooling, and build artifacts out of the image.
+# =============================================================================
+
+# Secrets — NEVER bake into image layers
+.env
+*.env
+backend/.env
+
+# Databases — runtime data lives on the named volume, not in the image
+*.db
+*.db-shm
+*.db-wal
+*.db.bak-*
+*.sqlite
+*.sqlite3
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/*.db.bak-*
+
+# Python virtual environment — recreated inside the image via uv sync
+# Docker .dockerignore patterns do not auto-match subdirectories without **/
+# so we list the top-level and backend-specific paths explicitly.
+.venv/
+venv/
+env/
+ENV/
+backend/.venv/
+**/.venv/
+
+# Python bytecode cache
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+
+# Node.js — frontend deps are installed inside the node build stage
+node_modules/
+frontend/node_modules/
+
+# Frontend build artifacts — produced fresh inside the Docker build stage
+frontend/dist/
+frontend/.vite/
+
+# Git — not needed in the image
+.git/
+.gitignore
+
+# IDE and OS artifacts
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+Icon
+
+# Test artifacts
+.pytest_cache/
+**/.pytest_cache/
+.benchmarks/
+**/.benchmarks/
+.ruff_cache/
+**/.ruff_cache/
+.coverage
+htmlcov/
+backend/test_outputs/
+backend/tests/
+
+# CI / local tooling
+Plugin/
+.atl/
+.engram/
+.sdd/
+sdd/
+openspec/
+docs/
