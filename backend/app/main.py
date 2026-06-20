@@ -42,7 +42,7 @@ from fastapi import APIRouter, FastAPI, Request, Response
 # (e.g. QUINTANA_AIRTABLE_API_KEY) are available via os.environ.get().
 # pydantic-settings only reads its own declared fields; this covers the rest.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
-from fastapi.responses import RedirectResponse  # noqa: E402
+from fastapi.responses import FileResponse, RedirectResponse  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint  # noqa: E402
 from starlette.staticfiles import StaticFiles  # noqa: E402
@@ -316,3 +316,38 @@ async def redirect_to_frontend_admin(request: Request):
     settings: Settings = getattr(request.app.state, "settings", None) or Settings()
     target = settings.frontend_url.rstrip("/") + "/admin"
     return RedirectResponse(url=target, status_code=307)
+
+
+# ---------------------------------------------------------------------------
+# Static frontend — Docker production build
+# ---------------------------------------------------------------------------
+# Serves the React SPA built by the Dockerfile Node stage.
+# API routes (/api/v1/*, /demo/*, /docs, /admin) registered above take priority.
+#
+# Strategy: mount static assets (JS/CSS/images) via StaticFiles on /assets,
+# /fonts, /images then use a FastAPI catch-all route (/{full_path:path}) to
+# serve index.html for all other paths, enabling React Router deep-link support.
+#
+# This directory only exists inside the Docker image (/app/static-frontend/).
+# Outside Docker the path is absent and all mounts/routes are skipped, leaving
+# the ./Qora local dev workflow (hot-reload on :5173) completely unaffected.
+# ---------------------------------------------------------------------------
+
+_FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "static-frontend")
+if os.path.isdir(_FRONTEND_DIR):
+    # Mount static asset directories so they are served efficiently
+    for _asset_subdir in ("assets", "fonts", "images"):
+        _asset_path = os.path.join(_FRONTEND_DIR, _asset_subdir)
+        if os.path.isdir(_asset_path):
+            app.mount(
+                f"/{_asset_subdir}",
+                StaticFiles(directory=_asset_path),
+                name=f"frontend-{_asset_subdir}",
+            )
+
+    # Catch-all route: serve index.html for all unmatched paths so that
+    # React Router can resolve deep links client-side (SPA routing support).
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        """Serve the React SPA index.html for all unmatched GET paths."""
+        return FileResponse(os.path.join(_FRONTEND_DIR, "index.html"))

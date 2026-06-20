@@ -1,0 +1,49 @@
+# =============================================================================
+# docker-compose.yml — Qora production-like single-container deployment
+# =============================================================================
+# Starts the full application (API + React SPA) on port 8000.
+# SQLite is persisted on the named volume qora-data.
+#
+# Usage:
+#   docker compose up --build        # First run / rebuild
+#   docker compose up -d             # Detached
+#   docker compose down              # Stop and remove containers (volume retained)
+#   docker compose down -v           # Stop and remove containers + volumes (data loss!)
+#
+# Prerequisites:
+#   - Copy backend/.env.example to .env and fill in required API keys.
+#   - .env must be present at the repo root (same directory as this file).
+# =============================================================================
+
+services:
+  qora:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: qora:latest
+    container_name: qora
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # SQLite database on the named volume — overrides any DATABASE_URL in .env
+      DATABASE_URL: "sqlite+aiosqlite:////app/data/qora.db"
+      # Skip the backup-before-migration guard on container restarts.
+      # The named volume already persists the DB; a daily backup step is
+      # separate from the migration safety gate in scripts/migrate.py.
+      QORA_SKIP_BACKUP_CHECK: "1"
+    volumes:
+      - qora-data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  qora-data:
+    # Named volume managed by Docker — survives docker compose down.
+    # Use `docker compose down -v` to explicitly delete it (data loss!).
