@@ -10,8 +10,10 @@ PR #2: Session Auth + Demo + Tool Scope
   - create_authorized_session() — factory; assigns scopes based on is_demo
   - get_authorized_session() — FastAPI dep for custom-LLM hot path (zero DB)
 
-PR #3 (not in this file yet):
-  - require_webhook_secret
+PR #3: Webhook Auth + CORS
+  - require_webhook_secret() — optional X-Webhook-Secret dep for voice endpoints
+    Disabled by default (QORA_WEBHOOK_AUTH_ENABLED=false).
+    When enabled, validates X-Webhook-Secret header via constant-time comparison.
 
 Design rationale (design.md):
   - FastAPI Depends() is swappable: Phase C replaces require_api_key with
@@ -248,6 +250,85 @@ def create_authorized_session(
 # ---------------------------------------------------------------------------
 # get_authorized_session — FastAPI dependency for custom-LLM hot path
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# require_webhook_secret — optional voice endpoint dependency (PR #3)
+# ---------------------------------------------------------------------------
+
+
+def require_webhook_secret(
+    request: Request,
+    settings: Settings = Depends(_get_settings),
+) -> None:
+    """FastAPI dependency that optionally validates ElevenLabs webhook secret.
+
+    Disabled by default (QORA_WEBHOOK_AUTH_ENABLED=false) so that existing
+    ElevenLabs agents continue to work without any reconfiguration.
+
+    When QORA_WEBHOOK_AUTH_ENABLED=true:
+    - Reads the ``X-Webhook-Secret`` header from the incoming request.
+    - Compares it against ``settings.qora_webhook_secret`` using constant-time
+      comparison (secrets.compare_digest) to prevent timing attacks.
+    - Returns 401 when the header is missing, the value is wrong, or the secret
+      is not configured (fail-closed: enabled + unconfigured → deny all).
+
+    ElevenLabs sends this header on every webhook call when configured in their
+    dashboard. See: https://elevenlabs.io/docs/conversational-ai/customization/security
+
+    Rollout:
+    1. Set QORA_WEBHOOK_SECRET=<strong-random-value> in .env.
+    2. Paste the same value into the ElevenLabs agent's "Webhook secret" field.
+    3. Set QORA_WEBHOOK_AUTH_ENABLED=true.
+    4. Restart backend. Existing agents with the secret configured will continue
+       to work; agents without the secret will start returning 401.
+
+    Returns:
+        None — dependency succeeds silently when auth passes or is disabled.
+
+    Raises:
+        HTTPException(401) — when enabled and the header is missing or wrong.
+    """
+    if not settings.qora_webhook_auth_enabled:
+        # Auth disabled (default) — no-op. Existing ElevenLabs agents unaffected.
+        return None
+
+    # Auth is enabled. Fail-closed: no configured secret → deny all requests.
+    if settings.qora_webhook_secret is None:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "webhook_auth_misconfigured",
+                "message": (
+                    "QORA_WEBHOOK_AUTH_ENABLED=true but QORA_WEBHOOK_SECRET is not configured. "
+                    "Set QORA_WEBHOOK_SECRET to enable webhook authentication."
+                ),
+            },
+        )
+
+    presented_secret = request.headers.get("X-Webhook-Secret")
+    if presented_secret is None:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "webhook_auth_required",
+                "message": "X-Webhook-Secret header is required when webhook auth is enabled",
+            },
+        )
+
+    expected_secret = settings.qora_webhook_secret.get_secret_value()
+
+    # Constant-time comparison — prevents timing side-channel attacks.
+    if not secrets.compare_digest(presented_secret.encode(), expected_secret.encode()):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "webhook_auth_failed",
+                "message": "Invalid webhook secret",
+            },
+        )
+
+    return None
 
 
 def get_authorized_session(

@@ -37,8 +37,8 @@ Chain strategy: pending
 
 ## PR #3 — Webhook Auth + CORS (~200 lines)
 
-- [ ] 3.1 RED: Add webhook secret enabled/disabled tests and CORS origin tests in backend auth/main tests.
-- [ ] 3.2 GREEN: Add disabled-by-default `require_webhook_secret()` to `backend/app/core/auth.py` and wire voice webhook endpoints without breaking existing ElevenLabs agents.
-- [ ] 3.3 GREEN: Replace wildcard CORS in `backend/app/main.py` with `QORA_ALLOWED_ORIGINS`; document rollout vars in `backend/.env.example`.
-- [ ] 3.4 VERIFY: If webhook auth is enabled, manually configure ElevenLabs secret, run a live demo call, confirm transcript writes; remove secret to confirm 401, then restore.
-- [ ] 3.5 VERIFY: Confirm allowed origins work, rejected origins fail, webhook auth remains off by default, and file hygiene constraints still hold.
+- [x] 3.1 RED: Add webhook secret enabled/disabled tests and CORS origin tests in backend auth/main tests.
+- [x] 3.2 GREEN: Add disabled-by-default `require_webhook_secret()` to `backend/app/core/auth.py` and wire voice webhook endpoints without breaking existing ElevenLabs agents.
+- [x] 3.3 GREEN: Replace wildcard CORS in `backend/app/main.py` with `QORA_ALLOWED_ORIGINS`; document rollout vars in `backend/.env.example`.
+- [x] 3.4 VERIFY: If webhook auth is enabled, manually configure ElevenLabs secret, run a live demo call, confirm transcript writes; remove secret to confirm 401, then restore.
+- [x] 3.5 VERIFY: Confirm allowed origins work, rejected origins fail, webhook auth remains off by default, and file hygiene constraints still hold.

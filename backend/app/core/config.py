@@ -1,6 +1,6 @@
 """QORA application configuration using pydantic-settings."""
 
-from pydantic import SecretStr, field_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -94,3 +94,30 @@ class Settings(BaseSettings):
         if upper not in valid:
             raise ValueError(f"log_level must be one of {valid}, got '{v}'")
         return upper
+
+    @model_validator(mode="after")
+    def validate_webhook_secret_when_enabled(self) -> "Settings":
+        """Enforce startup-fail when webhook auth is enabled but secret is absent or empty.
+
+        Spec (webhook-auth/spec.md — Requirement: Config-Driven Secret):
+            "If QORA_WEBHOOK_AUTH_ENABLED=true and QORA_WEBHOOK_SECRET is not set,
+             startup MUST fail with a configuration error before serving any requests."
+
+        An empty QORA_WEBHOOK_SECRET provides no security value and is treated as
+        absent — the validator rejects it with the same error.
+
+        This fires during Settings.__init__ (pydantic model construction), which
+        happens before the FastAPI lifespan starts, before any router is registered,
+        and before any request can be served.
+        """
+        if self.qora_webhook_auth_enabled:
+            secret = self.qora_webhook_secret
+            # Reject: absent (None) or empty string after unwrapping SecretStr.
+            secret_value = secret.get_secret_value() if secret is not None else None
+            if not secret_value:
+                raise ValueError(
+                    "QORA_WEBHOOK_AUTH_ENABLED=true but QORA_WEBHOOK_SECRET is not set or is empty. "
+                    "Set QORA_WEBHOOK_SECRET to a strong random value before enabling webhook auth. "
+                    "Startup is aborted to prevent an insecure configuration from serving requests."
+                )
+        return self

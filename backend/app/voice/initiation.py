@@ -12,10 +12,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import structlog
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from app.core.auth import create_authorized_session
+from app.core.auth import create_authorized_session, require_webhook_secret
 from app.core.database import get_session as db_session
 from app.leads.service import get_lead, transition_lead_status
 from app.leads.service import InvalidTransitionError
@@ -68,6 +68,7 @@ async def initiation_webhook(
     body: InitiationRequest | None = None,
     client_id: str | None = Query(default=None),
     lead_id: str | None = Query(default=None),
+    _webhook_auth: None = Depends(require_webhook_secret),
 ) -> InitiationResponse:
     """Handle ElevenLabs conversation initiation.
 
