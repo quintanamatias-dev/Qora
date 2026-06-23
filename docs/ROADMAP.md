@@ -1,7 +1,7 @@
 # Qora Production Roadmap
 
 > Living document. Update as items are completed or scope changes.
-> Last updated: 2026-06-18
+> Last updated: 2026-06-23
 
 ## Current State
 
@@ -50,13 +50,13 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
-| B1 | Dockerfile + docker-compose | - [ ] | Backend + frontend + DB |
-| B2 | Deploy to VPS/cloud (Railway, Fly, DigitalOcean, etc.) | - [ ] | Public HTTPS endpoint for webhooks |
-| B3 | Replace SQLite with PostgreSQL | - [ ] | Or managed SQLite (Turso/LiteFS) if preferred |
-| B4 | Database migrations (Alembic) | - [ ] | Replace startup DDL compatibility patches |
-| B5 | API authentication | - [ ] | At minimum: API key per client for webhooks, session auth for frontend |
-| B6 | Webhook signature verification | - [ ] | Validate ElevenLabs webhook signatures |
-| B7 | CORS lockdown | - [ ] | Replace allow-all with explicit origins |
+| B1 | Dockerfile + docker-compose | - [x] | Completed in PR #105: single-container FastAPI + React SPA image, compose runtime, SQLite named volume |
+| B2 | Deploy to VPS/cloud (Railway, Fly, DigitalOcean, etc.) | - [ ] | Public HTTPS endpoint for webhooks; do last after security hardening |
+| B3 | Replace SQLite with PostgreSQL | - [ ] | Deferred for now; continue with SQLite + migrations unless production needs change |
+| B4 | Database migrations (Alembic) | - [x] | Completed in PR #103: Alembic migration foundation and startup DDL cleanup |
+| B5 | API authentication | - [x] | Completed in PRs #107, #109, #111: admin API key auth, session-scoped demo/pipeline auth, tool scope validation |
+| B6 | Webhook signature verification | - [x] | Completed in PR #111: opt-in webhook secret auth for initiation and Custom LLM routes |
+| B7 | CORS lockdown | - [x] | Completed in PR #111: configurable `QORA_ALLOWED_ORIGINS` replaces hardcoded allow-all for production |
 | B8 | Secrets management | - [ ] | Per-client credential storage, not .env-only |
 | B9 | Structured logging + error monitoring | - [ ] | Sentry/equivalent, structured log shipping |
 | B10 | Background job durability | - [ ] | Replace in-process asyncio tasks with restart-safe jobs |
