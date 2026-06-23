@@ -272,6 +272,26 @@ api_v1_router.include_router(demo_router)  # /api/v1/demo — public demo endpoi
 # ---------------------------------------------------------------------------
 
 
+def _parse_allowed_origins(raw: str) -> list[str]:
+    """Parse QORA_ALLOWED_ORIGINS into a list of allowed origin strings.
+
+    Args:
+        raw: Comma-separated origins or "*" for wildcard (open dev default).
+             Whitespace around commas is trimmed.
+
+    Returns:
+        List of origin strings. ["*"] for wildcard.
+
+    Examples:
+        "*"                                     → ["*"]
+        "https://app.example.com"               → ["https://app.example.com"]
+        "https://a.com, https://b.com"          → ["https://a.com", "https://b.com"]
+    """
+    if raw.strip() == "*":
+        return ["*"]
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
 def create_app(docs_enabled: bool | None = None) -> FastAPI:
     """Create and configure a QORA FastAPI application instance.
 
@@ -308,10 +328,16 @@ def create_app(docs_enabled: bool | None = None) -> FastAPI:
         redoc_url="/redoc" if docs_enabled else None,
     )
 
+    # CORS lockdown (Phase B5 PR #3): use QORA_ALLOWED_ORIGINS to restrict origins.
+    # Default is "*" (open) to preserve current dev behavior — set an explicit list
+    # in production (e.g. "https://your-frontend.com,https://admin.your-domain.com").
+    _raw_origins = os.getenv("QORA_ALLOWED_ORIGINS", "*")
+    _allowed_origins = _parse_allowed_origins(_raw_origins)
+
     _new_app.add_middleware(RequestLoggingMiddleware)
     _new_app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=_allowed_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )

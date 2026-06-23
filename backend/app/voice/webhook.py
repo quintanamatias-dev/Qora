@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 import httpx as _httpx
 import structlog
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -51,7 +51,10 @@ from app.tools.registry import (
     DEFAULT_FILLER,
     build_tool_definitions as _build_tool_definitions,
 )
-from app.core.auth import create_authorized_session as _create_authorized_session
+from app.core.auth import (
+    create_authorized_session as _create_authorized_session,
+    require_webhook_secret,
+)
 from app.voice.context import build_voice_context, parse_agent_tool_config
 from app.voice.session import session_store
 
@@ -530,7 +533,11 @@ async def _stream_llm_response(
     "/custom-llm/chat/completions"
 )  # ElevenLabs appends /chat/completions to base URL
 @router.post("/chat/completions")  # If base URL is /api/v1/voice
-async def custom_llm_webhook(body: CustomLLMRequest, request: Request):
+async def custom_llm_webhook(
+    body: CustomLLMRequest,
+    request: Request,
+    _webhook_auth: None = Depends(require_webhook_secret),
+):
     """Handle ElevenLabs Custom LLM webhook (legacy route).
 
     Extracts client_id + lead_id from elevenlabs_extra_body.
@@ -606,7 +613,10 @@ async def custom_llm_webhook(body: CustomLLMRequest, request: Request):
 
 @router.post("/{client_id}/custom-llm/chat/completions")
 async def custom_llm_path_route(
-    client_id: str, body: CustomLLMRequest, request: Request
+    client_id: str,
+    body: CustomLLMRequest,
+    request: Request,
+    _webhook_auth: None = Depends(require_webhook_secret),
 ):
     """Handle ElevenLabs Custom LLM webhook with client_id in URL path (CAP-1).
 
