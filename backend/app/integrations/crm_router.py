@@ -14,9 +14,10 @@ Design decisions:
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from app.core.auth import require_api_key
 from app.integrations.crm_import_service import ImportResult, import_leads_from_crm
 
 # Imported at module level for testability (can be patched in tests)
@@ -25,7 +26,11 @@ try:
 except ImportError:
     async_session_factory = None  # type: ignore[assignment]
 
-router = APIRouter(prefix="/clients", tags=["crm"])
+router = APIRouter(
+    prefix="/clients",
+    tags=["crm"],
+    dependencies=[Depends(require_api_key)],
+)
 
 
 # ---------------------------------------------------------------------------

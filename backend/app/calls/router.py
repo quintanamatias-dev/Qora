@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.calls.schemas import (
     CallAnalysisResponse,
@@ -40,6 +40,7 @@ from app.calls.service import (
     get_transcript,
     list_sessions_for_client,
 )
+from app.core.auth import require_api_key
 from app.core.database import get_session as db_session
 
 router = APIRouter(prefix="/calls", tags=["calls"])
@@ -53,7 +54,7 @@ logger = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 
-@router.get("/metrics", response_model=CallMetricsResponse)
+@router.get("/metrics", response_model=CallMetricsResponse, dependencies=[Depends(require_api_key)])
 async def get_call_metrics_endpoint(
     client_id: str,
     lead_id: str | None = None,
@@ -117,7 +118,7 @@ def _session_to_dict(cs) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(require_api_key)])
 async def list_call_sessions(
     client_id: str,
     lead_id: str | None = None,
@@ -224,7 +225,7 @@ async def elevenlabs_postcall_webhook(body: ElevenLabsPostCallPayload):
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{conversation_id}/end", response_model=EndSessionResponse)
+@router.post("/{conversation_id}/end", response_model=EndSessionResponse, dependencies=[Depends(require_api_key)])
 async def end_call_session(conversation_id: str, body: EndSessionRequest):
     """Close a call session (CAP-2a).
 
@@ -299,7 +300,7 @@ async def end_call_session(conversation_id: str, body: EndSessionRequest):
 # ---------------------------------------------------------------------------
 
 
-@router.get("/{session_id}")
+@router.get("/{session_id}", dependencies=[Depends(require_api_key)])
 async def get_call_session(session_id: str):
     """Get a call session by ID — for admin/debug use."""
     async with db_session() as session:
@@ -312,7 +313,7 @@ async def get_call_session(session_id: str):
         return result
 
 
-@router.get("/{session_id}/transcript", response_model=SessionTranscriptResponse)
+@router.get("/{session_id}/transcript", response_model=SessionTranscriptResponse, dependencies=[Depends(require_api_key)])
 async def get_call_transcript(session_id: str):
     """Get all transcript turns for a call session — for admin/debug use."""
     async with db_session() as session:
@@ -356,7 +357,7 @@ def _parse_json_col(value: str | None, default: Any = None) -> Any:
         return default
 
 
-@router.get("/{session_id}/analysis", response_model=CallAnalysisResponse)
+@router.get("/{session_id}/analysis", response_model=CallAnalysisResponse, dependencies=[Depends(require_api_key)])
 async def get_call_analysis_endpoint(session_id: str):
     """Get the full analysis for a call session (all 12 dimensions).
 

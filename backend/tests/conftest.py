@@ -5,6 +5,7 @@ Provides:
 - App factory with QORA lifespan
 - QORA Settings fixture (no Twilio dependencies)
 - respx mocks for OpenAI/ElevenLabs
+- Auth fixtures (Phase B5): auth_headers + QORA_API_KEY env injection
 """
 
 from __future__ import annotations
@@ -16,6 +17,17 @@ from unittest.mock import MagicMock
 import pytest
 import pytest_asyncio
 from pydantic import SecretStr
+
+
+# ---------------------------------------------------------------------------
+# Auth test configuration (Phase B5 — PR #1: Foundation + Admin Auth)
+# ---------------------------------------------------------------------------
+# A well-known test API key used by all backend tests. Never used in production.
+# This value is intentionally public — it only authenticates against the ephemeral
+# in-process test server, never against a real QORA deployment.
+# ---------------------------------------------------------------------------
+
+_TEST_API_KEY = "qora-test-key-do-not-use-in-production"
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +74,78 @@ def _clear_session_store_between_tests():
 
 
 # ---------------------------------------------------------------------------
+# Auth fixtures (Phase B5 — PR #1: Foundation + Admin Auth)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _inject_test_api_key(monkeypatch):
+    """Inject QORA_API_KEY into the test process environment.
+
+    This ensures that any Settings() instance created during tests (e.g. in
+    route dependencies that fall back to Settings() when app.state.settings
+    is not populated) will find a valid API key without per-test changes.
+
+    The key value is intentionally a known test constant — it only
+    authenticates against the in-process test server.
+    """
+    monkeypatch.setenv("QORA_API_KEY", _TEST_API_KEY)
+
+
+@pytest.fixture(autouse=True)
+def _auto_bypass_api_key(request):
+    """Autouse fixture: bypass require_api_key for all tests except auth behavior tests.
+
+    Sets app.core.auth._TESTING_BYPASS = True so that require_api_key() returns a
+    synthetic CallerIdentity without checking the Authorization header. This prevents
+    ~1724 existing tests from failing with 401 after admin routes were protected.
+
+    Tests in TestAdminRoutesRequireAuth are excluded — they explicitly verify that
+    401 is returned when the real auth dependency runs without a valid header.
+
+    The bypass flag only activates when running under pytest (PYTEST_CURRENT_TEST
+    env var is set by pytest itself). Production processes never set this flag.
+    """
+    import app.core.auth as auth_module
+
+    # Tests in test_auth.py that verify real auth behavior must NOT get the bypass.
+    # Identified by their class names — all classes in that module test real auth.
+    _AUTH_TEST_CLASSES = {"TestRequireApiKey", "TestAuthSettings", "TestAdminRoutesRequireAuth"}
+    cls = request.node.cls
+    if cls is not None and cls.__name__ in _AUTH_TEST_CLASSES:
+        # Ensure bypass is OFF for these tests
+        auth_module._TESTING_BYPASS = False
+        yield
+        auth_module._TESTING_BYPASS = False
+        return
+
+    # Enable bypass for all other tests
+    auth_module._TESTING_BYPASS = True
+    yield
+    auth_module._TESTING_BYPASS = False
+
+
+@pytest.fixture
+def bypass_api_key():
+    """Explicit opt-in bypass marker — no-op since autouse handles it."""
+    pass
+
+
+@pytest.fixture
+def auth_headers() -> dict[str, str]:
+    """Return HTTP headers that satisfy require_api_key for the test key.
+
+    Usage in test functions that need to test real auth behavior
+    (e.g. TestAdminRoutesRequireAuth which clears dependency_overrides):
+        response = client.get("/api/v1/clients", headers=auth_headers)
+
+    Usage with httpx AsyncClient:
+        response = await async_client.get("/api/v1/clients", headers=auth_headers)
+    """
+    return {"Authorization": f"Bearer {_TEST_API_KEY}"}
+
+
+# ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
 
@@ -75,6 +159,7 @@ def test_settings(tmp_path: Path):
     return Settings(
         openai_api_key=SecretStr("sk-test-openai"),
         elevenlabs_api_key=SecretStr("el-test-key"),
+        qora_api_key=SecretStr(_TEST_API_KEY),
         database_url=db_url,
         debug=False,
     )

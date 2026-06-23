@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 
 from app.analytics.schemas import (
@@ -27,6 +27,7 @@ from app.analytics.schemas import (
     ServiceIssueItem,
     VALID_PERIODS,
 )
+from app.core.auth import require_api_key
 from app.analytics.service import (
     get_agent_stats,
     get_interests,
@@ -37,7 +38,11 @@ from app.analytics.service import (
 from app.core.database import get_session as db_session
 from app.tenants.models import Client
 
-router = APIRouter(prefix="/analytics", tags=["analytics"])
+router = APIRouter(
+    prefix="/analytics",
+    tags=["analytics"],
+    dependencies=[Depends(require_api_key)],
+)
 
 
 # ---------------------------------------------------------------------------

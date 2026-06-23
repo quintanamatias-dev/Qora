@@ -20,10 +20,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.schemas import ClientCreate, ClientResponse, ClientUpdate
+from app.core.auth import require_api_key
 from app.tenants.models import Agent, Client
 import app.tenants.service as tenant_service
 
-router = APIRouter(prefix="/clients", tags=["clients"])
+router = APIRouter(
+    prefix="/clients",
+    tags=["clients"],
+    dependencies=[Depends(require_api_key)],
+)
 
 
 # ---------------------------------------------------------------------------
