@@ -28,12 +28,12 @@ Chain strategy: pending
 
 ## PR #2 — Session Auth + Demo + Tool Scope (~400 lines)
 
-- [ ] 2.1 RED: Add tests for `AuthorizedSession` creation, session-store lookup, demo context/leads safety, full demo pipeline writes, tool scope denial, and zero per-turn DB/network auth lookup.
-- [ ] 2.2 GREEN: Add `AuthorizedSession` to `backend/app/core/auth.py` and `ConversationState.auth` in `backend/app/voice/session.py`; bind auth once at session start in `backend/app/voice/initiation.py`.
-- [ ] 2.3 GREEN: Create `backend/app/demo/router.py` with public `/api/v1/demo/context` and `/api/v1/demo/leads`; preserve `/demo` as public/easy and never expose admin keys.
-- [ ] 2.4 GREEN: Update `backend/app/static/index.html` for demo button flow: load context, load demo leads, user starts conversation; do not route demo through scheduled calls.
-- [ ] 2.5 GREEN: Pass cached `AuthorizedSession` through `backend/app/voice/webhook.py` into `backend/app/tools/dispatcher.py`; tools are backend actions requested by the agent and must check cached session scope before data access.
-- [ ] 2.6 VERIFY: Prove custom-LLM turns use cached auth with zero DB/network auth lookup; verify scheduler flow remains future-designed only, with no implication demo uses scheduled calls.
+- [x] 2.1 RED: Add tests for `AuthorizedSession` creation, session-store lookup, demo context/leads safety, full demo pipeline writes, tool scope denial, and zero per-turn DB/network auth lookup.
+- [x] 2.2 GREEN: Add `AuthorizedSession` to `backend/app/core/auth.py` and `ConversationState.auth` in `backend/app/voice/session.py`; bind auth once at session start in `backend/app/voice/initiation.py`.
+- [x] 2.3 GREEN: Create `backend/app/demo/router.py` with public `/api/v1/demo/context` and `/api/v1/demo/leads`; preserve `/demo` as public/easy and never expose admin keys.
+- [x] 2.4 GREEN: Update `backend/app/static/index.html` for demo button flow: load context, load demo leads, user starts conversation; do not route demo through scheduled calls.
+- [x] 2.5 GREEN: Pass cached `AuthorizedSession` through `backend/app/voice/webhook.py` into `backend/app/tools/dispatcher.py`; tools are backend actions requested by the agent and must check cached session scope before data access.
+- [x] 2.6 VERIFY: Prove custom-LLM turns use cached auth with zero DB/network auth lookup; verify scheduler flow remains future-designed only, with no implication demo uses scheduled calls.
 
 ## PR #3 — Webhook Auth + CORS (~200 lines)
 

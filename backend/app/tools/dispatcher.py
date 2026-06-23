@@ -8,6 +8,19 @@ Phase 1 (configurable-agent-tools): adds capture_data routing with agent_tool_co
 Phase 2 (configurable-agent-tools): removes register_interest, mark_not_interested,
     schedule_followup from _TOOL_REGISTRY. Calls to these names return tool_removed
     so old agents don't crash — they receive a structured error via the SSE stream.
+
+Phase B5 PR #2 (session-auth-binding):
+  - dispatch_tool now accepts an optional ``authorized_session`` parameter.
+  - When present, the scope guard validates the session's ``scopes`` frozenset
+    before executing any handler that reads or writes tenant data.
+  - Tenant boundary check: session.client_id MUST match the call's client_id.
+  - Scope requirements per tool:
+      - "pipeline:write"  → capture_data (writes captured fields)
+      - "pipeline:read"   → get_lead_details, get_lead_profile,
+                            get_lead_history, get_lead_pain_points
+  - load_skill is NOT scope-gated (reads static skill files, no tenant data).
+  - When authorized_session is None (legacy path), the scope guard is skipped
+    for backward compatibility with callers that predate B5.
 """
 
 from __future__ import annotations
@@ -25,8 +38,74 @@ from app.tools.get_lead_pain_points import get_lead_pain_points
 from app.tools.get_lead_profile import get_lead_profile
 
 if TYPE_CHECKING:
+    from app.core.auth import AuthorizedSession
     from app.integrations.crm_config import CRMConfig
     from app.prompts.skill_loader import SkillRegistryEntry
+
+
+# ---------------------------------------------------------------------------
+# Scope requirements per tool (Phase B5 PR #2)
+# ---------------------------------------------------------------------------
+
+#: Tools that require "pipeline:write" scope.
+_WRITE_TOOLS: frozenset[str] = frozenset({"capture_data"})
+
+#: Tools that require "pipeline:read" scope.
+_READ_TOOLS: frozenset[str] = frozenset({
+    "get_lead_details",
+    "get_lead_profile",
+    "get_lead_history",
+    "get_lead_pain_points",
+})
+
+
+def _check_scope(
+    tool_name: str,
+    client_id: str,
+    authorized_session: "AuthorizedSession | None",
+) -> dict | None:
+    """Check scope and tenant boundary for a tool call.
+
+    Returns an error dict if the call is denied, or None if allowed.
+
+    Args:
+        tool_name: Name of the tool being dispatched.
+        client_id: Tenant client_id of the current call.
+        authorized_session: The cached AuthorizedSession for this call, or None
+            when the caller predates Phase B5 (legacy path — no guard applied).
+
+    Returns:
+        Error dict with ``error: "scope_denied"`` if denied, else None.
+    """
+    if authorized_session is None:
+        # Legacy path — no session context. Skip scope guard for backward compat.
+        return None
+
+    # Tenant boundary check: session.client_id must match this call's client_id.
+    # A demo session for client-A cannot dispatch tools for client-B.
+    if authorized_session.client_id != client_id:
+        return {
+            "error": "scope_denied",
+            "detail": (
+                f"Tenant mismatch: session client_id '{authorized_session.client_id}' "
+                f"does not match call client_id '{client_id}'"
+            ),
+        }
+
+    # Scope check: validate the session's frozenset contains the required scope.
+    if tool_name in _WRITE_TOOLS and "pipeline:write" not in authorized_session.scopes:
+        return {
+            "error": "scope_denied",
+            "detail": f"Tool '{tool_name}' requires 'pipeline:write' scope",
+        }
+
+    if tool_name in _READ_TOOLS and "pipeline:read" not in authorized_session.scopes:
+        return {
+            "error": "scope_denied",
+            "detail": f"Tool '{tool_name}' requires 'pipeline:read' scope",
+        }
+
+    return None
 
 # Legacy tool names removed in Phase 2 (imported from registry for single source of truth).
 from app.tools.registry import _REMOVED_TOOLS as _LEGACY_REMOVED_TOOLS
@@ -54,6 +133,7 @@ async def dispatch_tool(
     clients_dir: Path | None = None,
     agent_tool_config: dict | None = None,
     crm_config: "CRMConfig | None" = None,
+    authorized_session: "AuthorizedSession | None" = None,
 ) -> dict:
     """Route a tool call to the correct handler.
 
@@ -73,10 +153,20 @@ async def dispatch_tool(
         crm_config: Optional CRMConfig — when present, capture_data uses
             field_definitions for schema validation and field_type coercion.
             Takes priority over agent_tool_config for capture_data schema.
+        authorized_session: Optional AuthorizedSession cached at session start.
+            When provided, scope and tenant boundary are validated before handler
+            execution. When None (legacy callers), the scope guard is skipped.
 
     Returns:
         Tool result dict. Always returns a dict — never raises.
     """
+    # --- Phase B5 PR #2: scope + tenant boundary check ---
+    # load_skill is intentionally exempt — it reads static skill files only.
+    if tool_name not in ("load_skill",):
+        scope_error = _check_scope(tool_name, client_id, authorized_session)
+        if scope_error is not None:
+            return scope_error
+
     # --- Phase 2: legacy tools return structured tool_removed error ---
     if tool_name in _LEGACY_REMOVED_TOOLS:
         return {

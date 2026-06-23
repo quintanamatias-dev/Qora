@@ -136,192 +136,103 @@
     let isPlaying = false;
     let pollInterval = null;
     let isMuted = false;
-    let currentClientData = {};  // holds the selected client's name, agent_name, etc.
+    let currentClientData = {};  // holds the resolved demo client/agent metadata
     let currentSessionId = null;  // ElevenLabs conversation_id for the active session
-    let currentAgentConfig = null;  // holds the selected agent's TTS config, or null if not available
-    let clientAgents = [];  // all active agents for the selected client
-    let selectedAgentId = '';  // resolved elevenlabs_agent_id from the selected agent
-    let selectedAgentSlug = '';  // slug of the selected agent for dynamic_variables
+    let currentAgentConfig = null;  // TTS config for the demo agent (null if not configured)
+    let selectedAgentId = '';  // resolved elevenlabs_agent_id from demo/context
+    let selectedAgentSlug = '';  // slug of the demo agent
+    let demoDemoClientId = '';  // demo client_id resolved from /api/v1/demo/context
 
-    // ── Client/Lead loading ─────────────────────────────────────────────────────
-    async function loadClients() {
-      const select = document.getElementById('clientId');
-      const errSpan = document.getElementById('clientError');
-      select.innerHTML = '<option value="" disabled selected>Cargando...</option>';
+    // ── Demo context + leads loading (Phase B5 PR #2) ──────────────────────────
+    // The demo page now fetches from auth-exempt demo endpoints instead of calling
+    // the admin-protected /api/v1/clients and /api/v1/leads endpoints directly.
+    // NO credentials are ever exposed to the browser.
+    // ──────────────────────────────────────────────────────────────────────────
+    async function loadDemoContext() {
+      const clientSelect = document.getElementById('clientId');
+      const agentSelect  = document.getElementById('agentSelect');
+      const agentHint    = document.getElementById('agentIdHint');
+      const errSpan      = document.getElementById('clientError');
+
+      clientSelect.innerHTML = '<option value="" disabled selected>Cargando...</option>';
+      agentSelect.innerHTML  = '<option value="" disabled selected>Cargando agente demo...</option>';
+      agentSelect.disabled = true;
       errSpan.style.display = 'none';
 
       try {
-        const r = await fetch('/api/v1/clients');
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const clients = await r.json();
-
-        if (!clients || clients.length === 0) {
-          select.innerHTML = '<option value="" disabled selected>Sin clientes activos</option>';
-          return;
+        const r = await fetch('/api/v1/demo/context');
+        if (!r.ok) {
+          throw new Error('Demo no configurado (HTTP ' + r.status + '). Configurar QORA_DEMO_CLIENT_ID y QORA_DEMO_AGENT_ID en el servidor.');
         }
+        const ctx = await r.json();
 
-        select.innerHTML = '';
-        clients.forEach(c => {
-          const opt = document.createElement('option');
-          opt.value = c.client_id;
-          opt.textContent = c.name;
-          opt.dataset.companyName = c.name || '';
-          opt.dataset.agentName = c.agent_name || '';
-          select.appendChild(opt);
-        });
+        // ctx: { elevenlabs_agent_id, client_name, agent_name, demo_client_id }
+        demoDemoClientId = ctx.demo_client_id || '';
+        selectedAgentId  = ctx.elevenlabs_agent_id || '';
+        selectedAgentSlug = '';  // slug not exposed by demo/context (not needed in demo flow)
 
-        // Prefer qora-demo client when available; fall back to first
-        const qoraDemoIdx = Array.from(select.options).findIndex(o => o.value === 'qora-demo');
-        select.selectedIndex = qoraDemoIdx >= 0 ? qoraDemoIdx : 0;
-        await onClientChange();
+        currentClientData = {
+          name:       ctx.client_name  || '',
+          agent_name: ctx.agent_name   || '',
+        };
 
-      } catch (e) {
-        console.error('Failed to load clients:', e);
-        errSpan.textContent = 'Error cargando clientes. Ingresá el ID manualmente:';
-        errSpan.style.display = 'block';
-        // Fallback: show a text input
-        select.innerHTML = '<option value="quintana-seguros">quintana-seguros (fallback)</option>';
-        await onClientChange();
-      }
-    }
+        // Populate client selector with the single demo client (read-only in demo)
+        clientSelect.innerHTML = '';
+        const cOpt = document.createElement('option');
+        cOpt.value = demoDemoClientId;
+        cOpt.textContent = ctx.client_name || demoDemoClientId;
+        cOpt.dataset.companyName = ctx.client_name || '';
+        cOpt.dataset.agentName   = ctx.agent_name  || '';
+        clientSelect.appendChild(cOpt);
+        clientSelect.selectedIndex = 0;
+        clientSelect.disabled = true;  // demo client is fixed
 
-    async function loadAgentForClient(clientId) {
-      // Fetch agents for this client and populate the agent selector dropdown.
-      // Per spec: demo MUST read elevenlabs_agent_id from the API — no hardcoded value.
-      const agentSelect = document.getElementById('agentSelect');
-      const agentHint   = document.getElementById('agentIdHint');
+        // Populate agent selector with the single demo agent (read-only in demo)
+        agentSelect.innerHTML = '';
+        const aOpt = document.createElement('option');
+        aOpt.value = ctx.elevenlabs_agent_id || '';
+        aOpt.textContent = ctx.agent_name || 'Agente demo';
+        aOpt.selected = true;
+        agentSelect.appendChild(aOpt);
+        agentSelect.disabled = true;  // demo agent is fixed
 
-      clientAgents = [];
-      selectedAgentId = '';
-      selectedAgentSlug = '';
-      currentAgentConfig = null;
-      agentSelect.innerHTML = '<option value="" disabled selected>Cargando agentes...</option>';
-      agentSelect.disabled = true;
-      if (agentHint) { agentHint.style.display = 'none'; agentHint.textContent = ''; }
-
-      if (!clientId) {
-        agentSelect.innerHTML = '<option value="" disabled selected>Seleccioná un cliente primero...</option>';
-        return;
-      }
-
-      try {
-        const r = await fetch('/api/v1/clients/' + encodeURIComponent(clientId) + '/agents');
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const agents = await r.json();
-
-        if (!agents || agents.length === 0) {
-          agentSelect.innerHTML = '<option value="" disabled selected>Sin agentes configurados</option>';
+        if (!selectedAgentId) {
           if (agentHint) {
-            agentHint.textContent = '⚠ Sin agente configurado para este cliente.';
+            agentHint.textContent = '⚠ Agente sin ElevenLabs Agent ID. Configuralo en el panel admin.';
             agentHint.style.display = 'block';
           }
-          return;
+        } else {
+          if (agentHint) { agentHint.style.display = 'none'; agentHint.textContent = ''; }
         }
 
-        // Store the full agents array for lookup on selection change
-        clientAgents = agents;
-
-        // Populate dropdown
-        agentSelect.innerHTML = '';
-        agents.forEach(a => {
-          const opt = document.createElement('option');
-          opt.value = a.agent_id;
-          opt.textContent = a.name;
-          if (a.is_default) opt.selected = true;
-          agentSelect.appendChild(opt);
-        });
-        agentSelect.disabled = false;
-
-        // If no agent was marked default, select the first one
-        if (agentSelect.selectedIndex < 0) agentSelect.selectedIndex = 0;
-
-        // Trigger initial agent selection to set config
-        onAgentChange();
+        // Now load demo leads (scoped to demo client via server-side config)
+        await loadDemoLeads();
 
       } catch (e) {
-        console.warn('Failed to load agents for client:', e);
-        agentSelect.innerHTML = '<option value="" disabled selected>Error cargando agentes</option>';
+        console.error('Failed to load demo context:', e);
+        errSpan.textContent = 'Error al cargar el contexto demo: ' + e.message;
+        errSpan.style.display = 'block';
+        clientSelect.innerHTML = '<option value="" disabled selected>Error — revisar configuración</option>';
+        agentSelect.innerHTML  = '<option value="" disabled selected>—</option>';
       }
     }
 
-    function onAgentChange() {
-      const agentSelect = document.getElementById('agentSelect');
-      const agentHint   = document.getElementById('agentIdHint');
-      const selectedId  = agentSelect.value;
-
-      const agent = clientAgents.find(a => String(a.agent_id) === String(selectedId));
-      if (!agent) {
-        selectedAgentId = '';
-        selectedAgentSlug = '';
-        currentAgentConfig = null;
-        return;
-      }
-
-      selectedAgentId = agent.elevenlabs_agent_id || '';
-      selectedAgentSlug = agent.slug || '';
-
-      // Store TTS config from agent API — used by buildInitPayload to set EL override.
-      // Do NOT fall back to hardcoded literals: if the API returns null for a field,
-      // hasTts will be false and buildInitPayload will skip the TTS override entirely.
-      const hasTts = (
-        agent.tts_speed            != null &&
-        agent.tts_stability        != null &&
-        agent.tts_similarity_boost != null
-      );
-      currentAgentConfig = hasTts ? {
-        tts_speed:            agent.tts_speed,
-        tts_stability:        agent.tts_stability,
-        tts_similarity_boost: agent.tts_similarity_boost,
-      } : null;
-
-      // Show/hide warning based on whether this agent has an ElevenLabs Agent ID
-      if (agentHint) {
-        if (!selectedAgentId) {
-          agentHint.textContent = '⚠ Agente sin ElevenLabs Agent ID. Configuralo en el panel admin.';
-          agentHint.style.display = 'block';
-        } else {
-          agentHint.style.display = 'none';
-          agentHint.textContent = '';
-        }
-      }
-    }
-
-    async function onClientChange() {
-      const select = document.getElementById('clientId');
-      const selectedOpt = select.options[select.selectedIndex];
-      const clientId = select.value;
-
-      // Update cached client data from option dataset
-      currentClientData = {
-        name: selectedOpt ? selectedOpt.dataset.companyName || '' : '',
-        agent_name:  selectedOpt ? selectedOpt.dataset.agentName  || '' : '',
-      };
-
-      // Fetch agents and populate the agent selector dropdown
-      await loadAgentForClient(clientId);
-      await loadLeadsForClient(clientId);
-    }
-
-    async function loadLeadsForClient(clientId) {
+    async function loadDemoLeads() {
       const leadSelect = document.getElementById('leadId');
-      if (!clientId) {
-        leadSelect.innerHTML = '<option value="" disabled selected>Seleccioná un cliente primero...</option>';
-        return;
-      }
-
       leadSelect.innerHTML = '<option value="" disabled selected>Cargando leads...</option>';
 
       try {
-        const r = await fetch('/api/v1/leads?client_id=' + encodeURIComponent(clientId));
+        // /api/v1/demo/leads is auth-exempt and scoped to the demo client on the server.
+        // NO client_id parameter needed — the server derives it from QORA_DEMO_CLIENT_ID.
+        const r = await fetch('/api/v1/demo/leads');
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const leads = await r.json();
 
         if (!leads || leads.length === 0) {
-          // No leads — surface actionable guidance to create a lead in admin
           leadSelect.innerHTML =
             '<option value="" disabled selected>Sin leads — crear un lead en /admin</option>';
           setStatus(
-            '⚠ Sin leads para este cliente. Crear un lead en el panel /admin primero.',
+            '⚠ Sin leads para el cliente demo. Crear un lead en el panel /admin primero.',
             'error'
           );
           return;
@@ -331,7 +242,6 @@
         leads.forEach(l => {
           const opt = document.createElement('option');
           opt.value = l.id;
-          // Build a descriptive label
           const carInfo = [
             leadValue(l, 'car_make'),
             leadValue(l, 'car_model'),
@@ -342,19 +252,17 @@
           leadSelect.appendChild(opt);
         });
 
-        // Select first by default
         leadSelect.selectedIndex = 0;
-        // Clear any previous no-leads warning
-        setStatus('Listo — seleccioná un agente y dale a Iniciar', '');
+        setStatus('Listo — seleccioná un lead y dale a Iniciar', '');
 
       } catch (e) {
-        console.error('Failed to load leads:', e);
+        console.error('Failed to load demo leads:', e);
         leadSelect.innerHTML = '<option value="" disabled selected>Error cargando leads</option>';
       }
     }
 
-    // Load clients on page ready
-    document.addEventListener('DOMContentLoaded', loadClients);
+    // Load demo context on page ready
+    document.addEventListener('DOMContentLoaded', loadDemoContext);
 
     // ── UI helpers ──────────────────────────────────────────────────────────────
     function setStatus(text, state) {
@@ -611,11 +519,13 @@
         await startMicrophone();
         setStatus('✓ Conectado — hablá cuando quieras', 'connected');
 
-        // Poll lead status
+        // Poll lead status via demo leads endpoint (auth-exempt, scoped to demo client).
+        // Avoids calling the protected /api/v1/leads/{id} endpoint from the browser.
         pollInterval = setInterval(async () => {
           try {
-            const r = await fetch('/api/v1/leads/' + leadId);
-            if (r.ok) updateLeadPanel(await r.json());
+            const allLeads = await (await fetch('/api/v1/demo/leads')).json();
+            const current = Array.isArray(allLeads) ? allLeads.find(l => l.id === leadId) : null;
+            if (current) updateLeadPanel(current);
           } catch(_) {}
         }, 5000);
       };
@@ -710,12 +620,15 @@
     }
 
     async function startConversation() {
+      // Phase B5 PR #2: use server-resolved demo client/agent IDs, never admin endpoints.
       const agentId = selectedAgentId;
       const leadId = document.getElementById('leadId').value;
-      const selectedClientId = document.getElementById('clientId').value;
+      // demoDemoClientId is set by loadDemoContext() from /api/v1/demo/context (server-side).
+      // Do NOT read it from the (now-disabled) clientId selector value.
+      const selectedClientId = demoDemoClientId;
 
-      if (!agentId) { setStatus('⚠ Agente sin ElevenLabs Agent ID — seleccioná otro agente o configuralo en /admin', 'error'); return; }
-      if (!selectedClientId) { setStatus('⚠ Seleccioná un cliente', 'error'); return; }
+      if (!agentId) { setStatus('⚠ Agente sin ElevenLabs Agent ID — configuralo en el panel admin', 'error'); return; }
+      if (!selectedClientId) { setStatus('⚠ Contexto demo no cargado — recargá la página', 'error'); return; }
       if (!leadId) { setStatus('⚠ Seleccioná un lead', 'error'); return; }
 
       hideReconnectButton();
@@ -731,12 +644,14 @@
         return;
       }
 
-      // Fetch lead data BEFORE connecting to populate dynamic variables
+      // Fetch lead data from demo leads endpoint to populate dynamic variables.
+      // /api/v1/demo/leads is auth-exempt and scoped to the demo client.
       let lead = {};
       try {
-        const r = await fetch('/api/v1/leads/' + leadId);
-        if (r.ok) { lead = await r.json(); updateLeadPanel(lead); }
-      } catch(e) { console.warn('Could not fetch lead:', e); }
+        const allLeads = await (await fetch('/api/v1/demo/leads')).json();
+        lead = (Array.isArray(allLeads) ? allLeads.find(l => l.id === leadId) : null) || {};
+        if (lead.id) updateLeadPanel(lead);
+      } catch(e) { console.warn('Could not fetch lead data:', e); }
 
       setStatus('Conectando con ElevenLabs...', 'connecting');
 
@@ -745,6 +660,10 @@
 
     /**
      * Close a call session on the backend.
+     *
+     * Uses the demo-scoped /api/v1/demo/sessions/{id}/end endpoint — auth-exempt,
+     * scoped to the demo client by server-side configuration (QORA_DEMO_CLIENT_ID).
+     * The browser never sends admin credentials.
      *
      * Handles three response cases:
      * - 200: Session closed successfully (fresh close or idempotent re-close)
@@ -757,14 +676,18 @@
      */
     async function closeSessionOnBackend(sessionId, reason, clientId, leadId) {
       try {
-        const resp = await fetch(`/api/v1/calls/${sessionId}/end`, {
+        // Phase B5 PR #2 Fix (Finding 2): use the demo-scoped /end route.
+        // The admin /api/v1/calls/{id}/end requires require_api_key which the browser
+        // does not have. /api/v1/demo/sessions/{id}/end is auth-exempt and scoped to
+        // the configured demo client — the browser never needs an API key.
+        const resp = await fetch(`/api/v1/demo/sessions/${sessionId}/end`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             reason: reason,
-            conversation_id: sessionId || undefined, // T30 / REQ-2.2: explicit body match
-            client_id: clientId || undefined,         // for reconciliation fallback
-            lead_id: leadId || undefined,             // for reconciliation fallback
+            conversation_id: sessionId || undefined, // for reconciliation
+            client_id: clientId || undefined,        // for reconciliation fallback
+            lead_id: leadId || undefined,            // for reconciliation fallback
           })
         });
         if (resp.status === 404) {
@@ -776,7 +699,7 @@
             `Check EL agent config → Custom LLM URL.`
           );
         } else if (!resp.ok) {
-          console.error(`/end returned ${resp.status} for ${sessionId}`);
+          console.error(`/demo/sessions/${sessionId}/end returned ${resp.status}`);
         }
       } catch (err) {
         console.warn('Failed to close session:', err);
