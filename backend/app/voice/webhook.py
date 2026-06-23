@@ -51,6 +51,7 @@ from app.tools.registry import (
     DEFAULT_FILLER,
     build_tool_definitions as _build_tool_definitions,
 )
+from app.core.auth import create_authorized_session as _create_authorized_session
 from app.voice.context import build_voice_context, parse_agent_tool_config
 from app.voice.session import session_store
 
@@ -214,11 +215,14 @@ async def _execute_tool(
     clients_dir: Any | None = None,
     agent_tool_config: dict | None = None,
     crm_config: Any | None = None,
+    authorized_session: Any | None = None,
 ) -> dict:
     """Execute a tool by name and return the result dict.
 
     For Phase 0, tools are dispatched directly from here.
     Phase 2 adds load_skill support via agent_slug + registry_entries.
+    Phase B5 PR #2: authorized_session passed through to dispatch_tool for
+        scope and tenant boundary validation before any data read/write.
     """
     try:
         from app.tools.dispatcher import dispatch_tool
@@ -233,6 +237,7 @@ async def _execute_tool(
             clients_dir=clients_dir,
             agent_tool_config=agent_tool_config,
             crm_config=crm_config,
+            authorized_session=authorized_session,
         )
     except ImportError:
         # Tools module not yet implemented — return safe stub
@@ -262,6 +267,7 @@ async def _stream_llm_response(
     conv_state: "ConversationState | None" = None,
     agent_tool_config: dict | None = None,
     crm_config: "Any | None" = None,
+    authorized_session: "Any | None" = None,
 ) -> AsyncGenerator[str, None]:
     """Generate SSE chunks from GPT-4o, handling tool calls mid-stream.
 
@@ -363,6 +369,14 @@ async def _stream_llm_response(
                             if conv_state is not None and conv_state.context is not None
                             else None
                         )
+                        # Phase B5 PR #2: pass authorized_session for scope guard.
+                        # Prefer conv_state.auth (populated at session start),
+                        # fall back to the parameter (future caller flexibility).
+                        _resolved_auth = (
+                            getattr(conv_state, "auth", None)
+                            if conv_state is not None
+                            else authorized_session
+                        ) or authorized_session
                         tool_result = await _execute_tool(
                             event.function_name,
                             args,
@@ -372,6 +386,7 @@ async def _stream_llm_response(
                             registry_entries=registry_entries or [],
                             agent_tool_config=_resolved_tool_config,
                             crm_config=crm_config,
+                            authorized_session=_resolved_auth,
                         )
 
                         # After a successful load_skill, store the content in conv_state
@@ -1214,12 +1229,27 @@ async def _process_custom_llm_request(
         # When the earlier build failed, _new_session_context is None (graceful degradation).
         initial_context: "VoiceSessionContext | None" = _new_session_context
 
+        # Phase B5 PR #2 Fix (Finding 1): bind AuthorizedSession at first-turn session creation.
+        # The initiation webhook already handles this for ElevenLabs-initiated calls (is_demo=False).
+        # For the browser/direct WebSocket path where initiation was NOT called (conv_state is None),
+        # we create the AuthorizedSession here so tool scope checks are always enforced.
+        # is_demo is always False on this path — demo sessions use the demo router initiation flow.
+        _direct_path_auth = _create_authorized_session(
+            client_id=client_id,
+            agent_id=agent.id if agent is not None else None,
+            lead_id=coerced_lead_id,
+            session_id=new_session_id,
+            is_demo=False,
+            agent_slug=getattr(agent, "slug", None) if agent is not None else None,
+        )
+
         session_store.create(
             conversation_id=conversation_id,
             client_id=client_id,
             lead_id=coerced_lead_id,
             session_id=new_session_id,
             context=initial_context,
+            auth=_direct_path_auth,
         )
         session_id = new_session_id
         conv_state = session_store.get((client_id, conversation_id))
@@ -1232,6 +1262,9 @@ async def _process_custom_llm_request(
 
         # _temperature and _max_tokens are pre-resolved above (from cached context or agent config)
         try:
+            # Phase B5 PR #2: pass authorized_session for tool scope guard.
+            # conv_state.auth is populated at session start (initiation webhook).
+            _authorized_session = getattr(conv_state, "auth", None) if conv_state is not None else None
             async for chunk in _stream_llm_response(
                 client=streaming_client,
                 messages=messages,
@@ -1247,6 +1280,7 @@ async def _process_custom_llm_request(
                 conv_state=conv_state,
                 agent_tool_config=_agent_tool_config_resolved,
                 crm_config=_crm_config_resolved,
+                authorized_session=_authorized_session,
             ):
                 yield chunk
         except Exception as exc:

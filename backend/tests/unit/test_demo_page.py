@@ -71,20 +71,19 @@ def test_demo_page_agent_selector_exists(demo_html: str):
 # ---------------------------------------------------------------------------
 
 
-def test_demo_page_fetches_agents_api_on_client_change(demo_html: str):
-    """The onClientChange function MUST fetch agents from /api/v1/clients/{id}/agents.
+def test_demo_page_fetches_demo_context_on_load(demo_html: str):
+    """The demo page MUST fetch from /api/v1/demo/context on load (Phase B5 PR #2).
 
-    After task 4.2 the client-change handler must:
-    1. Fetch agents: GET /api/v1/clients/{clientId}/agents
-    2. Find the default agent (is_default=true)
-    3. Populate agentId input with agent.elevenlabs_agent_id
+    After Phase B5 PR #2, the demo page switches from calling the auth-protected
+    /api/v1/clients/{id}/agents to the auth-exempt /api/v1/demo/context endpoint.
+    This prevents the demo from requiring an admin API key in the browser.
 
-    This test verifies the JS contains the agents API call pattern.
+    This test verifies the JS contains the demo context API call pattern.
     """
-    # The agents endpoint path must appear in the JS
-    assert "/agents" in demo_html, (
-        "Demo page JS must fetch the agents API endpoint to get elevenlabs_agent_id. "
-        "Add: fetch('/api/v1/clients/' + clientId + '/agents') in onClientChange."
+    # The demo context endpoint must appear in the JS
+    assert "/api/v1/demo/context" in demo_html, (
+        "Demo page JS must fetch /api/v1/demo/context to get agent metadata. "
+        "The admin /api/v1/clients endpoint is protected and must NOT be called from demo."
     )
 
 
@@ -171,16 +170,24 @@ def test_demo_page_no_lead_guidance_references_create_lead(demo_html: str):
 # ---------------------------------------------------------------------------
 
 
-def test_demo_page_prefers_qora_demo_client(demo_html: str):
-    """The loadClients function MUST attempt to pre-select the qora-demo client.
+def test_demo_page_uses_demo_context_endpoint_for_client_resolution(demo_html: str):
+    """The demo page must use /api/v1/demo/context for client/agent resolution (Phase B5 PR #2).
 
-    After task 4.2, after fetching clients the code must search for 'qora-demo'
-    and select it if found, falling back to the first client otherwise.
-    This is a static assertion: the string 'qora-demo' must appear in the JS.
+    After Phase B5 PR #2, client and agent identity are resolved server-side via
+    QORA_DEMO_CLIENT_ID / QORA_DEMO_AGENT_ID env vars. The demo page fetches from
+    /api/v1/demo/context and receives demo_client_id in the response — no need to
+    hardcode 'qora-demo' in the frontend JS.
+
+    This test verifies the endpoint is called and the response field is read.
     """
-    assert "qora-demo" in demo_html, (
-        "Demo page JS must explicitly prefer the 'qora-demo' client on load. "
-        "Add logic to find and select 'qora-demo' from the client list."
+    assert "/api/v1/demo/context" in demo_html, (
+        "Demo page JS must call /api/v1/demo/context to resolve client/agent identity. "
+        "The client_id must come from the server response, not be hardcoded in JS."
+    )
+    # The response field must be read from the server
+    assert "demo_client_id" in demo_html, (
+        "Demo page JS must read demo_client_id from /api/v1/demo/context response "
+        "to route WebSocket connections correctly."
     )
 
 
@@ -225,10 +232,10 @@ async def test_demo_endpoint_returns_200_html(demo_app):
 
 
 @pytest.mark.anyio
-async def test_demo_endpoint_html_has_no_hardcoded_agent_id(demo_app):
-    """GET /demo confirms no hardcoded agent ID is served — triangulation.
+async def test_demo_endpoint_html_uses_demo_context_endpoint(demo_app):
+    """GET /demo confirms the page fetches from demo context endpoint — triangulation (Phase B5 PR #2).
 
-    Triangulation of test_demo_page_has_no_hardcoded_elevenlabs_agent_id:
+    Triangulation of test_demo_page_fetches_demo_context_on_load:
     Tests the SAME contract via HTTP (different code path than reading from disk).
     """
     from httpx import AsyncClient, ASGITransport
@@ -243,6 +250,9 @@ async def test_demo_endpoint_html_has_no_hardcoded_agent_id(demo_app):
         html = response.text
         # Must not contain the old hardcoded agent ID
         assert "agent_9401kn60tcbhfwhba7p7q3n5cfca" not in html
-        # Must contain the agents API fetch
+        # Must read elevenlabs_agent_id from the demo/context response
         assert "elevenlabs_agent_id" in html
-        assert "qora-demo" in html
+        # Must call the auth-exempt demo context endpoint (not the protected admin endpoint)
+        assert "/api/v1/demo/context" in html
+        # demo_client_id must be read from the server response
+        assert "demo_client_id" in html

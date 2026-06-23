@@ -1,6 +1,11 @@
 """QORA Voice — In-memory conversation state and session management.
 
 Implements AD-3: In-Memory Session Store for conversation tracking.
+
+PR #2 (phase-b-api-authentication):
+  - ConversationState.auth: AuthorizedSession | None — composed alongside
+    VoiceSessionContext. Created once at session start (initiation webhook or
+    demo session open) and read every turn — zero DB per turn on the hot path.
 """
 
 from __future__ import annotations
@@ -10,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from app.core.auth import AuthorizedSession
     from app.voice.context import VoiceSessionContext
 
 
@@ -42,6 +48,12 @@ class ConversationState:
     # Injected into system prompt via _assemble_context_system_content on subsequent turns.
     loaded_skills: dict[str, str] = field(default_factory=dict)
 
+    # Phase B5 PR #2: Session-start auth context.
+    # Created once at session start (initiation or demo session open).
+    # Read from session_store on every subsequent turn — ZERO DB / network per turn.
+    # None until auth is established (e.g., legacy calls that predate B5).
+    auth: "AuthorizedSession | None" = None
+
 
 # ---------------------------------------------------------------------------
 # SessionStore — module-level singleton per process
@@ -68,6 +80,7 @@ class SessionStore:
         lead_id: str | None,
         session_id: str,
         context: "VoiceSessionContext | None" = None,
+        auth: "AuthorizedSession | None" = None,
     ) -> ConversationState:
         """Create and store a new ConversationState.
 
@@ -78,6 +91,9 @@ class SessionStore:
             session_id: call_sessions.id for DB persistence.
             context: Optional VoiceSessionContext — built at initiation and
                 cached here for zero-query webhook turns (VSC-4).
+            auth: Optional AuthorizedSession — created at session start and
+                cached here for zero-DB auth checks on the custom-LLM hot path
+                (Phase B5 PR #2).
 
         Returns:
             The newly created ConversationState.
@@ -88,6 +104,7 @@ class SessionStore:
             lead_id=lead_id,
             session_id=session_id,
             context=context,
+            auth=auth,
         )
         self._sessions[(client_id, conversation_id)] = state
         return state

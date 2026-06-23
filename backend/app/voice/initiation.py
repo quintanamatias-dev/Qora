@@ -15,6 +15,7 @@ import structlog
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from app.core.auth import create_authorized_session
 from app.core.database import get_session as db_session
 from app.leads.service import get_lead, transition_lead_status
 from app.leads.service import InvalidTransitionError
@@ -210,13 +211,27 @@ async def initiation_webhook(
                 )
 
         # VSC-5: Store session state with context (context=None if build failed or no conv_id)
+        # Phase B5 PR #2: Bind AuthorizedSession at session start — production flow.
+        # The session is NOT a demo session here (demo has its own initiation path via
+        # the demo router). This path handles all ElevenLabs-initiated webhook calls.
         if resolved_conversation_id:
+            _agent_id_for_auth = agent.id if agent is not None else None
+            _agent_slug_for_auth = getattr(agent, "slug", None) if agent is not None else None
+            _auth_session = create_authorized_session(
+                client_id=resolved_client_id,
+                agent_id=_agent_id_for_auth,
+                lead_id=resolved_lead_id,
+                session_id="",  # No call_session yet at initiation time
+                is_demo=False,
+                agent_slug=_agent_slug_for_auth,
+            )
             session_store.create(
                 conversation_id=resolved_conversation_id,
                 client_id=resolved_client_id,
                 lead_id=resolved_lead_id,
                 session_id="",  # No call_session for initiation-only store
                 context=_vsc_context,
+                auth=_auth_session,
             )
 
         return InitiationResponse(

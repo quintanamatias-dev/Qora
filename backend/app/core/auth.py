@@ -5,8 +5,10 @@ PR #1: Foundation + Admin Auth
   - require_api_key() — Bearer token dependency for all admin routes
   - get_settings_from_request() — shared helper to read Settings from app.state
 
-PR #2 (not in this file yet):
-  - AuthorizedSession, create_authorized_session, get_authorized_session
+PR #2: Session Auth + Demo + Tool Scope
+  - AuthorizedSession dataclass (per-call auth context, cached in session_store)
+  - create_authorized_session() — factory; assigns scopes based on is_demo
+  - get_authorized_session() — FastAPI dep for custom-LLM hot path (zero DB)
 
 PR #3 (not in this file yet):
   - require_webhook_secret
@@ -16,6 +18,8 @@ Design rationale (design.md):
     require_jwt — zero router changes needed.
   - secrets.compare_digest ensures constant-time comparison (no timing side-channel).
   - CallerIdentity stores only an audit hash, never the raw key.
+  - AuthorizedSession is composed with ConversationState — same session_store,
+    same composite key (client_id, conversation_id) — zero dual-lookup on hot path.
   - _TESTING_BYPASS: module-level flag set by conftest.py autouse fixture.
     Enables existing tests to pass without per-test auth header changes.
     NEVER set in production. Protected by environment check.
@@ -26,7 +30,8 @@ from __future__ import annotations
 import hashlib
 import os
 import secrets
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 
 from fastapi import Depends, HTTPException, Request
 
@@ -148,3 +153,136 @@ def require_api_key(
     # This identifies the key in logs without ever exposing the secret.
     audit_hash = hashlib.sha256(presented_key.encode()).hexdigest()[:16]
     return CallerIdentity(api_key_hash=audit_hash)
+
+
+# ---------------------------------------------------------------------------
+# AuthorizedSession — per-call auth context (PR #2)
+# ---------------------------------------------------------------------------
+# Design: composed with ConversationState via ConversationState.auth field.
+# Keyed by (client_id, conversation_id) in session_store — zero dual-lookup.
+# Created ONCE at session start (initiation webhook or demo session open).
+# Read from session_store on every subsequent turn — ZERO DB / network calls.
+# ---------------------------------------------------------------------------
+
+#: Scopes granted to all sessions (demo and production).
+#: "admin:write" and "admin:read" are intentionally NOT listed here.
+_PIPELINE_SCOPES: frozenset[str] = frozenset({"pipeline:write", "pipeline:read"})
+
+
+@dataclass
+class AuthorizedSession:
+    """Cached auth context for one voice call/session.
+
+    Created once at session start. Read from session_store on every subsequent
+    turn — zero DB or network calls per turn (mandatory fast path).
+
+    Attributes:
+        client_id: Tenant identifier. Must match every tool call's client_id.
+        agent_id: Optional agent UUID.
+        agent_slug: Optional agent slug (for skill routing).
+        lead_id: Optional lead UUID — scope boundary for tool calls.
+        session_id: call_sessions.id in SQLite.
+        scopes: Frozenset of granted permission strings.
+            - "pipeline:write" — transcript, call session, captured data, post-call
+            - "pipeline:read"  — read own tenant data
+            - "admin:write"    — create/update/delete clients, agents, leads (NOT demo)
+            - "admin:read"     — list clients, agents, leads (NOT demo)
+        is_demo: True when the session was started from the /demo button flow.
+            Demo sessions never receive admin:write or admin:read.
+        created_at: Monotonic timestamp of session creation (for TTL enforcement).
+    """
+
+    client_id: str
+    agent_id: str | None
+    agent_slug: str | None
+    lead_id: str | None
+    session_id: str
+    scopes: frozenset[str]
+    is_demo: bool = False
+    created_at: float = field(default_factory=time.monotonic)
+
+
+# ---------------------------------------------------------------------------
+# create_authorized_session — factory
+# ---------------------------------------------------------------------------
+
+
+def create_authorized_session(
+    client_id: str,
+    agent_id: str | None,
+    lead_id: str | None,
+    session_id: str,
+    *,
+    is_demo: bool = False,
+    agent_slug: str | None = None,
+) -> AuthorizedSession:
+    """Create an AuthorizedSession with scopes derived from is_demo.
+
+    Args:
+        client_id: Tenant identifier.
+        agent_id: Agent UUID (may be None for legacy callers).
+        lead_id: Lead UUID being called (may be None if unknown at session start).
+        session_id: call_sessions.id — may be empty string when not yet persisted.
+        is_demo: When True, restricts scopes to pipeline only (no admin).
+        agent_slug: Optional agent slug for skill routing.
+
+    Returns:
+        AuthorizedSession with appropriate scopes.
+
+    Note:
+        Both demo and production sessions receive pipeline:write + pipeline:read.
+        Demo sessions NEVER receive admin:write or admin:read — this is the
+        hard security boundary protecting tenant data from demo access.
+    """
+    return AuthorizedSession(
+        client_id=client_id,
+        agent_id=agent_id,
+        agent_slug=agent_slug,
+        lead_id=lead_id,
+        session_id=session_id,
+        scopes=_PIPELINE_SCOPES,  # same for demo and production
+        is_demo=is_demo,
+    )
+
+
+# ---------------------------------------------------------------------------
+# get_authorized_session — FastAPI dependency for custom-LLM hot path
+# ---------------------------------------------------------------------------
+
+
+def get_authorized_session(
+    client_id: str,
+    conversation_id: str,
+    request: Request,
+) -> AuthorizedSession:
+    """FastAPI dependency for the per-turn custom-LLM hot path.
+
+    Reads the AuthorizedSession from the in-memory session_store.
+    ZERO DB or network calls — this is the mandatory fast path.
+
+    Args:
+        client_id: Tenant identifier (from URL path).
+        conversation_id: ElevenLabs conversation ID (from request body).
+        request: FastAPI Request (unused but required by Depends pattern).
+
+    Returns:
+        AuthorizedSession for this call.
+
+    Raises:
+        HTTPException(401): When no session is found or session has no auth.
+    """
+    from app.voice.session import session_store
+
+    state = session_store.get((client_id, conversation_id))
+    if state is None or state.auth is None:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "session_not_found",
+                "message": (
+                    "No authorized session found for this conversation. "
+                    "Session may have expired or was never established."
+                ),
+            },
+        )
+    return state.auth
