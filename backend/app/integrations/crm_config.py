@@ -101,8 +101,13 @@ class CRMConfig(BaseModel):
     - Otherwise → treated as literal value (suitable for dev/test)
 
     Backward compat: api_key_env is still accepted and mapped to api_key at load time.
+
+    enabled field (B8):
+    - Default True preserves backward compat — existing crm.yaml files without this
+      field are treated as enabled. Set enabled: false to disable without deleting the file.
     """
 
+    enabled: bool = True  # B8: integration on/off switch; default True for backward compat
     provider: Literal["airtable"]
     base_id: str
     table_id: str
@@ -152,8 +157,13 @@ class CRMConfig(BaseModel):
         - If api_key matches ^[A-Z][A-Z0-9_]+$ → look up in os.environ
         - Otherwise → return api_key literal
 
+        B8 addition: when the env var value is set but contains a known weak
+        placeholder, a CredentialResolutionError is raised identifying the env
+        var name. The secret value is NEVER included in the error message.
+
         Raises:
-            CredentialResolutionError: if the env var lookup fails.
+            CredentialResolutionError: if the env var lookup fails or the
+                resolved value is a known weak placeholder.
         """
         if _looks_like_env_var_name(self.api_key):
             # Treat as env var name → look up the actual credential
@@ -163,6 +173,17 @@ class CRMConfig(BaseModel):
                     f"CRM credential env var '{self.api_key}' is not set. "
                     "Configure it in your .env file or deployment environment."
                 )
+
+            # B8: Reject weak placeholder values for CRM credentials.
+            # Import here to avoid circular dependency (credentials imports crm_config).
+            from app.core.credentials import is_weak_placeholder  # noqa: PLC0415
+            if is_weak_placeholder(value):
+                raise CredentialResolutionError(
+                    f"CRM credential env var '{self.api_key}' contains a known weak placeholder. "
+                    "Replace it with a real credential before starting the application. "
+                    "Secret values are never logged."
+                )
+
             return value
 
         # Treat as literal value (dev/test pattern)
