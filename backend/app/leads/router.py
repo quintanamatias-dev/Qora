@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import require_api_key
 from app.leads import lead_custom_fields_service as cf_service
 from app.leads.models import LeadStatus
 from app.leads.service import (
@@ -41,7 +42,11 @@ from app.scheduler.models import ScheduledCall
 
 logger = structlog.get_logger(__name__)
 
-router = APIRouter(prefix="/leads", tags=["leads"])
+router = APIRouter(
+    prefix="/leads",
+    tags=["leads"],
+    dependencies=[Depends(require_api_key)],
+)
 
 
 # ---------------------------------------------------------------------------

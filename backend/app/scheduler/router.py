@@ -17,6 +17,8 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import require_api_key
+
 from app.scheduler.schemas import (
     ScheduledCallCreate,
     ScheduledCallReschedule,
@@ -32,7 +34,10 @@ from app.scheduler.service import (
     reschedule_call,
 )
 
-router = APIRouter(tags=["scheduler"])
+router = APIRouter(
+    tags=["scheduler"],
+    dependencies=[Depends(require_api_key)],
+)
 logger = structlog.get_logger(__name__)
 
 

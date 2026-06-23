@@ -50,6 +50,36 @@ class Settings(BaseSettings):
     default_company_name: str = "Quintana Seguros"
     default_agent_name: str = "Jaumpablo"
 
+    # ------------------------------------------------------------------
+    # Authentication (Phase B5 — PR #1: Foundation + Admin Auth)
+    # ------------------------------------------------------------------
+    # Admin API protection. Set to a strong random secret in production.
+    # Phase C: replaced by require_jwt — zero router changes needed.
+    qora_api_key: SecretStr | None = None
+
+    # Toggle OpenAPI docs (/docs + /redoc). Default True for dev; set False in prod.
+    qora_docs_enabled: bool = True
+
+    # Demo identity — used by PR #2 (Session Auth + Demo).
+    # Declared here so Settings is the single source of truth.
+    qora_demo_client_id: str | None = None
+    qora_demo_agent_id: str | None = None
+
+    # Session TTL — used by PR #2 AuthorizedSession lifecycle cleanup.
+    qora_session_ttl_seconds: int = 14400  # 4 hours default
+
+    # Webhook auth — declared here for PR #3 (Webhook Auth + CORS).
+    # NOT enforced in PR #1 or PR #2. Defaults keep the current open behaviour.
+    # Wiring (require_webhook_secret) is implemented in PR #3.
+    qora_webhook_secret: SecretStr | None = None
+    qora_webhook_auth_enabled: bool = False  # default: off — no webhook auth yet
+
+    # CORS origins — declared here for PR #3 (Webhook Auth + CORS).
+    # NOT enforced in PR #1 or PR #2. The CORSMiddleware in main.py still uses
+    # allow_origins=["*"] until PR #3 wires this setting.
+    # comma-separated list; "*" = open (dev default — matches current behaviour)
+    qora_allowed_origins: str = "*"
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

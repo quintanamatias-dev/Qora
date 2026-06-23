@@ -38,9 +38,10 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.core.auth import require_api_key
 from app.integrations.crm_config import CRMConfig, CRMConfigLoader, ConfigValidationError
 
 # ---------------------------------------------------------------------------
@@ -50,7 +51,11 @@ from app.integrations.crm_config import CRMConfig, CRMConfigLoader, ConfigValida
 # Default: backend/clients/ relative to this file's location
 CLIENTS_ROOT: Path = Path(__file__).resolve().parent.parent.parent / "clients"
 
-router = APIRouter(prefix="/clients", tags=["integrations"])
+router = APIRouter(
+    prefix="/clients",
+    tags=["integrations"],
+    dependencies=[Depends(require_api_key)],
+)
 
 
 # ---------------------------------------------------------------------------

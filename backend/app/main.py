@@ -31,6 +31,7 @@ NOTE: The admin UI is served exclusively by the React/Vite frontend at
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -216,45 +217,23 @@ async def lifespan(app: FastAPI):
 
 
 # ---------------------------------------------------------------------------
-# FastAPI application
-# ---------------------------------------------------------------------------
-
-app = FastAPI(
-    title="QORA",
-    version="0.1.0",
-    description=(
-        "QORA — AI-powered outbound call center platform. "
-        "ElevenLabs Conversational AI + GPT-4o + SQLite CRM."
-    ),
-    lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
-)
-
-app.add_middleware(RequestLoggingMiddleware)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-# ---------------------------------------------------------------------------
-# API v1 router
+# API v1 router (module-level, stateless — shared across all app instances)
 # ---------------------------------------------------------------------------
 
 api_v1_router = APIRouter(prefix="/api/v1")
 
 
+_APP_VERSION = "0.1.0"  # Kept in sync with create_app() FastAPI(version=...)
+
+
 @api_v1_router.get("/health", tags=["meta"])
 async def health_check():
-    """Health check — returns service status and uptime."""
+    """Health check — returns service status, version, and uptime."""
     uptime = time.monotonic() - _APP_START_TIME if _APP_START_TIME > 0 else 0.0
     return {
         "status": "healthy",
         "uptime_seconds": round(uptime, 1),
-        "version": app.version,
+        "version": _APP_VERSION,
     }
 
 
@@ -285,13 +264,68 @@ api_v1_router.include_router(analytics_router)  # /api/v1/analytics — Issue #3
 api_v1_router.include_router(crm_router)  # /api/v1/clients/{client_id}/crm/import
 api_v1_router.include_router(crm_config_router)  # /api/v1/clients/{client_id}/integrations
 
-app.include_router(api_v1_router)
+
+# ---------------------------------------------------------------------------
+# FastAPI application factory
+# ---------------------------------------------------------------------------
+
+
+def create_app(docs_enabled: bool | None = None) -> FastAPI:
+    """Create and configure a QORA FastAPI application instance.
+
+    Args:
+        docs_enabled: When True, /docs and /redoc are mounted. When False, both
+            return 404. When None (default), reads QORA_DOCS_ENABLED from the
+            environment (default True — dev-friendly; set False in production).
+
+    Returns:
+        A fully configured FastAPI instance with all middleware and API v1 routers.
+
+    Design note:
+        ``api_v1_router`` is a module-level singleton (stateless).  Multiple
+        ``create_app()`` calls in the same process share the same router object;
+        this is safe because routers carry no mutable per-request state.
+
+        Module-level decorators such as ``@app.get("/admin")`` are applied only
+        to the production singleton returned by ``create_app()`` at the bottom
+        of this module.  Test-created apps expose the full API v1 surface but
+        not the /admin redirect or the static file mounts.
+    """
+    if docs_enabled is None:
+        docs_enabled = os.getenv("QORA_DOCS_ENABLED", "true").strip().lower() != "false"
+
+    _new_app = FastAPI(
+        title="QORA",
+        version="0.1.0",
+        description=(
+            "QORA — AI-powered outbound call center platform. "
+            "ElevenLabs Conversational AI + GPT-4o + SQLite CRM."
+        ),
+        lifespan=lifespan,
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+    )
+
+    _new_app.add_middleware(RequestLoggingMiddleware)
+    _new_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    _new_app.include_router(api_v1_router)
+
+    return _new_app
+
+
+# Module-level singleton — created once at import time using the env toggle.
+# Tests that need docs-toggle behaviour should call create_app() directly.
+app = create_app()
 
 # ---------------------------------------------------------------------------
 # Static files — demo page (voice call simulator)
 # ---------------------------------------------------------------------------
-
-import os  # noqa: E402
 
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 if os.path.isdir(_STATIC_DIR):

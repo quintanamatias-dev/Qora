@@ -46,7 +46,13 @@ async def analytics_db(tmp_path: Path):
 
 @pytest_asyncio.fixture
 async def analytics_client(analytics_db):
-    """HTTP client with analytics router mounted."""
+    """HTTP client with analytics router mounted.
+
+    Includes the test Bearer token so protected analytics endpoints return
+    their expected status codes (not 401). The test API key is injected by
+    the autouse _inject_test_api_key fixture in conftest.py.
+    """
+    import os
     from fastapi import FastAPI, APIRouter
     from app.analytics.router import router as analytics_router
 
@@ -56,9 +62,23 @@ async def analytics_client(analytics_db):
     test_app = FastAPI()
     test_app.include_router(api_v1)
 
+    # Inject settings with the test API key into app.state so _get_settings()
+    # returns the test settings without falling back to a bare Settings() call.
+    test_key = os.environ.get("QORA_API_KEY", "qora-test-key-do-not-use-in-production")
+    test_app.state.settings = analytics_db  # placeholder — overridden below
+    # Re-use the Settings object from the shared Settings class
+    from app.core.config import Settings
+    test_app.state.settings = Settings(
+        openai_api_key=SecretStr("sk-test"),
+        elevenlabs_api_key=SecretStr("el-test"),
+        qora_api_key=SecretStr(test_key),
+        database_url=str(analytics_db.engine.url),
+    )
+
     async with AsyncClient(
         transport=ASGITransport(app=test_app),
         base_url="http://test",
+        headers={"Authorization": f"Bearer {test_key}"},
     ) as client:
         yield client
 

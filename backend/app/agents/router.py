@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.schemas import AgentCreate, AgentResponse, AgentUpdate, SyncStatusResponse
+from app.core.auth import require_api_key
 from app.elevenlabs.service import sync_to_elevenlabs
 from app.tenants.models import Agent, Client
 import app.tenants.service as tenant_service
@@ -28,6 +29,7 @@ router = APIRouter(
     prefix="/clients/{client_id}/agents",
     tags=["agents"],
     redirect_slashes=False,
+    dependencies=[Depends(require_api_key)],
 )
 
 
