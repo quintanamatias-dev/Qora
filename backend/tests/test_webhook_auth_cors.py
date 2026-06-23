@@ -678,3 +678,144 @@ class TestCustomLLMWebhookAuth:
             f"Admin route must not accept webhook-secret-only requests (expected non-200), "
             f"got {response.status_code}"
         )
+
+
+# ---------------------------------------------------------------------------
+# TDD RED — Startup-fail contract (spec: Config-Driven Secret requirement)
+# ---------------------------------------------------------------------------
+# Spec: "If QORA_WEBHOOK_AUTH_ENABLED=true and QORA_WEBHOOK_SECRET is not set,
+# startup MUST fail with a configuration error."
+# The enforcement point is Settings construction (pydantic model_validator) so
+# that the error fires before any request is served.
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookSecretStartupContract:
+    """Verify the startup-fail contract for webhook auth misconfiguration.
+
+    Spec reference: webhook-auth/spec.md — Requirement: Config-Driven Secret
+      "If QORA_WEBHOOK_AUTH_ENABLED=true and QORA_WEBHOOK_SECRET is not set,
+       startup MUST fail with a configuration error before serving any requests."
+
+    These tests exercise Settings() construction (the env/default production path),
+    NOT the per-request require_webhook_secret dependency.
+    """
+
+    def test_settings_raises_on_enabled_auth_without_secret(self, monkeypatch):
+        """Settings() MUST raise ValidationError when webhook auth is enabled but secret is absent.
+
+        This is the canonical startup-fail path: pydantic-settings reads env vars
+        and the model_validator fires during __init__, preventing the app from
+        reaching its lifespan startup.
+        """
+        import pytest
+        from pydantic import ValidationError
+
+        monkeypatch.setenv("QORA_WEBHOOK_AUTH_ENABLED", "true")
+        monkeypatch.delenv("QORA_WEBHOOK_SECRET", raising=False)
+
+        # Force re-import so env vars are picked up without .env file interference.
+        # Construct directly with explicit fields to isolate env-var path.
+        from pydantic import SecretStr
+
+        with pytest.raises(ValidationError) as exc_info:
+            from app.core.config import Settings
+
+            Settings(
+                openai_api_key=SecretStr("sk-test"),
+                elevenlabs_api_key=SecretStr("el-test"),
+                qora_webhook_auth_enabled=True,
+                # qora_webhook_secret intentionally absent (None by default)
+            )
+
+        # The error must mention the misconfiguration clearly.
+        error_text = str(exc_info.value).lower()
+        assert "webhook" in error_text, (
+            f"ValidationError message must mention 'webhook', got: {exc_info.value}"
+        )
+
+    def test_settings_raises_on_enabled_auth_with_empty_secret(self, monkeypatch):
+        """Settings() MUST raise ValidationError when webhook auth is enabled and secret is empty string.
+
+        An empty QORA_WEBHOOK_SECRET is treated the same as absent — it provides
+        no security value and must be rejected at startup.
+        """
+        import pytest
+        from pydantic import SecretStr, ValidationError
+
+        monkeypatch.setenv("QORA_WEBHOOK_AUTH_ENABLED", "true")
+        monkeypatch.setenv("QORA_WEBHOOK_SECRET", "")
+
+        with pytest.raises(ValidationError):
+            from app.core.config import Settings
+
+            Settings(
+                openai_api_key=SecretStr("sk-test"),
+                elevenlabs_api_key=SecretStr("el-test"),
+                qora_webhook_auth_enabled=True,
+                qora_webhook_secret=SecretStr(""),
+            )
+
+    def test_settings_succeeds_when_auth_disabled_and_secret_absent(self):
+        """Settings() MUST succeed when webhook auth is disabled (default), even without a secret.
+
+        The disabled-by-default contract must not be broken by the startup-fail guard.
+        """
+        from pydantic import SecretStr
+        from app.core.config import Settings
+
+        # Must NOT raise — auth is disabled; secret is optional when disabled.
+        settings = Settings(
+            openai_api_key=SecretStr("sk-test"),
+            elevenlabs_api_key=SecretStr("el-test"),
+            qora_webhook_auth_enabled=False,
+            # qora_webhook_secret absent — this is fine when auth is disabled
+        )
+        assert settings.qora_webhook_auth_enabled is False
+        assert settings.qora_webhook_secret is None
+
+    def test_settings_succeeds_when_auth_enabled_and_secret_present(self):
+        """Settings() MUST succeed when webhook auth is enabled AND a non-empty secret is set.
+
+        This is the valid production configuration.
+        """
+        from pydantic import SecretStr
+        from app.core.config import Settings
+
+        # Must NOT raise — auth enabled + secret configured is the correct state.
+        settings = Settings(
+            openai_api_key=SecretStr("sk-test"),
+            elevenlabs_api_key=SecretStr("el-test"),
+            qora_webhook_auth_enabled=True,
+            qora_webhook_secret=SecretStr("strong-random-secret-value"),
+        )
+        assert settings.qora_webhook_auth_enabled is True
+        assert settings.qora_webhook_secret is not None
+
+    def test_create_app_raises_on_enabled_auth_without_secret_env(self, monkeypatch):
+        """create_app() / lifespan startup MUST raise when env has auth enabled but no secret.
+
+        This test proves the startup-fail fires on the production env-variable path
+        (QORA_WEBHOOK_AUTH_ENABLED=true, no QORA_WEBHOOK_SECRET in environment).
+        The error must surface before any request can be served.
+        """
+        import pytest
+
+        monkeypatch.setenv("QORA_WEBHOOK_AUTH_ENABLED", "true")
+        monkeypatch.delenv("QORA_WEBHOOK_SECRET", raising=False)
+
+        from app.main import create_app
+        from fastapi.testclient import TestClient
+
+        app = create_app()
+
+        # The lifespan startup calls Settings() — it must raise before yield.
+        # TestClient with raise_server_exceptions=True will surface the error.
+        with pytest.raises(Exception) as exc_info:
+            with TestClient(app, raise_server_exceptions=True) as _client:
+                pass  # lifespan must fail before we get here
+
+        error_text = str(exc_info.value).lower()
+        assert "webhook" in error_text or "secret" in error_text, (
+            f"Startup exception must mention webhook/secret config, got: {exc_info.value}"
+        )
