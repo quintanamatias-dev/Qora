@@ -57,7 +57,7 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 | B5 | API authentication | - [x] | Completed in PRs #107, #109, #111: admin API key auth, session-scoped demo/pipeline auth, tool scope validation |
 | B6 | Webhook signature verification | - [x] | Completed in PR #111: opt-in webhook secret auth for initiation and Custom LLM routes |
 | B7 | CORS lockdown | - [x] | Completed in PR #111: configurable `QORA_ALLOWED_ORIGINS` replaces hardcoded allow-all for production |
-| B8 | Secrets management | - [ ] | Per-client credential storage, not .env-only |
+| B8 | Secrets management | - [x] | Completed in PRs #113, #115: startup validation, active CRM credential checks, root `.env` convention, pre-flight script, operator runbook |
 | B9 | Structured logging + error monitoring | - [ ] | Sentry/equivalent, structured log shipping |
 | B10 | Background job durability | - [ ] | Replace in-process asyncio tasks with restart-safe jobs |
 
