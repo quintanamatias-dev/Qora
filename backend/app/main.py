@@ -157,6 +157,15 @@ async def lifespan(app: FastAPI):
         log_level=settings.log_level,
     )
 
+    # 2b. Validate per-client CRM integration credentials (B8).
+    # Scans backend/clients/*/crm.yaml; hard-fails if any active integration
+    # references an env var that is missing or is a weak placeholder.
+    # Global Qora credentials are already validated by Settings() above.
+    from app.core.credentials import validate_all_integration_credentials  # noqa: E402
+
+    validate_all_integration_credentials()
+    logger.info("tenant_credentials_validated")
+
     # 3. Init database
     # Schema is guaranteed by the pre-start migration command
     # (python scripts/migrate.py / alembic upgrade head).
@@ -297,8 +306,8 @@ def create_app(docs_enabled: bool | None = None) -> FastAPI:
 
     Args:
         docs_enabled: When True, /docs and /redoc are mounted. When False, both
-            return 404. When None (default), reads QORA_DOCS_ENABLED from the
-            environment (default True — dev-friendly; set False in production).
+            return 404. When None (default), reads qora_docs_enabled from a
+            Settings instance (the sole env authority per B8).
 
     Returns:
         A fully configured FastAPI instance with all middleware and API v1 routers.
@@ -312,9 +321,23 @@ def create_app(docs_enabled: bool | None = None) -> FastAPI:
         to the production singleton returned by ``create_app()`` at the bottom
         of this module.  Test-created apps expose the full API v1 surface but
         not the /admin redirect or the static file mounts.
+
+        B8: docs_enabled and CORS origins are read from Settings (sole env authority)
+        rather than via direct os.getenv() for these declared Settings fields.
     """
+    # B8: read docs toggle and CORS origins from the Settings validator (sole env authority).
+    # Settings() reads from the same env vars as the previous os.getenv() calls —
+    # zero behavior change. Secret values are NEVER logged.
+    #
+    # Design note: Settings() is constructed here to resolve docs_enabled and CORS origins
+    # via the validated Settings path. This fires at create_app() call time, which means
+    # invalid configs (e.g. QORA_WEBHOOK_AUTH_ENABLED=true without a secret) surface
+    # immediately — satisfying the "startup aborts before requests" spec requirement.
+    _settings = Settings()
+
     if docs_enabled is None:
-        docs_enabled = os.getenv("QORA_DOCS_ENABLED", "true").strip().lower() != "false"
+        # B8: read from settings.qora_docs_enabled — NOT via os.getenv() directly.
+        docs_enabled = _settings.qora_docs_enabled
 
     _new_app = FastAPI(
         title="QORA",
@@ -331,8 +354,8 @@ def create_app(docs_enabled: bool | None = None) -> FastAPI:
     # CORS lockdown (Phase B5 PR #3): use QORA_ALLOWED_ORIGINS to restrict origins.
     # Default is "*" (open) to preserve current dev behavior — set an explicit list
     # in production (e.g. "https://your-frontend.com,https://admin.your-domain.com").
-    _raw_origins = os.getenv("QORA_ALLOWED_ORIGINS", "*")
-    _allowed_origins = _parse_allowed_origins(_raw_origins)
+    # B8: read from settings.qora_allowed_origins — routes through the Settings validator.
+    _allowed_origins = _parse_allowed_origins(_settings.qora_allowed_origins)
 
     _new_app.add_middleware(RequestLoggingMiddleware)
     _new_app.add_middleware(

@@ -3,6 +3,66 @@
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
+# ---------------------------------------------------------------------------
+# Known weak placeholder values — CRITICAL and HIGH secrets must not use these.
+# Case-insensitive comparison is applied; see validate_required_secrets().
+# Source of truth: openspec/changes/phase-b-secrets-management/specs/secrets-validation/spec.md
+# ---------------------------------------------------------------------------
+_WEAK_PLACEHOLDERS: frozenset[str] = frozenset({
+    "change-me-before-production",
+    "your-key-here",
+    "todo",
+    "replace_me",
+    "xxx",
+    "test",
+    "changeme",
+})
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+
+def _validate_secret_field(
+    field_name: str,
+    secret: SecretStr | None,
+    tier: str,
+    errors: list[str],
+) -> None:
+    """Validate a single secret field against the presence and placeholder rules.
+
+    Appends a human-readable error message to ``errors`` when validation fails.
+    The secret VALUE is never included in any error message.
+
+    Args:
+        field_name: The environment variable name (e.g. "OPENAI_API_KEY").
+        secret: The SecretStr value loaded from the environment, or None.
+        tier: "CRITICAL" or "HIGH" — used in the error message for context.
+        errors: List to accumulate error strings (mutated in place).
+    """
+    if secret is None:
+        errors.append(
+            f"{field_name} is required ({tier}) but is not set. "
+            f"Add {field_name} to your .env file."
+        )
+        return
+
+    value = secret.get_secret_value()
+    if not value.strip():
+        errors.append(
+            f"{field_name} is required ({tier}) but is empty. "
+            f"Set {field_name} to a non-empty value."
+        )
+        return
+
+    if value.strip().lower() in _WEAK_PLACEHOLDERS:
+        errors.append(
+            f"{field_name} ({tier}) contains a known weak placeholder. "
+            f"Replace it with a real credential before starting the application. "
+            f"Do not use placeholder values for {tier} secrets."
+        )
+
 
 class Settings(BaseSettings):
     """QORA application settings loaded from environment variables and .env file."""
@@ -94,6 +154,57 @@ class Settings(BaseSettings):
         if upper not in valid:
             raise ValueError(f"log_level must be one of {valid}, got '{v}'")
         return upper
+
+    @model_validator(mode="after")
+    def validate_required_secrets(self) -> "Settings":
+        """Hard-fail startup when CRITICAL or HIGH secrets are absent, empty, or weak placeholders.
+
+        Spec (secrets-validation — Requirement: Critical Secret Fail-Fast):
+            OPENAI_API_KEY and ELEVENLABS_API_KEY must be present and non-empty. If absent
+            or empty, startup aborts and the error message names the missing variable.
+
+        Spec (secrets-validation — Requirement: Platform API Key Required):
+            QORA_API_KEY is required in ALL environments including local dev.
+
+        Spec (secrets-validation — Requirement: Placeholder Value Rejection):
+            Known weak placeholder values are rejected for HIGH and CRITICAL secrets.
+            The error message identifies the variable and the placeholder pattern.
+
+        Secret values are NEVER logged or included in error messages.
+        """
+        errors: list[str] = []
+
+        # CRITICAL: OPENAI_API_KEY
+        _validate_secret_field(
+            field_name="OPENAI_API_KEY",
+            secret=self.openai_api_key,
+            tier="CRITICAL",
+            errors=errors,
+        )
+
+        # CRITICAL: ELEVENLABS_API_KEY
+        _validate_secret_field(
+            field_name="ELEVENLABS_API_KEY",
+            secret=self.elevenlabs_api_key,
+            tier="CRITICAL",
+            errors=errors,
+        )
+
+        # HIGH: QORA_API_KEY (required in all environments)
+        _validate_secret_field(
+            field_name="QORA_API_KEY",
+            secret=self.qora_api_key,
+            tier="HIGH",
+            errors=errors,
+        )
+
+        if errors:
+            raise ValueError(
+                "Startup aborted — required secret(s) are missing or invalid:\n"
+                + "\n".join(f"  • {e}" for e in errors)
+            )
+
+        return self
 
     @model_validator(mode="after")
     def validate_webhook_secret_when_enabled(self) -> "Settings":

@@ -75,6 +75,7 @@ def tts_app():
     mini_app.state.settings = Settings(
         openai_api_key=SecretStr("sk-test"),
         elevenlabs_api_key=SecretStr("el-test"),
+        qora_api_key=SecretStr("qora-test-key"),  # B8: now required
         elevenlabs_stability=0.4,
         elevenlabs_speed=0.95,
         elevenlabs_similarity_boost=0.75,
