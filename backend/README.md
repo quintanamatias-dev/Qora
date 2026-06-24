@@ -14,6 +14,10 @@ QORA connects ElevenLabs' voice agent directly to a Custom LLM webhook backed by
 - **Cross-call memory** — `build_memory_context()` injects last 3 call summaries, profile facts, interest history, and operational notes into every new call
 - **Automated scheduling** — `next_action` pipeline determines follow-up strategy and creates `ScheduledCall` entries automatically
 - **Analytics dashboard** — overview, service issues, interests, and per-agent stats via `/api/v1/analytics`
+- **Admin Bearer auth** — all admin routes protected by `Authorization: Bearer <QORA_API_KEY>` (Phase B5)
+- **Session-scoped voice auth** — `AuthorizedSession` cached in session store; demo sessions never get admin scope (Phase B6)
+- **Webhook shared-secret auth** — optional `X-Webhook-Secret` validation on ElevenLabs voice endpoints (Phase B7)
+- **Configurable CORS** — `QORA_ALLOWED_ORIGINS` restricts browser origins in production (Phase B7)
 - **Demo UI** — browser-based WebSocket demo at `/demo/`
 
 ## Architecture Overview
@@ -84,9 +88,15 @@ Browser (Demo UI)
 4. **Configure environment**
 
    ```bash
+   # Run from the repo root — .env.example lives there (B8 convention)
+   cd ..
    cp .env.example .env
    # Edit .env and fill in your API keys
    ```
+
+   > **Root `.env` is the single source of truth for the backend.** Do NOT create `backend/.env`; the application ignores it since B8.
+
+   **Core**
 
    | Variable | Description |
    |----------|-------------|
@@ -94,6 +104,18 @@ Browser (Demo UI)
    | `ELEVENLABS_API_KEY` | ElevenLabs API key |
    | `ELEVENLABS_AGENT_ID` | Your ElevenLabs agent ID |
    | `DATABASE_URL` | SQLite path (default: `sqlite+aiosqlite:///./qora.db`) |
+
+   **Authentication (Phase B5)**
+
+   | Variable | Default | Description |
+   |----------|---------|-------------|
+   | `QORA_API_KEY` | — | Admin Bearer token. All admin routes return 401 without this. Generate: `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` |
+   | `QORA_DOCS_ENABLED` | `true` | Set `false` to disable `/docs` and `/redoc` in production. |
+   | `QORA_DEMO_CLIENT_ID` | — | Demo tenant `client_id` — enables `/api/v1/demo/*` endpoints. |
+   | `QORA_DEMO_AGENT_ID` | — | Demo agent UUID. |
+   | `QORA_WEBHOOK_SECRET` | — | Shared secret for `X-Webhook-Secret` header. Required when `QORA_WEBHOOK_AUTH_ENABLED=true`. |
+   | `QORA_WEBHOOK_AUTH_ENABLED` | `false` | Enable webhook shared-secret validation. Startup fails if `true` without a secret. |
+   | `QORA_ALLOWED_ORIGINS` | `*` | CORS allow-list. Comma-separated in production: `https://app.example.com,https://admin.example.com`. |
 
 5. **Run database migrations (required before first start)**
 
@@ -292,9 +314,10 @@ backend/
 │   ├── unit/                    # Unit tests per module
 │   ├── integration/             # Integration tests (webhook, app wiring)
 │   └── test_spec_coverage.py    # Spec scenario coverage matrix
-├── .env.example
 └── pyproject.toml
 ```
+
+> **Note:** The env template is at repo root — `../.env.example` (B8 convention). There is no `backend/.env.example`. Copy `../.env.example` to `../.env` (repo root) before starting the server.
 
 ## License
 

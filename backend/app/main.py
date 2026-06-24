@@ -42,7 +42,10 @@ from fastapi import APIRouter, FastAPI, Request, Response
 # Load ALL .env variables into os.environ so per-client credentials
 # (e.g. QUINTANA_AIRTABLE_API_KEY) are available via os.environ.get().
 # pydantic-settings only reads its own declared fields; this covers the rest.
-load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
+# B8: Load from repo-root/.env (single source of truth).
+# Path resolution: __file__ (backend/app/main.py) → .parent = backend/app/
+#   → .parent = backend/ → .parent = repo-root/
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env", override=False)
 from fastapi.responses import FileResponse, RedirectResponse  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint  # noqa: E402

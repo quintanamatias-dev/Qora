@@ -17,14 +17,14 @@ Step-by-step guide to get QORA running on your machine and exposed to ElevenLabs
 
 ```bash
 git clone <repo-url>
-cd Qora/backend
+cd Qora
 
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+# Create virtual environment inside the backend folder
+python -m venv backend/.venv
+source backend/.venv/bin/activate   # Windows: backend\.venv\Scripts\activate
 
 # Install dependencies
-pip install -e ".[dev]"
+pip install -e "backend/.[dev]"
 ```
 
 ---
@@ -32,10 +32,13 @@ pip install -e ".[dev]"
 ## 2. Configure API Keys
 
 ```bash
+# Run from the repo root — that is where .env.example lives
 cp .env.example .env
 ```
 
-Edit `.env` and fill in:
+Edit `.env` (at the repo root) and fill in:
+
+### Core variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -45,7 +48,35 @@ Edit `.env` and fill in:
 | `DATABASE_URL` | Optional | Default: `sqlite+aiosqlite:///./qora.db` |
 | `LOG_LEVEL` | Optional | Default: `INFO` |
 
-**Never commit your `.env` file.** It's already in `.gitignore`.
+### Auth variables (Phase B5)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `QORA_API_KEY` | ✅ (all environments) | Admin Bearer token — protects all admin routes. Local dev can use any non-placeholder value (e.g. `dev-key`). Generate a strong key for staging/production: `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `QORA_DOCS_ENABLED` | Optional | Toggle `/docs` and `/redoc`. Default: `true`. Set `false` in production. |
+| `QORA_DEMO_CLIENT_ID` | Required for demo | `client_id` of the demo tenant in your DB (e.g. `qora-demo`). Enables `/api/v1/demo/*` endpoints. |
+| `QORA_DEMO_AGENT_ID` | Required for demo | Agent UUID for the demo tenant. |
+| `QORA_SESSION_TTL_SECONDS` | Optional | In-memory session TTL in seconds. Default: `14400` (4 hours). |
+| `QORA_WEBHOOK_SECRET` | Required if webhook auth enabled | Shared secret for `X-Webhook-Secret` header validation. Must match ElevenLabs agent setting. |
+| `QORA_WEBHOOK_AUTH_ENABLED` | Optional | Enable ElevenLabs webhook authentication. Default: `false`. When `true`, `QORA_WEBHOOK_SECRET` must be set or startup fails. |
+| `QORA_ALLOWED_ORIGINS` | Optional | Comma-separated CORS origin allow-list. Default: `*` (open — dev only). Example: `https://app.example.com,https://admin.example.com` |
+
+Edit `frontend/.env` (copy from `frontend/.env.example`):
+
+| Variable | Description |
+|----------|-------------|
+| `VITE_API_KEY` | Must match `QORA_API_KEY`. Sent by the React admin UI as a `Bearer` token. **Browser-visible — acceptable only for current Phase B static admin auth.** Will be replaced by JWT in Phase C. |
+| `VITE_API_BASE_URL` | Leave empty for Vite proxy (same-origin). |
+
+> **Do NOT create `backend/.env`.** The backend reads from root `.env` only (B8). Any old `backend/.env` is ignored — delete it if it exists.
+
+Run the pre-flight check to validate all REQUIRED secrets before starting:
+
+```bash
+python backend/scripts/check-secrets.py
+```
+
+**Never commit your `.env` files.** Both root `.env` and `frontend/.env` are already in `.gitignore`.
 
 ---
 
@@ -185,7 +216,7 @@ In the [ElevenLabs dashboard](https://elevenlabs.io/app/conversational-ai):
 
 ---
 
-## 8. Run Tests
+## 8. Run Tests (optional)
 
 ```bash
 # All tests
@@ -201,7 +232,43 @@ pytest tests/integration/voice/ -v
 
 ---
 
-## 9. Post-Call Analysis
+## 9. Admin API — curl Examples
+
+All admin routes require the `Authorization: Bearer` header. Replace `<YOUR_KEY>` with the value of `QORA_API_KEY` in your `.env`.
+
+```bash
+# Health check (public — no auth)
+curl http://localhost:8000/api/v1/health
+
+# List clients (requires auth)
+curl -H "Authorization: Bearer <YOUR_KEY>" http://localhost:8000/api/v1/clients
+
+# Create a client
+curl -X POST http://localhost:8000/api/v1/clients \
+  -H "Authorization: Bearer <YOUR_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Acme Corp"}'
+
+# List leads for a client
+curl -H "Authorization: Bearer <YOUR_KEY>" \
+  "http://localhost:8000/api/v1/leads?client_id=acme-corp"
+
+# List call sessions
+curl -H "Authorization: Bearer <YOUR_KEY>" \
+  "http://localhost:8000/api/v1/calls?client_id=acme-corp"
+
+# Demo context (public — no auth needed)
+curl http://localhost:8000/api/v1/demo/context
+```
+
+**401 response** when key is wrong or missing:
+```json
+{ "error": "authentication_required", "message": "Authorization header missing" }
+```
+
+---
+
+## 10. Post-Call Analysis
 
 QORA's post-call analysis pipeline is fully Python-native. When a call ends, the
 summarizer (`backend/app/summarizer.py`) fans out 13 analysis dimensions in parallel
@@ -213,7 +280,7 @@ analysis pipeline and all 13 dimensions.
 
 ---
 
-## Troubleshooting
+## 11. Troubleshooting
 
 ### `422 Unprocessable Entity` from webhook
 

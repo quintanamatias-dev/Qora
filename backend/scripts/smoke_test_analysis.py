@@ -29,7 +29,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # Load .env before importing app modules
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+# B8: Load from repo-root/.env (single source of truth).
+# Path resolution: __file__ (backend/scripts/smoke_test_analysis.py)
+#   → .parent = backend/scripts/ → .parent = backend/ → .parent = repo-root/
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 # ---------------------------------------------------------------------------
 # GPT Call Interceptor — captures every prompt sent to OpenAI

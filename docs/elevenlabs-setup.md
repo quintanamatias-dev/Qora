@@ -62,7 +62,60 @@ Qora production baseline:
 
 The documented default volume is `0.6`, but Qora uses `0.15` to avoid fighting the agent voice. Configure per tenant/agent; do not mix ambient audio in the browser unless there is a product reason to bypass ElevenLabs mixing.
 
-### 4. Initiation Webhook
+### 4. Webhook Authentication (optional — recommended for production)
+
+Qora supports shared-secret validation for all ElevenLabs-facing webhook endpoints. When enabled, every call to `/api/v1/voice/initiation`, `/api/v1/voice/{client_id}/custom-llm/chat/completions`, and `/api/v1/calls/elevenlabs-postcall` must include the `X-Webhook-Secret` header.
+
+**Default**: disabled — existing ElevenLabs agents continue to work with no changes.
+
+#### Rollout steps
+
+1. **Generate a strong secret**
+   ```bash
+   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+   ```
+
+2. **Set the secret in root `.env`** (the repo-root `.env` is the backend source of truth — see B8)
+   ```env
+   QORA_WEBHOOK_SECRET=<generated-secret>
+   ```
+   Do NOT enable yet — just store the value.
+
+3. **Configure ElevenLabs agent** (if supported for your account)
+   In your ElevenLabs agent → **Security** → set the webhook secret field to the same value.
+   ElevenLabs will then send `X-Webhook-Secret: <secret>` on every webhook call.
+
+4. **Enable enforcement in root `.env`**
+   ```env
+   QORA_WEBHOOK_AUTH_ENABLED=true
+   ```
+
+5. **Restart the backend**
+   ```bash
+   # From repo root
+   ./Qora
+   # or
+   cd backend && uvicorn app.main:app --reload
+   ```
+   If `QORA_WEBHOOK_AUTH_ENABLED=true` but `QORA_WEBHOOK_SECRET` is missing or empty, **startup fails immediately** with a configuration error. This is intentional — it prevents silently open webhook endpoints.
+
+6. **Verify manually**
+   ```bash
+   # Should return 401 (no secret)
+   curl -X POST https://<YOUR-NGROK>/api/v1/voice/initiation
+
+   # Should return 200 or expected response (correct secret)
+   curl -X POST https://<YOUR-NGROK>/api/v1/voice/initiation \
+     -H "X-Webhook-Secret: <generated-secret>" \
+     -H "Content-Type: application/json" \
+     -d '{"client_id": "your-client-id"}'
+   ```
+
+> **Rollback**: set `QORA_WEBHOOK_AUTH_ENABLED=false` and restart. No schema changes, no data loss.
+
+---
+
+### 5. Initiation Webhook
 
 Navigate to the **Security / Anulación de webhook de datos de inicio** section.
 
@@ -74,7 +127,7 @@ https://<YOUR-NGROK-SUBDOMAIN>.ngrok-free.dev/api/v1/voice/initiation?client_id=
 
 The `{{lead_id}}` placeholder is filled by ElevenLabs from the conversation's dynamic_variables when the call is initiated.
 
-### 5. Post-Call Webhook (optional but recommended for Phase 2 memory)
+### 6. Post-Call Webhook (optional but recommended for Phase 2 memory)
 
 Navigate to the **Webhook posterior a la llamada** section.
 

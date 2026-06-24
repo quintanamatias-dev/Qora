@@ -35,11 +35,13 @@ Docker Compose MUST continue to read secrets from the root `.env` via `env_file:
 - THEN the `.env.example` and `docs/ops/secrets-management.md` document the explicit copy fallback
 - AND warn that manual sync is required when the root file changes
 
+> **B8 implementation note:** The symlink approach was rejected in favor of updating `load_dotenv()` in `backend/app/main.py` and backend scripts to resolve three `.parent` levels to the repo root. `backend/.env` is neither created nor read. Operators copy root `.env.example` to root `.env`.
+
 ---
 
 ### Requirement: Classified .env.example
 
-`backend/.env.example` MUST classify every known env variable with one of these tier labels: `REQUIRED`, `OPTIONAL`, `PER_CLIENT`, or `FUTURE`.
+The root `.env.example` (at the repo root — NOT `backend/.env.example`, which is deleted as of B8) MUST classify every known env variable with one of these tier labels: `REQUIRED`, `OPTIONAL`, `PER_CLIENT`, or `FUTURE`.
 
 Each REQUIRED variable MUST include a human-readable comment explaining what it is and where to obtain it.
 
@@ -50,16 +52,18 @@ The file MUST be organized into labeled sections in this order:
 4. `## PER_CLIENT — Integration Credentials`
 5. `## FUTURE / Not Yet Wired`
 
+> **B8 implementation note:** `backend/.env.example` was deleted and replaced by root `.env.example`. The backend `load_dotenv()` path was updated to read from the repo root. Operators copy root `.env.example` to root `.env`.
+
 #### Scenario: Operator sets up environment from .env.example
 
-- GIVEN a new operator copies `backend/.env.example` to `backend/.env`
+- GIVEN a new operator copies root `.env.example` to root `.env`
 - WHEN they read the file
 - THEN they can identify every REQUIRED variable, where to get its value, and what happens if it is missing
 - AND no variable is present without a tier label
 
 #### Scenario: Every active variable has a section and comment
 
-- GIVEN `backend/.env.example` is inspected
+- GIVEN root `.env.example` is inspected
 - WHEN searching for any variable listed in the Secret Classification Table from the proposal
 - THEN it appears in exactly one section with its tier label and at least one comment line
 
@@ -73,14 +77,14 @@ These variables MUST be moved to the `## FUTURE / Not Yet Wired` section or remo
 
 #### Scenario: N8N variables are in the FUTURE section
 
-- GIVEN `backend/.env.example` is read
+- GIVEN root `.env.example` is read
 - WHEN searching for `N8N_*` variables
 - THEN they appear only under `## FUTURE / Not Yet Wired`
 - AND are not present in REQUIRED or OPTIONAL sections
 
 #### Scenario: BROKER_NAME is absent or marked clearly
 
-- GIVEN `backend/.env.example` is read
+- GIVEN root `.env.example` is read
 - WHEN searching for `BROKER_NAME`
 - THEN it either does not appear, or appears under `## FUTURE / Not Yet Wired` with a comment explaining why it is not active
 - AND it does not appear in any REQUIRED or OPTIONAL section
@@ -101,9 +105,9 @@ The documentation MUST state that `VITE_API_KEY` is a Phase B only mechanism and
 - WHEN they read the `VITE_API_KEY` entry
 - THEN a comment clearly states it is browser-visible and lists the Phase C replacement path
 
-#### Scenario: Frontend env variables do not leak into backend .env.example
+#### Scenario: Frontend env variables do not leak into root .env.example
 
-- GIVEN `backend/.env.example` is read
+- GIVEN root `.env.example` is read
 - WHEN searching for `VITE_*` variables
 - THEN none are present — frontend variables are documented only in `frontend/.env.example`
 
@@ -113,7 +117,7 @@ The documentation MUST state that `VITE_API_KEY` is a Phase B only mechanism and
 
 The system MUST include `docs/ops/secrets-management.md` covering: local dev setup (symlink or copy), Docker deploy steps, secret rotation procedure, and the VITE_API_KEY browser-visibility warning.
 
-The runbook MUST be discoverable from `backend/.env.example` via a comment reference.
+The runbook MUST be discoverable from root `.env.example` via a comment reference.
 
 #### Scenario: Operator performs first local setup
 

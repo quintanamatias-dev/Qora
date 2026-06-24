@@ -29,7 +29,9 @@ from sqlalchemy import delete, select
 # Add backend to path so imports work when run from the repo root or backend/.
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
-load_dotenv(BACKEND_DIR / ".env")
+# B8: Load from repo-root/.env (single source of truth).
+# Path resolution: BACKEND_DIR is backend/ → .parent is repo-root/
+load_dotenv(BACKEND_DIR.parent / ".env")
 
 from smoke_test_analysis import TRANSCRIPT_NEGATIVE, TRANSCRIPT_POSITIVE  # noqa: E402
 
