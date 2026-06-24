@@ -618,12 +618,6 @@ async def test_concurrent_tenants_same_conversation_id_no_cross_contamination(
 
 
 # ---------------------------------------------------------------------------
-# T34 — CAP-1 same-value precedence test
-# ---------------------------------------------------------------------------
-
-
-@respx.mock
-# ---------------------------------------------------------------------------
 # T01 — RED: Session creation stores elevenlabs_conversation_id (CAP-3 REQ-3.1)
 # ---------------------------------------------------------------------------
 
@@ -795,6 +789,7 @@ async def test_path_route_coerces_empty_strings_to_null(app_client: AsyncClient)
 # ---------------------------------------------------------------------------
 
 
+@respx.mock
 @pytest.mark.asyncio
 async def test_path_route_same_client_id_in_both_path_and_body(app_client: AsyncClient):
     """CAP-1: When path and body client_id are EQUAL, request succeeds with no mismatch warning.

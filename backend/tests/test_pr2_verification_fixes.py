@@ -657,6 +657,8 @@ class TestFinding3ZeroDbHotPathStrengthened:
         @asynccontextmanager
         async def _noop_db_session():
             mock_db = AsyncMock()
+            # session.add() is synchronous in AsyncSession — override to avoid leaking coroutine
+            mock_db.add = MagicMock()
             yield mock_db
 
         with (

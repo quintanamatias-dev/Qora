@@ -137,64 +137,68 @@ async def run_migration(database_url: str) -> None:
     print(f"Connecting to: {database_url}")
     engine = create_async_engine(database_url, echo=False)
 
-    async with engine.begin() as conn:
-        # ------------------------------------------------------------------
-        # 0. Pre-flight: agents table must exist (run migrate_add_agents.py first)
-        # ------------------------------------------------------------------
-        if not await table_exists(conn, "agents"):
-            raise RuntimeError(
-                "agents table does not exist. "
-                "Run migrate_add_agents.py before migrate_add_agent_id_fks.py."
+    try:
+        async with engine.begin() as conn:
+            # ------------------------------------------------------------------
+            # 0. Pre-flight: agents table must exist (run migrate_add_agents.py first)
+            # ------------------------------------------------------------------
+            if not await table_exists(conn, "agents"):
+                raise RuntimeError(
+                    "agents table does not exist. "
+                    "Run migrate_add_agents.py before migrate_add_agent_id_fks.py."
+                )
+
+            # ------------------------------------------------------------------
+            # 1. Add agent_id to call_sessions
+            # ------------------------------------------------------------------
+            print("\nMigrating call_sessions table...")
+            await add_column_if_missing(
+                conn, "call_sessions", "agent_id", "TEXT REFERENCES agents(id)"
             )
 
-        # ------------------------------------------------------------------
-        # 1. Add agent_id to call_sessions
-        # ------------------------------------------------------------------
-        print("\nMigrating call_sessions table...")
-        await add_column_if_missing(
-            conn, "call_sessions", "agent_id", "TEXT REFERENCES agents(id)"
-        )
-
-        # ------------------------------------------------------------------
-        # 2. Add agent_id to scheduled_calls
-        # ------------------------------------------------------------------
-        print("\nMigrating scheduled_calls table...")
-        await add_column_if_missing(
-            conn, "scheduled_calls", "agent_id", "TEXT REFERENCES agents(id)"
-        )
-
-        # ------------------------------------------------------------------
-        # 3. Backfill agent_id from default agents
-        # ------------------------------------------------------------------
-        print("\nBackfilling agent_id for existing rows...")
-        await backfill_agent_id(conn, "call_sessions")
-        await backfill_agent_id(conn, "scheduled_calls")
-
-        # ------------------------------------------------------------------
-        # 4. Verify — report remaining NULL rows (cannot enforce NOT NULL
-        #    via ALTER TABLE in SQLite, but we surface the count clearly)
-        # ------------------------------------------------------------------
-        print("\nVerifying backfill completeness...")
-        null_sessions = await count_null_agent_rows(conn, "call_sessions")
-        null_scheduled = await count_null_agent_rows(conn, "scheduled_calls")
-
-        if null_sessions > 0:
-            print(
-                f"  [warn] {null_sessions} call_sessions row(s) still have NULL agent_id "
-                "(client has no default agent — manual assignment required)"
+            # ------------------------------------------------------------------
+            # 2. Add agent_id to scheduled_calls
+            # ------------------------------------------------------------------
+            print("\nMigrating scheduled_calls table...")
+            await add_column_if_missing(
+                conn, "scheduled_calls", "agent_id", "TEXT REFERENCES agents(id)"
             )
-        else:
-            print("  [ok]   call_sessions: 0 NULL agent_id rows")
 
-        if null_scheduled > 0:
-            print(
-                f"  [warn] {null_scheduled} scheduled_calls row(s) still have NULL agent_id "
-                "(client has no default agent — manual assignment required)"
-            )
-        else:
-            print("  [ok]   scheduled_calls: 0 NULL agent_id rows")
+            # ------------------------------------------------------------------
+            # 3. Backfill agent_id from default agents
+            # ------------------------------------------------------------------
+            print("\nBackfilling agent_id for existing rows...")
+            await backfill_agent_id(conn, "call_sessions")
+            await backfill_agent_id(conn, "scheduled_calls")
 
-    await engine.dispose()
+            # ------------------------------------------------------------------
+            # 4. Verify — report remaining NULL rows (cannot enforce NOT NULL
+            #    via ALTER TABLE in SQLite, but we surface the count clearly)
+            # ------------------------------------------------------------------
+            print("\nVerifying backfill completeness...")
+            null_sessions = await count_null_agent_rows(conn, "call_sessions")
+            null_scheduled = await count_null_agent_rows(conn, "scheduled_calls")
+
+            if null_sessions > 0:
+                print(
+                    f"  [warn] {null_sessions} call_sessions row(s) still have NULL agent_id "
+                    "(client has no default agent — manual assignment required)"
+                )
+            else:
+                print("  [ok]   call_sessions: 0 NULL agent_id rows")
+
+            if null_scheduled > 0:
+                print(
+                    f"  [warn] {null_scheduled} scheduled_calls row(s) still have NULL agent_id "
+                    "(client has no default agent — manual assignment required)"
+                )
+            else:
+                print("  [ok]   scheduled_calls: 0 NULL agent_id rows")
+    finally:
+        # Always dispose the engine — prevents aiosqlite.Connection ResourceWarning
+        # when run_migration raises (e.g. RuntimeError from pre-flight check).
+        await engine.dispose()
+
     print("\nMigration complete.")
 
 
