@@ -5,18 +5,78 @@
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Component Diagram](#component-diagram)
-3. [Components](#components)
-4. [Data Flow — Single Conversation Turn](#data-flow--single-conversation-turn)
-5. [Data Flow — Post-Call Analysis](#data-flow--post-call-analysis)
-6. [Data Lifecycle](#data-lifecycle)
-7. [Phase Roadmap](#phase-roadmap)
+2. [Authentication and Session Security](#authentication-and-session-security)
+3. [Component Diagram](#component-diagram)
+4. [Components](#components)
+5. [Data Flow — Single Conversation Turn](#data-flow--single-conversation-turn)
+6. [Data Flow — Post-Call Analysis](#data-flow--post-call-analysis)
+7. [Data Lifecycle](#data-lifecycle)
+8. [Phase Roadmap](#phase-roadmap)
 
 ---
 
 ## Overview
 
 QORA is a Custom LLM webhook server that powers ElevenLabs Conversational AI agents with GPT-4o, multi-tenant routing, lead context injection, CRM tool execution, post-call analysis, cross-call memory, and dynamic skill loading.
+
+## Authentication and Session Security
+
+Qora uses three independent auth layers. Each layer maps to a different caller type.
+
+### Layer 1 — Admin Bearer auth (`require_api_key`)
+
+All admin API surfaces (clients, agents, leads, calls, analytics, scheduler) require:
+
+```
+Authorization: Bearer <QORA_API_KEY>
+```
+
+`require_api_key` in `backend/app/core/auth.py` performs constant-time comparison via `secrets.compare_digest` to prevent timing attacks. It returns a `CallerIdentity` containing only an audit hash — the raw key is never stored or logged.
+
+**Design intent**: Phase C will replace `require_api_key` with a JWT dependency (`require_jwt`) and zero router changes will be needed.
+
+### Layer 2 — Session-scoped voice auth (`AuthorizedSession`)
+
+Voice conversation turns are authenticated through an `AuthorizedSession` cached in the in-memory `session_store`. This session is created once at conversation start (initiation webhook or demo session open) and read on every subsequent GPT-4o turn — zero DB or network calls per turn.
+
+```
+AuthorizedSession
+  ├── client_id       — tenant boundary
+  ├── agent_id / agent_slug
+  ├── lead_id         — tool call scope boundary
+  ├── session_id      — call_sessions.id
+  ├── scopes          — frozenset: {"pipeline:write", "pipeline:read"}
+  └── is_demo         — True → admin:write / admin:read scopes NOT granted
+```
+
+**Demo isolation**: Demo sessions receive only `pipeline:write` and `pipeline:read`. They never receive `admin:write` or `admin:read`. This is the hard boundary preventing the public demo from accessing or modifying tenant admin data.
+
+**Tool scope validation**: `_check_scope()` in `backend/app/tools/dispatcher.py` verifies every tool call against the session's scopes and `client_id`. A tool call from a demo session cannot write to a different tenant's data.
+
+### Layer 3 — Webhook shared-secret (`require_webhook_secret`)
+
+ElevenLabs voice webhook endpoints (initiation, custom-LLM, post-call) optionally validate an `X-Webhook-Secret` header against `QORA_WEBHOOK_SECRET`.
+
+| `QORA_WEBHOOK_AUTH_ENABLED` | Behavior |
+|----------------------------|----------|
+| `false` (default) | No validation — existing ElevenLabs agents unaffected |
+| `true` | All voice webhook calls must include correct `X-Webhook-Secret` or receive `401` |
+
+**Startup guard**: Setting `QORA_WEBHOOK_AUTH_ENABLED=true` without a configured `QORA_WEBHOOK_SECRET` causes startup to fail before serving any requests.
+
+### CORS
+
+`CORSMiddleware` is configured from `QORA_ALLOWED_ORIGINS` (parsed in `main.py`). Default is `*` (open — dev-friendly). In production, set an explicit comma-separated list of allowed browser origins.
+
+```
+QORA_ALLOWED_ORIGINS=https://app.example.com,https://admin.example.com
+```
+
+### Demo public endpoints
+
+`/api/v1/demo/*` routes are intentionally auth-exempt. Server-side scope isolation ensures they only return data for the tenant configured in `QORA_DEMO_CLIENT_ID`. The browser never sees `QORA_API_KEY` or `QORA_WEBHOOK_SECRET`.
+
+---
 
 ## Component Diagram
 
@@ -335,3 +395,6 @@ All prompt paths support `{{variable}}` template substitution (lead_name, call_h
 | Phase 3 | ✅ Complete | Analytics dashboard, interest scoring, profile facts |
 | Phase 4 | ✅ Complete | Data corrections, misc notes, objections, service issues dimensions |
 | Phase 5 | ✅ Complete | Next-action decision engine, scheduler, outbound call queue |
+| Phase B5 | ✅ Complete | Admin API Bearer auth foundation (`require_api_key`, `CallerIdentity`) — PR #107 |
+| Phase B6 | ✅ Complete | Session-scoped demo auth (`AuthorizedSession`, tool scope guard, demo router) — PR #109 |
+| Phase B7 | ✅ Complete | Webhook shared-secret auth + configurable CORS (`require_webhook_secret`, `QORA_ALLOWED_ORIGINS`) — PR #111 |

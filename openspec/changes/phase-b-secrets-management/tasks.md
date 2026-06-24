@@ -40,12 +40,12 @@ Chain strategy: stacked-to-main
 
 ## PR #2: Tooling + Env/Docs Cleanup (~250 lines)
 
-- [ ] 2.1 RED: Add tests for `backend/scripts/check-secrets.py` success, required missing, placeholder, CRM scan, dead vars, and `--json` output.
-- [ ] 2.2 GREEN: Create `backend/scripts/check-secrets.py` with exit 0/1, JSON schema, classification table, and no secret-value output.
-- [ ] 2.3 RED: Add tests or assertions for root `.env` loading in `backend/app/main.py`, `backend/scripts/seed_analysis_demo_call.py`, and `backend/scripts/smoke_test_analysis.py`.
-- [ ] 2.4 GREEN: Update those three `load_dotenv()` paths to repo-root `.env`; remove/deprecate `backend/.env` path usage.
-- [ ] 2.5 GREEN: Move/replace `backend/.env.example` with root `.env.example`; classify active vars and keep `N8N_*`, `TWILIO_*`, `BROKER_NAME` only if truly future/dead.
-- [ ] 2.6 GREEN: Update `frontend/.env.example` with the browser-visible `VITE_API_KEY` warning and Phase C JWT replacement note.
-- [ ] 2.7 GREEN: Create `docs/ops/secrets-management.md` and update practical docs that still point to `backend/.env`; coordinate with existing uncommitted B5-B7 docs updates.
-- [ ] 2.8 HYGIENE: Do not touch `.atl/.skill-registry.cache.json` or `.atl/skill-registry.md`; verify protected files are unchanged before PR prep.
-- [ ] 2.9 VERIFY: Run focused script tests, env convention checks, docs link checks, and relevant backend suite.
+- [x] 2.1 RED: Add tests for `backend/scripts/check-secrets.py` success, required missing, placeholder, CRM scan, dead vars, and `--json` output.
+- [x] 2.2 GREEN: Create `backend/scripts/check-secrets.py` with exit 0/1, JSON schema, classification table, and no secret-value output.
+- [x] 2.3 RED: Add tests or assertions for root `.env` loading in `backend/app/main.py`, `backend/scripts/seed_analysis_demo_call.py`, and `backend/scripts/smoke_test_analysis.py`.
+- [x] 2.4 GREEN: Update those three `load_dotenv()` paths to repo-root `.env`; remove/deprecate `backend/.env` path usage.
+- [x] 2.5 GREEN: Move/replace `backend/.env.example` with root `.env.example`; classify active vars and keep `N8N_*`, `TWILIO_*`, `BROKER_NAME` only if truly future/dead.
+- [x] 2.6 GREEN: Update `frontend/.env.example` with the browser-visible `VITE_API_KEY` warning and Phase C JWT replacement note.
+- [x] 2.7 GREEN: Create `docs/ops/secrets-management.md` and update practical docs that still point to `backend/.env`; coordinate with existing uncommitted B5-B7 docs updates.
+- [x] 2.8 HYGIENE: Do not touch `.atl/.skill-registry.cache.json` or `.atl/skill-registry.md`; verify protected files are unchanged before PR prep.
+- [x] 2.9 VERIFY: Run focused script tests, env convention checks, docs link checks, and relevant backend suite.

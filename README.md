@@ -8,9 +8,9 @@ QORA is a B2B SaaS platform that replaces traditional call center agents with AI
 
 **The core value proposition**: An AI agent that sounds indistinguishable from a human, knows your product, calls your leads, and never burns out.
 
-## Current State — Phase 7 Complete ✅
+## Current State — Phase B7 Complete ✅
 
-Full client dashboard, CRM, internal admin panel, call scheduler, post-call analysis, agent entity model, and unified design system — all implemented and tested.
+Full client dashboard, CRM, internal admin panel, call scheduler, post-call analysis, agent entity model, unified design system, and API authentication layer — all implemented and tested.
 
 > **Architecture source of truth:** `docs/architecture.md` owns Qora's runtime architecture, configuration precedence, and source-of-truth decisions. Keep README high-level; put detailed architecture decisions there.
 
@@ -38,6 +38,10 @@ Full client dashboard, CRM, internal admin panel, call scheduler, post-call anal
 | Internal admin CRUD (clients + agents) | ✅ Working |
 | Unified design system (admin + client dashboard) | ✅ Working |
 | React frontend with TanStack Query | ✅ Working |
+| Admin Bearer auth (`QORA_API_KEY`) protecting all admin routes | ✅ Working |
+| Session-scoped demo auth (`AuthorizedSession`, tool scope guard) | ✅ Working |
+| Webhook shared-secret auth (`X-Webhook-Secret`, opt-in) | ✅ Working |
+| Configurable CORS (`QORA_ALLOWED_ORIGINS`) | ✅ Working |
 | 718 backend + 402 frontend tests | ✅ |
 
 ### Architecture
@@ -97,6 +101,7 @@ Jaumpablo is an insurance sales agent for Quintana Seguros (pilot client). He:
 
 ```
 Qora/
+├── .env.example                # Source of truth for all backend secrets (B8 convention)
 ├── backend/                    # FastAPI application
 │   ├── app/
 │   │   ├── core/               # Settings, DB, logging
@@ -120,7 +125,6 @@ Qora/
 │   ├── tests/                  # 718 backend tests (unit + integration)
 │   ├── scripts/                # Migration and inspection scripts
 │   ├── pyproject.toml
-│   ├── .env.example
 │   └── README.md               # Backend setup guide
 ├── frontend/                   # React client dashboard + admin panel
 │   ├── src/
@@ -174,6 +178,11 @@ Agenda system with configurable retry logic. Schedule follow-up calls from withi
 ### ✅ Phase 7 — Internal Admin + Multi-Agent (complete)
 Agent entity model (1 client → N agents). Internal admin CRUD for clients and agents. CRM Next Action column with scheduled call visibility. Admin panel unified with client dashboard design system.
 
+### ✅ Phase B5/B6/B7 — Auth + Security (complete)
+- **B5**: Admin Bearer auth (`QORA_API_KEY`) protecting all admin API routes.
+- **B6**: Session-scoped demo auth (`AuthorizedSession`) with tool scope validation. Demo pipeline isolated from admin data.
+- **B7**: Webhook shared-secret auth (`X-Webhook-Secret`, opt-in via `QORA_WEBHOOK_AUTH_ENABLED`) and configurable CORS (`QORA_ALLOWED_ORIGINS`).
+
 ### 🔲 Phase 8 — Real Telephony
 - Deploy to Railway/Render + public webhooks ([#11](../../issues/11))
 - Twilio outbound call integration ([#12](../../issues/12))
@@ -216,13 +225,21 @@ This starts:
 **TL;DR:**
 
 ```bash
-# 1. Install dependencies
-cd backend
-pip install -e .
-
-# 2. Configure environment
+# 1. Configure environment (from repo root — .env.example lives here)
 cp .env.example .env
-# Fill in: OPENAI_API_KEY, ELEVENLABS_API_KEY, ELEVENLABS_AGENT_ID
+# Required: OPENAI_API_KEY, ELEVENLABS_API_KEY, ELEVENLABS_AGENT_ID
+# Auth:     QORA_API_KEY (admin Bearer token — generate with python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+
+# Validate before starting
+python backend/scripts/check-secrets.py
+
+# Frontend env (for admin UI)
+cd frontend && cp .env.example .env
+# Set VITE_API_KEY to the same value as QORA_API_KEY
+cd ..
+
+# 2. Install dependencies
+cd backend && pip install -e .
 
 # 3. Run migrations first (required — init_db no longer auto-creates schema)
 python scripts/migrate.py
@@ -233,6 +250,8 @@ uvicorn app.main:app --reload
 # 5. Open demo
 open http://localhost:8000/demo/
 ```
+
+> See [`docs/running-locally.md`](docs/running-locally.md) for full env var reference including auth, demo, webhook secret, and CORS settings.
 
 For ElevenLabs to reach your local webhook, `Qora` starts ngrok automatically:
 ```bash
