@@ -149,25 +149,27 @@ async def test_agents_migration_enforces_unique_via_insert(tmp_path: Path):
     engine3 = create_async_engine(db_url, echo=False)
     import uuid
 
-    with pytest.raises(Exception):  # sqlalchemy.exc.IntegrityError
-        async with engine3.begin() as conn:
-            await conn.execute(
-                sqlalchemy.text(
-                    "INSERT INTO agents (id, client_id, slug, name, voice_id) "
-                    "VALUES (:id1, 'test-client', 'agent-slug', 'Agent 1', 'v-1')"
-                ),
-                {"id1": str(uuid.uuid4())},
-            )
-            # Duplicate slug for same client — must raise
-            await conn.execute(
-                sqlalchemy.text(
-                    "INSERT INTO agents (id, client_id, slug, name, voice_id) "
-                    "VALUES (:id2, 'test-client', 'agent-slug', 'Agent 2', 'v-2')"
-                ),
-                {"id2": str(uuid.uuid4())},
-            )
-
-    await engine3.dispose()
+    try:
+        with pytest.raises(Exception):  # sqlalchemy.exc.IntegrityError
+            async with engine3.begin() as conn:
+                await conn.execute(
+                    sqlalchemy.text(
+                        "INSERT INTO agents (id, client_id, slug, name, voice_id) "
+                        "VALUES (:id1, 'test-client', 'agent-slug', 'Agent 1', 'v-1')"
+                    ),
+                    {"id1": str(uuid.uuid4())},
+                )
+                # Duplicate slug for same client — must raise
+                await conn.execute(
+                    sqlalchemy.text(
+                        "INSERT INTO agents (id, client_id, slug, name, voice_id) "
+                        "VALUES (:id2, 'test-client', 'agent-slug', 'Agent 2', 'v-2')"
+                    ),
+                    {"id2": str(uuid.uuid4())},
+                )
+    finally:
+        # Always dispose to prevent aiosqlite.Connection ResourceWarning on GC
+        await engine3.dispose()
 
 
 # ---------------------------------------------------------------------------

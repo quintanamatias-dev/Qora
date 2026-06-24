@@ -29,7 +29,8 @@ def test_lead_model_has_external_lead_id_column():
     )
 
     # Check the actual SQLAlchemy column type and nullable flag
-    table_columns = {col.name: col for col in mapper.mapper.mapped_table.columns}
+    # Use persist_selectable instead of the deprecated mapped_table (removed in SQLAlchemy 2.0)
+    table_columns = {col.name: col for col in mapper.persist_selectable.columns}
     assert "external_lead_id" in table_columns, (
         "external_lead_id must be a mapped table column"
     )
