@@ -45,7 +45,7 @@ Chain strategy: stacked-to-main
 
 - [x] 2.3 RED: add CRM transient/config error tests covering retry, `dead`, and `operator_review=true` error JSON.
 - [x] 2.4 Create `backend/app/jobs/handlers/crm_sync.py` and modify `backend/app/summarizer.py` to enqueue durable CRM sync with legacy fallback.
-- [x] 3.1 Add a minimal internal query helper for `background_jobs` failed/dead rows.
+- [x] 3.1 Add a minimal internal query helper for `background_jobs` failed/dead rows (`backend/app/jobs/queries.py`).
 - [x] 3.2 Test that dead CRM and pipeline jobs are queryable with `job_type`, `attempts`, and structured `error` fields for B9.
 
 ## Phase 4: Gated Transcript Durability (PR 3, Last — off-call only)
