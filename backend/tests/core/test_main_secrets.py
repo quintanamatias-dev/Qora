@@ -56,6 +56,10 @@ def _make_mock_settings() -> MagicMock:
     mock.host = "0.0.0.0"
     mock.port = 8000
     mock.database_url = "sqlite+aiosqlite:///./test.db"
+    # Phase B10: feature flag defaults to False so lifespan does not invoke the executor.
+    # MagicMock() attributes return truthy MagicMock objects by default, which would
+    # cause lifespan to call executor.recover() against a mocked DB and fail.
+    mock.enable_job_executor = False
     return mock
 
 

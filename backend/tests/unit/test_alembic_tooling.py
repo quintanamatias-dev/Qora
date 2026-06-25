@@ -773,8 +773,12 @@ class TestRealMigrationExecution:
 
         assert versions, "alembic_version table is empty after upgrade head"
         assert len(versions) == 1, f"Expected 1 version, got {versions}"
-        assert "20241201_0001" in versions[0], (
-            f"Baseline revision '20241201_0001' not found in alembic_version: {versions}"
+        # HEAD revision advances as new migrations are added — accept any known Qora revision.
+        # Phase B10 (background_jobs) added 20260624_0002 as the new head.
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002"}
+        assert versions[0] in _KNOWN_REVISIONS, (
+            f"alembic_version should contain a known Qora revision. "
+            f"Got: {versions}. Known: {_KNOWN_REVISIONS}"
         )
 
     def test_fresh_db_broker_name_is_not_null(self, tmp_path):
@@ -951,8 +955,12 @@ class TestRealMigrationExecution:
         conn.close()
 
         assert versions, "alembic_version is empty after stamp head"
-        assert "20241201_0001" in versions[0], (
-            f"Stamp head did not record baseline revision. Got: {versions}"
+        # HEAD revision advances as new migrations are added — accept any known Qora revision.
+        # Phase B10 (background_jobs) added 20260624_0002 as the new head.
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002"}
+        assert versions[0] in _KNOWN_REVISIONS, (
+            f"Stamp head did not record a known Qora revision. Got: {versions}. "
+            f"Known revisions: {_KNOWN_REVISIONS}"
         )
         assert row is not None, "Sentinel client row was deleted during stamp — data loss!"
         assert row == ("test-id", "TestClient"), (
