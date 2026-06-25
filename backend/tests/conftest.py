@@ -193,6 +193,7 @@ async def db_engine(test_settings):
     import app.leads.models  # noqa: F401
     import app.calls.models  # noqa: F401
     import app.scheduler.models  # noqa: F401
+    import app.jobs.models  # noqa: F401  — BackgroundJob model (Phase B10)
 
     # 4. Enable WAL mode for concurrent read/write support (matches production init_db)
     from sqlalchemy import text

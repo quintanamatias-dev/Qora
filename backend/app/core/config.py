@@ -140,6 +140,17 @@ class Settings(BaseSettings):
     # comma-separated list; "*" = open (dev default — matches current behaviour)
     qora_allowed_origins: str = "*"
 
+    # ------------------------------------------------------------------
+    # Background Job Executor (Phase B10)
+    # ------------------------------------------------------------------
+    # Feature flag: controls whether post-call jobs use the durable executor
+    # (DB-backed retry/recovery) or the legacy fire-and-forget create_task path.
+    # Default: False — deploy migration + code with flag off (no behavior change).
+    # Set ENABLE_JOB_EXECUTOR=true to enable durable job execution.
+    # Rollback: set flag back to False; Alembic downgrade drops background_jobs table.
+    # Design: openspec/changes/phase-b-background-job-durability/design.md
+    enable_job_executor: bool = False
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

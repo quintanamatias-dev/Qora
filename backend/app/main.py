@@ -191,6 +191,17 @@ async def lifespan(app: FastAPI):
     logger.info("seed_data_loaded")
     _APP_START_TIME = time.monotonic()
 
+    # 4b. Startup recovery for background job executor (Phase B10).
+    # Re-enqueues pending/running jobs that survived a process crash.
+    # Only runs when ENABLE_JOB_EXECUTOR=true — flag-off is a no-op.
+    if settings.enable_job_executor:
+        from app.jobs.executor import executor as job_executor
+
+        recovered = await job_executor.recover()
+        logger.info("job_executor_recovery_complete", recovered=recovered)
+    else:
+        logger.debug("job_executor_disabled", flag="ENABLE_JOB_EXECUTOR=false")
+
     # 5. Start background cleanup tasks
     cleanup_task = asyncio.create_task(_session_store_cleanup_task())
 
@@ -209,6 +220,12 @@ async def lifespan(app: FastAPI):
 
     # ---- Shutdown ----
     logger.info("qora_shutdown_started")
+
+    # Shutdown background job executor tasks (if enabled).
+    if settings.enable_job_executor:
+        from app.jobs.executor import executor as job_executor
+        await job_executor.shutdown()
+
     cleanup_task.cancel()
     sweeper_task.cancel()
     scheduler_task.cancel()
