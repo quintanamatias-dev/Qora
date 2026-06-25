@@ -32,12 +32,15 @@ Chain strategy: stacked-to-main
 - [x] 1.4 Create `backend/app/jobs/executor.py` with enqueue, `_run_job`, backoff+jitter, recovery idempotency, and shutdown tracking.
 - [x] 1.5 Wire `backend/app/core/config.py`, `backend/app/core/database.py`, and `backend/app/main.py` for `ENABLE_JOB_EXECUTOR`, ORM registration, startup recovery, and safe flag-off behavior.
 
-## Phase 2: Durable Post-Call Pipeline (PR 2)
+## Phase 2: Durable Post-Call Pipeline (PR 2a — summarize only)
 
-- [ ] 2.1 RED: add tests for `backend/app/calls/service.py` enqueueing summary jobs before close response when the flag is on.
-- [ ] 2.2 Create `backend/app/jobs/handlers/summarize.py` to run existing summary, lead update, and auto-scheduling logic through the executor.
-- [ ] 2.3 RED: add CRM transient/config error tests covering retry, `dead`, and `operator_review=true` error JSON.
-- [ ] 2.4 Create `backend/app/jobs/handlers/crm_sync.py` and modify `backend/app/summarizer.py` to enqueue durable CRM sync with legacy fallback.
+- [x] 2.1 RED: add tests for `backend/app/calls/service.py` enqueueing summary jobs before close response when the flag is on.
+- [x] 2.2 Create `backend/app/jobs/handlers/summarize.py` to run existing summary, lead update, and auto-scheduling logic through the executor.
+- [x] B1 Handler registration on normal app import path — `import app.jobs.handlers` in `backend/app/main.py`.
+- [x] B2 Durable summarize handler uses `generate_summary_and_facts_durable()` (not fire-and-forget variant).
+- [x] B4 `_run_summarizer(durable=True)` re-raises GPT failures so executor sees them for retry/dead-letter.
+- [ ] 2.3 RED: add CRM transient/config error tests covering retry, `dead`, and `operator_review=true` error JSON. (PR 2b)
+- [ ] 2.4 Create `backend/app/jobs/handlers/crm_sync.py` and modify `backend/app/summarizer.py` to enqueue durable CRM sync with legacy fallback. (PR 2b)
 
 ## Phase 3: Minimal Operator Surface (PR 2)
 
