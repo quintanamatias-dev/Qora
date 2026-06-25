@@ -17,6 +17,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.calls.models import CallAnalysis, CallSession, TranscriptTurn
 
 # ---------------------------------------------------------------------------
+# Durable job executor — imported at module level for test patchability.
+# Tests can patch 'app.calls.service.executor' and 'app.calls.service.settings'.
+# ---------------------------------------------------------------------------
+
+from app.core.config import Settings as _Settings
+
+settings = _Settings()
+
+# Executor singleton imported at module level so tests can patch it directly.
+# The executor is always importable (it is instantiated at module load regardless
+# of ENABLE_JOB_EXECUTOR). The flag governs whether we *use* it, not whether we
+# import it.
+from app.jobs.executor import executor
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
@@ -563,8 +578,14 @@ async def _reconcile_session(
         age_seconds=age_seconds,
     )
 
-    # Fire-and-forget summary generation
-    _schedule_summarize(cs.id)
+    # Durable path (ENABLE_JOB_EXECUTOR=true): enqueue a persistent job so
+    # summarization survives process restarts. The enqueue() call is awaited so
+    # the background_jobs row is persisted before the reconcile response is returned.
+    # Legacy path (ENABLE_JOB_EXECUTOR=false): fire-and-forget create_task (no durability).
+    if settings.enable_job_executor:
+        await executor.enqueue("summarize", {"session_id": cs.id}, db=session)
+    else:
+        _schedule_summarize(cs.id)
 
     return cs
 
@@ -661,10 +682,16 @@ async def close_session(
             merged_sibling_ids=merged_ids,
         )
 
-    # Fire-and-forget summary generation (CAP-4)
-    # Non-blocking — MUST NOT delay session close response.
-    # Uses a new independent DB session via asyncio.create_task.
-    _schedule_summarize(session_id)
+    # Durable path (ENABLE_JOB_EXECUTOR=true): enqueue a durable job via the executor.
+    #   - The enqueue() call is awaited so the background_jobs row is persisted
+    #     before close_session() returns (durability guarantee).
+    #   - executor.enqueue() dispatches the actual handler coroutine as a background
+    #     task; the caller does not wait for the handler to complete.
+    # Legacy path (ENABLE_JOB_EXECUTOR=false): fire-and-forget create_task (no durability).
+    if settings.enable_job_executor:
+        await executor.enqueue("summarize", {"session_id": session_id}, db=session)
+    else:
+        _schedule_summarize(session_id)
 
     return cs, False
 

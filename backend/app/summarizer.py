@@ -172,6 +172,10 @@ def apply_status_from_next_action(
 async def generate_summary_and_facts(session_id: str, db: AsyncSession) -> None:
     """Generate summary and extract facts from a completed call session.
 
+    Legacy fire-and-forget path only. For the durable executor path, use
+    generate_summary_and_facts_durable() which propagates exceptions so the
+    executor can record failures, retry, and dead-letter.
+
     Loads transcript turns from DB. If 0 turns, skips without making any
     GPT call. On GPT failure, logs and returns silently — MUST NOT raise.
 
@@ -180,7 +184,7 @@ async def generate_summary_and_facts(session_id: str, db: AsyncSession) -> None:
         db: Active async DB session.
     """
     try:
-        await _run_summarizer(session_id, db)
+        await _run_summarizer(session_id, db, durable=False)
     except Exception as exc:
         logger.error(
             "summarizer_unexpected_error",
@@ -190,7 +194,33 @@ async def generate_summary_and_facts(session_id: str, db: AsyncSession) -> None:
         )
 
 
-async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
+async def generate_summary_and_facts_durable(session_id: str, db: AsyncSession) -> None:
+    """Durable executor path: generate summary and extract facts from a call session.
+
+    Calls _run_summarizer(durable=True) so that any internal GPT/OpenAI failure
+    is re-raised after the failed-analysis marker is written to DB.  This allows
+    the background job executor to:
+    - Record the error in background_jobs.error (operator visibility)
+    - Apply retry with exponential backoff (transient failures)
+    - Dead-letter the job after max_attempts (persistent failures)
+
+    MUST NOT be used in the legacy fire-and-forget context.  Use
+    generate_summary_and_facts() there instead (it swallows all exceptions).
+
+    Args:
+        session_id: UUID of the call session to summarize.
+        db: AsyncSession provided by the executor for this attempt.
+
+    Raises:
+        Exception: Any exception from _run_summarizer(durable=True) propagates to
+                   the caller so the executor can record it and apply retry/dead-letter.
+    """
+    logger.info("summarizer_durable_started", session_id=session_id)
+    await _run_summarizer(session_id, db, durable=True)
+    logger.info("summarizer_durable_completed", session_id=session_id)
+
+
+async def _run_summarizer(session_id: str, db: AsyncSession, *, durable: bool = False) -> None:
     """Internal: runs the full summarize+persist pipeline.
 
     Separated so the outer function can catch all exceptions in one place.
@@ -200,6 +230,15 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
     new-table writes (CallAnalysis, LeadProfileFact, LeadInterestHistory) — are
     wrapped in a savepoint (nested transaction).  If ANY write fails, the savepoint
     rolls back and NO partial data is committed.
+
+    Args:
+        session_id: UUID of the call session to summarize.
+        db:         Active async DB session.
+        durable:    When True (executor/durable path), re-raise GPT/pipeline
+                    exceptions AFTER writing the failed-analysis marker so the
+                    executor can record the failure and apply retry/dead-letter.
+                    When False (default — legacy fire-and-forget path), exceptions
+                    are swallowed after writing the marker (original behavior).
     """
     # Load transcript turns
     turns_result = await db.execute(
@@ -375,6 +414,10 @@ async def _run_summarizer(session_id: str, db: AsyncSession) -> None:
             await _upsert_call_analysis_failed(
                 db, cs.id, cs.lead_id, cs.client_id, error_msg
             )
+        if durable:
+            # Durable path: re-raise so the executor records the failure and applies
+            # retry/dead-letter. The failed-analysis marker is already persisted above.
+            raise
         return
 
     # ★ Wrap ALL persistence in a single savepoint — guarantees atomicity.

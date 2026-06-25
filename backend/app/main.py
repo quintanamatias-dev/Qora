@@ -53,6 +53,7 @@ from starlette.staticfiles import StaticFiles  # noqa: E402
 
 from app.core.config import Settings  # noqa: E402
 from app.core.logging import setup_logging, get_logger  # noqa: E402
+import app.jobs.handlers  # noqa: F401  (side-effect: registers summarize handler)
 
 logger = get_logger(__name__)
 
