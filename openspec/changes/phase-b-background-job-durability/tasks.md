@@ -39,13 +39,13 @@ Chain strategy: stacked-to-main
 - [x] B1 Handler registration on normal app import path — `import app.jobs.handlers` in `backend/app/main.py`.
 - [x] B2 Durable summarize handler uses `generate_summary_and_facts_durable()` (not fire-and-forget variant).
 - [x] B4 `_run_summarizer(durable=True)` re-raises GPT failures so executor sees them for retry/dead-letter.
-- [ ] 2.3 RED: add CRM transient/config error tests covering retry, `dead`, and `operator_review=true` error JSON. (PR 2b)
-- [ ] 2.4 Create `backend/app/jobs/handlers/crm_sync.py` and modify `backend/app/summarizer.py` to enqueue durable CRM sync with legacy fallback. (PR 2b)
+  - [x] 2.3 RED: add CRM transient/config error tests covering retry, `dead`, and `operator_review=true` error JSON. (PR 2b)
+  - [x] 2.4 Create `backend/app/jobs/handlers/crm_sync.py` and modify `backend/app/summarizer.py` to enqueue durable CRM sync with legacy fallback. (PR 2b)
 
-## Phase 3: Minimal Operator Surface (PR 2)
+## Phase 3: Minimal Operator Surface (PR 2b)
 
-- [ ] 3.1 Add a minimal internal query helper or route for `background_jobs` failed/dead rows, scoped to existing admin/internal patterns.
-- [ ] 3.2 Test that dead CRM and pipeline jobs are queryable with `job_type`, `attempts`, and structured `error` fields for B9.
+  - [x] 3.1 Add a minimal internal query helper for `background_jobs` failed/dead rows (`backend/app/jobs/queries.py`).
+  - [x] 3.2 Test that dead CRM and pipeline jobs are queryable with `job_type`, `attempts`, and structured `error` fields for B9.
 
 ## Phase 4: Gated Transcript Durability (PR 3, Last)
 

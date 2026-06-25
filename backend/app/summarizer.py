@@ -53,6 +53,20 @@ from app.leads.models import Lead, LeadInterestHistory, LeadProfileFact
 
 logger = structlog.get_logger(__name__)
 
+# ---------------------------------------------------------------------------
+# Module-level settings instance and executor import for CRM sync routing.
+# Tests can patch 'app.summarizer.settings' and 'app.summarizer.executor'.
+# ---------------------------------------------------------------------------
+
+from app.core.config import Settings as _Settings  # noqa: E402
+
+settings = _Settings()
+
+# Executor singleton imported at module level so tests can patch it directly.
+# The executor is always importable regardless of ENABLE_JOB_EXECUTOR — the
+# flag governs whether we *use* it, not whether we import it.
+from app.jobs.executor import executor  # noqa: E402
+
 # Terminal states from which no further status transitions are allowed.
 _TERMINAL_STATUSES: frozenset[str] = frozenset({"quoted", "interested", "not_interested"})
 
@@ -1121,38 +1135,65 @@ async def _schedule_crm_sync(
     lead_id: str,
     db: AsyncSession,
 ) -> None:
-    """Dispatch an optional fire-and-forget CRM sync task after savepoint commits.
+    """Dispatch a CRM sync task after the post-call savepoint commits.
+
+    When ENABLE_JOB_EXECUTOR=true: enqueues a durable 'crm_sync' job via the
+    background executor. The job row is persisted in the caller's DB session
+    (same commit as the summarizer savepoint) via executor.enqueue(..., db=db).
+    If the CRM sync fails, the executor retries with backoff and records the
+    error in background_jobs for operator visibility.
+
+    IMPORTANT — durable path propagates enqueue failures: if executor.enqueue()
+    raises (e.g. handler not registered, DB write failure), the exception is
+    NOT swallowed. This ensures the caller sees the failure and can surface it
+    to operators. Silently swallowing enqueue failures in durable mode hides
+    operator-critical errors.
+
+    When ENABLE_JOB_EXECUTOR=false (default): schedules the legacy fire-and-forget
+    asyncio.create_task path (no durability guarantee). Errors on the legacy path
+    are caught and logged — this intentional best-effort behavior is preserved.
 
     This is a generic post-call integration hook — it knows nothing about
     Airtable or any specific CRM adapter. Provider-specific behaviour lives
     inside ``app/integrations/adapters/``.
 
-    Behaviour:
-    - Schedules a background coroutine that opens its OWN DB session and runs
-      ``crm_sync_service.sync_lead`` (CS-2). The caller's ``db`` session is NOT
-      forwarded to the task — it would be closed by the time the fire-and-forget
-      task runs, causing ``sync_lead`` to fail with a closed-session error.
-      This mirrors ``_summarize_in_background`` in app/calls/service.py.
-    - If the client has no ``crm.yaml``, sync_lead returns silently (FM-4).
-    - If the CRM sync task fails internally it logs and swallows the error (CS-5).
-    - This function itself must NEVER raise — any unexpected error is caught here.
-
     Args:
         client_id: Client slug used to locate the client's ``crm.yaml``.
         lead_id: UUID of the lead to push to the CRM.
-        db: Active async DB session of the caller. Intentionally NOT passed to the
-            background task — kept in the signature for backward-compat. The task
-            opens its own independent session.
+        db: Active async DB session of the caller. Used for enqueue INSERT in
+            durable mode (same commit as summarizer savepoint); intentionally
+            NOT passed to the background task in legacy mode (task opens own session).
+
+    Raises:
+        Exception: Any exception from executor.enqueue() in durable mode propagates
+            to the caller. Legacy (flag-off) path swallows exceptions (fire-and-forget).
+
+    Design: openspec/changes/phase-b-background-job-durability/design.md
+    Spec:   durable-post-call-pipeline/spec.md — Requirement: CRM Sync Is Durable
     """
-    try:
-        asyncio.create_task(_run_crm_sync_in_background(client_id, lead_id))
-    except Exception as exc:
-        logger.warning(
-            "crm_sync_dispatch_failed",
-            client_id=client_id,
-            lead_id=lead_id,
-            error=str(exc),
+    if settings.enable_job_executor:
+        # Durable path: enqueue via executor so CRM sync survives restarts.
+        # enqueue() is awaited — job row is inserted in the caller's session
+        # (same commit as the summarizer savepoint).
+        # Exceptions are NOT caught: callers must see enqueue failures in durable
+        # mode so they can surface them to operators.
+        await executor.enqueue(
+            "crm_sync",
+            {"client_id": client_id, "lead_id": lead_id},
+            db=db,
         )
+    else:
+        # Legacy path: fire-and-forget create_task (no durability).
+        # Errors are caught and logged — intentional best-effort behavior.
+        try:
+            asyncio.create_task(_run_crm_sync_in_background(client_id, lead_id))
+        except Exception as exc:
+            logger.warning(
+                "crm_sync_dispatch_failed",
+                client_id=client_id,
+                lead_id=lead_id,
+                error=str(exc),
+            )
 
 
 async def _run_crm_sync_in_background(client_id: str, lead_id: str) -> None:
