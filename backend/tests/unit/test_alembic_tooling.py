@@ -775,7 +775,8 @@ class TestRealMigrationExecution:
         assert len(versions) == 1, f"Expected 1 version, got {versions}"
         # HEAD revision advances as new migrations are added — accept any known Qora revision.
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002"}
+        # PR3 transcript finalization fields: 20260625_0003
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"alembic_version should contain a known Qora revision. "
             f"Got: {versions}. Known: {_KNOWN_REVISIONS}"
@@ -957,7 +958,8 @@ class TestRealMigrationExecution:
         assert versions, "alembic_version is empty after stamp head"
         # HEAD revision advances as new migrations are added — accept any known Qora revision.
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002"}
+        # PR3 transcript finalization fields: 20260625_0003
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"Stamp head did not record a known Qora revision. Got: {versions}. "
             f"Known revisions: {_KNOWN_REVISIONS}"

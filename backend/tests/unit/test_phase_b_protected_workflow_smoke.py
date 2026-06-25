@@ -157,7 +157,8 @@ async def smoke_stamped_db(tmp_path: Path):
     assert row is not None, "alembic_version must be present after stamp"
     # HEAD revision advances as new migrations are added — accept any known Qora revision.
     # Phase B10 (background_jobs) added 20260624_0002 as the new head.
-    _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002"}
+    # PR3 transcript finalization fields: 20260625_0003
+    _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003"}
     assert row[0] in _KNOWN_REVISIONS, (
         f"Expected a known Qora revision as head, got {row[0]!r}. "
         f"Known revisions: {_KNOWN_REVISIONS}"

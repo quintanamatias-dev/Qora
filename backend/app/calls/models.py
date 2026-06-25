@@ -74,6 +74,15 @@ class CallSession(Base):
     agent_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("agents.id"), nullable=True, default=None
     )
+    # PR 3: transcript finalization audit — stamped by transcript_flush_handler
+    # after the call ends. NULL means not yet finalized (call still live or handler pending).
+    # Operators and B9 can inspect these to confirm off-call durability ran.
+    transcript_finalized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    transcript_turn_count: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=None
+    )
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<CallSession id={self.id!r} status={self.status!r}>"

@@ -2,7 +2,7 @@
 
 ## Technical Approach
 
-DB-backed in-process job executor replacing high-risk post-call `asyncio.create_task` fire-and-forget calls. A new `background_jobs` SQLite table stores job lifecycle state. A `JobExecutor` singleton wraps enqueue → execute → retry → dead-letter with exponential backoff. On startup, `executor.recover()` re-enqueues incomplete jobs. Feature flag `ENABLE_JOB_EXECUTOR=false` keeps legacy paths as rollback. Transcript durability is deliberately gated: PR 3 must use a no-delay strategy that does not insert/await one durable job per turn in the live streaming path.
+DB-backed in-process job executor replacing high-risk post-call `asyncio.create_task` fire-and-forget calls. A new `background_jobs` SQLite table stores job lifecycle state. A `JobExecutor` singleton wraps enqueue → execute → retry → dead-letter with exponential backoff. On startup, `executor.recover()` re-enqueues incomplete jobs. Feature flag `ENABLE_JOB_EXECUTOR=false` keeps legacy paths as rollback. Transcript durability is deliberately gated: PR 3 MUST NOT add any new work to live call turn handlers; all new transcript reconciliation/finalization runs before call start, after normal call end, or after cut/disconnect handling.
 
 ## Architecture Decisions
 
@@ -17,7 +17,7 @@ DB-backed in-process job executor replacing high-risk post-call `asyncio.create_
 | Feature flag | `Settings.enable_job_executor: bool = False` | Env-only, no flag | Pydantic-settings validated; call sites check `if settings.enable_job_executor:` with `else:` fallback to raw `create_task` |
 | Error shape | JSON in TEXT column: `{"message": str, "type": str, "operator_review": bool}` | Plain string | Structured for B9 queries; `operator_review` flag distinguishes config errors from transient |
 | Module location | `backend/app/jobs/` package | Flatten into `app/core/` | Keeps executor, models, registry, handlers co-located; mirrors `app/calls/`, `app/scheduler/` pattern |
-| Transcript strategy | Deferred/coalesced transcript durability, reviewed in PR 3 before implementation | Naive per-turn durable enqueue from SSE path | Protects real-time latency and avoids SQLite write pressure during active calls; accepts bounded transcript loss over call delay |
+| Transcript strategy | Off-call transcript reconciliation/finalization in PR 3 | Per-turn durable enqueue/write/buffer work from live SSE path | Protects real-time latency by adding zero new live-call work; accepts bounded transcript loss over call delay |
 
 ## Data Flow
 
@@ -49,18 +49,25 @@ caller (close_session / summarizer)
 ```
 live SSE request
   │
+  ├─ keep today's behavior only
   ├─ use current request/session messages for in-call continuity
-  ├─ DO NOT await transcript DB writes
-  ├─ DO NOT synchronously insert one background_jobs row per turn
-  └─ defer transcript durability to an approved minimal-write strategy
-        ├─ after-call/session flush, or
-        ├─ in-memory/coalesced buffer with best-effort flush, or
-        └─ equivalent non-blocking approach reviewed before coding
+  ├─ DO NOT add executor.enqueue(...)
+  ├─ DO NOT add transcript DB writes
+  ├─ DO NOT add in-memory durability buffers
+  └─ DO NOT add reconciliation/finalization steps
+
+call start / call end / cut-disconnect boundary
+  │
+  └─ run transcript reconciliation/finalization outside the live turn path
+        ├─ compare existing persisted turns or final transcript snapshot
+        ├─ enqueue at most off-call transcript_flush work if executor is enabled
+        └─ retry bounded failures without affecting caller streaming latency
 ```
 
 Tradeoff: this favors voice latency over strict per-turn durability. A crash during
-an active call may lose buffered transcript turns, but it avoids making every caller
-pay SQLite/job enqueue latency while the agent is responding.
+an active call may lose transcript turns not covered by today's behavior, but PR 3
+must not make every caller pay extra SQLite, enqueue, or buffer-update latency while
+the agent is responding.
 
 ### Startup Recovery
 
@@ -98,11 +105,11 @@ crm_sync_handler(payload, db)
 | `backend/app/jobs/handlers/__init__.py` | Create | Package init, register all handlers |
 | `backend/app/jobs/handlers/summarize.py` | Create | Wraps `generate_summary_and_facts` |
 | `backend/app/jobs/handlers/crm_sync.py` | Create | Wraps `crm_sync_service.sync_lead` with error classification |
-| `backend/app/jobs/handlers/transcript_flush.py` | Create | PR 3 only: flushes deferred/coalesced transcript payload after no-delay strategy approval |
+| `backend/app/jobs/handlers/transcript_flush.py` | Create | PR 3 only: handles off-call transcript reconciliation/finalization after normal end or cut/disconnect |
 | `backend/alembic/versions/YYYYMMDD_NNNN_add_background_jobs.py` | Create | Migration: `background_jobs` table + indexes |
 | `backend/app/core/config.py` | Modify | Add `enable_job_executor: bool = False` to Settings |
 | `backend/app/main.py` | Modify | Import executor, call `executor.recover()` in lifespan after init_db, cancel on shutdown |
-| `backend/app/calls/service.py` | Modify | `_schedule_summarize`: check flag and use `executor.enqueue()` or fallback; PR 3 revises `schedule_user_turn_persist` only with an approved non-blocking transcript strategy |
+| `backend/app/calls/service.py` | Modify | `_schedule_summarize`: check flag and use `executor.enqueue()` or fallback; PR 3 may add call-boundary transcript finalization hooks but MUST NOT add work inside live user-turn handlers such as `schedule_user_turn_persist` |
 | `backend/app/summarizer.py` | Modify | `_schedule_crm_sync`: check flag, use `executor.enqueue()` or fallback |
 | `backend/app/core/database.py` | Modify | Add `import app.jobs.models` in `init_db` for ORM registration |
 
@@ -148,7 +155,8 @@ class JobExecutor:
 | Unit | Error classification (ConfigurationError vs generic → correct state) | Mock handler raises, assert `dead` + `operator_review` flag |
 | Unit | Feature flag toggle (executor path vs raw create_task) | Patch `Settings.enable_job_executor`, assert correct dispatch |
 | Unit | Error shape persisted correctly | Assert JSON structure in `error` column after failure |
-| Unit | Transcript no-delay guard | Assert live request path does not await DB writes or insert per-turn durable jobs |
+| Unit | Transcript no-live-work guard | Assert live turn handlers do not add executor enqueue, DB writes, buffers, or per-turn durable jobs |
+| Unit | Off-call transcript finalization | Assert normal end and cut/disconnect boundaries trigger bounded transcript reconciliation/finalization outside live turns |
 | Integration | `executor.recover()`: seed pending/running jobs, recover, verify re-execution | Full DB via `db_engine` fixture, actual executor |
 | Integration | Idempotency: recover same job twice, assert single execution | Track handler call count |
 | Integration | Fresh session per retry: fail attempt 1 via DB error, succeed attempt 2 | Verify independent sessions |
