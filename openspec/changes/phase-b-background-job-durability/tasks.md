@@ -7,7 +7,7 @@
 | Estimated changed lines | 900-1,300 |
 | 400-line budget risk | High |
 | Chained PRs recommended | Yes |
-| Suggested split | PR 1 executor foundation → PR 2 post-call durability → PR 3 gated no-delay transcript durability |
+| Suggested split | PR 1 executor foundation → PR 2 post-call durability → PR 3 off-call transcript reconciliation |
 | Delivery strategy | auto-chain |
 | Chain strategy | stacked-to-main |
 
@@ -22,7 +22,7 @@ Chain strategy: stacked-to-main
 |------|------|-----------|-------|
 | 1 | Durable job table, executor, registry, recovery tests | PR 1 | Foundation; no call-flow behavior change unless flag enabled. |
 | 2 | Post-call summary/lead/scheduling/CRM jobs and error visibility | PR 2 | Depends on PR 1; includes CRM classification tests. |
-| 3 | No-delay transcript/user-turn durability | PR 3 | Final gated review slice; user must review the live-call latency strategy before coding. |
+| 3 | Off-call transcript reconciliation/finalization | PR 3 | Final slice; no new work is allowed in live user-turn handlers. |
 
 ## Phase 1: Executor Foundation (PR 1)
 
@@ -47,12 +47,13 @@ Chain strategy: stacked-to-main
   - [x] 3.1 Add a minimal internal query helper for `background_jobs` failed/dead rows (`backend/app/jobs/queries.py`).
   - [x] 3.2 Test that dead CRM and pipeline jobs are queryable with `job_type`, `attempts`, and structured `error` fields for B9.
 
-## Phase 4: Gated Transcript Durability (PR 3, Last)
+## Phase 4: Off-Call Transcript Durability (PR 3, Last)
 
-- [ ] 4.1 Review gate before coding: choose a no-delay transcript strategy for `backend/app/calls/service.py` that never awaits DB/job writes in the live call path.
-- [ ] 4.2 RED: add tests proving `schedule_user_turn_persist` does not synchronously enqueue one durable job per turn and preserves streaming latency.
-- [ ] 4.3 Create the approved deferred/coalesced transcript persistence path (for example `backend/app/jobs/handlers/transcript_flush.py`) with bounded retry and session-identifiable failures.
+- [x] 4.1 RED: add tests proving `backend/app/calls/service.py::schedule_user_turn_persist` adds no executor enqueue, DB write, buffer mutation, or transcript reconciliation during live turns.
+- [x] 4.2 Add call-boundary transcript reconciliation/finalization hooks in `backend/app/calls/service.py` for normal end and cut/disconnect only.
+- [x] 4.3 Create `backend/app/jobs/handlers/transcript_flush.py` only for off-call transcript finalization, with `max_attempts=2` and session-identifiable failures.
+- [x] 4.4 Add tests proving live turn handlers do not create per-turn durable job rows, while end/cut boundaries may enqueue off-call transcript finalization.
 
 ## Verification
 
-- [ ] 5.1 Run `cd backend && python3 -m pytest tests/ -q` after each PR slice.
+- [x] 5.1 Run `cd backend && python3 -m pytest tests/ -q` after each PR slice.

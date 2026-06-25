@@ -582,8 +582,19 @@ async def _reconcile_session(
     # summarization survives process restarts. The enqueue() call is awaited so
     # the background_jobs row is persisted before the reconcile response is returned.
     # Legacy path (ENABLE_JOB_EXECUTOR=false): fire-and-forget create_task (no durability).
+    #
+    # PR 3: After enqueueing summarize, also enqueue an off-call transcript_flush job.
+    # transcript_flush runs AFTER the live turn path has ended (cut/disconnect boundary).
+    # max_attempts=2: retry once on transient failure, then accept bounded loss (spec).
+    # This call is NOT inside the live SSE turn handler — it is at the reconcile boundary.
     if settings.enable_job_executor:
         await executor.enqueue("summarize", {"session_id": cs.id}, db=session)
+        await executor.enqueue(
+            "transcript_flush",
+            {"session_id": cs.id},
+            max_attempts=2,
+            db=session,
+        )
     else:
         _schedule_summarize(cs.id)
 
@@ -688,8 +699,19 @@ async def close_session(
     #   - executor.enqueue() dispatches the actual handler coroutine as a background
     #     task; the caller does not wait for the handler to complete.
     # Legacy path (ENABLE_JOB_EXECUTOR=false): fire-and-forget create_task (no durability).
+    #
+    # PR 3: Also enqueue off-call transcript_flush at the normal call-end boundary.
+    # max_attempts=2: spec says retry once before accepting bounded loss.
+    # This is NOT in a live turn handler — it runs after flush() confirms the session
+    # is closed and all turns have been persisted via the existing per-turn mechanism.
     if settings.enable_job_executor:
         await executor.enqueue("summarize", {"session_id": session_id}, db=session)
+        await executor.enqueue(
+            "transcript_flush",
+            {"session_id": session_id},
+            max_attempts=2,
+            db=session,
+        )
     else:
         _schedule_summarize(session_id)
 

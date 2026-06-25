@@ -180,10 +180,12 @@ class TestCloseSessionSummarizeRouting:
             async with db_engine.async_session_factory() as db:
                 await close_session(db, session_id=session_id, closed_reason="test")
 
-        me.enqueue.assert_called_once()
-        args = me.enqueue.call_args.args
-        assert args[0] == "summarize"
-        assert args[1]["session_id"] == session_id
+        # PR3 adds a second enqueue call ('transcript_flush'), so assert_called_once()
+        # is no longer valid. Assert the first call is still 'summarize' with correct payload.
+        assert me.enqueue.called, "executor.enqueue must be called at least once"
+        first_call = me.enqueue.call_args_list[0]
+        assert first_call.args[0] == "summarize"
+        assert first_call.args[1]["session_id"] == session_id
 
     @pytest.mark.asyncio
     async def test_flag_off_uses_legacy_schedule(self, db_engine):
@@ -246,10 +248,11 @@ class TestReconcileSessionSummarizeRouting:
                 )
 
         assert result is not None, "_reconcile_session must return the reconciled session"
-        me.enqueue.assert_called_once()
-        args = me.enqueue.call_args.args
-        assert args[0] == "summarize"
-        assert args[1]["session_id"] == result.id
+        # PR3 adds a second enqueue call ('transcript_flush'); assert first call is summarize.
+        assert me.enqueue.called, "executor.enqueue must be called at least once"
+        first_call = me.enqueue.call_args_list[0]
+        assert first_call.args[0] == "summarize"
+        assert first_call.args[1]["session_id"] == result.id
         msched.assert_not_called()
 
     @pytest.mark.asyncio
