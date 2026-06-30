@@ -254,7 +254,20 @@ async def demo_end_call_session(session_id: str, body: DemoSessionEndRequest, re
         )
 
     from app.calls.service import close_session, get_session, get_session_by_elevenlabs_id
+    from app.core import database
     from app.core.database import get_session as db_session
+
+    # Guard: when the DB session factory is not initialized (e.g. a TestClient
+    # that skips lifespan), no session can possibly exist to close. Return a
+    # controlled 404 instead of letting get_session() raise RuntimeError, which
+    # would surface as an uncontrolled 500 on this auth-exempt route.
+    if database.async_session_factory is None:
+        _logger.warning(
+            "demo_end_session_db_not_initialized",
+            session_id=session_id,
+            demo_client_id=demo_client_id,
+        )
+        raise HTTPException(status_code=404, detail="Call session not found")
 
     async with db_session() as db:
         # Primary: resolve by ElevenLabs conversation ID (same as the admin /end route)
@@ -264,46 +277,98 @@ async def demo_end_call_session(session_id: str, body: DemoSessionEndRequest, re
             cs = await get_session(db, session_id)
 
         if cs is None:
-            _logger.warning(
-                "demo_end_session_not_found",
+            # Reconciliation fallback: session_id is an unknown ElevenLabs conversation
+            # ID that was not yet written to the DB (e.g. browser-started demo where
+            # create_session was called before EL returned a conversation_id).
+            #
+            # Security guard (auth-exempt route): body.client_id MUST match the
+            # configured demo client — the browser supplies this from the /demo/context
+            # response. A mismatch means a caller is trying to close a session for a
+            # different tenant via this unauthenticated endpoint.
+            if body.client_id != demo_client_id:
+                _logger.warning(
+                    "demo_end_session_reconcile_client_mismatch",
+                    session_id=session_id,
+                    body_client_id=body.client_id,
+                    demo_client_id=demo_client_id,
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "demo_scope_violation",
+                        "message": (
+                            "body.client_id does not match the configured demo client. "
+                            "Cross-tenant close is not permitted on the demo endpoint."
+                        ),
+                    },
+                )
+
+            if not body.lead_id:
+                _logger.warning(
+                    "demo_end_session_reconcile_missing_lead_id",
+                    session_id=session_id,
+                    demo_client_id=demo_client_id,
+                )
+                raise HTTPException(status_code=404, detail="Call session not found")
+
+            _logger.info(
+                "demo_end_session_reconcile_attempt",
                 session_id=session_id,
                 demo_client_id=demo_client_id,
-            )
-            raise HTTPException(status_code=404, detail="Call session not found")
-
-        # Scope guard: session must belong to the configured demo client.
-        # This prevents the auth-exempt endpoint from closing sessions for other tenants.
-        if cs.client_id != demo_client_id:
-            _logger.warning(
-                "demo_end_session_client_mismatch",
-                session_id=session_id,
-                session_client_id=cs.client_id,
-                demo_client_id=demo_client_id,
-            )
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "demo_scope_violation",
-                    "message": "Session does not belong to the configured demo client.",
-                },
+                lead_id=body.lead_id,
             )
 
-        try:
-            closed_session, _was_already_closed = await close_session(
-                db,
-                session_id=cs.id,
-                closed_reason=body.reason,
-                update_lead_counters=True,
-                reconcile_client_id=body.client_id,
-                reconcile_lead_id=body.lead_id,
-            )
-        except ValueError:
-            raise HTTPException(status_code=404, detail="Call session not found")
+            try:
+                closed_session, _was_already_closed = await close_session(
+                    db,
+                    session_id=session_id,
+                    closed_reason=body.reason,
+                    update_lead_counters=True,
+                    reconcile_client_id=demo_client_id,
+                    reconcile_lead_id=body.lead_id,
+                )
+            except ValueError:
+                _logger.warning(
+                    "demo_end_session_reconcile_failed",
+                    session_id=session_id,
+                    demo_client_id=demo_client_id,
+                    lead_id=body.lead_id,
+                )
+                raise HTTPException(status_code=404, detail="Call session not found")
+        else:
+            # Session found directly — scope guard: must belong to the demo client.
+            # This prevents the auth-exempt endpoint from closing sessions for other tenants.
+            if cs.client_id != demo_client_id:
+                _logger.warning(
+                    "demo_end_session_client_mismatch",
+                    session_id=session_id,
+                    session_client_id=cs.client_id,
+                    demo_client_id=demo_client_id,
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "demo_scope_violation",
+                        "message": "Session does not belong to the configured demo client.",
+                    },
+                )
+
+            try:
+                closed_session, _was_already_closed = await close_session(
+                    db,
+                    session_id=cs.id,
+                    closed_reason=body.reason,
+                    update_lead_counters=True,
+                    reconcile_client_id=body.client_id,
+                    reconcile_lead_id=body.lead_id,
+                )
+            except ValueError:
+                raise HTTPException(status_code=404, detail="Call session not found")
 
     _logger.info(
         "demo_end_session_completed",
         session_id=session_id,
-        resolved_id=cs.id,
+        resolved_id=closed_session.id,
         reason=body.reason,
     )
 
