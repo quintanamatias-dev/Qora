@@ -1,7 +1,7 @@
 # Qora Production Roadmap
 
 > Living document. Update as items are completed or scope changes.
-> Last updated: 2026-06-23
+> Last updated: 2026-06-30
 
 ## Current State
 
@@ -20,9 +20,8 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 **What does NOT work yet:**
 - No real phone calls (outbound or inbound)
 - No public deployment (local + ngrok only)
-- No authentication
 - SQLite only (no production DB)
-- No monitoring or alerting
+- No operator login (API key auth exists; JWT/managed auth planned)
 
 ---
 
@@ -58,7 +57,7 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 | B6 | Webhook signature verification | - [x] | Completed in PR #111: opt-in webhook secret auth for initiation and Custom LLM routes |
 | B7 | CORS lockdown | - [x] | Completed in PR #111: configurable `QORA_ALLOWED_ORIGINS` replaces hardcoded allow-all for production |
 | B8 | Secrets management | - [x] | Completed in PRs #113, #115: startup validation, active CRM credential checks, root `.env` convention, pre-flight script, operator runbook |
-| B9 | Structured logging + error monitoring | - [ ] | Sentry/equivalent, structured log shipping |
+| B9 | Structured logging + error monitoring | - [x] | Completed in PRs #125, #126: correlation middleware (X-Request-ID), canonical error handling, LOG_FORMAT toggle, stdlib bridge, voice/job context binding, optional Sentry (SENTRY_DSN), PII filter, health ?detail=true, zero live-call latency impact |
 | B10 | Background job durability | - [x] | Completed in PRs #119, #120, #121, #122: DB-backed executor, durable summarize/CRM/transcript jobs, feature flag, off-call only |
 
 ---
