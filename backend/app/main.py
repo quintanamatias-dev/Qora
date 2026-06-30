@@ -37,7 +37,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, FastAPI, Request, Response
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 
 # Load ALL .env variables into os.environ so per-client credentials
 # (e.g. QUINTANA_AIRTABLE_API_KEY) are available via os.environ.get().
@@ -53,6 +53,14 @@ from starlette.staticfiles import StaticFiles  # noqa: E402
 
 from app.core.config import Settings  # noqa: E402
 from app.core.logging import setup_logging, get_logger  # noqa: E402
+from app.core.observability import (  # noqa: E402
+    CorrelationMiddleware,
+    handle_exception,
+    handle_http_exception,
+    handle_validation_error,
+    init_sentry,
+)
+from fastapi.exceptions import RequestValidationError  # noqa: E402
 import app.jobs.handlers  # noqa: F401  (side-effect: registers summarize handler)
 
 logger = get_logger(__name__)
@@ -152,8 +160,14 @@ async def lifespan(app: FastAPI):
     settings = Settings()
     app.state.settings = settings
 
-    # 2. Configure logging
-    setup_logging(settings.log_level)
+    # 2. Configure logging (B9: pass log_format from settings)
+    setup_logging(settings.log_level, log_format=settings.log_format)
+
+    # 2a. Initialize optional Sentry error monitoring (B9 PR2).
+    # Gated on SENTRY_DSN — no-op when absent or empty.
+    # Called before DB init so DB errors are captured if Sentry is active.
+    # Design: openspec/changes/phase-b-structured-logging-error-monitoring/design.md#5
+    init_sentry(settings.sentry_dsn)
     logger.info(
         "qora_startup",
         host=settings.host,
@@ -257,14 +271,89 @@ _APP_VERSION = "0.1.0"  # Kept in sync with create_app() FastAPI(version=...)
 
 
 @api_v1_router.get("/health", tags=["meta"])
-async def health_check():
-    """Health check — returns service status, version, and uptime."""
+async def health_check(detail: bool = False):
+    """Health check — returns service status, version, and uptime.
+
+    Without ?detail=true: liveness-only response (fast, no I/O).
+    With ?detail=true: adds DB ping (2s timeout) and job executor status.
+
+    Spec: observability-health-readiness (B9 PR2)
+    Design: openspec/changes/phase-b-structured-logging-error-monitoring/design.md
+    """
     uptime = time.monotonic() - _APP_START_TIME if _APP_START_TIME > 0 else 0.0
-    return {
+    base: dict = {
         "status": "healthy",
         "uptime_seconds": round(uptime, 1),
         "version": _APP_VERSION,
     }
+
+    if not detail:
+        return base
+
+    # ---------------------------------------------------------------------------
+    # Detail mode: DB ping + job executor status
+    # Design decision #6: asyncio.wait_for with 2s timeout for DB ping.
+    # Design decision: health detail is request-time but NOT in the live call path.
+    # ---------------------------------------------------------------------------
+
+    # DB connectivity check
+    db_status: str = "ok"
+    db_error: str | None = None
+
+    try:
+        from app.core import database as db_module
+        from sqlalchemy import text as sa_text
+
+        if db_module.engine is not None:
+            async def _ping() -> None:
+                async with db_module.engine.connect() as conn:  # type: ignore[union-attr]
+                    await conn.execute(sa_text("SELECT 1"))
+
+            await asyncio.wait_for(_ping(), timeout=2.0)
+        else:
+            db_status = "error"
+            db_error = "Database engine not initialized"
+    except asyncio.TimeoutError:
+        db_status = "timeout"
+    except Exception as exc:
+        db_status = "error"
+        # Security: this detailed health view is auth-exempt (load balancers /
+        # k8s probes must reach it without credentials). Raw exception strings
+        # can leak DB driver internals, file paths, or connection details, so we
+        # return a coarse, non-sensitive marker to clients. The full exception is
+        # logged for operators with the bound request_id for correlation.
+        db_error = "unavailable"
+        logger.warning(
+            "health_db_check_failed",
+            error_type=type(exc).__name__,
+            exc_info=True,
+        )
+
+    # Job executor status check.
+    # "running" requires BOTH the feature flag to be enabled AND the executor
+    # singleton to actually be started (recover() ran at startup and shutdown()
+    # has not run). Reporting solely from the config flag would lie if startup
+    # failed before recovery or after a graceful shutdown. The flag still gates
+    # the check because a disabled executor never starts.
+    job_executor_status: str = "stopped"
+    try:
+        from app.jobs.executor import executor as _executor
+
+        settings = Settings()
+        if settings.enable_job_executor and getattr(_executor, "started", False):
+            job_executor_status = "running"
+    except Exception:
+        pass
+
+    result = {
+        **base,
+        "db": db_status,
+        "job_executor": job_executor_status,
+    }
+    if db_error is not None:
+        result["db_error"] = db_error
+
+    return result
 
 
 # Register domain routers
@@ -385,6 +474,23 @@ def create_app(docs_enabled: bool | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # B9 — Register global exception handlers.
+    # FastAPI dispatches to the most-specific handler first:
+    # RequestValidationError → HTTPException → Exception
+    # Registration order here is irrelevant; FastAPI uses MRO for dispatch.
+    # Design: openspec/changes/phase-b-structured-logging-error-monitoring/design.md
+    _new_app.add_exception_handler(RequestValidationError, handle_validation_error)
+    _new_app.add_exception_handler(HTTPException, handle_http_exception)
+    _new_app.add_exception_handler(Exception, handle_exception)
+
+    # B9 — Register CorrelationMiddleware as outermost layer.
+    # add_middleware() inserts at the outermost position, so the LAST call
+    # to add_middleware results in that middleware being the outermost.
+    # CorrelationMiddleware must be outermost so request_id is bound before
+    # any other middleware or handler runs (including RequestLoggingMiddleware).
+    # Raw ASGI implementation ensures contextvars survive StreamingResponse/SSE.
+    _new_app.add_middleware(CorrelationMiddleware)
 
     _new_app.include_router(api_v1_router)
 

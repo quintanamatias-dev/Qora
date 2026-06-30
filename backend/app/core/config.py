@@ -1,5 +1,7 @@
 """QORA application configuration using pydantic-settings."""
 
+from typing import Literal
+
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
@@ -150,6 +152,18 @@ class Settings(BaseSettings):
     # Rollback: set flag back to False; Alembic downgrade drops background_jobs table.
     # Design: openspec/changes/phase-b-background-job-durability/design.md
     enable_job_executor: bool = False
+
+    # ------------------------------------------------------------------
+    # Observability (Phase B9)
+    # ------------------------------------------------------------------
+    # Optional Sentry DSN — when absent or empty, Sentry is never initialized.
+    # PR 2 wires this into sentry_sdk.init(). PR 1 declares the field only so
+    # Settings is the single source of truth from the start.
+    sentry_dsn: str | None = None
+
+    # Log format: "json" (default, machine-parseable) or "console" (human-readable).
+    # Design: Architecture Decision #4 — validated at startup; no free-form strings.
+    log_format: Literal["json", "console"] = "json"
 
     model_config = {
         "env_file": ".env",

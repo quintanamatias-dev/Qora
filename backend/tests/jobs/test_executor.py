@@ -938,6 +938,67 @@ class TestFeatureFlag:
         assert s.enable_job_executor is True
 
 
+class TestExecutorStartedLifecycle:
+    """The executor exposes an actual-runtime `started` flag for health reporting.
+
+    Spec: health must report actual lifecycle, not just the config flag.
+    """
+
+    def test_fresh_executor_is_not_started(self):
+        """A newly constructed executor reports started=False."""
+        from app.jobs.executor import JobExecutor
+
+        ex = JobExecutor()
+        assert ex.started is False
+
+    async def test_recover_marks_executor_started(self):
+        """recover() flips started to True even when there are no jobs to recover."""
+        from app.jobs.executor import JobExecutor
+
+        ex = JobExecutor()
+
+        # Stub get_session so recover() runs without a real DB: yield a session
+        # whose execute() returns an empty result set.
+        class _EmptyResult:
+            def scalars(self):
+                class _S:
+                    def all(self_inner):
+                        return []
+
+                return _S()
+
+        class _FakeSession:
+            async def execute(self, *_a, **_k):
+                return _EmptyResult()
+
+            async def commit(self):
+                return None
+
+        class _FakeSessionCtx:
+            async def __aenter__(self):
+                return _FakeSession()
+
+            async def __aexit__(self, *_a):
+                return False
+
+        with patch("app.jobs.executor.get_session", return_value=_FakeSessionCtx()):
+            recovered = await ex.recover()
+
+        assert recovered == 0
+        assert ex.started is True
+
+    async def test_shutdown_marks_executor_not_started(self):
+        """shutdown() flips started back to False."""
+        from app.jobs.executor import JobExecutor
+
+        ex = JobExecutor()
+        ex._started = True  # simulate a started executor
+
+        await ex.shutdown()
+
+        assert ex.started is False
+
+
 # ===========================================================================
 # Integration — Alembic migration round-trip
 # Spec: design.md — Testing Strategy — Migration: Alembic upgrade/downgrade
@@ -1371,8 +1432,11 @@ class TestLifespanWithExecutorEnabled:
             mock_settings = MagicMock()
             mock_settings.enable_job_executor = True
             mock_settings.log_level = "INFO"
+            mock_settings.log_format = "json"
             mock_settings.host = "127.0.0.1"
             mock_settings.port = 8000
+            # B9 PR2: must be None so init_sentry() is a no-op in lifespan tests.
+            mock_settings.sentry_dsn = None
             MockSettings.return_value = mock_settings
 
             # Stub async_session_factory on the real db module for the seed step.
@@ -1433,8 +1497,11 @@ class TestLifespanWithExecutorEnabled:
             mock_settings = MagicMock()
             mock_settings.enable_job_executor = False  # flag OFF
             mock_settings.log_level = "INFO"
+            mock_settings.log_format = "json"
             mock_settings.host = "127.0.0.1"
             mock_settings.port = 8000
+            # B9 PR2: must be None so init_sentry() is a no-op in lifespan tests.
+            mock_settings.sentry_dsn = None
             MockSettings.return_value = mock_settings
 
             mock_session = MagicMock()

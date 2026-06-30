@@ -30,6 +30,24 @@ router = APIRouter(prefix="/voice", tags=["voice"])
 
 
 # ---------------------------------------------------------------------------
+# B9 — Initiation webhook context binding (observability-correlation spec)
+# ---------------------------------------------------------------------------
+
+
+def _bind_initiation_context(conversation_id: str | None) -> None:
+    """Bind conversation_id to structlog contextvars for the initiation path.
+
+    Called early in initiation_webhook so all downstream log lines inherit
+    conversation_id automatically. Only binds non-None values.
+
+    Design constraint: synchronous, zero I/O latency.
+    Spec: observability-correlation — Voice Session Context Binding
+    """
+    if conversation_id is not None:
+        structlog.contextvars.bind_contextvars(conversation_id=conversation_id)
+
+
+# ---------------------------------------------------------------------------
 # Request / Response schemas
 # ---------------------------------------------------------------------------
 
@@ -96,6 +114,10 @@ async def initiation_webhook(
 
     if not resolved_client_id:
         raise HTTPException(status_code=422, detail="client_id is required")
+
+    # B9 — Bind conversation_id to structlog contextvars early so all downstream
+    # log lines (lead load, memory build, context build) carry it automatically.
+    _bind_initiation_context(resolved_conversation_id)
 
     async with db_session() as session:
         # Load tenant config (if client not found, raise 404)
