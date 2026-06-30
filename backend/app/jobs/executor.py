@@ -23,6 +23,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+import sentry_sdk
 import structlog
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +33,24 @@ from app.jobs.models import BackgroundJob
 from app.jobs.registry import ConfigurationError, get_handler
 
 logger = structlog.get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# B9 — Job context binding (observability-correlation spec)
+# ---------------------------------------------------------------------------
+
+
+def _bind_job_context(job_id: str, job_type: str) -> None:
+    """Bind job_id and job_type to structlog contextvars.
+
+    Called at the start of each _run_job() attempt, before the handler
+    executes, so all log lines emitted by the handler and any functions
+    it calls automatically inherit the job context.
+
+    Design constraint: synchronous, zero I/O latency.
+    Spec: observability-correlation — Job Context Binding
+    """
+    structlog.contextvars.bind_contextvars(job_id=job_id, job_type=job_type)
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +114,15 @@ class JobExecutor:
         self._active_job_ids: set[str] = set()
         # All running asyncio tasks — used by shutdown() to cancel/await.
         self._tasks: set[asyncio.Task] = set()
+        # Lifecycle flag: True once recover() has run at startup, False after
+        # shutdown(). Reflects actual runtime state for health reporting rather
+        # than the static ENABLE_JOB_EXECUTOR config flag.
+        self._started: bool = False
+
+    @property
+    def started(self) -> bool:
+        """Whether the executor has been started (recover() ran, not yet shut down)."""
+        return self._started
 
     async def enqueue(
         self,
@@ -231,157 +259,200 @@ class JobExecutor:
         Each attempt uses a FRESH get_session() context independent of all others.
 
         Design: openspec/changes/phase-b-background-job-durability/design.md#data-flow
+
+        Context hygiene: job_id/job_type are bound to structlog contextvars each
+        attempt (see _bind_job_context below). They are unbound in the finally
+        block so they never leak into the next job executed on the same worker
+        task or into unrelated post-job logging. Binding happens after the
+        pending→running transition; the finally is a no-op when nothing was bound.
         """
-        while True:
-            # Load the current job state with a fresh session
-            async with get_session() as db:
-                job = await db.get(BackgroundJob, job_id)
-                if job is None:
-                    logger.error("job_not_found", job_id=job_id)
-                    self._active_job_ids.discard(job_id)
-                    return
+        try:
+            while True:
+                # Load the current job state with a fresh session
+                async with get_session() as db:
+                    job = await db.get(BackgroundJob, job_id)
+                    if job is None:
+                        logger.error("job_not_found", job_id=job_id)
+                        self._active_job_ids.discard(job_id)
+                        return
 
-                # Guard: do not run dead/completed jobs
-                if job.status in ("completed", "dead"):
-                    self._active_job_ids.discard(job_id)
-                    return
+                    # Guard: do not run dead/completed jobs
+                    if job.status in ("completed", "dead"):
+                        self._active_job_ids.discard(job_id)
+                        return
 
-                # Transition pending → running
-                job.status = "running"
-                job.started_at = datetime.now(timezone.utc)
-                job.attempts += 1
-                current_attempt = job.attempts
-                current_max = job.max_attempts
-                job_type = job.job_type
-                payload_str = job.payload
-                await db.commit()
+                    # Transition pending → running
+                    job.status = "running"
+                    job.started_at = datetime.now(timezone.utc)
+                    job.attempts += 1
+                    current_attempt = job.attempts
+                    current_max = job.max_attempts
+                    job_type = job.job_type
+                    payload_str = job.payload
+                    await db.commit()
 
-            logger.info(
-                "job_started",
-                job_id=job_id,
-                job_type=job_type,
-                attempt=current_attempt,
-            )
+                # B9 — Bind job context to structlog contextvars before handler runs.
+                # Ensures all log lines from the handler and its callees automatically
+                # include job_id and job_type without modifying individual log sites.
+                # Spec: observability-correlation — Job Context Binding
+                _bind_job_context(job_id=job_id, job_type=job_type)
 
-            # Execute handler with a FRESH session (spec: fresh session per retry)
-            payload = json.loads(payload_str)
-            error_obj: dict | None = None
-            success = False
-            is_config_error = False
-
-            try:
-                # get_handler() is inside the try block so that an unregistered
-                # job_type (e.g. handler removed after job was enqueued) is treated
-                # as a ConfigurationError and captured into the error state rather
-                # than propagating as an unhandled exception that leaves the job stuck
-                # in 'running' with _active_job_ids unclean.
-                handler = get_handler(job_type)
-                async with get_session() as handler_db:
-                    await handler(payload, handler_db)
-                success = True
-            except ConfigurationError as exc:
-                is_config_error = True
-                error_obj = {
-                    "message": str(exc),
-                    "type": type(exc).__name__,
-                    "operator_review": True,
-                }
-                logger.warning(
-                    "job_config_error",
+                logger.info(
+                    "job_started",
                     job_id=job_id,
                     job_type=job_type,
                     attempt=current_attempt,
-                    error=str(exc),
-                )
-            except Exception as exc:
-                error_obj = {
-                    "message": str(exc),
-                    "type": type(exc).__name__,
-                    "operator_review": False,
-                }
-                logger.warning(
-                    "job_failed",
-                    job_id=job_id,
-                    job_type=job_type,
-                    attempt=current_attempt,
-                    error=str(exc),
                 )
 
-            # Update job state based on outcome
-            async with get_session() as db:
-                job = await db.get(BackgroundJob, job_id)
-                if job is None:
-                    return
+                # Execute handler with a FRESH session (spec: fresh session per retry)
+                payload = json.loads(payload_str)
+                error_obj: dict | None = None
+                last_exc: BaseException | None = None  # B9 PR2: kept for Sentry dead-letter capture
+                success = False
+                is_config_error = False
 
-                if success:
-                    job.status = "completed"
-                    job.completed_at = datetime.now(timezone.utc)
-                    await db.commit()
-                    logger.info(
-                        "job_completed",
-                        job_id=job_id,
-                        job_type=job_type,
-                        attempts=job.attempts,
-                    )
-                    self._active_job_ids.discard(job_id)
-                    return
-
-                # Failure path: persist error regardless (audit trail)
-                job.error = json.dumps(error_obj)
-
-                # Determine if we should retry or dead-letter
-                #
-                # ConfigurationError policy (design.md):
-                #   - attempt == 1: mark failed, allow 1 more retry
-                #   - attempt >= 2: dead + operator_review=True (already set in error_obj)
-                #
-                # Transient error policy:
-                #   - attempts < max_attempts: failed + retry
-                #   - attempts == max_attempts: dead
-                should_dead_letter = False
-                if is_config_error and current_attempt >= 2:
-                    should_dead_letter = True
-                elif not is_config_error and current_attempt >= current_max:
-                    should_dead_letter = True
-
-                if should_dead_letter:
-                    job.status = "dead"
-                    await db.commit()
-                    logger.error(
-                        "job_dead",
-                        job_id=job_id,
-                        job_type=job_type,
-                        attempts=job.attempts,
-                    )
-                    self._active_job_ids.discard(job_id)
-                    return
-                else:
-                    job.status = "failed"
-                    await db.commit()
-                    logger.info(
-                        "job_will_retry",
+                try:
+                    # get_handler() is inside the try block so that an unregistered
+                    # job_type (e.g. handler removed after job was enqueued) is treated
+                    # as a ConfigurationError and captured into the error state rather
+                    # than propagating as an unhandled exception that leaves the job stuck
+                    # in 'running' with _active_job_ids unclean.
+                    handler = get_handler(job_type)
+                    async with get_session() as handler_db:
+                        await handler(payload, handler_db)
+                    success = True
+                except ConfigurationError as exc:
+                    is_config_error = True
+                    last_exc = exc
+                    error_obj = {
+                        "message": str(exc),
+                        "type": type(exc).__name__,
+                        "operator_review": True,
+                    }
+                    logger.warning(
+                        "job_config_error",
                         job_id=job_id,
                         job_type=job_type,
                         attempt=current_attempt,
-                        next_attempt=current_attempt + 1,
+                        error=str(exc),
+                    )
+                except Exception as exc:
+                    last_exc = exc
+                    error_obj = {
+                        "message": str(exc),
+                        "type": type(exc).__name__,
+                        "operator_review": False,
+                    }
+                    logger.warning(
+                        "job_failed",
+                        job_id=job_id,
+                        job_type=job_type,
+                        attempt=current_attempt,
+                        error=str(exc),
                     )
 
-            # Sleep with exponential backoff before the next attempt
-            delay = calculate_backoff(
-                attempt=current_attempt,
-                base=1.0,
-                max_delay=60.0,
-                jitter=1.0,
-            )
-            logger.debug(
-                "job_backoff",
-                job_id=job_id,
-                delay_seconds=round(delay, 2),
-                next_attempt=current_attempt + 1,
-            )
-            await asyncio.sleep(delay)
+                # Update job state based on outcome
+                async with get_session() as db:
+                    job = await db.get(BackgroundJob, job_id)
+                    if job is None:
+                        return
 
-            # Loop continues: next iteration reads current state and retries
+                    if success:
+                        job.status = "completed"
+                        job.completed_at = datetime.now(timezone.utc)
+                        await db.commit()
+                        logger.info(
+                            "job_completed",
+                            job_id=job_id,
+                            job_type=job_type,
+                            attempts=job.attempts,
+                        )
+                        self._active_job_ids.discard(job_id)
+                        return
+
+                    # Failure path: persist error regardless (audit trail)
+                    job.error = json.dumps(error_obj)
+
+                    # Determine if we should retry or dead-letter
+                    #
+                    # ConfigurationError policy (design.md):
+                    #   - attempt == 1: mark failed, allow 1 more retry
+                    #   - attempt >= 2: dead + operator_review=True (already set in error_obj)
+                    #
+                    # Transient error policy:
+                    #   - attempts < max_attempts: failed + retry
+                    #   - attempts == max_attempts: dead
+                    should_dead_letter = False
+                    if is_config_error and current_attempt >= 2:
+                        should_dead_letter = True
+                    elif not is_config_error and current_attempt >= current_max:
+                        should_dead_letter = True
+
+                    if should_dead_letter:
+                        job.status = "dead"
+                        await db.commit()
+                        logger.error(
+                            "job_dead",
+                            job_id=job_id,
+                            job_type=job_type,
+                            attempts=job.attempts,
+                        )
+
+                        # B9 PR2 — Optional Sentry capture for dead-lettered jobs.
+                        # Spec: observability-sentry — Dead-Letter Job Capture.
+                        # Best-effort: failure here must not interfere with normal flow.
+                        # Only captures when Sentry DSN was configured at startup.
+                        # CRITICAL: this is NOT in the live voice/SSE call path —
+                        # it runs only in background job workers after all retries exhausted.
+                        if sentry_sdk.is_initialized():
+                            try:
+                                with sentry_sdk.push_scope() as scope:
+                                    scope.set_tag("job_id", job_id)
+                                    scope.set_tag("job_type", job_type)
+                                    if error_obj:
+                                        scope.set_extra("error_detail", error_obj)
+                                    sentry_sdk.capture_exception(last_exc)
+                            except Exception:
+                                logger.debug(
+                                    "sentry_dead_letter_capture_failed",
+                                    job_id=job_id,
+                                    exc_info=True,
+                                )
+
+                        self._active_job_ids.discard(job_id)
+                        return
+                    else:
+                        job.status = "failed"
+                        await db.commit()
+                        logger.info(
+                            "job_will_retry",
+                            job_id=job_id,
+                            job_type=job_type,
+                            attempt=current_attempt,
+                            next_attempt=current_attempt + 1,
+                        )
+
+                # Sleep with exponential backoff before the next attempt
+                delay = calculate_backoff(
+                    attempt=current_attempt,
+                    base=1.0,
+                    max_delay=60.0,
+                    jitter=1.0,
+                )
+                logger.debug(
+                    "job_backoff",
+                    job_id=job_id,
+                    delay_seconds=round(delay, 2),
+                    next_attempt=current_attempt + 1,
+                )
+                await asyncio.sleep(delay)
+
+                # Loop continues: next iteration reads current state and retries
+        finally:
+            # Clear job context so it never bleeds into the next job run on
+            # this worker task or into unrelated post-job logging. Safe even
+            # when nothing was bound (e.g. early return before _bind_job_context).
+            structlog.contextvars.unbind_contextvars("job_id", "job_type")
 
     async def recover(self) -> int:
         """Re-enqueue incomplete jobs on startup (crash recovery sweep).
@@ -398,6 +469,9 @@ class JobExecutor:
         Design: openspec/changes/phase-b-background-job-durability/design.md#startup-recovery
         """
         recovered = 0
+        # Mark the executor live: startup wiring invoked recover(), so the
+        # in-process worker infrastructure is now active and accepting tasks.
+        self._started = True
 
         async with get_session() as db:
             result = await db.execute(
@@ -452,6 +526,7 @@ class JobExecutor:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
         self._active_job_ids.clear()
+        self._started = False
         logger.info("job_executor_shutdown")
 
 

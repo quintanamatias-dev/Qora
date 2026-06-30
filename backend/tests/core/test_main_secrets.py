@@ -53,6 +53,7 @@ def _make_mock_settings() -> MagicMock:
     """Return a MagicMock that satisfies the attributes lifespan() reads."""
     mock = MagicMock()
     mock.log_level = "INFO"
+    mock.log_format = "json"
     mock.host = "0.0.0.0"
     mock.port = 8000
     mock.database_url = "sqlite+aiosqlite:///./test.db"
@@ -60,6 +61,10 @@ def _make_mock_settings() -> MagicMock:
     # MagicMock() attributes return truthy MagicMock objects by default, which would
     # cause lifespan to call executor.recover() against a mocked DB and fail.
     mock.enable_job_executor = False
+    # B9 PR2: sentry_dsn must be None so init_sentry() is a no-op in lifespan tests.
+    # Without this, the MagicMock attribute is truthy and sentry_sdk.init() would be
+    # called with a MagicMock DSN, raising BadDsn.
+    mock.sentry_dsn = None
     return mock
 
 

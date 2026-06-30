@@ -60,6 +60,35 @@ from app.voice.session import session_store
 
 QORA_TOOL_DEFINITIONS = TOOL_DEFINITIONS
 
+
+# ---------------------------------------------------------------------------
+# B9 — Voice session context binding (observability-correlation spec)
+# ---------------------------------------------------------------------------
+
+
+def _bind_voice_context(
+    conversation_id: str | None,
+    call_session_id: str | None,
+) -> None:
+    """Bind available voice identifiers to structlog contextvars.
+
+    Called early in _process_custom_llm_request so all downstream log lines
+    (LLM calls, tool execution, transcript persistence) inherit these values.
+
+    Design constraint: must be synchronous and add zero I/O latency to the
+    live voice/SSE turn path. Only non-None values are bound — missing fields
+    are omitted entirely rather than emitted as null.
+
+    Spec: observability-correlation — Voice Session Context Binding
+    """
+    ctx: dict[str, str] = {}
+    if conversation_id is not None:
+        ctx["conversation_id"] = conversation_id
+    if call_session_id is not None:
+        ctx["call_session_id"] = call_session_id
+    if ctx:
+        structlog.contextvars.bind_contextvars(**ctx)
+
 SAFE_CONTEXT_RENDER_FAILURE_PROMPT = (
     "Sos un asistente de voz. Disculpate brevemente y deci que hay un "
     "inconveniente tecnico temporal. No inventes detalles ni prometas acciones."
@@ -808,6 +837,17 @@ async def _process_custom_llm_request(
         conversation_id = f"demo-{uuid.uuid4().hex[:12]}"
         conv_state = session_store.get((client_id, conversation_id))
 
+    # B9 — Bind voice session identifiers to structlog contextvars.
+    # Done immediately after conversation_id is resolved so all downstream log
+    # lines (context loading, LLM calls, tool execution, transcript persist)
+    # inherit call_session_id and conversation_id automatically.
+    # call_session_id is resolved later in the function; bind conversation_id now
+    # and call_session_id once it is known (see session creation block below).
+    _bind_voice_context(
+        conversation_id=conversation_id,
+        call_session_id=None,  # Not yet resolved at this point; re-bound below
+    )
+
     # Declare variables populated by either the cached or per-turn path
     agent = None
     system_content: str = ""
@@ -1263,6 +1303,20 @@ async def _process_custom_llm_request(
         )
         session_id = new_session_id
         conv_state = session_store.get((client_id, conversation_id))
+
+    # B9 — Re-bind voice context now that call_session_id (DB session_id) is known.
+    # The early _bind_voice_context() call above bound conversation_id only;
+    # call_session_id was still None because the DB session had not been
+    # resolved/reused/created yet. Re-bind here, AFTER session resolution and
+    # BEFORE any downstream stream/log work, so every log line emitted by the
+    # SSE generator (LLM calls, tool execution, transcript persistence) carries
+    # both conversation_id and call_session_id. Synchronous, zero added I/O.
+    # When session_id is None (graceful degradation), it is omitted — not bound
+    # as null — per the binding contract.
+    _bind_voice_context(
+        conversation_id=conversation_id,
+        call_session_id=session_id,
+    )
 
     async def generate():
         # Fire-and-forget: persist user turn (CAP-1)
