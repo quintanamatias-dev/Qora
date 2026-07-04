@@ -40,6 +40,20 @@ logger = get_logger(__name__)
 _ACTIVE_TELEPHONY_STATUSES = {"dialing", "ringing", "in_call"}
 
 # ---------------------------------------------------------------------------
+# Background task strong-reference registry (FIX: GC safety for fire-and-forget)
+#
+# CPython only keeps a weak reference to bare asyncio tasks. A task created with
+# asyncio.create_task() that is not retained by the caller can be garbage-collected
+# and silently cancelled before it completes — a critical risk for the post-dial
+# probe, which is the PRIMARY reconciliation path for ambiguous-ReadTimeout incidents.
+#
+# Pattern: a module-level set holds a strong reference for each in-flight task.
+# The done-callback removes the task after completion/cancellation, so the set
+# does not grow unboundedly.
+# ---------------------------------------------------------------------------
+_background_tasks: set[asyncio.Task] = set()
+
+# ---------------------------------------------------------------------------
 # Per-lead asyncio locks — prevent two concurrent dials for the same lead_id.
 #
 # Problem: Without a lock, two coroutines can both pass the DB SELECT (seeing
@@ -694,7 +708,7 @@ def _fire_probe(
     """
     from app.outbound.probe import probe_call_evidence
 
-    asyncio.create_task(
+    task = asyncio.create_task(
         probe_call_evidence(
             session_id=session_id,
             agent_id=agent_id,
@@ -702,6 +716,11 @@ def _fire_probe(
             settings=settings,
         )
     )
+    # Retain a strong reference so CPython's GC cannot cancel the task before
+    # it completes. The done-callback discards it from the set upon completion
+    # or cancellation, preventing unbounded growth.
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 async def _find_in_progress_scheduled_call(
