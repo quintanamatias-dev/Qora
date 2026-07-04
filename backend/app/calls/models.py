@@ -83,6 +83,47 @@ class CallSession(Base):
     transcript_turn_count: Mapped[int | None] = mapped_column(
         Integer, nullable=True, default=None
     )
+    # C2: Outbound telephony metadata — nullable for inbound/pre-C2 sessions.
+    # provider_call_id: ElevenLabs call identifier from the outbound-call API response.
+    provider_call_id: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    # telephony_provider: always "elevenlabs" for now; stored for future multi-provider support.
+    telephony_provider: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    # telephony_status: provider-reported state machine.
+    # dialing → ringing → in_call → completed | no_answer | failed | recurrent_error
+    # NULL for inbound/pre-C2 sessions. "completed" ONLY set by webhook evidence (FAS-safe).
+    telephony_status: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    # telephony_error: human-readable error detail; populated on failure/retry.
+    telephony_error: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    # provider_metadata: safe/allowlisted provider metadata (cost, billed_duration_seconds, etc.).
+    # Only fields in _SAFE_PROVIDER_METADATA_FIELDS are persisted — PII and routing data are stripped.
+    provider_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
+    # session_end_received: True when the Custom LLM session-end webhook has fired for this
+    # outbound session. This is the canonical "session-end evidence" used by the reconciliation
+    # sweep to distinguish "completed" (session-end confirmed) from "stale_in_call" (no evidence).
+    # NULL for inbound/pre-C2 sessions. False for outbound sessions awaiting session-end.
+    # FAS contract: telephony_status='completed' in the sweep REQUIRES session_end_received=True.
+    session_end_received: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
+
+    # C3 — SIP Observability columns (call-observability-reconciliation change)
+    # All five are nullable — existing/inbound rows remain NULL (no data loss on migration).
+    # Populated asynchronously by the post-dial probe or background reconciliation sweep.
+    # These fields must NEVER contain raw SIP bodies, Proxy-Authorization headers,
+    # digest credentials, or SIP URIs containing phone numbers (PII).
+    # Only structured allowlisted fields (spec: Structured-Field-Only SIP Extraction).
+    #
+    # sip_call_id: ElevenLabs/Telnyx SIP Call-ID header value (e.g. "otb_...")
+    sip_call_id: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    # sip_status_code: Final SIP response status code (200, 404, 487, etc.)
+    sip_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    # sip_reason: Final SIP response reason phrase ("OK", "Not Found", "Request Terminated")
+    sip_reason: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    # reconciled_at: UTC timestamp when SIP evidence was successfully captured
+    reconciled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    # reconciliation_source: Which path populated the SIP evidence
+    # Values: "probe" (post-dial background probe) | "sweep" (background reconciliation sweep)
+    reconciliation_source: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<CallSession id={self.id!r} status={self.status!r}>"

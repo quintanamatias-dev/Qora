@@ -556,6 +556,11 @@ async def _reconcile_session(
             lead.call_count = (lead.call_count or 0) + 1
             lead.last_called_at = now
 
+    # C2: Sync telephony_status for outbound sessions via reconciliation path.
+    # Reconciliation is also triggered by a webhook event — same FAS evidence applies.
+    from app.outbound.linkage import update_telephony_status_on_session_end
+    update_telephony_status_on_session_end(cs)
+
     # Merge sibling sessions BEFORE flush (Issue #22)
     merged_ids = await _merge_sibling_sessions(session, completed_session=cs)
 
@@ -680,6 +685,13 @@ async def close_session(
         if lead is not None:
             lead.call_count = (lead.call_count or 0) + 1
             lead.last_called_at = now
+
+    # C2: Sync telephony_status for outbound sessions.
+    # When close_session() is called, it is always from a webhook event (session-end callback).
+    # This is FAS-safe webhook evidence — set telephony_status='completed' for outbound sessions.
+    # Inbound sessions have telephony_status=None and are unaffected.
+    from app.outbound.linkage import update_telephony_status_on_session_end
+    update_telephony_status_on_session_end(cs)
 
     # Merge sibling sessions BEFORE flush so summarizer sees full transcript (Issue #22)
     merged_ids = await _merge_sibling_sessions(session, completed_session=cs)

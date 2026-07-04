@@ -40,8 +40,9 @@ from app.calls.service import (
     get_transcript,
     list_sessions_for_client,
 )
-from app.core.auth import require_api_key
+from app.core.auth import require_api_key, require_webhook_secret
 from app.core.database import get_session as db_session
+from app.outbound.linkage import link_outbound_session_by_webhook
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
@@ -93,6 +94,10 @@ def _session_to_dict(cs) -> dict:
     """Serialize a CallSession ORM object to a response dict.
 
     Includes summary and extracted_facts for CRM use.
+
+    C3 — SIP Observability: includes five nullable SIP fields in all responses.
+    Fields that are NULL are serialized as null (not omitted).
+    Spec: outbound-call-trigger (delta) — GET Call Session — SIP Observability Fields.
     """
     return {
         "id": cs.id,
@@ -110,6 +115,16 @@ def _session_to_dict(cs) -> dict:
         "summary": cs.summary,
         "extracted_facts": cs.extracted_facts,
         "merged_into_session_id": cs.merged_into_session_id,
+        # C3 — SIP Observability fields (nullable — null when not yet reconciled)
+        "sip_call_id": cs.sip_call_id,
+        "sip_status_code": cs.sip_status_code,
+        "sip_reason": cs.sip_reason,
+        "reconciled_at": (
+            cs.reconciled_at.isoformat()
+            if cs.reconciled_at is not None
+            else None
+        ),
+        "reconciliation_source": cs.reconciliation_source,
     }
 
 
@@ -153,16 +168,51 @@ async def list_call_sessions(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/elevenlabs-postcall")
+@router.post("/elevenlabs-postcall", dependencies=[Depends(require_webhook_secret)])
 async def elevenlabs_postcall_webhook(body: ElevenLabsPostCallPayload):
     """Handle ElevenLabs post-call webhook (CAP-2b).
 
+    Protected by require_webhook_secret (WU2 Fix B3). When
+    QORA_WEBHOOK_AUTH_ENABLED=true, the X-Webhook-Secret header is validated
+    before any session mutation. This prevents unauthenticated POST requests
+    from mutating billing/completion state.
+
     - If session is `initiated`: close it with reason="network_drop" and increment Lead.call_count.
     - If session is `completed`: merge transcript turns if ElevenLabs has more data.
+    - Outbound sessions: calls link_outbound_session_by_webhook() with provider_call_id
+      to enable fallback linkage when conversation_id is not yet associated (WU2 Fix B1).
     - Idempotent on session status.
     """
     async with db_session() as db:
         cs = await get_session_by_elevenlabs_id(db, body.conversation_id)
+
+        # WU2 Fix B1 + RE2: attempt outbound linkage via provider_call_id fallback.
+        # If the session is not found by conversation_id (inbound lookup), try
+        # link_outbound_session_by_webhook to find it via provider_call_id.
+        # This fires BEFORE the inbound close_session path to handle outbound sessions
+        # that have not yet had their elevenlabs_conversation_id set.
+        #
+        # RE2 (WU2 re-review): client_id MUST be present in the payload to scope
+        # the provider_call_id fallback to the correct tenant. Without client_id,
+        # any webhook payload could match any tenant's outbound session by provider_call_id
+        # — a cross-tenant linkage risk. We prefer safe no-match over convenience:
+        # if client_id is absent, we skip the provider_call_id fallback entirely.
+        if cs is None and body.provider_call_id is not None and body.client_id is not None:
+            linked = await link_outbound_session_by_webhook(
+                db,
+                conversation_id=body.conversation_id,
+                provider_call_id=body.provider_call_id,
+                client_id=body.client_id,
+            )
+            if linked is not None:
+                logger.info(
+                    "postcall_outbound_linked_via_provider_call_id",
+                    session_id=linked.id,
+                    conversation_id=body.conversation_id,
+                    provider_call_id=body.provider_call_id,
+                    client_id=body.client_id,
+                )
+                return {"status": "ok", "session_id": linked.id, "linked_via": "provider_call_id"}
 
         if cs is None:
             logger.warning(
@@ -260,7 +310,69 @@ async def end_call_session(conversation_id: str, body: EndSessionRequest):
                 reconcile_lead_id=body.lead_id,
             )
         except ValueError:
-            # Session never existed (and reconciliation also failed or was not attempted).
+            # Session not found by conversation_id. Before returning 404, attempt
+            # outbound linkage via provider_call_id if provided (WU2 re-review RE1).
+            #
+            # The EndSessionRequest schema carries provider_call_id for this purpose:
+            # when an outbound CallSession was created with a provider_call_id from
+            # the dialing API response, but the elevenlabs_conversation_id was never
+            # stored (e.g. the conversation-start webhook never fired), the /end route
+            # can still close the session by finding it via provider_call_id.
+            #
+            # No client_id scope is applied here because /end is admin-authenticated
+            # (require_api_key) and the path param is the conversation_id — the
+            # admin API key already establishes operator intent. We still pass
+            # body.client_id if present to enable tenant-aware lookup.
+            if body.provider_call_id is not None:
+                linked = await link_outbound_session_by_webhook(
+                    db,
+                    conversation_id=conversation_id,
+                    provider_call_id=body.provider_call_id,
+                    client_id=body.client_id,  # may be None — linkage still works (broader scope)
+                )
+                if linked is not None:
+                    logger.info(
+                        "end_session_linked_via_provider_call_id",
+                        conversation_id=conversation_id,
+                        provider_call_id=body.provider_call_id,
+                        session_id=linked.id,
+                        reason=body.reason,
+                    )
+                    # Linkage set telephony_status/elevenlabs_conversation_id/session_end_received,
+                    # but the full /end contract (status='completed', ended_at, duration_seconds,
+                    # billable_minutes, closed_reason, lead counters) requires close_session().
+                    # Continue through the normal close path so the response is fully authoritative.
+                    cs, was_already_closed = await close_session(
+                        db,
+                        session_id=linked.id,
+                        closed_reason=body.reason,
+                        update_lead_counters=True,
+                        reconcile_client_id=body.client_id,
+                        reconcile_lead_id=body.lead_id,
+                    )
+                    if was_already_closed:
+                        logger.info(
+                            "end_session_fallback_idempotent",
+                            conversation_id=conversation_id,
+                            session_id=cs.id,
+                            reason=body.reason,
+                        )
+                    else:
+                        logger.info(
+                            "end_session_fallback_closed",
+                            conversation_id=conversation_id,
+                            session_id=cs.id,
+                            reason=body.reason,
+                            duration_seconds=cs.duration_seconds,
+                        )
+                    return EndSessionResponse(
+                        id=cs.id,
+                        status=cs.status,
+                        duration_seconds=cs.duration_seconds,
+                        closed_reason=cs.closed_reason,
+                    )
+
+            # No session found by conversation_id or provider_call_id.
             # Log at warning level so operators can detect integration failures
             # (e.g. ElevenLabs custom-LLM not firing → no CallSession was ever created).
             # The frontend handles this 404 benignly on WebSocket close paths.

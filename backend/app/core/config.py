@@ -135,6 +135,13 @@ class Settings(BaseSettings):
     qora_webhook_auth_enabled: bool = False  # default: off — no webhook auth yet
 
     # CORS origins — declared here for PR #3 (Webhook Auth + CORS).
+    # NOTE (WU2 re-review RE3): outbound_without_webhook_auth_warning is a derived
+    # property (see below). When enable_outbound_calls=True AND
+    # qora_webhook_auth_enabled=False, the application lifespan logs a structured
+    # WARNING at startup. Production/live-call configs MUST set:
+    #   QORA_WEBHOOK_AUTH_ENABLED=true
+    #   QORA_WEBHOOK_SECRET=<strong-random-secret>
+    # before enabling ENABLE_OUTBOUND_CALLS=true.
     # NOT enforced in PR #1 or PR #2. The CORSMiddleware in main.py still uses
     # allow_origins=["*"] until PR #3 wires this setting.
     # comma-separated list; "*" = open (dev default — matches current behaviour)
@@ -150,6 +157,26 @@ class Settings(BaseSettings):
     # Rollback: set flag back to False; Alembic downgrade drops background_jobs table.
     # Design: openspec/changes/phase-b-background-job-durability/design.md
     enable_job_executor: bool = False
+
+    # ------------------------------------------------------------------
+    # Outbound Call Trigger (Phase C2)
+    # ------------------------------------------------------------------
+    # Feature flag: gates ALL real telephony actions. Default False — no calls
+    # are placed and no charges incurred until explicitly enabled by the operator.
+    # Matches enable_job_executor pattern: single operator toggle.
+    # Rollback: set to False (or remove) — immediate; no code change needed.
+    # Migration rollback: alembic downgrade -1 removes new telephony columns.
+    # Design: openspec/changes/phase-c2-outbound-call-trigger/design.md
+    enable_outbound_calls: bool = False
+
+    # ------------------------------------------------------------------
+    # Call SIP Observability (C3 — call-observability-reconciliation)
+    # ------------------------------------------------------------------
+    # Maximum number of unreconciled sessions to process per reconciliation sweep cycle.
+    # Prevents hitting ElevenLabs API rate limits on large backlogs.
+    # Conservative default (10): clears typical backlogs in 2-3 sweep cycles (5-min interval).
+    # Design: openspec/changes/call-observability-reconciliation/design.md — Per-sweep cap.
+    reconciliation_sweep_cap: int = 10
 
     model_config = {
         "env_file": ".env",
@@ -216,6 +243,26 @@ class Settings(BaseSettings):
             )
 
         return self
+
+    @property
+    def outbound_without_webhook_auth_warning(self) -> bool:
+        """True when outbound calls are enabled but webhook auth is disabled.
+
+        This combination means real outbound calls can be placed, but the
+        elevenlabs-postcall and /end webhook endpoints are unauthenticated.
+        An adversary who knows the webhook URL can mark outbound sessions as
+        completed without placing a real call, corrupting billing records.
+
+        Production / live-call configurations MUST set:
+            QORA_WEBHOOK_AUTH_ENABLED=true
+            QORA_WEBHOOK_SECRET=<strong-random-secret>
+        before enabling ENABLE_OUTBOUND_CALLS=true.
+
+        This property is used by the lifespan startup logger to emit a
+        structured WARNING when the risky config is detected.
+        (WU2 re-review RE3)
+        """
+        return self.enable_outbound_calls and not self.qora_webhook_auth_enabled
 
     @model_validator(mode="after")
     def validate_webhook_secret_when_enabled(self) -> "Settings":

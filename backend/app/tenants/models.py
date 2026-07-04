@@ -87,6 +87,13 @@ class Agent(Base):
     soft_timeout_use_llm: Mapped[bool | None] = mapped_column(
         Boolean, nullable=True, default=None
     )
+    # C2: ElevenLabs phone number resource ID for SIP trunk outbound-call API.
+    # Seeded from ELEVENLABS_PHONE_NUMBER_ID env var during initial setup.
+    # Configurable via PATCH /agents/{agent_id}.
+    # NULL on pre-C2 rows — not required for inbound-only agents.
+    elevenlabs_phone_number_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, default=None
+    )
     # ElevenLabs sync tracking columns
     elevenlabs_sync_status: Mapped[str | None] = mapped_column(
         String, nullable=True, default=None

@@ -215,6 +215,37 @@ async def lifespan(app: FastAPI):
     from app.scheduler.service import scheduler_tick
 
     scheduler_task = asyncio.create_task(scheduler_tick())
+
+    # 8. Start outbound telephony reconciliation sweep (C2)
+    # Transitions stale dialing/ringing/in_call sessions older than 30 min
+    # to stale_in_call (no webhook evidence) or completed (webhook evidence).
+    # Only active when ENABLE_OUTBOUND_CALLS is true.
+    outbound_sweeper_task = None
+    if settings.enable_outbound_calls:
+        from app.outbound.sweep import stale_outbound_telephony_sweeper
+
+        outbound_sweeper_task = asyncio.create_task(
+            stale_outbound_telephony_sweeper(settings=settings)
+        )
+        logger.info("outbound_telephony_sweeper_started")
+
+        # RE3 (WU2 re-review): warn operators when outbound is enabled but
+        # webhook auth is not. Unauthenticated webhooks allow any actor who
+        # knows the URL to mark outbound sessions as completed without a real
+        # call — corrupting billing and call-count records.
+        # Production configs MUST set QORA_WEBHOOK_AUTH_ENABLED=true before
+        # enabling ENABLE_OUTBOUND_CALLS=true.
+        if settings.outbound_without_webhook_auth_warning:
+            logger.warning(
+                "outbound_calls_enabled_without_webhook_auth",
+                message=(
+                    "ENABLE_OUTBOUND_CALLS=true but QORA_WEBHOOK_AUTH_ENABLED=false. "
+                    "Webhook endpoints (/calls/elevenlabs-postcall, /calls/{id}/end) "
+                    "are unauthenticated. Set QORA_WEBHOOK_AUTH_ENABLED=true and "
+                    "QORA_WEBHOOK_SECRET before enabling outbound in production."
+                ),
+            )
+
     logger.info("qora_startup_complete")
 
     yield
@@ -230,6 +261,8 @@ async def lifespan(app: FastAPI):
     cleanup_task.cancel()
     sweeper_task.cancel()
     scheduler_task.cancel()
+    if outbound_sweeper_task is not None:
+        outbound_sweeper_task.cancel()
     try:
         await cleanup_task
     except asyncio.CancelledError:
@@ -242,6 +275,11 @@ async def lifespan(app: FastAPI):
         await scheduler_task
     except asyncio.CancelledError:
         pass
+    if outbound_sweeper_task is not None:
+        try:
+            await outbound_sweeper_task
+        except asyncio.CancelledError:
+            pass
     await db_module.close_db()
     logger.info("qora_shutdown_complete")
 
@@ -280,6 +318,7 @@ from app.analytics.router import router as analytics_router  # noqa: E402
 from app.integrations.crm_router import router as crm_router  # noqa: E402
 from app.integrations.crm_config_router import router as crm_config_router  # noqa: E402
 from app.demo.router import router as demo_router  # noqa: E402
+from app.outbound.router import router as outbound_router  # noqa: E402 — C2 outbound trigger
 
 api_v1_router.include_router(clients_router)  # /api/v1/clients — full CRUD
 api_v1_router.include_router(
@@ -295,6 +334,7 @@ api_v1_router.include_router(analytics_router)  # /api/v1/analytics — Issue #3
 api_v1_router.include_router(crm_router)  # /api/v1/clients/{client_id}/crm/import
 api_v1_router.include_router(crm_config_router)  # /api/v1/clients/{client_id}/integrations
 api_v1_router.include_router(demo_router)  # /api/v1/demo — public demo endpoints (Phase B5 PR #2)
+api_v1_router.include_router(outbound_router)  # /api/v1/clients/{id}/leads/{id}/call — C2 outbound
 
 
 # ---------------------------------------------------------------------------

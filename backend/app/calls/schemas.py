@@ -28,6 +28,11 @@ class EndSessionRequest(BaseModel):
     conversation_id: str | None = (
         None  # Optional — must match path param (T30 / REQ-2.2)
     )
+    # provider_call_id: Optional ElevenLabs call identifier for fallback linkage.
+    # When provided, enables link_outbound_session_by_webhook() to find the outbound
+    # CallSession by provider_call_id if conversation_id lookup fails (first-time linkage).
+    # WU2 fix: wires the fallback provider_call_id path through the real /end route.
+    provider_call_id: str | None = None
 
 
 class EndSessionResponse(BaseModel):
@@ -87,6 +92,16 @@ class ElevenLabsPostCallPayload(BaseModel):
     agent_id: str | None = None
     transcript: list[dict] | None = None  # [{role, message}]
     metadata: dict | None = None
+    # provider_call_id: Optional ElevenLabs call identifier.
+    # When present in the webhook payload, passed to link_outbound_session_by_webhook()
+    # to enable provider_call_id fallback linkage (WU2 fix B1).
+    provider_call_id: str | None = None
+    # client_id: Optional tenant identifier.
+    # When present, passed to link_outbound_session_by_webhook() to scope the
+    # provider_call_id fallback lookup to this tenant only — preventing cross-tenant
+    # session linkage (WU2 re-review RE2). When absent, provider_call_id fallback
+    # is NOT attempted (safe no-match preferred over cross-tenant risk).
+    client_id: str | None = None
 
     model_config = {"extra": "allow"}
 
