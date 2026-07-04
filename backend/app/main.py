@@ -229,22 +229,15 @@ async def lifespan(app: FastAPI):
         )
         logger.info("outbound_telephony_sweeper_started")
 
-        # RE3 (WU2 re-review): warn operators when outbound is enabled but
-        # webhook auth is not. Unauthenticated webhooks allow any actor who
-        # knows the URL to mark outbound sessions as completed without a real
-        # call — corrupting billing and call-count records.
-        # Production configs MUST set QORA_WEBHOOK_AUTH_ENABLED=true before
-        # enabling ENABLE_OUTBOUND_CALLS=true.
-        if settings.outbound_without_webhook_auth_warning:
-            logger.warning(
-                "outbound_calls_enabled_without_webhook_auth",
-                message=(
-                    "ENABLE_OUTBOUND_CALLS=true but QORA_WEBHOOK_AUTH_ENABLED=false. "
-                    "Webhook endpoints (/calls/elevenlabs-postcall, /calls/{id}/end) "
-                    "are unauthenticated. Set QORA_WEBHOOK_AUTH_ENABLED=true and "
-                    "QORA_WEBHOOK_SECRET before enabling outbound in production."
-                ),
-            )
+        # Fail-closed enforcement is handled at Settings construction time by the
+        # validate_outbound_requires_webhook_auth model_validator in config.py.
+        # If we reach this point, QORA_WEBHOOK_AUTH_ENABLED=true is guaranteed —
+        # the Settings() call above would have raised ValueError and aborted
+        # startup before the lifespan ran. No advisory warning is needed here.
+        logger.info(
+            "outbound_calls_webhook_auth_verified",
+            message="ENABLE_OUTBOUND_CALLS=true and QORA_WEBHOOK_AUTH_ENABLED=true — webhook auth enforced.",
+        )
 
     logger.info("qora_startup_complete")
 

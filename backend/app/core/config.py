@@ -135,15 +135,9 @@ class Settings(BaseSettings):
     qora_webhook_auth_enabled: bool = False  # default: off — no webhook auth yet
 
     # CORS origins — declared here for PR #3 (Webhook Auth + CORS).
-    # NOTE (WU2 re-review RE3): outbound_without_webhook_auth_warning is a derived
-    # property (see below). When enable_outbound_calls=True AND
-    # qora_webhook_auth_enabled=False, the application lifespan logs a structured
-    # WARNING at startup. Production/live-call configs MUST set:
-    #   QORA_WEBHOOK_AUTH_ENABLED=true
-    #   QORA_WEBHOOK_SECRET=<strong-random-secret>
-    # before enabling ENABLE_OUTBOUND_CALLS=true.
-    # NOT enforced in PR #1 or PR #2. The CORSMiddleware in main.py still uses
-    # allow_origins=["*"] until PR #3 wires this setting.
+    # NOTE: When enable_outbound_calls=True, QORA_WEBHOOK_AUTH_ENABLED=true is
+    # REQUIRED — enforced by the validate_outbound_requires_webhook_auth model_validator.
+    # Startup is aborted (not warned) if this combination is violated.
     # comma-separated list; "*" = open (dev default — matches current behaviour)
     qora_allowed_origins: str = "*"
 
@@ -289,4 +283,42 @@ class Settings(BaseSettings):
                     "Set QORA_WEBHOOK_SECRET to a strong random value before enabling webhook auth. "
                     "Startup is aborted to prevent an insecure configuration from serving requests."
                 )
+        return self
+
+    @model_validator(mode="after")
+    def validate_outbound_requires_webhook_auth(self) -> "Settings":
+        """Fail-closed: outbound calls MUST NOT be enabled without webhook auth.
+
+        Security (HIGH + compounding MEDIUM):
+            When ENABLE_OUTBOUND_CALLS=true and QORA_WEBHOOK_AUTH_ENABLED=false,
+            the /calls/elevenlabs-postcall and /calls/{id}/end webhook endpoints
+            are unauthenticated. An adversary who knows the webhook URL can close
+            outbound sessions, corrupt billing counters, and inject transcript turns
+            without placing a real call.
+
+            Additionally, the unauthenticated fallback path for tenant scoping relies
+            on the attacker-controlled body.client_id field, compounding the risk.
+
+        This validator enforces fail-closed behaviour: the application refuses to start
+        rather than logging a warning and continuing in a degraded-security state.
+
+        To enable outbound calls in production:
+            QORA_WEBHOOK_AUTH_ENABLED=true
+            QORA_WEBHOOK_SECRET=<strong-random-secret>
+            ENABLE_OUTBOUND_CALLS=true
+
+        This fires during Settings.__init__ (pydantic model construction), before the
+        FastAPI lifespan starts, before any router is registered, and before any
+        request can be served.
+        """
+        if self.enable_outbound_calls and not self.qora_webhook_auth_enabled:
+            raise ValueError(
+                "ENABLE_OUTBOUND_CALLS=true requires QORA_WEBHOOK_AUTH_ENABLED=true. "
+                "Unauthenticated webhook endpoints allow any actor who knows the URL to "
+                "close outbound sessions, corrupt billing counters, and inject transcript "
+                "turns without placing a real call. "
+                "Set QORA_WEBHOOK_AUTH_ENABLED=true and QORA_WEBHOOK_SECRET=<strong-random-secret> "
+                "before enabling outbound calls. "
+                "Startup is aborted to prevent this insecure configuration from serving requests."
+            )
         return self

@@ -445,50 +445,40 @@ class TestRE2PostcallPassesClientIdToLinkage:
 
 
 class TestRE3OutboundCallsConfigGuard:
-    """When ENABLE_OUTBOUND_CALLS=true, QORA_WEBHOOK_AUTH_ENABLED should be true.
+    """When ENABLE_OUTBOUND_CALLS=true, QORA_WEBHOOK_AUTH_ENABLED must be true.
 
-    This is a WARNING-level config check: outbound calls will work without
-    webhook auth, but operators must be explicitly warned that the webhook
-    endpoints that mark calls as completed are unauthenticated.
+    Upgraded from WARNING-level to FAIL-CLOSED: the Settings model_validator
+    validate_outbound_requires_webhook_auth now raises ValueError and aborts
+    startup when ENABLE_OUTBOUND_CALLS=true AND QORA_WEBHOOK_AUTH_ENABLED=false.
 
-    Implementation: Settings validator that logs a structured WARNING when
-    ENABLE_OUTBOUND_CALLS=true and QORA_WEBHOOK_AUTH_ENABLED=false.
-    Does NOT fail startup (would break existing devs), but must surface in logs.
+    The previous advisory warning was insufficient — an unauthenticated actor
+    who knows the webhook URL can close outbound sessions, corrupt billing
+    counters, and inject transcript turns without placing a real call.
     """
 
-    def test_settings_exposes_outbound_webhook_auth_warning_state(self):
-        """Settings must expose a way to detect the risky outbound+no-auth config.
+    def test_settings_raises_when_outbound_enabled_without_webhook_auth(self):
+        """Settings construction must raise when outbound is enabled without webhook auth.
 
         GIVEN enable_outbound_calls=True AND qora_webhook_auth_enabled=False
-        WHEN the settings are inspected
-        THEN there is a property or validator that signals this combination is risky
+        WHEN Settings() is constructed
+        THEN ValueError is raised — startup is aborted (fail-closed).
 
-        Implementation: Settings.outbound_without_webhook_auth_warning property
-        returns True when enable_outbound_calls=True AND NOT qora_webhook_auth_enabled.
+        This replaces the old advisory WARNING: the system now refuses to start
+        rather than logging a warning and continuing in a degraded-security state.
         """
+        import pytest
         from pydantic import SecretStr
 
         from app.core.config import Settings
 
-        settings = Settings(
-            openai_api_key=SecretStr("test-openai-key-123456"),
-            elevenlabs_api_key=SecretStr("test-elevenlabs-key-123456"),
-            qora_api_key=SecretStr("test-admin-key"),
-            enable_outbound_calls=True,
-            qora_webhook_auth_enabled=False,
-        )
-
-        # Must expose the risky combination
-        assert hasattr(settings, "outbound_without_webhook_auth_warning"), (
-            "Settings must have outbound_without_webhook_auth_warning property "
-            "to signal the risky outbound+no-auth combination. "
-            f"Available attrs: {[a for a in dir(settings) if 'outbound' in a.lower() or 'webhook' in a.lower()]}"
-        )
-        assert settings.outbound_without_webhook_auth_warning is True, (
-            "outbound_without_webhook_auth_warning must be True when "
-            "enable_outbound_calls=True and qora_webhook_auth_enabled=False. "
-            f"Got: {settings.outbound_without_webhook_auth_warning!r}"
-        )
+        with pytest.raises(ValueError, match="ENABLE_OUTBOUND_CALLS=true requires QORA_WEBHOOK_AUTH_ENABLED=true"):
+            Settings(
+                openai_api_key=SecretStr("test-openai-key-123456"),
+                elevenlabs_api_key=SecretStr("test-elevenlabs-key-123456"),
+                qora_api_key=SecretStr("test-admin-key"),
+                enable_outbound_calls=True,
+                qora_webhook_auth_enabled=False,
+            )
 
     def test_settings_no_warning_when_both_outbound_and_auth_enabled(self):
         """No warning when both outbound and webhook auth are enabled.

@@ -93,6 +93,26 @@ def _inject_test_api_key(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _disable_outbound_calls_in_tests(monkeypatch):
+    """Force ENABLE_OUTBOUND_CALLS=false for the test environment.
+
+    The project .env may have ENABLE_OUTBOUND_CALLS=true (production dev config).
+    Any Settings() construction in tests that does not explicitly pass
+    enable_outbound_calls=False would trigger the fail-closed validator that
+    requires QORA_WEBHOOK_AUTH_ENABLED=true whenever outbound is enabled.
+
+    Tests that need to exercise the outbound+webhook-auth combination must
+    override ENABLE_OUTBOUND_CALLS and QORA_WEBHOOK_AUTH_ENABLED explicitly
+    in their own env setup (see test_fail_closed_outbound_webhook_auth.py for
+    the pattern).
+
+    This fixture prevents the test suite from being broken by a production .env
+    value that is correct for production but unsafe for the test sandbox.
+    """
+    monkeypatch.setenv("ENABLE_OUTBOUND_CALLS", "false")
+
+
+@pytest.fixture(autouse=True)
 def _auto_bypass_api_key(request):
     """Autouse fixture: bypass require_api_key for all tests except auth behavior tests.
 
