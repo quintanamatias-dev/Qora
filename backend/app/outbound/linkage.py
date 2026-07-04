@@ -227,6 +227,22 @@ async def _find_by_provider_call_id(
     return result.scalars().first()
 
 
+# Statuses that represent "no real conversation happened" — a session-end webhook
+# arriving for these is out-of-order, duplicate, or stale and must NOT silently
+# overwrite the diagnostic status with 'completed'.
+# - no_answer:       Call was placed; the recipient never answered.
+# - recurrent_error: Repeated provider-level errors; no conversation occurred.
+#
+# Statuses that are intentionally overwritten by session-end evidence:
+# - failed:          Outbound API reported failure, but a conversation webhook arrived
+#                    anyway (FAS scenario). The webhook is the ground truth.
+# - stale_in_call:   Sweep marked session as stuck; a late webhook resolves it.
+# - ringing/in_call: Normal in-progress → completed transition.
+_TERMINAL_NO_CONVERSATION_STATUSES: frozenset[str] = frozenset(
+    {"no_answer", "recurrent_error"}
+)
+
+
 def update_telephony_status_on_session_end(cs: CallSession) -> CallSession:
     """Update telephony_status to 'completed' when a session-end webhook fires.
 
@@ -239,11 +255,14 @@ def update_telephony_status_on_session_end(cs: CallSession) -> CallSession:
     FAS-safe contract:
     - Only updates telephony_status when the session has an outbound telephony_status
       (i.e., cs.telephony_status is NOT None — inbound sessions have NULL here).
-    - Always sets to 'completed' regardless of previous outbound status: the
-      session-end webhook is definitive evidence that a conversation occurred.
+    - Does NOT overwrite terminal no-conversation statuses (no_answer,
+      recurrent_error): these are more informative than 'completed', and a
+      session-end arriving for them is out-of-order or stale.
+    - Does overwrite failed/stale_in_call: the session-end webhook is definitive
+      evidence that a real conversation occurred regardless of prior provider state.
     - Idempotent: already-completed stays completed.
-    - session_end_received=True is set whenever telephony_status is not None,
-      regardless of previous value — the session-end is idempotent evidence.
+    - session_end_received=True is always set when telephony_status is not None —
+      the webhook fired, even if we preserve the existing terminal status.
 
     Args:
         cs: CallSession ORM instance (may be a mock in tests).
@@ -252,11 +271,21 @@ def update_telephony_status_on_session_end(cs: CallSession) -> CallSession:
         The same cs instance with telephony_status updated (for chaining).
     """
     # Only outbound sessions have a telephony_status. Inbound sessions have NULL.
-    # The webhook firing IS the evidence — update regardless of prior outbound status.
     if cs.telephony_status is not None:
-        # Record session-end evidence regardless of whether telephony_status changes.
-        # The sweep uses session_end_received=True as the safe completion signal.
+        # Always record that the session-end webhook fired — the sweep reads this.
         cs.session_end_received = True
+
+        # Guard: preserve terminal no-conversation statuses. An out-of-order or
+        # duplicate session-end webhook must not silently flip these to 'completed'.
+        if cs.telephony_status in _TERMINAL_NO_CONVERSATION_STATUSES:
+            logger.info(
+                "outbound_session_end_status_preserved",
+                session_id=cs.id,
+                telephony_status=cs.telephony_status,
+                reason="terminal_no_conversation_status_preserved",
+            )
+            return cs
+
         if cs.telephony_status != "completed":
             cs.telephony_status = "completed"
     return cs
