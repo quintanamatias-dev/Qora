@@ -7,11 +7,14 @@
  *   - Calls useLeads hook
  *   - Routes to loading / error / empty / data UI branches
  *   - Delegates rendering to LeadTable (presentational)
+ *
+ * C2: passes clientId to LeadTable so CallNowCell can scope the outbound endpoint.
  */
 
 import { useParams, useNavigate } from 'react-router'
 import { useLeads } from '@/api/hooks'
 import { LeadTable } from './lead-table'
+import type { Lead } from '@/api/types'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // LeadsPage
@@ -42,6 +45,7 @@ export function LeadsPage() {
 
       {/* Leads area — routes to loading / error / empty / data */}
       <LeadsArea
+        clientId={clientId ?? ''}
         loading={isLoading}
         error={isError}
         leads={data ?? null}
@@ -55,16 +59,15 @@ export function LeadsPage() {
 // LeadsArea — UI branch routing
 // ──────────────────────────────────────────────────────────────────────────────
 
-import type { Lead } from '@/api/types'
-
 interface LeadsAreaProps {
+  clientId: string
   loading: boolean
   error: boolean
   leads: Lead[] | null
   onSelectLead: (leadId: string) => void
 }
 
-function LeadsArea({ loading, error, leads, onSelectLead }: LeadsAreaProps) {
+function LeadsArea({ clientId, loading, error, leads, onSelectLead }: LeadsAreaProps) {
   // Loading — show skeleton
   if (loading) {
     return (
@@ -111,7 +114,7 @@ function LeadsArea({ loading, error, leads, onSelectLead }: LeadsAreaProps) {
 
   // Data — render lead table
   if (leads) {
-    return <LeadTable leads={leads} onSelectLead={onSelectLead} />
+    return <LeadTable clientId={clientId} leads={leads} onSelectLead={onSelectLead} />
   }
 
   return null

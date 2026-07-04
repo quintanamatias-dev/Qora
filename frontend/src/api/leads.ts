@@ -6,7 +6,7 @@
  */
 
 import { apiFetch } from './client'
-import type { Lead, CreateLeadPayload, LeadContextPreview, DimensionRollups } from './types'
+import type { Lead, CreateLeadPayload, LeadContextPreview, DimensionRollups, CallTriggerResponse } from './types'
 
 /**
  * GET /api/v1/leads?client_id=<clientId>
@@ -67,5 +67,31 @@ export async function fetchLeadDimensionRollups(
 ): Promise<DimensionRollups> {
   return apiFetch<DimensionRollups>(
     `/api/v1/leads/${encodeURIComponent(leadId)}/dimension-rollups?client_id=${encodeURIComponent(clientId)}`
+  )
+}
+
+/**
+ * POST /api/v1/clients/{clientId}/leads/{leadId}/call
+ * Manually triggers an outbound ElevenLabs/Telnyx call for a lead.
+ *
+ * Guards (enforced by backend):
+ * - 403: ENABLE_OUTBOUND_CALLS flag is off
+ * - 409: concurrent active CallSession or in_progress ScheduledCall
+ * - 422: lead phone number is not valid E.164
+ * - 429: call attempt too soon after last attempt (10-second cooldown)
+ *
+ * On success returns { status, call_session_id }.
+ * On error throws ApiError with the corresponding HTTP status.
+ *
+ * IMPORTANT: This function must NEVER be called without an explicit operator
+ * confirmation step in the UI — real telephony charges apply (~$0.21/min).
+ */
+export async function triggerCall(
+  clientId: string,
+  leadId: string
+): Promise<CallTriggerResponse> {
+  return apiFetch<CallTriggerResponse>(
+    `/api/v1/clients/${encodeURIComponent(clientId)}/leads/${encodeURIComponent(leadId)}/call`,
+    { method: 'POST' }
   )
 }
