@@ -13,7 +13,12 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  vi.runOnlyPendingTimers()
+  // Flush any pending timers inside act so React can process resulting state
+  // updates (e.g. setVisible(false) from a timeout) before the test tears down.
+  // Required with React 19 + vi.useFakeTimers() to avoid act(...) warnings.
+  act(() => {
+    vi.runOnlyPendingTimers()
+  })
   vi.useRealTimers()
 })
 

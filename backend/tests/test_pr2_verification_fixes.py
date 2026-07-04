@@ -348,16 +348,44 @@ class TestFinding2DemoSessionEndRoute:
 
         Approach: test that the route exists and is callable; full scope
         validation is tested via unit test on the route handler.
-        """
-        from app.main import app
-        client = TestClient(app, raise_server_exceptions=False)
 
-        # Call with a fake session ID — should get 404 (not found) or 503 (not configured)
-        # NOT 200 (which would mean we closed a non-existent session without validation)
-        response = client.post(
-            "/api/v1/demo/sessions/nonexistent-session-id/end",
-            json={"reason": "user_hangup"},
-        )
+        Setup: the demo router calls app.core.database.get_session which requires
+        init_db() to have been called. In tests that skip lifespan startup, we
+        patch the DB session and service lookups so the route can execute without
+        a real DB — returning 404 (session not found), which is exactly the
+        isolation-proving response for a nonexistent session.
+        """
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, patch
+
+        from app.main import app
+
+        @asynccontextmanager
+        async def _mock_db_session():
+            """Yield a no-op async DB session — no real DB required."""
+            yield AsyncMock()
+
+        with (
+            # Patch the DB session factory used inside demo/router.py
+            patch("app.core.database.get_session", new=_mock_db_session),
+            # Both lookup paths return None → route must return 404
+            patch(
+                "app.calls.service.get_session_by_elevenlabs_id",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "app.calls.service.get_session",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            client = TestClient(app, raise_server_exceptions=False)
+
+            # Call with a fake session ID — should get 404 (not found) or 503 (not configured)
+            # NOT 200 (which would mean we closed a non-existent session without validation)
+            response = client.post(
+                "/api/v1/demo/sessions/nonexistent-session-id/end",
+                json={"reason": "user_hangup"},
+            )
 
         # Must be a failure indicating session not found — not silently succeed
         assert response.status_code in (404, 503, 422), (

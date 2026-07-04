@@ -84,7 +84,8 @@ def test_apply_migrations_creates_alembic_version_table(tmp_path: Path):
     # HEAD revision advances as new migrations are added — accept any known Qora revision.
     # Baseline: 20241201_0001; Phase B10 background_jobs: 20260624_0002
     # PR3 transcript finalization fields: 20260625_0003
-    _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003"}
+    # C2 outbound telephony: 20260702_0004
+    _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006"}
     assert row[0] in _KNOWN_REVISIONS, (
         f"Expected a known Qora migration version, got {row[0]!r}. "
         f"Known revisions: {_KNOWN_REVISIONS}"
@@ -128,3 +129,91 @@ def test_apply_migrations_is_idempotent(tmp_path: Path):
     apply_migrations(db_url)
     # Second call must be a no-op (already at head)
     apply_migrations(db_url)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# C2 migration contract: telephony_provider must NOT have a server-side default.
+# Existing rows (inbound calls) must retain NULL for all telephony columns.
+# Review blocker CRITICAL-1: server_default='elevenlabs' was mistakenly added.
+# ---------------------------------------------------------------------------
+
+
+def test_c2_migration_telephony_provider_no_server_default(tmp_path: Path):
+    """call_sessions.telephony_provider must NOT have a server default after C2 migration.
+
+    GIVEN a migration-created DB with the C2 outbound telephony migration applied
+    WHEN a call_sessions row is inserted WITHOUT specifying telephony_provider
+    THEN telephony_provider must be NULL (not 'elevenlabs')
+
+    Contract: existing inbound/pre-C2 rows must remain NULL on all telephony columns.
+    A server_default of 'elevenlabs' would misclassify legacy rows as outbound calls.
+    """
+    import sqlite3
+    from tests.helpers.migrations import apply_migrations
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/telephony_default_check.db"
+    apply_migrations(db_url)
+
+    db_path = str(tmp_path / "telephony_default_check.db")
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+
+    # Verify the column exists and has NO default (dflt_value must be NULL)
+    cur.execute("PRAGMA table_info(call_sessions)")
+    cols = {row[1]: row for row in cur.fetchall()}
+    conn.close()
+
+    assert "telephony_provider" in cols, (
+        "call_sessions.telephony_provider must exist after C2 migration"
+    )
+    # PRAGMA table_info row: (cid, name, type, notnull, dflt_value, pk)
+    # dflt_value is index 4
+    dflt_value = cols["telephony_provider"][4]
+    assert dflt_value is None, (
+        f"call_sessions.telephony_provider must have NO server default (NULL), "
+        f"got dflt_value={dflt_value!r}. "
+        "A server_default would misclassify pre-C2 inbound rows as 'elevenlabs' outbound."
+    )
+
+
+def test_c2_migration_all_telephony_columns_nullable_no_defaults(tmp_path: Path):
+    """All 5 call_sessions telephony columns must be nullable with no server defaults.
+
+    GIVEN a migration-created DB
+    WHEN PRAGMA table_info(call_sessions) is queried
+    THEN provider_call_id, telephony_provider, telephony_status, telephony_error,
+         provider_metadata must all be nullable (notnull=0) with dflt_value=NULL.
+    """
+    import sqlite3
+    from tests.helpers.migrations import apply_migrations
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/all_telephony_nulls.db"
+    apply_migrations(db_url)
+
+    db_path = str(tmp_path / "all_telephony_nulls.db")
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(call_sessions)")
+    cols = {row[1]: row for row in cur.fetchall()}
+    conn.close()
+
+    telephony_cols = [
+        "provider_call_id",
+        "telephony_provider",
+        "telephony_status",
+        "telephony_error",
+        "provider_metadata",
+    ]
+    for col_name in telephony_cols:
+        assert col_name in cols, (
+            f"call_sessions.{col_name} must exist after C2 migration"
+        )
+        notnull = cols[col_name][3]
+        dflt_value = cols[col_name][4]
+        assert notnull == 0, (
+            f"call_sessions.{col_name} must be nullable (notnull=0), got notnull={notnull}"
+        )
+        assert dflt_value is None, (
+            f"call_sessions.{col_name} must have no server default, "
+            f"got dflt_value={dflt_value!r}. Pre-C2 rows must remain fully NULL."
+        )
