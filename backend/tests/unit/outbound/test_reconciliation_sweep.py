@@ -31,10 +31,12 @@ _EL_BASE = "https://api.elevenlabs.io/v1"
 _CONVERSATIONS_URL = f"{_EL_BASE}/conversational_ai/conversations"
 
 
-def _make_settings(api_key: str = "test-key", sweep_cap: int = 10):
+def _make_settings(api_key: str = "test-key", sweep_cap: int = 10, max_attempts: int = 5):
     s = MagicMock()
     s.elevenlabs_api_key = SecretStr(api_key)
     s.reconciliation_sweep_cap = sweep_cap
+    # Must be an int — MagicMock auto-attributes are not comparable with >= on ints.
+    s.reconciliation_max_attempts = max_attempts
     return s
 
 
@@ -45,6 +47,7 @@ def _make_unreconciled_session(
     phone: str = "+14155552671",
     started_at: datetime | None = None,
     telephony_error: str | None = None,
+    reconciliation_attempts: int = 0,
 ) -> MagicMock:
     cs = MagicMock()
     cs.id = session_id
@@ -57,6 +60,7 @@ def _make_unreconciled_session(
     cs.sip_status_code = None
     cs.sip_reason = None
     cs.reconciliation_source = None
+    cs.reconciliation_attempts = reconciliation_attempts  # Integer — required for retry-cap comparison
     cs.started_at = started_at or (datetime.now(timezone.utc) - timedelta(minutes=10))
 
     # Lead mock to get phone number

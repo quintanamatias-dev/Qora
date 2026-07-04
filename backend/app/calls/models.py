@@ -123,7 +123,16 @@ class CallSession(Base):
     )
     # reconciliation_source: Which path populated the SIP evidence
     # Values: "probe" (post-dial background probe) | "sweep" (background reconciliation sweep)
+    #         "unreconcilable" (parked after hitting reconciliation_max_attempts)
     reconciliation_source: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+
+    # reconciliation_attempts: number of reconciliation sweep attempts made for this session.
+    # Incremented on each failed sweep attempt (e.g. ElevenLabs list API 404/5xx).
+    # When it reaches settings.reconciliation_max_attempts, the session is parked as
+    # unreconcilable: reconciled_at is set and reconciliation_source='unreconcilable'.
+    # NULL for pre-C3 sessions and sessions that were reconciled on the first attempt.
+    # Default 0 so new unreconciled sessions start at zero without a migration null-check.
+    reconciliation_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<CallSession id={self.id!r} status={self.status!r}>"

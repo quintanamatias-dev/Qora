@@ -177,6 +177,7 @@ async def reconcile_unreconciled_sessions(
     Candidate sessions:
       - telephony_status IN ('failed', 'stale_in_call')
       - reconciled_at IS NULL
+      - reconciliation_attempts < settings.reconciliation_max_attempts
       - Ordered oldest-first (started_at ASC)
       - Limited to settings.reconciliation_sweep_cap per cycle
 
@@ -189,27 +190,38 @@ async def reconcile_unreconciled_sessions(
       3. Write sip_call_id, sip_status_code, sip_reason, reconciled_at='sweep'.
       4. NEVER change telephony_status — reconciliation is read-only for call state.
 
+    Retry cap (resilience fix):
+      On each failed attempt (API error or exception), reconciliation_attempts is
+      incremented. When it reaches settings.reconciliation_max_attempts (default 5),
+      the session is parked: reconciled_at is set with reconciliation_source='unreconcilable'.
+      Parked sessions are excluded from future candidate queries (reconciled_at IS NOT NULL).
+      A distinct ERROR-level log event surfaces parked sessions for operator attention.
+
     API errors on individual sessions are caught and logged — sweep continues.
     The cap (reconciliation_sweep_cap) prevents rate-limit exposure.
 
     Args:
         db: Active async DB session.
-        settings: Application settings with elevenlabs_api_key and reconciliation_sweep_cap.
+        settings: Application settings with elevenlabs_api_key, reconciliation_sweep_cap,
+                  and reconciliation_max_attempts.
 
     Returns:
         Number of sessions successfully reconciled (SIP evidence written).
+        Does NOT count sessions parked as unreconcilable.
     """
     from app.elevenlabs.service import ElevenLabsService
 
     cap = getattr(settings, "reconciliation_sweep_cap", 10)
+    max_attempts = getattr(settings, "reconciliation_max_attempts", 5)
 
-    # Query eligible sessions: failed or stale_in_call with reconciled_at IS NULL.
-    # Oldest-first (started_at ASC) so the longest-waiting sessions are resolved first.
+    # Query eligible sessions: failed or stale_in_call with reconciled_at IS NULL
+    # AND attempts below the cap. Oldest-first so longest-waiting sessions resolve first.
     stmt = (
         select(CallSession)
         .where(
             CallSession.telephony_status.in_(_RECONCILIATION_CANDIDATE_STATUSES),
             CallSession.reconciled_at.is_(None),
+            CallSession.reconciliation_attempts < max_attempts,
         )
         .order_by(CallSession.started_at.asc())
         .limit(cap)
@@ -231,12 +243,39 @@ async def reconcile_unreconciled_sessions(
                 reconciled_count += 1
                 needs_commit = True
         except Exception as exc:
+            # Increment the attempt counter on failure. This is the only mutation
+            # allowed on failed reconciliation — telephony_status is NEVER changed.
+            cs.reconciliation_attempts = (cs.reconciliation_attempts or 0) + 1
+            needs_commit = True
+
             logger.warning(
                 "reconciliation_sweep_session_error",
                 session_id=cs.id,
                 error=str(exc),
                 error_type=type(exc).__name__,
+                reconciliation_attempts=cs.reconciliation_attempts,
+                max_attempts=max_attempts,
             )
+
+            # Park the session when the attempt limit is reached so it is excluded
+            # from future sweep cycles. Surface at ERROR level for operator visibility.
+            if cs.reconciliation_attempts >= max_attempts:
+                cs.reconciled_at = datetime.now(timezone.utc)
+                cs.reconciliation_source = "unreconcilable"
+                logger.error(
+                    "reconciliation_session_parked_unreconcilable",
+                    session_id=cs.id,
+                    telephony_status=cs.telephony_status,
+                    reconciliation_attempts=cs.reconciliation_attempts,
+                    last_error=str(exc),
+                    last_error_type=type(exc).__name__,
+                    note=(
+                        "Session has exhausted reconciliation_max_attempts and will no "
+                        "longer be retried. Operator review required to investigate the "
+                        "ElevenLabs API errors and determine whether SIP evidence exists."
+                    ),
+                )
+
             # Continue to the next candidate — do not let one failure stop the sweep
 
     if needs_commit:

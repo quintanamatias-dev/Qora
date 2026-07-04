@@ -172,6 +172,16 @@ class Settings(BaseSettings):
     # Design: openspec/changes/call-observability-reconciliation/design.md — Per-sweep cap.
     reconciliation_sweep_cap: int = 10
 
+    # Maximum number of reconciliation sweep attempts before a session is parked as
+    # unreconcilable. Prevents infinite retry loops when ElevenLabs list API returns
+    # persistent errors (e.g. 404 on the conversations endpoint).
+    # When a session reaches this limit: reconciled_at is set with
+    # reconciliation_source='unreconcilable' so it is excluded from future sweeps
+    # and remains queryable by operators for investigation.
+    # Default 5: allows recovery from transient outages (5 × 5 min = 25 min window)
+    # while stopping the infinite-retry loop in production incidents.
+    reconciliation_max_attempts: int = 5
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
