@@ -79,7 +79,14 @@ async def build_dynamic_variables(
                 error_msg=str(exc),
             )
 
+    # Resolve lead identity fields — always strings for ElevenLabs dynamic vars
+    lead_id_str: str = str(lead.id) if lead else ""
+    lead_phone: str = lead.phone if lead else ""
+
     return {
+        # Lead identity — allows the agent to resolve CRM context during the call
+        "lead_id": lead_id_str,
+        "lead_phone": lead_phone,
         # Plain names — kept for backward-compat with initiation.py contract
         "lead_name": lead_name,
         "car_make": car_make,

@@ -177,3 +177,61 @@ async def test_build_dynamic_variables_returns_dict_with_required_keys():
 
     for key in EXPECTED_KEYS:
         assert key in vars_, f"Expected key '{key}' missing from dynamic variables"
+
+
+# ---------------------------------------------------------------------------
+# lead_id injection — the agent must receive the CRM lead identity to resolve
+# lead data and personalize the call. ElevenLabs dynamic vars are string pairs.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_build_dynamic_variables_includes_lead_id():
+    """GIVEN a lead with id 'lead-abc-123'
+    WHEN build_dynamic_variables is called
+    THEN the result includes 'lead_id' equal to that id.
+    """
+    from app.outbound.dynamic_vars import build_dynamic_variables
+
+    db = AsyncMock()
+    lead = _make_lead(lead_id="lead-abc-123")
+    agent = _make_agent()
+    client = _make_client()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "app.leads.lead_custom_fields_service.get_all",
+            AsyncMock(return_value={}),
+        )
+        vars_ = await build_dynamic_variables(db=db, lead=lead, agent=agent, client=client)
+
+    assert "lead_id" in vars_, "lead_id must be present in dynamic variables"
+    assert vars_["lead_id"] == "lead-abc-123"
+
+
+@pytest.mark.asyncio
+async def test_build_dynamic_variables_lead_id_is_string():
+    """GIVEN a lead whose id could be a non-string type (UUID, int)
+    WHEN build_dynamic_variables is called
+    THEN lead_id in the result is a str — ElevenLabs dynamic vars require strings.
+    """
+    from app.outbound.dynamic_vars import build_dynamic_variables
+
+    db = AsyncMock()
+    lead = _make_lead()
+    # Simulate an id that is not already a str (e.g. UUID object or int)
+    lead.id = 42  # type: ignore[assignment]
+    agent = _make_agent()
+    client = _make_client()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "app.leads.lead_custom_fields_service.get_all",
+            AsyncMock(return_value={}),
+        )
+        vars_ = await build_dynamic_variables(db=db, lead=lead, agent=agent, client=client)
+
+    assert isinstance(vars_["lead_id"], str), (
+        f"lead_id must be str, got {type(vars_['lead_id'])}"
+    )
+    assert vars_["lead_id"] == "42"
