@@ -41,7 +41,7 @@ from pydantic import SecretStr
 # ---------------------------------------------------------------------------
 
 _EL_BASE = "https://api.elevenlabs.io/v1"
-_CONVERSATIONS_URL = f"{_EL_BASE}/conversational_ai/conversations"
+_CONVERSATIONS_URL = f"{_EL_BASE}/convai/conversations"
 
 
 def _make_settings(
@@ -354,7 +354,7 @@ class TestReconciliationCandidateExclusion:
                 },
             )
         )
-        sip_url = f"{_EL_BASE}/conversational_ai/conversations/conv-below-cap/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-below-cap/sip_messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(
                 200,

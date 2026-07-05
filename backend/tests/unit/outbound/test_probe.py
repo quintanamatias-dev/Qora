@@ -28,7 +28,7 @@ from pydantic import SecretStr
 # ---------------------------------------------------------------------------
 
 _EL_BASE = "https://api.elevenlabs.io/v1"
-_CONVERSATIONS_URL = f"{_EL_BASE}/conversational_ai/conversations"
+_CONVERSATIONS_URL = f"{_EL_BASE}/convai/conversations"
 
 
 def _make_settings(api_key: str = "test-key"):
@@ -125,7 +125,7 @@ class TestProbeSuccessfulCapture:
         )
 
         # Mock: get_sip_messages → SIP messages with Call-ID + final response
-        sip_url = f"{_EL_BASE}/conversational_ai/conversations/conv-match-001/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-match-001/sip_messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(
                 200,
@@ -663,7 +663,7 @@ class TestProbeDetectsSipRoutingFailure:
             )
         )
 
-        sip_url = f"{_EL_BASE}/conversational_ai/conversations/conv-sip-fail-001/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-sip-fail-001/sip_messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(
                 200,
@@ -743,7 +743,7 @@ class TestProbeDetectsSipRoutingFailure:
                 },
             )
         )
-        sip_url = f"{_EL_BASE}/conversational_ai/conversations/conv-busy-001/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-busy-001/sip_messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(
                 200,
@@ -811,7 +811,7 @@ class TestProbeDetectsSipRoutingFailure:
                 },
             )
         )
-        sip_url = f"{_EL_BASE}/conversational_ai/conversations/conv-answered-001/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-answered-001/sip_messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(
                 200,
@@ -852,7 +852,6 @@ class TestProbeDetectsSipRoutingFailure:
 class TestProbeEvidenceUnavailable:
     """Probe handles the case where ElevenLabs conversations API returns 404.
 
-    Known issue: ElevenLabs conversations API may return 404 for very recent calls.
     The probe must not crash. Session is left for the stale sweep (safety net).
     """
 
@@ -863,8 +862,7 @@ class TestProbeEvidenceUnavailable:
         WHEN probe_call_evidence runs
         THEN no exception is raised, reconciled_at remains NULL (sweep picks it up).
 
-        Known issue: ElevenLabs returns 404 for very recent calls on the conversations
-        list endpoint. The probe must fail safely and let the sweep handle it later.
+        The probe must fail safely and let the sweep handle it later.
         """
         from app.outbound.probe import probe_call_evidence
 
@@ -939,7 +937,7 @@ class TestProbeEvidenceUnavailable:
             )
         )
 
-        sip_url = f"{_EL_BASE}/conversational_ai/conversations/conv-sip-404/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-sip-404/sip_messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(404, json={"detail": "Not found"})
         )

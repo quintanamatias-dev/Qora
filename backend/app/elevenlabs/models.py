@@ -138,7 +138,7 @@ class ConversationSummary(BaseModel):
 
 
 class ConversationListResponse(BaseModel):
-    """Response from GET /conversational_ai/conversations."""
+    """Response from GET /convai/conversations."""
 
     conversations: list[ConversationSummary] = []
 

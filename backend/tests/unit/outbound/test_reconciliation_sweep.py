@@ -28,7 +28,7 @@ from pydantic import SecretStr
 # ---------------------------------------------------------------------------
 
 _EL_BASE = "https://api.elevenlabs.io/v1"
-_CONVERSATIONS_URL = f"{_EL_BASE}/conversational_ai/conversations"
+_CONVERSATIONS_URL = f"{_EL_BASE}/convai/conversations"
 
 
 def _make_settings(api_key: str = "test-key", sweep_cap: int = 10, max_attempts: int = 5):
@@ -165,7 +165,7 @@ class TestReconciliationSweepMatchAndWrite:
         )
 
         # Mock: get_sip_messages
-        sip_url = f"{_EL_BASE}/conversational_ai/conversations/conv-sweep-001/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-sweep-001/sip_messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(
                 200,
@@ -240,7 +240,7 @@ class TestReconciliationSweepMatchAndWrite:
             )
         )
 
-        sip_url = f"{_EL_BASE}/conversational_ai/conversations/conv-stale-001/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-stale-001/sip_messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(
                 200,
@@ -413,7 +413,7 @@ class TestReconciliationSweepCapEnforcement:
 
         # Mock SIP messages for each conversation
         for i in range(cap):
-            sip_url = f"{_EL_BASE}/conversational_ai/conversations/conv-cap-{i:03d}/sip_messages"
+            sip_url = f"{_EL_BASE}/convai/conversations/conv-cap-{i:03d}/sip_messages"
             respx.get(sip_url).mock(
                 return_value=httpx.Response(
                     200,
@@ -483,7 +483,7 @@ class TestReconciliationSweepAPIErrorResilience:
 
         respx.get(_CONVERSATIONS_URL).mock(side_effect=conversations_side)
 
-        sip_url = f"{_EL_BASE}/conversational_ai/conversations/conv-ok-001/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-ok-001/sip_messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(
                 200,
@@ -574,7 +574,7 @@ class TestReconciliationSweepAmbiguousTimeout:
             )
         )
 
-        sip_url = f"{_EL_BASE}/conversational_ai/conversations/conv-amb-001/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-amb-001/sip_messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(
                 200,

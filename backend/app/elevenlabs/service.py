@@ -359,7 +359,7 @@ class ElevenLabsService:
     ) -> ConversationListResponse:
         """List recent conversations for an agent within a time window.
 
-        GET /conversational_ai/conversations?agent_id={agent_id}
+        GET /convai/conversations?agent_id={agent_id}
 
         Spec: call-sip-observability — Requirement: ElevenLabs API Client Methods.
 
@@ -379,7 +379,7 @@ class ElevenLabsService:
         """
         api_key = self._settings.elevenlabs_api_key.get_secret_value()
         headers = {"xi-api-key": api_key}
-        url = f"{_ELEVENLABS_BASE_URL}/conversational_ai/conversations"
+        url = f"{_ELEVENLABS_BASE_URL}/convai/conversations"
         params = {"agent_id": agent_id}
 
         response = await _get_with_429_backoff(
@@ -395,7 +395,7 @@ class ElevenLabsService:
     ) -> dict:
         """Get full detail for a specific ElevenLabs conversation.
 
-        GET /conversational_ai/conversations/{conversation_id}
+        GET /convai/conversations/{conversation_id}
 
         Returns raw dict of safe fields. Callers extract what they need.
 
@@ -404,7 +404,7 @@ class ElevenLabsService:
         """
         api_key = self._settings.elevenlabs_api_key.get_secret_value()
         headers = {"xi-api-key": api_key}
-        url = f"{_ELEVENLABS_BASE_URL}/conversational_ai/conversations/{conversation_id}"
+        url = f"{_ELEVENLABS_BASE_URL}/convai/conversations/{conversation_id}"
 
         response = await _get_with_429_backoff(url=url, headers=headers)
         return response.json()
@@ -415,7 +415,7 @@ class ElevenLabsService:
     ) -> SipMessagesResponse:
         """Get SIP message sequence for an ElevenLabs conversation.
 
-        GET /conversational_ai/conversations/{conversation_id}/sip_messages
+        GET /convai/conversations/{conversation_id}/sip_messages
 
         Spec: call-sip-observability — SIP field extraction, allowlist only.
         The SipMessagesResponse Pydantic model enforces the allowlist —
@@ -427,7 +427,7 @@ class ElevenLabsService:
         api_key = self._settings.elevenlabs_api_key.get_secret_value()
         headers = {"xi-api-key": api_key}
         url = (
-            f"{_ELEVENLABS_BASE_URL}/conversational_ai/conversations"
+            f"{_ELEVENLABS_BASE_URL}/convai/conversations"
             f"/{conversation_id}/sip_messages"
         )
 

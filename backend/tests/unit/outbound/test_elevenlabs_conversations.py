@@ -23,7 +23,7 @@ from unittest.mock import MagicMock
 # ---------------------------------------------------------------------------
 
 _EL_BASE = "https://api.elevenlabs.io/v1"
-_CONVERSATIONS_URL = f"{_EL_BASE}/conversational_ai/conversations"
+_CONVERSATIONS_URL = f"{_EL_BASE}/convai/conversations"
 
 
 def _make_settings(api_key: str = "test-xi-key"):
@@ -305,7 +305,7 @@ class TestGetSipMessages:
         from app.elevenlabs.models import SipMessagesResponse
 
         conv_id = "conv-sip-001"
-        sip_url = f"{_EL_BASE}/conversational_ai/conversations/{conv_id}/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/{conv_id}/sip_messages"
 
         respx.get(sip_url).mock(
             return_value=httpx.Response(
@@ -349,7 +349,7 @@ class TestGetSipMessages:
         from app.elevenlabs.service import ElevenLabsService
 
         conv_id = "conv-empty"
-        sip_url = f"{_EL_BASE}/conversational_ai/conversations/{conv_id}/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/{conv_id}/sip_messages"
 
         respx.get(sip_url).mock(
             return_value=httpx.Response(200, json={"sip_messages": []})
@@ -372,7 +372,7 @@ class TestGetSipMessages:
         from app.elevenlabs.service import ElevenLabsService
 
         conv_id = "conv-not-found"
-        sip_url = f"{_EL_BASE}/conversational_ai/conversations/{conv_id}/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/{conv_id}/sip_messages"
 
         respx.get(sip_url).mock(
             return_value=httpx.Response(404, json={"detail": "not found"})
@@ -392,7 +392,7 @@ class TestGetSipMessages:
         from app.elevenlabs.service import ElevenLabsService
 
         conv_id = "conv-rate-limited"
-        sip_url = f"{_EL_BASE}/conversational_ai/conversations/{conv_id}/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/{conv_id}/sip_messages"
 
         call_count = {"n": 0}
 
@@ -424,7 +424,7 @@ class TestGetConversationDetail:
         from app.elevenlabs.service import ElevenLabsService
 
         conv_id = "conv-detail-001"
-        detail_url = f"{_EL_BASE}/conversational_ai/conversations/{conv_id}"
+        detail_url = f"{_EL_BASE}/convai/conversations/{conv_id}"
 
         respx.get(detail_url).mock(
             return_value=httpx.Response(
@@ -454,7 +454,7 @@ class TestGetConversationDetail:
         from app.elevenlabs.service import ElevenLabsService
 
         conv_id = "conv-error"
-        detail_url = f"{_EL_BASE}/conversational_ai/conversations/{conv_id}"
+        detail_url = f"{_EL_BASE}/convai/conversations/{conv_id}"
 
         respx.get(detail_url).mock(
             return_value=httpx.Response(500, json={"error": "internal error"})
