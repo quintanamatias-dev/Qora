@@ -9,7 +9,7 @@ client_id + lead_id.
 An "orphan" session is defined as:
   - outbound (telephony_status IS NOT NULL)
   - no elevenlabs_conversation_id (never linked)
-  - non-terminal telephony_status (dialing, ringing, in_call, failed, stale_in_call)
+  - non-terminal telephony_status (dialing, ringing, in_call, failed, stale_in_call, no_answer)
   - created within the last 10 minutes
 
 Safety contracts verified:
