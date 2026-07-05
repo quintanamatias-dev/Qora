@@ -463,6 +463,12 @@ async def _run_summarizer(session_id: str, db: AsyncSession, *, durable: bool = 
                 await _upsert_call_analysis_failed(
                     db, _session_id, _lead_id, _client_id, error_msg
                 )
+            # Durably commit the failure marker BEFORE the potential re-raise below.
+            # The begin_nested() savepoint alone is not durable: on the durable path
+            # the re-raise propagates to the outer get_session(), which rolls back the
+            # transaction and would undo the failure marker. Committing here persists
+            # it regardless of whether we re-raise.
+            await db.commit()
         if durable:
             # Durable path: re-raise so the executor records the failure and applies
             # retry/dead-letter. The failed-analysis marker is already persisted above.

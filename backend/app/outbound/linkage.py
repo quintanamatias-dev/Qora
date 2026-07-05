@@ -173,7 +173,15 @@ async def link_outbound_session_by_webhook(
     if cs.elevenlabs_conversation_id is None:
         cs.elevenlabs_conversation_id = conversation_id
 
-    # Mark completed — webhook evidence is the ONLY path to this status
+    # Mark completed — webhook evidence is the ONLY path to this status.
+    #
+    # Intentional contradiction with update_telephony_status_on_session_end():
+    # that guard PRESERVES no_answer (in _TERMINAL_NO_CONVERSATION_STATUSES),
+    # but the orphan-linkage path here OVERRIDES no_answer → completed. This is
+    # deliberate: reaching this point means a post-call webhook carried a real
+    # conversation_id for a session the probe had classified as no_answer. The
+    # webhook is stronger evidence that a conversation occurred than the probe's
+    # earlier no_answer classification, so we upgrade the status.
     cs.telephony_status = "completed"
 
     # Record that the session-end webhook fired (sweep evidence)
@@ -271,7 +279,7 @@ async def _find_orphan_outbound_session(
 
     An "orphan" session is an outbound session with no elevenlabs_conversation_id
     that is stuck in a non-terminal telephony_status (dialing, ringing, in_call,
-    failed, or stale_in_call), created within the last N minutes.
+    failed, stale_in_call, or no_answer), created within the last N minutes.
 
     This fallback fires when the ElevenLabs outbound API timed out and Qora never
     received the conversation_id in the API response. The post-call webhook arrives
@@ -284,8 +292,11 @@ async def _find_orphan_outbound_session(
     - Only matches sessions WITHOUT elevenlabs_conversation_id (truly orphan)
     - Time-bounded to prevent matching ancient sessions
     - Returns the MOST RECENT match (ORDER BY started_at DESC LIMIT 1)
-    - Only matches non-terminal statuses (not completed, not no_answer, not
-      recurrent_error) — terminal sessions do not need linking
+    - Matches non-terminal statuses plus no_answer (not completed, not
+      recurrent_error) — completed and recurrent_error sessions do not need
+      linking. no_answer IS included because the probe may set it before the
+      post-call webhook arrives with the conversation_id; the webhook evidence
+      of a real conversation supersedes the probe's no_answer classification.
 
     Args:
         db: Active async DB session.
