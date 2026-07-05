@@ -27,6 +27,7 @@ import { Button } from '@/design/components/button'
 import { deriveNextAction } from './next-action'
 import { triggerCall } from '@/api/leads'
 import { ApiError } from '@/api/client'
+import { parseUTC } from '@/lib/parse-utc'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Props
@@ -108,7 +109,7 @@ function resolveTriggerFailureMessage(result: CallTriggerResponse): string {
 export function formatLastCalled(isoOrNull: string | null): string {
   if (!isoOrNull) return 'Never'
   try {
-    return new Date(isoOrNull).toLocaleDateString('en-US', {
+    return parseUTC(isoOrNull).toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',

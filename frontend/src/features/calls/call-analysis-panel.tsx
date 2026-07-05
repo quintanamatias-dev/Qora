@@ -22,6 +22,7 @@ import type { CallAnalysis } from '@/api/types'
 import { resolveLabel } from '@/config/dimension-labels'
 import { Badge } from '@/design/components/badge'
 import { Card } from '@/design/components/card'
+import { parseUTC } from '@/lib/parse-utc'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Classification → badge status mapping
@@ -644,7 +645,7 @@ function AuditSection({ analysis }: { analysis: CallAnalysis }) {
           <div>
             <span className="text-xs text-ink-3">Analyzed at: </span>
             <span className="text-xs text-ink">
-              {new Date(analysis.analyzed_at).toLocaleString()}
+              {parseUTC(analysis.analyzed_at).toLocaleString()}
             </span>
           </div>
         </div>
