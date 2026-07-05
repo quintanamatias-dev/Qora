@@ -245,6 +245,16 @@ async def _run_summarizer(session_id: str, db: AsyncSession, *, durable: bool = 
     wrapped in a savepoint (nested transaction).  If ANY write fails, the savepoint
     rolls back and NO partial data is committed.
 
+    Transaction lifecycle fix (production bug — WAL checkpoint staleness):
+    The LLM call (10-60 s) must NOT hold an open DB transaction. After all data
+    is read, the read transaction is explicitly closed via ``await db.rollback()``
+    before the LLM call. SQLAlchemy's lazy transaction model opens a new
+    transaction automatically when the first write operation runs after the LLM
+    call completes, so no explicit ``BEGIN`` is needed.
+
+    _schedule_crm_sync is wrapped in its own try/except so a CRM-enqueue failure
+    does NOT roll back the already-committed analysis savepoint (root cause 2 fix).
+
     Args:
         session_id: UUID of the call session to summarize.
         db:         Active async DB session.
@@ -254,6 +264,11 @@ async def _run_summarizer(session_id: str, db: AsyncSession, *, durable: bool = 
                     When False (default — legacy fire-and-forget path), exceptions
                     are swallowed after writing the marker (original behavior).
     """
+    # ── PHASE 1: READ ────────────────────────────────────────────────────────
+    # Load all data needed for the LLM call. The DB session is active here.
+    # After this phase we close the transaction to avoid holding it open during
+    # the 10-60 s LLM call (WAL checkpoint staleness bug).
+
     # Load transcript turns
     turns_result = await db.execute(
         select(TranscriptTurn)
@@ -286,6 +301,12 @@ async def _run_summarizer(session_id: str, db: AsyncSession, *, durable: bool = 
     # the record shows that analysis was attempted but failed.
     user_turns = sum(1 for t in turns if t.role == "user")
     agent_turns = sum(1 for t in turns if t.role == "agent")
+
+    # Snapshot plain scalar attributes we'll need after the session transaction
+    # closes. These are primitive values — safe to use after db.rollback().
+    _session_id = cs.id
+    _lead_id = cs.lead_id
+    _client_id = cs.client_id
 
     # qora-interest-pipeline: Load previous interest_level from Lead for 70/30 formula
     previous_interest_level: int | None = None
@@ -396,6 +417,15 @@ async def _run_summarizer(session_id: str, db: AsyncSession, *, durable: bool = 
                 getattr(client_row, "analysis_language", "Spanish") or "Spanish"
             )
 
+    # ── CLOSE READ TRANSACTION before the LLM call ───────────────────────────
+    # Rolling back releases any implicit read transaction without discarding data
+    # (nothing was written). This prevents the SQLite WAL checkpoint from making
+    # the transaction stale while the LLM call is in-flight (10-60 s).
+    # SQLAlchemy opens a new transaction lazily on the next DB write.
+    await db.rollback()
+
+    # ── PHASE 2: LLM CALL (no open DB transaction) ───────────────────────────
+
     try:
         summary, facts = await _call_gpt_summarize(
             transcript_text,
@@ -403,7 +433,7 @@ async def _run_summarizer(session_id: str, db: AsyncSession, *, durable: bool = 
             current_profile_facts=current_profile_facts,
             current_misc_notes=current_misc_notes,
             current_lead_data=current_lead_data,
-            has_lead=bool(cs.lead_id),
+            has_lead=bool(_lead_id),
             lead_snapshot=lead_snapshot,
             client_rules=client_rules,
             analysis_language=analysis_language,
@@ -416,22 +446,46 @@ async def _run_summarizer(session_id: str, db: AsyncSession, *, durable: bool = 
             session_id=session_id,
             error=error_msg,
         )
-        async with db.begin_nested():
-            cs.total_user_turns = user_turns
-            cs.total_agent_turns = agent_turns
-            # DEPRECATED: cs.extracted_facts — use call_analyses table instead
-            cs.extracted_facts = {
-                "_analysis_status": "failed",
-                "_analysis_error": error_msg,
-            }
-            # ★ NEW: Write CallAnalysis failure marker (analysis v2 — same savepoint)
-            await _upsert_call_analysis_failed(
-                db, cs.id, cs.lead_id, cs.client_id, error_msg
-            )
+        # Re-load the CallSession ORM object in the new (post-rollback) transaction
+        # so we can write the failure marker. The rollback above closed the old
+        # transaction; db.get() here opens a fresh one.
+        cs_for_failure = await db.get(CallSession, _session_id)
+        if cs_for_failure is not None:
+            async with db.begin_nested():
+                cs_for_failure.total_user_turns = user_turns
+                cs_for_failure.total_agent_turns = agent_turns
+                # DEPRECATED: cs.extracted_facts — use call_analyses table instead
+                cs_for_failure.extracted_facts = {
+                    "_analysis_status": "failed",
+                    "_analysis_error": error_msg,
+                }
+                # ★ NEW: Write CallAnalysis failure marker (analysis v2 — same savepoint)
+                await _upsert_call_analysis_failed(
+                    db, _session_id, _lead_id, _client_id, error_msg
+                )
+            # Durably commit the failure marker BEFORE the potential re-raise below.
+            # The begin_nested() savepoint alone is not durable: on the durable path
+            # the re-raise propagates to the outer get_session(), which rolls back the
+            # transaction and would undo the failure marker. Committing here persists
+            # it regardless of whether we re-raise.
+            await db.commit()
         if durable:
             # Durable path: re-raise so the executor records the failure and applies
             # retry/dead-letter. The failed-analysis marker is already persisted above.
             raise
+        return
+
+    # ── PHASE 3: WRITE (fresh transaction after LLM call) ────────────────────
+
+    # Re-load the CallSession ORM object in the new transaction. The ORM instance
+    # from before db.rollback() must not be used for writes — it belongs to the
+    # expired read transaction. db.get() here opens a fresh implicit transaction.
+    cs = await db.get(CallSession, _session_id)
+    if cs is None:
+        logger.error(
+            "summarizer_session_disappeared_after_llm",
+            session_id=session_id,
+        )
         return
 
     # ★ Wrap ALL persistence in a single savepoint — guarantees atomicity.
@@ -452,15 +506,15 @@ async def _run_summarizer(session_id: str, db: AsyncSession, *, durable: bool = 
 
         # Merge into Lead FIRST — _merge_facts_into_lead updates facts["data_corrections"]
         # to the serializable list-of-dicts audit result before we persist extracted_facts.
-        if cs.lead_id:
+        if _lead_id:
             await _merge_facts_into_lead(
                 db,
-                cs.lead_id,
+                _lead_id,
                 summary,
                 facts,
                 session_id=cs.id,
                 corrections_axis=_corrections_axis,
-                client_id=cs.client_id,
+                client_id=_client_id,
             )
 
         # DEPRECATED: cs.extracted_facts — use call_analyses table instead.
@@ -468,21 +522,33 @@ async def _run_summarizer(session_id: str, db: AsyncSession, *, durable: bool = 
         cs.extracted_facts = facts
 
         # ★ NEW: Dual-write to CallAnalysis (analysis v2 — same savepoint, atomic)
-        await _upsert_call_analysis(db, cs.id, cs.lead_id, cs.client_id, summary, facts)
+        await _upsert_call_analysis(db, cs.id, _lead_id, _client_id, summary, facts)
 
         # Auto-schedule follow-up call if eligible (Phase 6)
-        if cs.lead_id and cs.client_id:
+        if _lead_id and _client_id:
             await _auto_schedule_if_needed(db, cs, facts)
 
     # Fire-and-forget CRM sync hook (Phase 3 — airtable-crm-integration).
     # Only dispatched after the savepoint commits successfully (CS-1).
     # _schedule_crm_sync handles config-missing no-op internally (FM-4).
-    if cs.lead_id and cs.client_id:
-        await _schedule_crm_sync(
-            client_id=cs.client_id,
-            lead_id=cs.lead_id,
-            db=db,
-        )
+    #
+    # Wrapped in its own try/except so a CRM-enqueue failure does NOT roll back
+    # the already-committed analysis savepoint (root cause 2 fix).
+    if _lead_id and _client_id:
+        try:
+            await _schedule_crm_sync(
+                client_id=_client_id,
+                lead_id=_lead_id,
+                db=db,
+            )
+        except Exception as crm_exc:
+            logger.warning(
+                "summarizer_crm_sync_enqueue_failed",
+                session_id=session_id,
+                lead_id=_lead_id,
+                client_id=_client_id,
+                error=str(crm_exc),
+            )
 
     logger.info(
         "summarizer_complete",

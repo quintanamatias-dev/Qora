@@ -9,7 +9,7 @@ client_id + lead_id.
 An "orphan" session is defined as:
   - outbound (telephony_status IS NOT NULL)
   - no elevenlabs_conversation_id (never linked)
-  - non-terminal telephony_status (dialing, ringing, in_call, failed, stale_in_call)
+  - non-terminal telephony_status (dialing, ringing, in_call, failed, stale_in_call, no_answer)
   - created within the last 10 minutes
 
 Safety contracts verified:
@@ -17,7 +17,7 @@ Safety contracts verified:
   - Lead-scoped (lead_id must match — no cross-lead)
   - Does NOT match sessions with elevenlabs_conversation_id already set
   - Does NOT match sessions older than the time window
-  - Does NOT match terminal statuses (completed, no_answer, recurrent_error)
+  - Does NOT match terminal statuses (completed, recurrent_error)
   - Returns most recent when multiple orphans exist
   - Postcall webhook extracts cicd from payload and calls linkage
 """
@@ -187,7 +187,7 @@ class TestFindOrphanOutboundSession:
         """Does NOT match sessions in terminal status 'completed'.
 
         The DB mock returns None to simulate the SQL filter excluding
-        completed/no_answer/recurrent_error statuses.
+        completed/recurrent_error statuses.
         """
         from app.outbound.linkage import _find_orphan_outbound_session
 
@@ -199,7 +199,7 @@ class TestFindOrphanOutboundSession:
 
         assert result is None, (
             "_find_orphan_outbound_session must not match terminal statuses "
-            "(completed, no_answer, recurrent_error are excluded by SQL). "
+            "(completed, recurrent_error are excluded by SQL). "
             f"Got: {result!r}"
         )
 
@@ -308,6 +308,39 @@ class TestFindOrphanOutboundSession:
                 f"_find_orphan_outbound_session must match status={status!r}. "
                 f"Got: {result!r}"
             )
+
+    @pytest.mark.asyncio
+    async def test_matches_no_answer_orphan_session(self):
+        """Matches a no_answer orphan session waiting for late webhook linkage.
+
+        GIVEN an outbound session with telephony_status='no_answer' and
+              no elevenlabs_conversation_id (probe classified it no_answer
+              before the post-call webhook arrived with the conversation_id)
+        WHEN _find_orphan_outbound_session is called
+        THEN the session IS returned — no_answer is an orphan-eligible status
+             because webhook evidence of a real conversation supersedes the
+             probe's earlier no_answer classification.
+        """
+        from app.outbound.linkage import _find_orphan_outbound_session
+
+        orphan = _make_outbound_session(
+            telephony_status="no_answer",
+            client_id="client-a",
+            lead_id="lead-001",
+            elevenlabs_conversation_id=None,
+            started_at=_utcnow() - timedelta(minutes=4),
+        )
+        db = _make_db_returning(orphan)
+
+        result = await _find_orphan_outbound_session(
+            db, client_id="client-a", lead_id="lead-001"
+        )
+
+        assert result is orphan, (
+            "_find_orphan_outbound_session must match a no_answer orphan session "
+            "(probe may set no_answer before the post-call webhook arrives). "
+            f"Got: {result!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
