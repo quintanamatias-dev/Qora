@@ -419,6 +419,23 @@ async def dial_outbound_call(
         # duplicate provider call while this one is in-flight.
         # ------------------------------------------------------------------
         el_service = ElevenLabsService(settings=settings)
+        # Build the conversation_initiation_client_data payload.
+        #
+        # ElevenLabs requires:
+        #   - "dynamic_variables": dict of template variables for {{var}} substitution
+        #     in the agent's prompt. Sending a flat dict instead of this wrapper means
+        #     template variables (e.g. {{lead_name}}) are never substituted.
+        #   - "custom_llm_extra_body": dict forwarded verbatim by ElevenLabs to the
+        #     Custom LLM endpoint as the `elevenlabs_extra_body` field. The Custom LLM
+        #     handler (webhook.py) reads client_id and lead_id from this field to scope
+        #     session creation and lead context resolution.
+        _cicd: dict = {}
+        if dynamic_vars:
+            _cicd["dynamic_variables"] = dynamic_vars
+        _cicd["custom_llm_extra_body"] = {
+            "client_id": client.id,
+            "lead_id": str(lead.id),
+        }
         outbound_request = OutboundCallRequest(
             # Both agent_elevenlabs_id and agent_phone_number_id were validated
             # in Guard 2b (before the lock and before db.commit()) — they are
@@ -426,7 +443,7 @@ async def dial_outbound_call(
             agent_id=agent_elevenlabs_id,
             agent_phone_number_id=agent_phone_number_id,
             to=lead.phone,
-            conversation_initiation_client_data=dynamic_vars if dynamic_vars else None,
+            conversation_initiation_client_data=_cicd,
         )
 
         result = await el_service.initiate_outbound_call(outbound_request)

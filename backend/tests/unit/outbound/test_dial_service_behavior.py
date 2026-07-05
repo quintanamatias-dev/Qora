@@ -813,3 +813,190 @@ async def test_concurrent_guard_blocks_second_dial():
         f"Concurrent guard must allow exactly 1 provider call. "
         f"Got {api_call_count} API call(s)."
     )
+
+
+# ---------------------------------------------------------------------------
+# TEST: conversation_initiation_client_data wraps dynamic_variables correctly
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_conversation_initiation_client_data_wraps_dynamic_variables():
+    """GIVEN dial_outbound_call is called with non-empty dynamic variables
+    WHEN the ElevenLabs API is called
+    THEN conversation_initiation_client_data must have a "dynamic_variables" key
+         wrapping the variables dict — not a flat dict at the top level.
+
+    Root cause: ElevenLabs requires {dynamic_variables: {...}} structure for
+    template substitution (e.g. {{lead_name}}). A flat dict is silently ignored
+    and the agent uses the literal template text instead of the substituted value.
+    """
+    from app.outbound.service import dial_outbound_call
+
+    mock_db = _build_mock_db(active_session=None)
+    mock_db.commit = AsyncMock()
+
+    captured_requests: list = []
+
+    async def _capture_request(request):
+        captured_requests.append(request)
+        return _accepted_result()
+
+    dynamic_vars_returned = {"lead_name": "Ana García", "lead_phone": "+541155551234"}
+
+    with patch(
+        "app.elevenlabs.service.ElevenLabsService.initiate_outbound_call",
+        new_callable=AsyncMock,
+        side_effect=_capture_request,
+    ):
+        with patch(
+            "app.outbound.dynamic_vars.build_dynamic_variables",
+            new_callable=AsyncMock,
+            return_value=dynamic_vars_returned,
+        ):
+            await dial_outbound_call(
+                db=mock_db,
+                lead=_make_lead(lead_id="lead-dv-001"),
+                agent=_make_agent(),
+                client=_make_client(),
+                settings=_make_settings(),
+            )
+
+    assert len(captured_requests) == 1, "ElevenLabs API must be called exactly once"
+    cicd = captured_requests[0].conversation_initiation_client_data
+
+    assert cicd is not None, "conversation_initiation_client_data must not be None"
+    assert "dynamic_variables" in cicd, (
+        "conversation_initiation_client_data must have a 'dynamic_variables' key. "
+        f"Got keys: {list(cicd.keys())}"
+    )
+    assert cicd["dynamic_variables"] == dynamic_vars_returned, (
+        f"dynamic_variables must match the dict returned by build_dynamic_variables. "
+        f"Got: {cicd['dynamic_variables']!r}"
+    )
+    # Flat keys must NOT be at the top level of cicd
+    for flat_key in dynamic_vars_returned:
+        assert flat_key not in cicd, (
+            f"Key {flat_key!r} must be nested under 'dynamic_variables', "
+            f"not at the top level of conversation_initiation_client_data."
+        )
+
+
+@pytest.mark.asyncio
+async def test_conversation_initiation_client_data_includes_custom_llm_extra_body():
+    """GIVEN dial_outbound_call is called
+    WHEN the ElevenLabs API is called
+    THEN conversation_initiation_client_data must include a "custom_llm_extra_body"
+         key with client_id and lead_id so the Custom LLM can route the session.
+
+    The Custom LLM handler (webhook.py) extracts client_id and lead_id from
+    elevenlabs_extra_body — which ElevenLabs populates from custom_llm_extra_body
+    in conversation_initiation_client_data. Without this, outbound calls have no
+    lead context and the agent addresses the lead generically.
+    """
+    from app.outbound.service import dial_outbound_call
+
+    mock_db = _build_mock_db(active_session=None)
+    mock_db.commit = AsyncMock()
+
+    captured_requests: list = []
+
+    async def _capture_request(request):
+        captured_requests.append(request)
+        return _accepted_result()
+
+    lead = _make_lead(lead_id="lead-extra-001")
+    client = _make_client()
+    client.id = "client-test-001"
+
+    with patch(
+        "app.elevenlabs.service.ElevenLabsService.initiate_outbound_call",
+        new_callable=AsyncMock,
+        side_effect=_capture_request,
+    ):
+        with patch(
+            "app.outbound.dynamic_vars.build_dynamic_variables",
+            new_callable=AsyncMock,
+            return_value={},
+        ):
+            await dial_outbound_call(
+                db=mock_db,
+                lead=lead,
+                agent=_make_agent(),
+                client=client,
+                settings=_make_settings(),
+            )
+
+    assert len(captured_requests) == 1
+    cicd = captured_requests[0].conversation_initiation_client_data
+
+    assert cicd is not None, "conversation_initiation_client_data must not be None"
+    assert "custom_llm_extra_body" in cicd, (
+        "conversation_initiation_client_data must have a 'custom_llm_extra_body' key "
+        "so ElevenLabs forwards it to the Custom LLM endpoint. "
+        f"Got keys: {list(cicd.keys())}"
+    )
+    extra_body = cicd["custom_llm_extra_body"]
+    assert extra_body.get("client_id") == client.id, (
+        f"custom_llm_extra_body must include client_id={client.id!r}. Got: {extra_body!r}"
+    )
+    assert extra_body.get("lead_id") == str(lead.id), (
+        f"custom_llm_extra_body must include lead_id={str(lead.id)!r}. Got: {extra_body!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_conversation_initiation_client_data_always_includes_custom_llm_extra_body_even_when_no_dynamic_vars():
+    """GIVEN dial_outbound_call is called with empty dynamic variables
+    WHEN the ElevenLabs API is called
+    THEN conversation_initiation_client_data must still include custom_llm_extra_body
+         with client_id and lead_id even when there are no template variables.
+
+    This ensures outbound calls always carry routing context to the Custom LLM,
+    regardless of whether the dynamic_variables dict is empty.
+    """
+    from app.outbound.service import dial_outbound_call
+
+    mock_db = _build_mock_db(active_session=None)
+    mock_db.commit = AsyncMock()
+
+    captured_requests: list = []
+
+    async def _capture_request(request):
+        captured_requests.append(request)
+        return _accepted_result()
+
+    lead = _make_lead(lead_id="lead-nodv-001")
+    client = _make_client()
+    client.id = "client-nodv-001"
+
+    with patch(
+        "app.elevenlabs.service.ElevenLabsService.initiate_outbound_call",
+        new_callable=AsyncMock,
+        side_effect=_capture_request,
+    ):
+        with patch(
+            "app.outbound.dynamic_vars.build_dynamic_variables",
+            new_callable=AsyncMock,
+            return_value={},  # empty dict — no dynamic vars
+        ):
+            await dial_outbound_call(
+                db=mock_db,
+                lead=lead,
+                agent=_make_agent(),
+                client=client,
+                settings=_make_settings(),
+            )
+
+    assert len(captured_requests) == 1
+    cicd = captured_requests[0].conversation_initiation_client_data
+
+    assert cicd is not None
+    # dynamic_variables must be absent when dict was empty
+    assert "dynamic_variables" not in cicd, (
+        "dynamic_variables key must be omitted when dynamic_vars is empty"
+    )
+    # custom_llm_extra_body must always be present
+    assert "custom_llm_extra_body" in cicd
+    assert cicd["custom_llm_extra_body"]["client_id"] == client.id
+    assert cicd["custom_llm_extra_body"]["lead_id"] == str(lead.id)

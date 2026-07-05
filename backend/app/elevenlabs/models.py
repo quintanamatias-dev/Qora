@@ -73,7 +73,12 @@ class OutboundCallRequest(BaseModel):
       - agent_phone_number_id: ElevenLabs phone number resource ID (from SIP trunk setup)
       - to: Destination number in E.164 format. Serialized to the wire as "to_number"
             (the API's required field name) in ElevenLabsService.initiate_outbound_call().
-      - conversation_initiation_client_data: Optional dynamic variables for the agent prompt
+      - conversation_initiation_client_data: Optional dict with two supported keys:
+          "dynamic_variables": flat dict of template variables for {{var}} substitution
+              in the agent prompt. Without this wrapper ElevenLabs ignores the values.
+          "custom_llm_extra_body": flat dict forwarded verbatim to the Custom LLM
+              endpoint as the `elevenlabs_extra_body` field. Used to carry client_id
+              and lead_id to the Custom LLM handler for outbound call session routing.
     """
 
     agent_id: str
