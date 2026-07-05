@@ -190,6 +190,64 @@ wait_for_ngrok_url() {
   fail "ngrok did not expose a public HTTPS URL after ${timeout_seconds}s. Check the logs above."
 }
 
+ensure_local_db_backup() {
+  local db_path="${DATABASE_URL:-}"
+
+  if [[ -n "$db_path" ]]; then
+    case "$db_path" in
+      sqlite+aiosqlite:///*) db_path="${db_path#sqlite+aiosqlite:///}" ;;
+      sqlite:///*) db_path="${db_path#sqlite:///}" ;;
+      *) db_path="$BACKEND_DIR/qora.db" ;;
+    esac
+  else
+    db_path="$BACKEND_DIR/qora.db"
+  fi
+
+  if [[ ! -f "$db_path" ]]; then
+    return 0
+  fi
+
+  "$PYTHON_BIN" - "$db_path" <<'PY'
+import datetime
+import shutil
+import sqlite3
+import sys
+from pathlib import Path
+
+db_path = Path(sys.argv[1]).resolve()
+if not db_path.exists() or db_path.stat().st_size == 0:
+    raise SystemExit(0)
+
+today = datetime.date.today().strftime("%Y%m%d")
+candidates = [
+    db_path.parent / f"{db_path.name}.bak-{today}",
+    db_path.parent / f"{db_path.stem}.bak-{today}",
+]
+
+def is_readable_sqlite(path: Path) -> bool:
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+    try:
+        with sqlite3.connect(str(path)) as conn:
+            conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
+        return True
+    except sqlite3.Error:
+        return False
+
+if any(is_readable_sqlite(candidate) for candidate in candidates):
+    raise SystemExit(0)
+
+backup_path = candidates[0]
+shutil.copy2(db_path, backup_path)
+
+if not is_readable_sqlite(backup_path):
+    print(f"ERROR: Created backup is not readable: {backup_path}", file=sys.stderr)
+    raise SystemExit(1)
+
+print(f"Created local SQLite backup: {backup_path}")
+PY
+}
+
 print_ready_summary() {
   local ngrok_url="$1"
 
@@ -266,6 +324,9 @@ fi
 stop_port_if_busy 8000 "QORA backend"
 stop_port_if_busy 5173 "QORA frontend"
 stop_port_if_busy 4040 "ngrok web interface"
+
+info "Checking local database backup"
+ensure_local_db_backup
 
 info "Ensuring local database schema is up to date (Alembic)"
 (

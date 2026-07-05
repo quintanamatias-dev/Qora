@@ -13,6 +13,7 @@ import { useParams, Link } from 'react-router'
 import type { CallSession, CallOutcome } from '@/api/types'
 import { Badge } from '@/design/components/badge'
 import { formatDuration } from '@/lib/format-duration'
+import { parseUTC } from '@/lib/parse-utc'
 import { TranscriptViewer } from './transcript-viewer'
 import { CallOutcomeBadge } from './call-outcome-badge'
 
@@ -33,7 +34,7 @@ interface CallHistoryListProps {
 export function formatCallDate(isoOrNull: string | null): string {
   if (!isoOrNull) return '—'
   try {
-    return new Date(isoOrNull).toLocaleString('en-US', {
+    return parseUTC(isoOrNull).toLocaleString('en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',

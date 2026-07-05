@@ -746,4 +746,12 @@ export const handlers = [
   http.get('/api/v1/calls/:sessionId/transcript', () => {
     return HttpResponse.json(transcriptFixture)
   }),
+
+  // ── C2: Outbound call trigger ─────────────────────────────────────────────
+  // POST /api/v1/clients/:clientId/leads/:leadId/call
+  // Default handler: returns dialing success.
+  // Tests that need error responses override via server.use() within that test.
+  http.post('/api/v1/clients/:clientId/leads/:leadId/call', () => {
+    return HttpResponse.json({ status: 'dialing', call_session_id: 'cs-default-001' })
+  }),
 ]

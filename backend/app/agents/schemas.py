@@ -119,6 +119,10 @@ class AgentCreate(BaseModel):
     soft_timeout_seconds: float | None = Field(default=None, ge=0.5, le=8.0)
     soft_timeout_message: str | None = None
     soft_timeout_use_llm: bool | None = None
+    # C2: ElevenLabs phone number resource ID for SIP trunk outbound-call API.
+    # Seeded from ELEVENLABS_PHONE_NUMBER_ID env var; configurable via API.
+    # NULL = no outbound calling configured for this agent.
+    elevenlabs_phone_number_id: str | None = None
 
     @field_validator("slug")
     @classmethod
@@ -165,6 +169,8 @@ class AgentUpdate(BaseModel):
     soft_timeout_seconds: float | None = Field(default=None, ge=0.5, le=8.0)
     soft_timeout_message: str | None = None
     soft_timeout_use_llm: bool | None = None
+    # C2: ElevenLabs phone number resource ID (optional PATCH field).
+    elevenlabs_phone_number_id: str | None = None
 
     @field_validator("tools_enabled")
     @classmethod
@@ -210,6 +216,8 @@ class AgentResponse(BaseModel):
     soft_timeout_use_llm: bool | None = None
     elevenlabs_sync_status: str | None = None
     elevenlabs_last_synced_at: datetime | None = None
+    # C2: ElevenLabs phone number resource ID
+    elevenlabs_phone_number_id: str | None = None
 
     model_config = {"from_attributes": True}
 

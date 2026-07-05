@@ -60,9 +60,13 @@ def test_config_default_similarity_boost():
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def tts_app():
-    """Minimal FastAPI app with only the voice router mounted."""
+    """Minimal FastAPI app with only the voice router mounted.
+
+    Function-scoped so the conftest autouse monkeypatch
+    (ENABLE_OUTBOUND_CALLS=false) is active before module imports.
+    """
     from fastapi import FastAPI
     from pydantic import SecretStr
 
@@ -76,6 +80,7 @@ def tts_app():
         openai_api_key=SecretStr("sk-test"),
         elevenlabs_api_key=SecretStr("el-test"),
         qora_api_key=SecretStr("qora-test-key"),  # B8: now required
+        enable_outbound_calls=False,  # Explicit — .env may have true
         elevenlabs_stability=0.4,
         elevenlabs_speed=0.95,
         elevenlabs_similarity_boost=0.75,

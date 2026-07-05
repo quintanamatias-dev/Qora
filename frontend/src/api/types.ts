@@ -130,6 +130,35 @@ export interface DimensionRollups {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Outbound Call Trigger — C2
+// POST /api/v1/clients/{clientId}/leads/{leadId}/call
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Status values returned by the manual trigger endpoint.
+ * - dialing: CallSession created, ElevenLabs API accepted
+ * - failed: provider returned a permanent or second-transient error
+ * - recurrent_error: second consecutive transient error after one auto-retry
+ */
+export type OutboundTriggerStatus = 'dialing' | 'failed' | 'recurrent_error'
+
+/**
+ * Response body from POST /api/v1/clients/{clientId}/leads/{leadId}/call.
+ * Mirrors backend CallTriggerResponse schema.
+ *
+ * A 200 response does NOT imply the call was placed. status must be inspected:
+ * only status === 'dialing' means a call is in progress. 'failed' and
+ * 'recurrent_error' are non-dialing outcomes returned with HTTP 200 — the UI
+ * must render an error, not a "Calling…" state.
+ */
+export interface CallTriggerResponse {
+  status: OutboundTriggerStatus
+  call_session_id: string | null
+  /** Human-readable failure reason; present when status !== 'dialing'. */
+  error?: string | null
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Call Sessions
 // ──────────────────────────────────────────────────────────────────────────────
 

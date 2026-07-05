@@ -23,6 +23,7 @@ import { useLead, useCallSessions, useLeadContextPreview, useIntegrations, useLe
 import { Badge } from '@/design/components/badge'
 import type { LeadStatus, QuoteField, LeadContextPreview, DetectedInterestRollup, ServiceIssueRollup } from '@/api/types'
 import { resolveLabel } from '@/config/dimension-labels'
+import { parseUTC } from '@/lib/parse-utc'
 import { CallHistoryList } from './call-history-list'
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -32,7 +33,7 @@ import { CallHistoryList } from './call-history-list'
 function formatDate(isoOrNull: string | null | undefined): string {
   if (!isoOrNull) return '—'
   try {
-    return new Date(isoOrNull).toLocaleString('en-US', {
+    return parseUTC(isoOrNull).toLocaleString('en-US', {
       year: 'numeric', month: 'short', day: 'numeric',
       hour: '2-digit', minute: '2-digit',
     })
