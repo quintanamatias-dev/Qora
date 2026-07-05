@@ -19,7 +19,7 @@
  *   - Row click is stopped from propagating when Call Now button is clicked
  */
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import type { Lead, LeadStatus, CallTriggerResponse } from '@/api/types'
 import { Badge } from '@/design/components/badge'
@@ -242,6 +242,20 @@ function ConfirmCallDialog({
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Constants
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * How long (ms) to wait in the 'calling' phase before declaring a timeout.
+ * The ElevenLabs backend read-timeout is 45 s; 60 s gives a comfortable margin
+ * so the UI never stays stuck when the provider fails silently.
+ */
+const CALLING_TIMEOUT_MS = 60_000
+
+const CALLING_TIMEOUT_MESSAGE =
+  'Call timed out — the call may still be connecting. Check call history.'
+
+// ──────────────────────────────────────────────────────────────────────────────
 // CallNowCell — stateful cell managing the per-row call lifecycle (C2)
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -252,6 +266,33 @@ interface CallNowCellProps {
 
 function CallNowCell({ clientId, lead }: CallNowCellProps) {
   const [state, setState] = useState<CallRowState>({ phase: 'idle' })
+  // Holds the active timeout handle so it can be cancelled on state change or unmount.
+  const callingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Start a 60-second safety timeout whenever we enter the 'calling' phase.
+  // If the backend never sends an outcome (silent provider failure), the timer
+  // fires and transitions the row to an error state instead of staying frozen.
+  useEffect(() => {
+    if (state.phase === 'calling') {
+      callingTimerRef.current = setTimeout(() => {
+        setState({ phase: 'error', message: CALLING_TIMEOUT_MESSAGE })
+      }, CALLING_TIMEOUT_MS)
+    } else {
+      // Any transition away from 'calling' (success, error, cancel) cancels the timer.
+      if (callingTimerRef.current !== null) {
+        clearTimeout(callingTimerRef.current)
+        callingTimerRef.current = null
+      }
+    }
+
+    return () => {
+      // Cleanup on unmount or before re-running the effect.
+      if (callingTimerRef.current !== null) {
+        clearTimeout(callingTimerRef.current)
+        callingTimerRef.current = null
+      }
+    }
+  }, [state.phase])
 
   function handleButtonClick(e: React.MouseEvent) {
     // Stop row-level onClick from navigating to lead detail
