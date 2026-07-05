@@ -214,6 +214,10 @@ async def elevenlabs_postcall_webhook(body: ElevenLabsPostCallPayload):
         # any webhook payload could match any tenant's outbound session by provider_call_id
         # — a cross-tenant linkage risk. We prefer safe no-match over convenience:
         # if client_id is absent, we skip the provider_call_id fallback entirely.
+        # WU2 Fix B1 + RE2 (Step 2): provider_call_id fallback.
+        # On match, assign cs and fall through to the close_session / transcript
+        # merge logic below — do NOT return early, or billing, duration, lead
+        # counters, and transcript data are all lost (R3 review CRITICAL #1).
         if cs is None and data.provider_call_id is not None and data.client_id is not None:
             linked = await link_outbound_session_by_webhook(
                 db,
@@ -229,7 +233,7 @@ async def elevenlabs_postcall_webhook(body: ElevenLabsPostCallPayload):
                     provider_call_id=data.provider_call_id,
                     client_id=data.client_id,
                 )
-                return {"status": "ok", "session_id": linked.id, "linked_via": "provider_call_id"}
+                cs = linked
 
         # Step 3: Orphan outbound session fallback — by client_id + lead_id
         # extracted from conversation_initiation_client_data.custom_llm_extra_body.
@@ -237,6 +241,7 @@ async def elevenlabs_postcall_webhook(body: ElevenLabsPostCallPayload):
         # never received the conversation_id in the API response. The webhook still
         # carries the original conversation_initiation_client_data that Qora injected,
         # letting us find the orphan session by tenant + lead.
+        # On match, assign cs and fall through — same rationale as Step 2.
         if cs is None:
             cicd = data.conversation_initiation_client_data or {}
             extra_body = cicd.get("custom_llm_extra_body", {}) if isinstance(cicd, dict) else {}
@@ -258,7 +263,7 @@ async def elevenlabs_postcall_webhook(body: ElevenLabsPostCallPayload):
                         client_id=cicd_client_id,
                         lead_id=cicd_lead_id,
                     )
-                    return {"status": "ok", "session_id": linked.id, "linked_via": "orphan_session_match"}
+                    cs = linked
 
         if cs is None:
             logger.warning(

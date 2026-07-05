@@ -361,6 +361,7 @@ class TestRE2PostcallPassesClientIdToLinkage:
         AND the session is NOT found by conversation_id
         WHEN the route processes the payload
         THEN link_outbound_session_by_webhook is called with client_id='client-re2'
+             AND close_session is called on the linked session (new contract: no early return)
         """
         from app.calls.router import elevenlabs_postcall_webhook
         from app.calls.schemas import ElevenLabsPostCallData, ElevenLabsPostCallPayload
@@ -378,12 +379,21 @@ class TestRE2PostcallPassesClientIdToLinkage:
             session_id="sess-re2-linked",
             client_id="client-re2",
         )
+        # _make_outbound_session sets cs.status = "completed" (line 67).
+        # The handler's "completed" branch calls get_transcript — mock it to return [].
+        # Also set .client_id explicitly so _schedule_summarize has a real value.
+        linked_cs.client_id = "client-re2"
+
+        mock_closed_cs = MagicMock()
+        mock_closed_cs.id = "sess-re2-linked"
+        mock_closed_cs.status = "completed"
 
         mock_db = _make_db()
 
         with (
             patch("app.calls.router.get_session_by_elevenlabs_id", return_value=None),
             patch("app.calls.router.link_outbound_session_by_webhook", return_value=linked_cs) as mock_link,
+            patch("app.calls.router.get_transcript", return_value=[]) as mock_get_transcript,
             patch("app.calls.router.db_session") as mock_db_ctx,
         ):
             mock_db_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_db)
@@ -391,12 +401,19 @@ class TestRE2PostcallPassesClientIdToLinkage:
 
             await elevenlabs_postcall_webhook(payload)
 
+        # Primary contract: linkage was called with the correct client_id
         mock_link.assert_called_once()
         call_kwargs = mock_link.call_args
         assert call_kwargs.kwargs.get("client_id") == "client-re2", (
             "elevenlabs-postcall route must pass client_id='client-re2' to "
             "link_outbound_session_by_webhook when payload contains client_id. "
             f"Got kwargs: {call_kwargs.kwargs!r}"
+        )
+
+        # The handler must have reached get_transcript (fell through to completed branch)
+        mock_get_transcript.assert_called_once(), (
+            "get_transcript must be called when linked session is already 'completed' — "
+            "handler must fall through instead of returning early."
         )
 
     @pytest.mark.asyncio

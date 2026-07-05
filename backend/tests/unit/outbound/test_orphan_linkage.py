@@ -453,7 +453,8 @@ class TestPostcallWebhookOrphanFallback:
               AND both Step 1 (conversation_id) and Step 2 (provider_call_id) fail
         WHEN the elevenlabs_postcall_webhook handler processes the payload
         THEN link_outbound_session_by_webhook is called with client_id + lead_id
-             AND the response is {"status": "ok", "linked_via": "orphan_session_match"}
+             AND close_session is called on the linked session (new contract)
+             AND the response is {"status": "ok", "session_id": ...}
         """
         from app.calls.router import elevenlabs_postcall_webhook
         from app.calls.schemas import ElevenLabsPostCallData, ElevenLabsPostCallPayload
@@ -475,12 +476,20 @@ class TestPostcallWebhookOrphanFallback:
 
         mock_linked_cs = MagicMock()
         mock_linked_cs.id = "orphan-sess-001"
+        # The handler checks cs.status to decide the close path.
+        # "initiated" → calls close_session with reason="network_drop".
+        mock_linked_cs.status = "initiated"
+
+        mock_closed_cs = MagicMock()
+        mock_closed_cs.id = "orphan-sess-001"
+        mock_closed_cs.status = "completed"
 
         mock_db = AsyncMock()
 
         with (
             patch("app.calls.router.get_session_by_elevenlabs_id", return_value=None),
             patch("app.calls.router.link_outbound_session_by_webhook") as mock_link,
+            patch("app.calls.router.close_session", return_value=(mock_closed_cs, False)) as mock_close,
             patch("app.calls.router.db_session") as mock_db_ctx,
         ):
             # Payload has no provider_call_id, so Step 2 (provider_call_id block) is
@@ -494,15 +503,17 @@ class TestPostcallWebhookOrphanFallback:
             result = await elevenlabs_postcall_webhook(payload)
 
         assert result["status"] == "ok", f"Expected status='ok', got: {result!r}"
-        assert result["linked_via"] == "orphan_session_match", (
-            "Response must indicate linkage via 'orphan_session_match'. "
-            f"Got: {result.get('linked_via')!r}"
-        )
         assert result["session_id"] == "orphan-sess-001", (
             f"Response must carry the orphan session_id. Got: {result.get('session_id')!r}"
         )
+        # linked_via is no longer in the response (handler falls through to normal close path)
+        assert "linked_via" not in result, (
+            "linked_via must NOT be in the response — handler now falls through to "
+            "close_session instead of returning early. "
+            f"Got: {result!r}"
+        )
 
-        # Verify the orphan call was made with the cicd-extracted ids
+        # Verify the orphan call was made with the cicd-extracted ids (primary contract)
         mock_link.assert_called_once()
         orphan_call = mock_link.call_args
         assert orphan_call.kwargs.get("client_id") == "client-a", (
@@ -512,6 +523,12 @@ class TestPostcallWebhookOrphanFallback:
         assert orphan_call.kwargs.get("lead_id") == "lead-001", (
             "Orphan fallback must pass lead_id='lead-001' extracted from cicd. "
             f"Got kwargs: {orphan_call.kwargs!r}"
+        )
+
+        # New contract: close_session must be called on the linked session
+        mock_close.assert_called_once(), (
+            "close_session must be called on the linked orphan session — "
+            "billing, duration, and lead counters require it. "
         )
 
     @pytest.mark.asyncio

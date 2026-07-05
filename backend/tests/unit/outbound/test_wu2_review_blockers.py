@@ -180,6 +180,7 @@ class TestB1PostcallRoutePassesProviderCallId:
         WHEN the /calls/elevenlabs-postcall route processes the payload
         THEN link_outbound_session_by_webhook is called with provider_call_id='el-call-abc'
              AND client_id='client-a'
+             AND close_session is called on the linked session (new contract: no early return)
 
         This proves the fallback linkage path (provider_call_id) is exercisable
         from the real webhook route, not just internally.
@@ -202,12 +203,19 @@ class TestB1PostcallRoutePassesProviderCallId:
         # then fall back to link_outbound_session_by_webhook with provider_call_id.
         mock_linked_cs = MagicMock()
         mock_linked_cs.id = "session-001"
+        # Handler checks cs.status to pick the close path. "initiated" → close_session called.
+        mock_linked_cs.status = "initiated"
+
+        mock_closed_cs = MagicMock()
+        mock_closed_cs.id = "session-001"
+        mock_closed_cs.status = "completed"
 
         mock_db = AsyncMock()
 
         with (
             patch("app.calls.router.get_session_by_elevenlabs_id", return_value=None) as mock_get,
             patch("app.calls.router.link_outbound_session_by_webhook", return_value=mock_linked_cs) as mock_link,
+            patch("app.calls.router.close_session", return_value=(mock_closed_cs, False)) as mock_close,
             patch("app.calls.router.db_session") as mock_db_ctx,
         ):
             mock_db_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_db)
@@ -230,9 +238,19 @@ class TestB1PostcallRoutePassesProviderCallId:
             f"Got kwargs: {call_kwargs.kwargs!r}"
         )
 
-        # Response must indicate linkage via provider_call_id
+        # New contract: close_session must be called (no early return after linkage)
+        mock_close.assert_called_once(), (
+            "close_session must be called on the linked session — "
+            "billing, duration, and lead counters require the full close path."
+        )
+
+        # Response is now {"status": "ok", "session_id": ...} — no linked_via key
         assert result["session_id"] == "session-001"
-        assert result.get("linked_via") == "provider_call_id"
+        assert result["status"] == "ok"
+        assert "linked_via" not in result, (
+            "linked_via must NOT be in the response — handler now falls through to "
+            "close_session instead of returning early with linked_via metadata."
+        )
 
 
 # ---------------------------------------------------------------------------
