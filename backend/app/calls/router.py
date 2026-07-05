@@ -40,7 +40,11 @@ from app.calls.service import (
     get_transcript,
     list_sessions_for_client,
 )
-from app.core.auth import require_api_key, require_webhook_secret
+from app.core.auth import (
+    require_api_key,
+    require_elevenlabs_webhook_signature,
+    require_webhook_secret,
+)
 from app.core.database import get_session as db_session
 from app.outbound.linkage import link_outbound_session_by_webhook
 
@@ -151,16 +155,24 @@ async def list_call_sessions(
 
     # Filter out ghost sessions: "initiated" with no turns and no duration.
     # These are WebSocket connection attempts that never established a real call.
-    return [
-        _session_to_dict(cs)
-        for cs in sessions
-        if not (
+    #
+    # Exception: outbound sessions have telephony_status set (e.g. "ringing",
+    # "dialing", "completed") even before the post-call webhook fires. A session
+    # with a non-null telephony_status is a real outbound call — never a ghost —
+    # regardless of its status, duration, or turn counts.
+    result = []
+    for cs in sessions:
+        is_ghost = (
             cs.status == "initiated"
             and not cs.duration_seconds
             and not cs.total_user_turns
             and not cs.total_agent_turns
         )
-    ]
+        has_telephony = getattr(cs, "telephony_status", None) is not None
+        if is_ghost and not has_telephony:
+            continue  # skip ghost inbound connection attempts
+        result.append(_session_to_dict(cs))
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -168,14 +180,15 @@ async def list_call_sessions(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/elevenlabs-postcall", dependencies=[Depends(require_webhook_secret)])
+@router.post("/elevenlabs-postcall", dependencies=[Depends(require_elevenlabs_webhook_signature)])
 async def elevenlabs_postcall_webhook(body: ElevenLabsPostCallPayload):
     """Handle ElevenLabs post-call webhook (CAP-2b).
 
-    Protected by require_webhook_secret (WU2 Fix B3). When
-    QORA_WEBHOOK_AUTH_ENABLED=true, the X-Webhook-Secret header is validated
-    before any session mutation. This prevents unauthenticated POST requests
-    from mutating billing/completion state.
+    Protected by require_elevenlabs_webhook_signature. When
+    QORA_WEBHOOK_AUTH_ENABLED=true, the ElevenLabs-Signature HMAC header is
+    validated before any session mutation. Falls back to X-Webhook-Secret for
+    backward compatibility. This prevents unauthenticated POST requests from
+    mutating billing/completion state.
 
     - If session is `initiated`: close it with reason="network_drop" and increment Lead.call_count.
     - If session is `completed`: merge transcript turns if ElevenLabs has more data.

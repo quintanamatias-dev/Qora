@@ -30,12 +30,13 @@ Design rationale (design.md):
 from __future__ import annotations
 
 import hashlib
+import hmac as _hmac
 import os
 import secrets
 import time
 from dataclasses import dataclass, field
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Body, Depends, HTTPException, Request
 
 from app.core.config import Settings
 
@@ -312,6 +313,16 @@ def require_webhook_secret(
     # - Webhooks (post-call, initiation): X-Webhook-Secret header
     # - Custom LLM: Authorization: Bearer <api_key>
     # Accept either so the same dependency works for all ElevenLabs endpoints.
+    import structlog
+    _auth_log = structlog.get_logger()
+    _auth_log.debug(
+        "webhook_auth_headers_debug",
+        has_x_webhook_secret=("X-Webhook-Secret" in request.headers),
+        has_authorization=("Authorization" in request.headers),
+        x_webhook_secret_len=len(request.headers.get("X-Webhook-Secret", "")),
+        authorization_prefix=request.headers.get("Authorization", "")[:20] if request.headers.get("Authorization") else None,
+        path=str(request.url.path),
+    )
     presented_secret = request.headers.get("X-Webhook-Secret")
     if presented_secret is None:
         # Fallback: check Authorization: Bearer <token> (Custom LLM path)
@@ -339,6 +350,145 @@ def require_webhook_secret(
             detail={
                 "error": "webhook_auth_failed",
                 "message": "Invalid webhook secret",
+            },
+        )
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# require_elevenlabs_webhook_signature — HMAC auth for post-call webhook
+# ---------------------------------------------------------------------------
+
+
+async def require_elevenlabs_webhook_signature(
+    request: Request,
+    settings: Settings = Depends(_get_settings),
+) -> None:
+    """FastAPI dependency that validates ElevenLabs HMAC webhook signatures.
+
+    ElevenLabs post-call webhooks use HMAC-SHA256 authentication, NOT plain
+    text secrets. The signature is sent in the ``ElevenLabs-Signature`` header
+    with the format: ``v0=<hmac-sha256-hex>,t=<unix-timestamp>``.
+
+    The HMAC is computed over: ``{timestamp}.{raw_body}``
+    using ``QORA_WEBHOOK_SECRET`` as the HMAC key.
+
+    This is fundamentally different from ``require_webhook_secret`` (which
+    does plain-text comparison against ``X-Webhook-Secret`` / Bearer). Using
+    the wrong dependency on the post-call endpoint causes 401 on every webhook
+    call because the plain-text comparison always fails against an HMAC value.
+
+    When ``QORA_WEBHOOK_AUTH_ENABLED=false``, this dependency is a no-op
+    (same behavior as require_webhook_secret for operational consistency).
+
+    Fallback: if the ``ElevenLabs-Signature`` header is absent but
+    ``X-Webhook-Secret`` is present, falls back to plain-text comparison for
+    backward compatibility during migration.
+
+    Returns:
+        None — dependency succeeds silently when auth passes or is disabled.
+
+    Raises:
+        HTTPException(401) — when enabled and the signature is missing, invalid,
+            or the HMAC does not match.
+    """
+    if not settings.qora_webhook_auth_enabled:
+        return None
+
+    # Fail-closed: auth enabled but secret not configured → deny all.
+    if settings.qora_webhook_secret is None:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "webhook_auth_misconfigured",
+                "message": (
+                    "QORA_WEBHOOK_AUTH_ENABLED=true but QORA_WEBHOOK_SECRET is not configured. "
+                    "Set QORA_WEBHOOK_SECRET to enable webhook authentication."
+                ),
+            },
+        )
+
+    expected_secret = settings.qora_webhook_secret.get_secret_value()
+
+    # Check for ElevenLabs-Signature header (HMAC path)
+    sig_header = request.headers.get("ElevenLabs-Signature") or request.headers.get(
+        "elevenlabs-signature"
+    )
+
+    if sig_header is None:
+        # Fallback: plain X-Webhook-Secret for backward compatibility.
+        presented_secret = request.headers.get("X-Webhook-Secret")
+        if presented_secret is None:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "webhook_auth_required",
+                    "message": (
+                        "ElevenLabs-Signature header or X-Webhook-Secret header "
+                        "is required when webhook auth is enabled"
+                    ),
+                },
+            )
+        # Plain-text comparison fallback
+        if not secrets.compare_digest(presented_secret.encode(), expected_secret.encode()):
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "webhook_auth_failed",
+                    "message": "Invalid webhook secret",
+                },
+            )
+        return None
+
+    # Parse the ElevenLabs-Signature header.
+    # Expected format: "v0=<hex>,t=<timestamp>" (fields may be in any order,
+    # separated by commas).
+    v0_hash: str | None = None
+    timestamp: str | None = None
+    for part in sig_header.split(","):
+        part = part.strip()
+        if part.startswith("v0="):
+            v0_hash = part[3:]
+        elif part.startswith("t="):
+            timestamp = part[2:]
+
+    if v0_hash is None or timestamp is None:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "webhook_auth_failed",
+                "message": (
+                    "ElevenLabs-Signature header format is invalid. "
+                    "Expected: v0=<hmac-sha256>,t=<timestamp>"
+                ),
+            },
+        )
+
+    # Read raw body for HMAC computation.
+    # FastAPI has already cached the body in request._body when the endpoint
+    # declared a Pydantic body parameter (via Request.body() caching).
+    # We explicitly call request.body() here which returns the cached bytes.
+    try:
+        raw_body = await request.body()
+    except Exception:
+        raw_body = b""
+
+    # Compute HMAC-SHA256 of "{timestamp}.{raw_body}"
+    message = f"{timestamp}.".encode() + raw_body
+    computed = _hmac.new(
+        expected_secret.encode(),
+        message,
+        digestmod=hashlib.sha256,
+    ).hexdigest()
+
+    # Constant-time comparison to prevent timing attacks.
+    if not secrets.compare_digest(computed, v0_hash):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "webhook_auth_failed",
+                "message": "Invalid ElevenLabs webhook signature",
             },
         )
 

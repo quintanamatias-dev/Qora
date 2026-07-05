@@ -382,11 +382,12 @@ class TestB3PostcallWebhookAuth:
 
     @pytest.mark.asyncio
     async def test_postcall_route_requires_webhook_secret_dependency(self):
-        """elevenlabs-postcall route must use require_webhook_secret as dependency.
+        """elevenlabs-postcall route must use a webhook auth dependency.
 
         GIVEN the calls router
         WHEN the elevenlabs-postcall endpoint is inspected
-        THEN require_webhook_secret must appear in its dependencies or signature
+        THEN either require_webhook_secret or require_elevenlabs_webhook_signature
+             must appear in its dependencies (HMAC-based auth supersedes plain-text).
 
         This proves auth is wired at the route level, not just as documentation.
         """
@@ -395,7 +396,12 @@ class TestB3PostcallWebhookAuth:
         from fastapi import Depends
 
         from app.calls import router as calls_router
-        from app.core.auth import require_webhook_secret
+        from app.core.auth import (
+            require_elevenlabs_webhook_signature,
+            require_webhook_secret,
+        )
+
+        _AUTH_DEPS = {require_webhook_secret, require_elevenlabs_webhook_signature}
 
         # Find the elevenlabs-postcall route in the router
         route_found = False
@@ -404,15 +410,18 @@ class TestB3PostcallWebhookAuth:
         for route in calls_router.router.routes:
             if hasattr(route, "path") and "elevenlabs-postcall" in route.path:
                 route_found = True
-                # Check if require_webhook_secret is in the route's dependencies
+                # Check if any accepted auth dep is in the route's dependencies
                 for dep in getattr(route, "dependencies", []):
-                    if hasattr(dep, "dependency") and dep.dependency is require_webhook_secret:
+                    if hasattr(dep, "dependency") and dep.dependency in _AUTH_DEPS:
                         has_webhook_auth = True
                         break
                 # Also check if it's in the endpoint signature as a Depends
                 sig = inspect.signature(route.endpoint)
                 for param in sig.parameters.values():
-                    if hasattr(param.default, "dependency") and param.default.dependency is require_webhook_secret:
+                    if (
+                        hasattr(param.default, "dependency")
+                        and param.default.dependency in _AUTH_DEPS
+                    ):
                         has_webhook_auth = True
                         break
 
@@ -420,7 +429,8 @@ class TestB3PostcallWebhookAuth:
             "elevenlabs-postcall route must be registered in the calls router."
         )
         assert has_webhook_auth, (
-            "elevenlabs-postcall route must have require_webhook_secret as a dependency. "
+            "elevenlabs-postcall route must have a webhook auth dependency "
+            "(require_webhook_secret or require_elevenlabs_webhook_signature). "
             "Unauthenticated POST can mutate billing/completion state (B3 blocker)."
         )
 
