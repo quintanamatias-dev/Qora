@@ -93,36 +93,42 @@ def _make_db_with_sessions(sessions: list) -> AsyncMock:
 
 
 class TestB1PostcallPayloadAcceptsProviderCallId:
-    """ElevenLabsPostCallPayload must include provider_call_id field."""
+    """ElevenLabsPostCallData (inner data object) must include provider_call_id field."""
 
     def test_postcall_payload_accepts_provider_call_id(self):
-        """ElevenLabsPostCallPayload must have a provider_call_id field.
+        """ElevenLabsPostCallData must have a provider_call_id field.
 
-        GIVEN the ElevenLabsPostCallPayload schema
+        GIVEN the ElevenLabsPostCallPayload wrapper schema with inner ElevenLabsPostCallData
         WHEN constructed with provider_call_id='el-call-abc'
-        THEN provider_call_id is stored on the model
+        THEN provider_call_id is accessible via payload.data.provider_call_id
         """
-        from app.calls.schemas import ElevenLabsPostCallPayload
+        from app.calls.schemas import ElevenLabsPostCallData, ElevenLabsPostCallPayload
 
         payload = ElevenLabsPostCallPayload(
-            conversation_id="conv-el-xyz",
-            provider_call_id="el-call-abc",
+            type="post_call_transcription",
+            data=ElevenLabsPostCallData(
+                conversation_id="conv-el-xyz",
+                provider_call_id="el-call-abc",
+            ),
         )
 
-        assert payload.provider_call_id == "el-call-abc", (
-            "ElevenLabsPostCallPayload must have provider_call_id field. "
-            f"Got: {getattr(payload, 'provider_call_id', 'MISSING')!r}"
+        assert payload.data.provider_call_id == "el-call-abc", (
+            "ElevenLabsPostCallData must have provider_call_id field. "
+            f"Got: {getattr(payload.data, 'provider_call_id', 'MISSING')!r}"
         )
 
     def test_postcall_payload_provider_call_id_optional(self):
         """provider_call_id must be optional (older ElevenLabs webhooks omit it)."""
-        from app.calls.schemas import ElevenLabsPostCallPayload
+        from app.calls.schemas import ElevenLabsPostCallData, ElevenLabsPostCallPayload
 
-        payload = ElevenLabsPostCallPayload(conversation_id="conv-el-xyz")
+        payload = ElevenLabsPostCallPayload(
+            type="post_call_transcription",
+            data=ElevenLabsPostCallData(conversation_id="conv-el-xyz"),
+        )
 
-        assert payload.provider_call_id is None, (
-            "ElevenLabsPostCallPayload.provider_call_id must default to None. "
-            f"Got: {getattr(payload, 'provider_call_id', 'MISSING')!r}"
+        assert payload.data.provider_call_id is None, (
+            "ElevenLabsPostCallData.provider_call_id must default to None. "
+            f"Got: {getattr(payload.data, 'provider_call_id', 'MISSING')!r}"
         )
 
 
@@ -180,13 +186,16 @@ class TestB1PostcallRoutePassesProviderCallId:
         RE2: client_id must be scoped to prevent cross-tenant linkage.
         """
         from app.calls.router import elevenlabs_postcall_webhook
-        from app.calls.schemas import ElevenLabsPostCallPayload
+        from app.calls.schemas import ElevenLabsPostCallData, ElevenLabsPostCallPayload
 
         # RE2: payload must include client_id for tenant-safe fallback
         payload = ElevenLabsPostCallPayload(
-            conversation_id="conv-el-xyz",
-            provider_call_id="el-call-abc",
-            client_id="client-a",
+            type="post_call_transcription",
+            data=ElevenLabsPostCallData(
+                conversation_id="conv-el-xyz",
+                provider_call_id="el-call-abc",
+                client_id="client-a",
+            ),
         )
 
         # The route must look up the session by conversation_id first (returns None),
@@ -731,26 +740,31 @@ class TestB5RouteIntegrationBehavior:
     async def test_elevenlabs_postcall_payload_provider_call_id_roundtrip(self):
         """ElevenLabsPostCallPayload provider_call_id survives a JSON parse roundtrip.
 
-        Proves the schema correctly exposes provider_call_id to the route handler.
+        Proves the schema (wrapper + inner data) correctly exposes provider_call_id
+        to the route handler via payload.data.provider_call_id.
         """
         import json
 
         from app.calls.schemas import ElevenLabsPostCallPayload
 
         raw_json = json.dumps({
-            "conversation_id": "conv-el-abc",
-            "provider_call_id": "el-call-xyz",
-            "transcript": [{"role": "agent", "message": "Hello"}],
+            "type": "post_call_transcription",
+            "event_timestamp": 0,
+            "data": {
+                "conversation_id": "conv-el-abc",
+                "provider_call_id": "el-call-xyz",
+                "transcript": [{"role": "agent", "message": "Hello"}],
+            },
         })
 
         payload = ElevenLabsPostCallPayload.model_validate_json(raw_json)
 
-        assert payload.provider_call_id == "el-call-xyz", (
-            "ElevenLabsPostCallPayload must correctly parse provider_call_id from JSON. "
-            f"Got: {getattr(payload, 'provider_call_id', 'MISSING')!r}"
+        assert payload.data.provider_call_id == "el-call-xyz", (
+            "ElevenLabsPostCallPayload must correctly parse provider_call_id from JSON (via data). "
+            f"Got: {getattr(payload.data, 'provider_call_id', 'MISSING')!r}"
         )
-        assert payload.conversation_id == "conv-el-abc"
-        assert payload.transcript[0]["role"] == "agent"
+        assert payload.data.conversation_id == "conv-el-abc"
+        assert payload.data.transcript[0]["role"] == "agent"
 
     @pytest.mark.asyncio
     async def test_end_session_request_provider_call_id_roundtrip(self):

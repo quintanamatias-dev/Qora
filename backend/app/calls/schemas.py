@@ -81,8 +81,11 @@ class CallMetricsResponse(BaseModel):
     period: MetricsPeriod
 
 
-class ElevenLabsPostCallPayload(BaseModel):
-    """ElevenLabs post-call webhook payload.
+class ElevenLabsPostCallData(BaseModel):
+    """Inner data object of the ElevenLabs post-call webhook payload.
+
+    ElevenLabs wraps the conversation data inside a top-level envelope.
+    This model represents the ``data`` field of that envelope.
 
     Minimum required fields. Extra fields allowed and ignored.
     Transcript format: [{role: str, message: str}]
@@ -102,6 +105,31 @@ class ElevenLabsPostCallPayload(BaseModel):
     # session linkage (WU2 re-review RE2). When absent, provider_call_id fallback
     # is NOT attempted (safe no-match preferred over cross-tenant risk).
     client_id: str | None = None
+    # New optional fields sent by ElevenLabs in the post_call_transcription event.
+    status: str | None = None
+    analysis: dict | None = None
+    conversation_initiation_client_data: dict | None = None
+
+    model_config = {"extra": "allow"}
+
+
+class ElevenLabsPostCallPayload(BaseModel):
+    """ElevenLabs post-call webhook envelope.
+
+    ElevenLabs sends a two-level structure:
+        {
+          "type": "post_call_transcription",
+          "event_timestamp": 1739537297,
+          "data": { <conversation data> }
+        }
+
+    The actual conversation data lives in ``data`` (see ElevenLabsPostCallData).
+    Extra top-level fields are allowed and ignored.
+    """
+
+    type: str
+    event_timestamp: int | None = None
+    data: ElevenLabsPostCallData
 
     model_config = {"extra": "allow"}
 

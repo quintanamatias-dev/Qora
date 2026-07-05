@@ -192,8 +192,12 @@ async def test_postcall_closes_orphan_session(seeded_db, app_client):
             response = await app_client.post(
                 "/api/v1/calls/elevenlabs-postcall",
                 json={
-                    "conversation_id": el_conv_id,
-                    "transcript": [],
+                    "type": "post_call_transcription",
+                    "event_timestamp": 0,
+                    "data": {
+                        "conversation_id": el_conv_id,
+                        "transcript": [],
+                    },
                 },
             )
 
@@ -229,8 +233,12 @@ async def test_postcall_increments_call_count_for_orphan(seeded_db, app_client):
             response = await app_client.post(
                 "/api/v1/calls/elevenlabs-postcall",
                 json={
-                    "conversation_id": el_conv_id,
-                    "transcript": [],
+                    "type": "post_call_transcription",
+                    "event_timestamp": 0,
+                    "data": {
+                        "conversation_id": el_conv_id,
+                        "transcript": [],
+                    },
                 },
             )
 
@@ -264,8 +272,12 @@ async def test_postcall_already_completed_stays_completed(seeded_db, app_client)
         response = await app_client.post(
             "/api/v1/calls/elevenlabs-postcall",
             json={
-                "conversation_id": el_conv_id,
-                "transcript": [],
+                "type": "post_call_transcription",
+                "event_timestamp": 0,
+                "data": {
+                    "conversation_id": el_conv_id,
+                    "transcript": [],
+                },
             },
         )
 
@@ -292,8 +304,12 @@ async def test_postcall_unknown_conversation_id_returns_404(app_client):
     response = await app_client.post(
         "/api/v1/calls/elevenlabs-postcall",
         json={
-            "conversation_id": "el-completely-unknown-xyz",
-            "transcript": [],
+            "type": "post_call_transcription",
+            "event_timestamp": 0,
+            "data": {
+                "conversation_id": "el-completely-unknown-xyz",
+                "transcript": [],
+            },
         },
     )
     assert response.status_code == 404
@@ -477,8 +493,12 @@ async def test_postcall_merges_extra_turns_when_el_has_more(seeded_db, app_clien
         response = await app_client.post(
             "/api/v1/calls/elevenlabs-postcall",
             json={
-                "conversation_id": el_conv_id,
-                "transcript": el_transcript,
+                "type": "post_call_transcription",
+                "event_timestamp": 0,
+                "data": {
+                    "conversation_id": el_conv_id,
+                    "transcript": el_transcript,
+                },
             },
         )
 

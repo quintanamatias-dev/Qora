@@ -312,39 +312,45 @@ class TestRE2PostcallPassesClientIdToLinkage:
     """
 
     def test_postcall_payload_accepts_client_id(self):
-        """ElevenLabsPostCallPayload must accept an optional client_id field.
+        """ElevenLabsPostCallData (inner data) must accept an optional client_id field.
 
-        GIVEN the ElevenLabsPostCallPayload schema
+        GIVEN the ElevenLabsPostCallPayload wrapper schema with inner ElevenLabsPostCallData
         WHEN constructed with client_id='client-re2'
-        THEN client_id is stored on the model
+        THEN client_id is accessible via payload.data.client_id
         """
-        from app.calls.schemas import ElevenLabsPostCallPayload
+        from app.calls.schemas import ElevenLabsPostCallData, ElevenLabsPostCallPayload
 
         payload = ElevenLabsPostCallPayload(
-            conversation_id="conv-re2",
-            provider_call_id="el-call-re2",
-            client_id="client-re2",
+            type="post_call_transcription",
+            data=ElevenLabsPostCallData(
+                conversation_id="conv-re2",
+                provider_call_id="el-call-re2",
+                client_id="client-re2",
+            ),
         )
 
-        assert payload.client_id == "client-re2", (
-            "ElevenLabsPostCallPayload must have client_id field. "
-            f"Got: {getattr(payload, 'client_id', 'MISSING')!r}"
+        assert payload.data.client_id == "client-re2", (
+            "ElevenLabsPostCallData must have client_id field. "
+            f"Got: {getattr(payload.data, 'client_id', 'MISSING')!r}"
         )
 
     def test_postcall_payload_client_id_optional(self):
-        """client_id must be optional on ElevenLabsPostCallPayload.
+        """client_id must be optional on ElevenLabsPostCallData.
 
-        GIVEN the ElevenLabsPostCallPayload schema
-        WHEN constructed WITHOUT client_id
+        GIVEN the ElevenLabsPostCallPayload wrapper schema
+        WHEN constructed WITHOUT client_id in the inner data
         THEN client_id defaults to None
         """
-        from app.calls.schemas import ElevenLabsPostCallPayload
+        from app.calls.schemas import ElevenLabsPostCallData, ElevenLabsPostCallPayload
 
-        payload = ElevenLabsPostCallPayload(conversation_id="conv-re2")
+        payload = ElevenLabsPostCallPayload(
+            type="post_call_transcription",
+            data=ElevenLabsPostCallData(conversation_id="conv-re2"),
+        )
 
-        assert payload.client_id is None, (
-            "ElevenLabsPostCallPayload.client_id must default to None. "
-            f"Got: {getattr(payload, 'client_id', 'MISSING')!r}"
+        assert payload.data.client_id is None, (
+            "ElevenLabsPostCallData.client_id must default to None. "
+            f"Got: {getattr(payload.data, 'client_id', 'MISSING')!r}"
         )
 
     @pytest.mark.asyncio
@@ -357,12 +363,15 @@ class TestRE2PostcallPassesClientIdToLinkage:
         THEN link_outbound_session_by_webhook is called with client_id='client-re2'
         """
         from app.calls.router import elevenlabs_postcall_webhook
-        from app.calls.schemas import ElevenLabsPostCallPayload
+        from app.calls.schemas import ElevenLabsPostCallData, ElevenLabsPostCallPayload
 
         payload = ElevenLabsPostCallPayload(
-            conversation_id="conv-re2",
-            provider_call_id="el-call-re2",
-            client_id="client-re2",
+            type="post_call_transcription",
+            data=ElevenLabsPostCallData(
+                conversation_id="conv-re2",
+                provider_call_id="el-call-re2",
+                client_id="client-re2",
+            ),
         )
 
         linked_cs = _make_outbound_session(
@@ -408,12 +417,15 @@ class TestRE2PostcallPassesClientIdToLinkage:
         from fastapi import HTTPException
 
         from app.calls.router import elevenlabs_postcall_webhook
-        from app.calls.schemas import ElevenLabsPostCallPayload
+        from app.calls.schemas import ElevenLabsPostCallData, ElevenLabsPostCallPayload
 
         payload = ElevenLabsPostCallPayload(
-            conversation_id="conv-no-client",
-            provider_call_id="el-call-re2",
-            # NO client_id
+            type="post_call_transcription",
+            data=ElevenLabsPostCallData(
+                conversation_id="conv-no-client",
+                provider_call_id="el-call-re2",
+                # NO client_id
+            ),
         )
 
         mock_db = _make_db()
