@@ -268,10 +268,12 @@ def require_webhook_secret(
 
     When QORA_WEBHOOK_AUTH_ENABLED=true:
     - Reads the ``X-Webhook-Secret`` header from the incoming request.
+    - Falls back to ``Authorization: Bearer <token>`` if X-Webhook-Secret is
+      absent (ElevenLabs Custom LLM sends the API key this way).
     - Compares it against ``settings.qora_webhook_secret`` using constant-time
       comparison (secrets.compare_digest) to prevent timing attacks.
-    - Returns 401 when the header is missing, the value is wrong, or the secret
-      is not configured (fail-closed: enabled + unconfigured → deny all).
+    - Returns 401 when both headers are missing, the value is wrong, or the
+      secret is not configured (fail-closed: enabled + unconfigured → deny all).
 
     ElevenLabs sends this header on every webhook call when configured in their
     dashboard. See: https://elevenlabs.io/docs/conversational-ai/customization/security
@@ -306,13 +308,25 @@ def require_webhook_secret(
             },
         )
 
+    # ElevenLabs sends secrets via two different mechanisms:
+    # - Webhooks (post-call, initiation): X-Webhook-Secret header
+    # - Custom LLM: Authorization: Bearer <api_key>
+    # Accept either so the same dependency works for all ElevenLabs endpoints.
     presented_secret = request.headers.get("X-Webhook-Secret")
+    if presented_secret is None:
+        # Fallback: check Authorization: Bearer <token> (Custom LLM path)
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            presented_secret = auth_header.removeprefix("Bearer ").strip()
     if presented_secret is None:
         raise HTTPException(
             status_code=401,
             detail={
                 "error": "webhook_auth_required",
-                "message": "X-Webhook-Secret header is required when webhook auth is enabled",
+                "message": (
+                    "X-Webhook-Secret header or Authorization: Bearer token "
+                    "is required when webhook auth is enabled"
+                ),
             },
         )
 
