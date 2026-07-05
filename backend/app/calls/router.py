@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.calls.schemas import (
     CallAnalysisResponse,
     CallMetricsResponse,
+    ElevenLabsPostCallData,
     ElevenLabsPostCallPayload,
     EndSessionRequest,
     EndSessionResponse,
@@ -196,8 +197,11 @@ async def elevenlabs_postcall_webhook(body: ElevenLabsPostCallPayload):
       to enable fallback linkage when conversation_id is not yet associated (WU2 Fix B1).
     - Idempotent on session status.
     """
+    # Unwrap the two-level ElevenLabs envelope — all conversation data lives in body.data.
+    data = body.data
+
     async with db_session() as db:
-        cs = await get_session_by_elevenlabs_id(db, body.conversation_id)
+        cs = await get_session_by_elevenlabs_id(db, data.conversation_id)
 
         # WU2 Fix B1 + RE2: attempt outbound linkage via provider_call_id fallback.
         # If the session is not found by conversation_id (inbound lookup), try
@@ -210,34 +214,63 @@ async def elevenlabs_postcall_webhook(body: ElevenLabsPostCallPayload):
         # any webhook payload could match any tenant's outbound session by provider_call_id
         # — a cross-tenant linkage risk. We prefer safe no-match over convenience:
         # if client_id is absent, we skip the provider_call_id fallback entirely.
-        if cs is None and body.provider_call_id is not None and body.client_id is not None:
+        if cs is None and data.provider_call_id is not None and data.client_id is not None:
             linked = await link_outbound_session_by_webhook(
                 db,
-                conversation_id=body.conversation_id,
-                provider_call_id=body.provider_call_id,
-                client_id=body.client_id,
+                conversation_id=data.conversation_id,
+                provider_call_id=data.provider_call_id,
+                client_id=data.client_id,
             )
             if linked is not None:
                 logger.info(
                     "postcall_outbound_linked_via_provider_call_id",
                     session_id=linked.id,
-                    conversation_id=body.conversation_id,
-                    provider_call_id=body.provider_call_id,
-                    client_id=body.client_id,
+                    conversation_id=data.conversation_id,
+                    provider_call_id=data.provider_call_id,
+                    client_id=data.client_id,
                 )
                 return {"status": "ok", "session_id": linked.id, "linked_via": "provider_call_id"}
+
+        # Step 3: Orphan outbound session fallback — by client_id + lead_id
+        # extracted from conversation_initiation_client_data.custom_llm_extra_body.
+        # This handles the case where ElevenLabs' outbound API timed out and Qora
+        # never received the conversation_id in the API response. The webhook still
+        # carries the original conversation_initiation_client_data that Qora injected,
+        # letting us find the orphan session by tenant + lead.
+        if cs is None:
+            cicd = data.conversation_initiation_client_data or {}
+            extra_body = cicd.get("custom_llm_extra_body", {}) if isinstance(cicd, dict) else {}
+            cicd_client_id = extra_body.get("client_id") if isinstance(extra_body, dict) else None
+            cicd_lead_id = extra_body.get("lead_id") if isinstance(extra_body, dict) else None
+
+            if cicd_client_id and cicd_lead_id:
+                linked = await link_outbound_session_by_webhook(
+                    db,
+                    conversation_id=data.conversation_id,
+                    client_id=cicd_client_id,
+                    lead_id=cicd_lead_id,
+                )
+                if linked is not None:
+                    logger.info(
+                        "postcall_outbound_linked_via_orphan_match",
+                        session_id=linked.id,
+                        conversation_id=data.conversation_id,
+                        client_id=cicd_client_id,
+                        lead_id=cicd_lead_id,
+                    )
+                    return {"status": "ok", "session_id": linked.id, "linked_via": "orphan_session_match"}
 
         if cs is None:
             logger.warning(
                 "postcall_unknown_conversation",
-                conversation_id=body.conversation_id,
+                conversation_id=data.conversation_id,
             )
             raise HTTPException(
                 status_code=404,
-                detail=f"No session found for conversation_id={body.conversation_id!r}",
+                detail=f"No session found for conversation_id={data.conversation_id!r}",
             )
 
-        el_transcript = body.transcript or []
+        el_transcript = data.transcript or []
 
         if cs.status == "initiated":
             # Session was never closed — close it now
@@ -250,7 +283,7 @@ async def elevenlabs_postcall_webhook(body: ElevenLabsPostCallPayload):
             logger.info(
                 "postcall_closed_orphan_session",
                 session_id=cs.id,
-                conversation_id=body.conversation_id,
+                conversation_id=data.conversation_id,
                 el_turn_count=len(el_transcript),
             )
 

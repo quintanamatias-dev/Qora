@@ -20,7 +20,11 @@ ID linkage chain (design.md):
 Lookup priority:
   1. Find by elevenlabs_conversation_id (fast path — already set on session)
   2. Fallback: find by provider_call_id (first-time linkage)
-  3. Return None if neither finds a session (orphan webhook — log only)
+  3. Fallback: find orphan outbound session by client_id + lead_id
+     (used when the outbound API timed out and Qora never received the
+      conversation_id in the API response — the webhook carries the original
+      conversation_initiation_client_data that Qora injected)
+  4. Return None if no session found (log only)
 
 Tenant/outbound scoping (WU2 Fix B2):
   Both lookup helpers accept an optional client_id to scope results to a
@@ -59,6 +63,7 @@ async def link_outbound_session_by_webhook(
     conversation_id: str,
     provider_call_id: str | None = None,
     client_id: str | None = None,
+    lead_id: str | None = None,
 ) -> CallSession | None:
     """Link an outbound CallSession to a webhook conversation event.
 
@@ -74,7 +79,11 @@ async def link_outbound_session_by_webhook(
          (Session was already linked in a prior turn or matched by conv_id)
       2. Fallback: find by provider_call_id (first-time linkage — conversation
          started but elevenlabs_conversation_id was not yet stored)
-      3. If no session found: return None
+      3. Orphan fallback: find by client_id + lead_id (used when the outbound
+         API timed out and Qora never received the conversation_id; the webhook
+         carries conversation_initiation_client_data with the original
+         client_id + lead_id that Qora injected)
+      4. If no session found: return None
 
     On success:
       - Sets telephony_status = 'completed' (FAS-safe — webhook = evidence)
@@ -93,6 +102,11 @@ async def link_outbound_session_by_webhook(
         client_id: Optional tenant ID to scope lookups. When provided, both
             primary and fallback lookups include client_id in the WHERE clause
             to prevent cross-tenant session matching (WU2 Fix B2).
+        lead_id: Optional lead ID for the orphan-session fallback (Step 3).
+            When both client_id and lead_id are provided, a time-bounded search
+            is performed for the most recent orphan outbound session (no
+            elevenlabs_conversation_id, non-terminal telephony_status, created
+            within the last 10 minutes) for this tenant+lead combination.
 
     Returns:
         Updated CallSession, or None if no outbound session was found.
@@ -111,12 +125,31 @@ async def link_outbound_session_by_webhook(
     if cs is None and provider_call_id is not None:
         cs = await _find_by_provider_call_id(db, provider_call_id, client_id=client_id)
 
+    # ------------------------------------------------------------------
+    # Step 3: Orphan session fallback — by client_id + lead_id
+    # (Used when the outbound API timed out and Qora never received the
+    #  conversation_id. The webhook carries conversation_initiation_client_data
+    #  with the original client_id and lead_id that Qora injected.)
+    # ------------------------------------------------------------------
+    if cs is None and client_id is not None and lead_id is not None:
+        cs = await _find_orphan_outbound_session(db, client_id=client_id, lead_id=lead_id)
+        if cs is not None:
+            logger.info(
+                "outbound_webhook_orphan_session_matched",
+                session_id=cs.id,
+                conversation_id=conversation_id,
+                client_id=client_id,
+                lead_id=lead_id,
+                orphan_telephony_status=cs.telephony_status,
+            )
+
     if cs is None:
         logger.warning(
             "outbound_webhook_session_not_found",
             conversation_id=conversation_id,
             provider_call_id=provider_call_id,
             client_id=client_id,
+            lead_id=lead_id,
         )
         return None
 
@@ -222,6 +255,69 @@ async def _find_by_provider_call_id(
     )
     if client_id is not None:
         stmt = stmt.where(CallSession.client_id == client_id)
+
+    result = await db.execute(stmt)
+    return result.scalars().first()
+
+
+async def _find_orphan_outbound_session(
+    db: AsyncSession,
+    *,
+    client_id: str,
+    lead_id: str,
+    started_after_minutes: int = 10,
+) -> CallSession | None:
+    """Find a recent orphan outbound session for a specific lead.
+
+    An "orphan" session is an outbound session with no elevenlabs_conversation_id
+    that is stuck in a non-terminal telephony_status (dialing, ringing, in_call,
+    failed, or stale_in_call), created within the last N minutes.
+
+    This fallback fires when the ElevenLabs outbound API timed out and Qora never
+    received the conversation_id in the API response. The post-call webhook arrives
+    with a conversation_id that Qora doesn't know about, but it also carries the
+    original conversation_initiation_client_data (client_id + lead_id) that Qora
+    injected at call time — allowing us to find the orphan session.
+
+    Safety constraints:
+    - Scoped to client_id + lead_id (no cross-tenant, no cross-lead matching)
+    - Only matches sessions WITHOUT elevenlabs_conversation_id (truly orphan)
+    - Time-bounded to prevent matching ancient sessions
+    - Returns the MOST RECENT match (ORDER BY started_at DESC LIMIT 1)
+    - Only matches non-terminal statuses (not completed, not no_answer, not
+      recurrent_error) — terminal sessions do not need linking
+
+    Args:
+        db: Active async DB session.
+        client_id: Tenant ID — required, no cross-tenant matching allowed.
+        lead_id: Lead ID — required, no cross-lead matching allowed.
+        started_after_minutes: How far back to search for orphan sessions.
+            Defaults to 10 minutes to avoid matching ancient sessions.
+
+    Returns:
+        Most recent matching orphan CallSession, or None if not found.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=started_after_minutes)
+
+    # Non-terminal outbound statuses that indicate an orphan waiting for linkage.
+    # Excludes: completed (already done), no_answer (call not answered),
+    # recurrent_error (repeated failures — not a live conversation).
+    _ORPHAN_STATUSES = ("dialing", "ringing", "in_call", "failed", "stale_in_call")
+
+    stmt = (
+        select(CallSession)
+        .where(
+            CallSession.client_id == client_id,
+            CallSession.lead_id == lead_id,
+            CallSession.telephony_status.in_(_ORPHAN_STATUSES),
+            CallSession.elevenlabs_conversation_id.is_(None),
+            CallSession.started_at >= cutoff,
+        )
+        .order_by(CallSession.started_at.desc())
+        .limit(1)
+    )
 
     result = await db.execute(stmt)
     return result.scalars().first()
