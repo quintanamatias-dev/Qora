@@ -302,9 +302,11 @@ async def _find_orphan_outbound_session(
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=started_after_minutes)
 
     # Non-terminal outbound statuses that indicate an orphan waiting for linkage.
-    # Excludes: completed (already done), no_answer (call not answered),
+    # Includes no_answer: probe may set this before the post-call webhook arrives
+    # with the conversation_id — the session still needs linkage.
+    # Excludes: completed (already done),
     # recurrent_error (repeated failures — not a live conversation).
-    _ORPHAN_STATUSES = ("dialing", "ringing", "in_call", "failed", "stale_in_call")
+    _ORPHAN_STATUSES = ("dialing", "ringing", "in_call", "failed", "stale_in_call", "no_answer")
 
     stmt = (
         select(CallSession)
