@@ -77,6 +77,7 @@ async def _seed_session(
     started_at: datetime | None = None,
     summary: str | None = None,
     extracted_facts: dict | None = None,
+    telephony_status: str | None = None,
 ):
     """Helper: insert a CallSession with optional summary/extracted_facts."""
     import uuid
@@ -92,6 +93,7 @@ async def _seed_session(
             started_at=started_at or datetime.now(timezone.utc),
             summary=summary,
             extracted_facts=extracted_facts,
+            telephony_status=telephony_status,
         )
         sess.add(cs)
         await sess.commit()
@@ -398,3 +400,98 @@ async def test_list_calls_no_cross_tenant_leak(app_client):
     assert response.status_code == 200
     data = response.json()
     assert data == []
+
+
+# ---------------------------------------------------------------------------
+# Scenario: Ghost filter — outbound sessions with telephony_status are NOT filtered
+# ---------------------------------------------------------------------------
+
+
+async def test_outbound_session_with_telephony_status_not_filtered_as_ghost(app_client):
+    """GIVEN an outbound session with status='initiated', no turns, no duration,
+         BUT telephony_status='ringing'
+    WHEN GET /calls is called
+    THEN the session must appear in the response — it is a real outbound call,
+         not a ghost WebSocket connection attempt.
+
+    Root cause: the ghost filter removed all status='initiated' sessions with no
+    turns/duration, which included outbound sessions that hadn't completed yet.
+    After the fix, a non-null telephony_status marks a real outbound call and
+    exempts it from the ghost filter.
+    """
+    client, seeded_db = app_client
+
+    outbound_id = await _seed_session(
+        seeded_db,
+        status="initiated",
+        telephony_status="ringing",
+        # No duration, no turns — exactly the conditions for ghost filtering
+        summary=None,
+        extracted_facts=None,
+    )
+
+    response = await client.get(
+        "/api/v1/calls", params={"client_id": "quintana-seguros"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    ids_returned = [item["id"] for item in data]
+    assert outbound_id in ids_returned, (
+        "Outbound session with telephony_status='ringing' must NOT be filtered as a ghost. "
+        "Only sessions with telephony_status=NULL should be filtered."
+    )
+
+
+async def test_ghost_inbound_session_without_telephony_status_is_filtered(app_client):
+    """GIVEN an inbound ghost session with status='initiated', no turns, no duration,
+         AND telephony_status=None (no outbound tracking)
+    WHEN GET /calls is called
+    THEN the session must NOT appear in the response — it is a ghost.
+    """
+    client, seeded_db = app_client
+
+    ghost_id = await _seed_session(
+        seeded_db,
+        status="initiated",
+        telephony_status=None,  # inbound ghost — no telephony tracking
+        summary=None,
+        extracted_facts=None,
+    )
+
+    response = await client.get(
+        "/api/v1/calls", params={"client_id": "quintana-seguros"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    ids_returned = [item["id"] for item in data]
+    assert ghost_id not in ids_returned, (
+        "Inbound ghost session (status='initiated', no turns, no duration, "
+        "telephony_status=NULL) must be filtered out of the call list."
+    )
+
+
+async def test_outbound_session_with_dialing_status_not_filtered(app_client):
+    """GIVEN an outbound session with status='initiated', telephony_status='dialing'
+    WHEN GET /calls is called
+    THEN the session appears — even 'dialing' (pre-dial) counts as a real outbound call.
+    """
+    client, seeded_db = app_client
+
+    dialing_id = await _seed_session(
+        seeded_db,
+        status="initiated",
+        telephony_status="dialing",
+    )
+
+    response = await client.get(
+        "/api/v1/calls", params={"client_id": "quintana-seguros"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    ids_returned = [item["id"] for item in data]
+    assert dialing_id in ids_returned, (
+        "Outbound session with telephony_status='dialing' must appear in call list."
+    )
