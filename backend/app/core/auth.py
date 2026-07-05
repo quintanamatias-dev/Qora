@@ -313,16 +313,6 @@ def require_webhook_secret(
     # - Webhooks (post-call, initiation): X-Webhook-Secret header
     # - Custom LLM: Authorization: Bearer <api_key>
     # Accept either so the same dependency works for all ElevenLabs endpoints.
-    import structlog
-    _auth_log = structlog.get_logger()
-    _auth_log.debug(
-        "webhook_auth_headers_debug",
-        has_x_webhook_secret=("X-Webhook-Secret" in request.headers),
-        has_authorization=("Authorization" in request.headers),
-        x_webhook_secret_len=len(request.headers.get("X-Webhook-Secret", "")),
-        authorization_prefix=request.headers.get("Authorization", "")[:20] if request.headers.get("Authorization") else None,
-        path=str(request.url.path),
-    )
     presented_secret = request.headers.get("X-Webhook-Secret")
     if presented_secret is None:
         # Fallback: check Authorization: Bearer <token> (Custom LLM path)
