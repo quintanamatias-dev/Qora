@@ -55,6 +55,20 @@ _STALE_TELEPHONY_STATUSES = frozenset({"dialing", "ringing", "in_call"})
 # Design decision: 30 minutes (design.md "30-min ceiling").
 STALE_TELEPHONY_THRESHOLD_MINUTES = 30
 
+# Shorter stale threshold specifically for 'ringing' sessions.
+#
+# A session stuck in 'ringing' for more than 5 minutes is almost certainly a
+# SIP routing failure (e.g. Telnyx 404 UNALLOCATED_NUMBER) where ElevenLabs
+# accepted the call but the phone never rang. The probe handles detection at
+# 8 seconds post-dial; this shorter sweep threshold is a safety net for the
+# cases where the probe could not fetch evidence (ElevenLabs conversations API
+# returned 404 or timed out).
+#
+# 'in_call' and 'dialing' keep the 30-minute ceiling:
+#   - 'in_call': the call is genuinely connected; cutting it short would be wrong.
+#   - 'dialing': the INVITE is still in-flight; 30 minutes gives enough headroom.
+STALE_RINGING_THRESHOLD_MINUTES = 5
+
 # How often the background loop runs.
 _SWEEP_INTERVAL_SECONDS = 300  # Every 5 minutes is sufficient for a 30-min threshold
 
@@ -64,7 +78,14 @@ async def sweep_stale_outbound_sessions(db: AsyncSession) -> int:
 
     A session is stale if:
     - telephony_status is in {dialing, ringing, in_call}
-    - started_at is older than STALE_TELEPHONY_THRESHOLD_MINUTES
+    - started_at is older than the status-specific threshold:
+        * 'ringing'          → STALE_RINGING_THRESHOLD_MINUTES (5 min)
+        * 'dialing', 'in_call' → STALE_TELEPHONY_THRESHOLD_MINUTES (30 min)
+
+    The shorter threshold for 'ringing' is a safety net for SIP routing failures
+    (e.g. Telnyx 404 UNALLOCATED_NUMBER) where the probe could not fetch evidence.
+    A session stuck in 'ringing' for more than 5 minutes almost certainly means
+    the phone never rang; sweeping it sooner lets the operator retry immediately.
 
     Transition logic (FAS-safe):
     - If session_end_received IS TRUE: → 'completed'
@@ -82,14 +103,26 @@ async def sweep_stale_outbound_sessions(db: AsyncSession) -> int:
     Returns:
         Number of sessions transitioned (0 if none found).
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(
-        minutes=STALE_TELEPHONY_THRESHOLD_MINUTES
-    )
+    now = datetime.now(timezone.utc)
+    default_cutoff = now - timedelta(minutes=STALE_TELEPHONY_THRESHOLD_MINUTES)
+    ringing_cutoff = now - timedelta(minutes=STALE_RINGING_THRESHOLD_MINUTES)
+
+    from sqlalchemy import or_, and_
 
     result = await db.execute(
         select(CallSession).where(
-            CallSession.telephony_status.in_(_STALE_TELEPHONY_STATUSES),
-            CallSession.started_at < cutoff,
+            or_(
+                # 'ringing' uses the shorter 5-minute threshold
+                and_(
+                    CallSession.telephony_status == "ringing",
+                    CallSession.started_at < ringing_cutoff,
+                ),
+                # 'dialing' and 'in_call' use the standard 30-minute threshold
+                and_(
+                    CallSession.telephony_status.in_({"dialing", "in_call"}),
+                    CallSession.started_at < default_cutoff,
+                ),
+            )
         )
     )
     stale_sessions = list(result.scalars().all())
@@ -97,7 +130,6 @@ async def sweep_stale_outbound_sessions(db: AsyncSession) -> int:
     if not stale_sessions:
         return 0
 
-    now = datetime.now(timezone.utc)
     swept_ids: list[str] = []
     completed_ids: list[str] = []
     stale_ids: list[str] = []

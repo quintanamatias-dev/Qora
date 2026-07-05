@@ -609,3 +609,415 @@ class TestServiceHookFiresProbe:
             "dial_outbound_call must fire probe via create_task even on ambiguous timeout — "
             "the probe is the reconciliation mechanism for unknown states"
         )
+
+
+# ---------------------------------------------------------------------------
+# SIP routing failure detection — production fix (Telnyx 404 UNALLOCATED_NUMBER)
+# ---------------------------------------------------------------------------
+
+
+class TestProbeDetectsSipRoutingFailure:
+    """Probe detects quick SIP failure (4xx/5xx) and transitions session to no_answer."""
+
+    def _make_ringing_session(self, session_id: str = "sess-sip-fail") -> MagicMock:
+        cs = _make_call_session(session_id=session_id, reconciled_at=None)
+        cs.telephony_status = "ringing"
+        return cs
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_probe_transitions_to_no_answer_on_sip_404(self):
+        """GIVEN ElevenLabs accepted the call AND SIP final response is 404
+        AND conversation status is 'done' with no successful interaction
+        WHEN probe_call_evidence runs
+        THEN telephony_status → 'no_answer', SIP fields written, reconciled_at set,
+             and probe_detected_sip_routing_failure is logged.
+
+        Production incident: Telnyx returns 404 UNALLOCATED_NUMBER on Argentina
+        mobile numbers. Session was stuck in 'ringing' for 30 minutes.
+        """
+        from app.outbound.probe import probe_call_evidence
+
+        session_id = "sess-sip-404"
+        agent_id = "agent-abc"
+        started_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+
+        cs = self._make_ringing_session(session_id=session_id)
+        cs.started_at = started_at
+        factory = _make_db_with_session(cs)
+
+        respx.get(_CONVERSATIONS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "conversations": [
+                        {
+                            "conversation_id": "conv-sip-fail-001",
+                            "agent_id": agent_id,
+                            "status": "done",
+                            "call_successful": "false",
+                            "start_time_unix_secs": int(started_at.timestamp()),
+                        }
+                    ]
+                },
+            )
+        )
+
+        sip_url = f"{_EL_BASE}/conversational_ai/conversations/conv-sip-fail-001/sip_messages"
+        respx.get(sip_url).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "sip_messages": [
+                        {
+                            "call_id": "otb_6001kwq98hjae6mv22tyyw13m2p1",
+                            "method": "INVITE",
+                            "direction": "outbound",
+                            "timestamp": started_at.isoformat(),
+                        },
+                        {
+                            "call_id": "otb_6001kwq98hjae6mv22tyyw13m2p1",
+                            "status_code": 404,
+                            "reason_phrase": "Not Found",
+                            "direction": "inbound",
+                            "timestamp": (started_at + timedelta(seconds=1)).isoformat(),
+                        },
+                    ]
+                },
+            )
+        )
+
+        settings = _make_settings()
+        with patch("app.outbound.probe.async_session_factory", factory):
+            await probe_call_evidence(
+                session_id=session_id,
+                agent_id=agent_id,
+                to_number="+5491140485464",
+                settings=settings,
+                delay=0,
+            )
+
+        assert cs.telephony_status == "no_answer", (
+            f"SIP 404 routing failure must transition telephony_status to 'no_answer', "
+            f"got {cs.telephony_status!r}"
+        )
+        assert cs.sip_status_code == 404
+        assert cs.sip_reason == "Not Found"
+        assert cs.sip_call_id == "otb_6001kwq98hjae6mv22tyyw13m2p1"
+        assert cs.reconciled_at is not None
+        assert cs.reconciliation_source == "probe"
+
+        db = factory.return_value
+        db.commit.assert_called()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_probe_transitions_to_no_answer_on_sip_486_busy(self):
+        """GIVEN SIP final response is 486 Busy Here
+        WHEN probe_call_evidence runs
+        THEN telephony_status → 'no_answer'.
+        """
+        from app.outbound.probe import probe_call_evidence
+
+        session_id = "sess-sip-486"
+        agent_id = "agent-abc"
+        started_at = datetime.now(timezone.utc) - timedelta(seconds=8)
+
+        cs = self._make_ringing_session(session_id=session_id)
+        cs.started_at = started_at
+        factory = _make_db_with_session(cs)
+
+        respx.get(_CONVERSATIONS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "conversations": [
+                        {
+                            "conversation_id": "conv-busy-001",
+                            "agent_id": agent_id,
+                            "status": "failed",
+                            "call_successful": None,
+                            "start_time_unix_secs": int(started_at.timestamp()),
+                        }
+                    ]
+                },
+            )
+        )
+        sip_url = f"{_EL_BASE}/conversational_ai/conversations/conv-busy-001/sip_messages"
+        respx.get(sip_url).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "sip_messages": [
+                        {
+                            "call_id": "otb_busy_test",
+                            "status_code": 486,
+                            "reason_phrase": "Busy Here",
+                            "direction": "inbound",
+                            "timestamp": started_at.isoformat(),
+                        }
+                    ]
+                },
+            )
+        )
+
+        settings = _make_settings()
+        with patch("app.outbound.probe.async_session_factory", factory):
+            await probe_call_evidence(
+                session_id=session_id,
+                agent_id=agent_id,
+                to_number="+14155552671",
+                settings=settings,
+                delay=0,
+            )
+
+        assert cs.telephony_status == "no_answer"
+        assert cs.sip_status_code == 486
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_probe_does_not_flag_sip_200_as_failure(self):
+        """GIVEN SIP final response is 200 OK
+        WHEN probe_call_evidence runs
+        THEN telephony_status is NOT changed to 'no_answer'.
+
+        A successful SIP response must never be classified as a routing failure.
+        """
+        from app.outbound.probe import probe_call_evidence
+
+        session_id = "sess-sip-200"
+        agent_id = "agent-abc"
+        started_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+
+        cs = self._make_ringing_session(session_id=session_id)
+        cs.started_at = started_at
+        # Simulate session already in_call (answered)
+        cs.telephony_status = "in_call"
+        factory = _make_db_with_session(cs)
+
+        respx.get(_CONVERSATIONS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "conversations": [
+                        {
+                            "conversation_id": "conv-answered-001",
+                            "agent_id": agent_id,
+                            "status": "done",
+                            "call_successful": "success",
+                            "start_time_unix_secs": int(started_at.timestamp()),
+                        }
+                    ]
+                },
+            )
+        )
+        sip_url = f"{_EL_BASE}/conversational_ai/conversations/conv-answered-001/sip_messages"
+        respx.get(sip_url).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "sip_messages": [
+                        {
+                            "call_id": "otb_answered_test",
+                            "status_code": 200,
+                            "reason_phrase": "OK",
+                            "direction": "inbound",
+                            "timestamp": started_at.isoformat(),
+                        }
+                    ]
+                },
+            )
+        )
+
+        settings = _make_settings()
+        with patch("app.outbound.probe.async_session_factory", factory):
+            await probe_call_evidence(
+                session_id=session_id,
+                agent_id=agent_id,
+                to_number="+14155552671",
+                settings=settings,
+                delay=0,
+            )
+
+        # SIP 200 + call_successful='success' must NOT change telephony_status
+        assert cs.telephony_status == "in_call", (
+            f"SIP 200 OK must not flip telephony_status to 'no_answer', "
+            f"got {cs.telephony_status!r}"
+        )
+        # But SIP fields ARE written
+        assert cs.sip_status_code == 200
+        assert cs.reconciled_at is not None
+
+
+class TestProbeEvidenceUnavailable:
+    """Probe handles the case where ElevenLabs conversations API returns 404.
+
+    Known issue: ElevenLabs conversations API may return 404 for very recent calls.
+    The probe must not crash. Session is left for the stale sweep (safety net).
+    """
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_probe_handles_conversations_api_404_gracefully(self):
+        """GIVEN ElevenLabs conversations API returns 404
+        WHEN probe_call_evidence runs
+        THEN no exception is raised, reconciled_at remains NULL (sweep picks it up).
+
+        Known issue: ElevenLabs returns 404 for very recent calls on the conversations
+        list endpoint. The probe must fail safely and let the sweep handle it later.
+        """
+        from app.outbound.probe import probe_call_evidence
+
+        cs = _make_call_session(reconciled_at=None)
+        cs.telephony_status = "ringing"
+        factory = _make_db_with_session(cs)
+
+        # ElevenLabs conversations API returns 404 (known intermittent issue)
+        respx.get(_CONVERSATIONS_URL).mock(
+            return_value=httpx.Response(404, json={"detail": "Not found"})
+        )
+
+        settings = _make_settings()
+
+        # Must NOT raise — probe is fire-and-forget
+        with patch("app.outbound.probe.async_session_factory", factory):
+            await probe_call_evidence(
+                session_id="sess-conv-404",
+                agent_id="agent-abc",
+                to_number="+14155552671",
+                settings=settings,
+                delay=0,
+            )
+
+        # Session is unchanged — sweep will handle it via STALE_RINGING_THRESHOLD
+        assert cs.reconciled_at is None, (
+            "reconciled_at must remain NULL when probe cannot fetch evidence — "
+            "stale sweep is the safety net"
+        )
+        assert cs.telephony_status == "ringing", (
+            "telephony_status must not be changed when probe has no evidence"
+        )
+        # DB must NOT be committed on failure
+        db = factory.return_value
+        db.commit.assert_not_called()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_probe_handles_sip_messages_api_404_gracefully(self):
+        """GIVEN conversation list returns a match but SIP messages API returns 404
+        WHEN probe_call_evidence runs
+        THEN no exception is raised, reconciled_at remains NULL.
+        """
+        from app.outbound.probe import probe_call_evidence
+
+        session_id = "sess-sip-msg-404"
+        agent_id = "agent-abc"
+        started_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+
+        cs = _make_call_session(
+            session_id=session_id,
+            agent_id=agent_id,
+            started_at=started_at,
+            reconciled_at=None,
+        )
+        cs.telephony_status = "ringing"
+        factory = _make_db_with_session(cs)
+
+        respx.get(_CONVERSATIONS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "conversations": [
+                        {
+                            "conversation_id": "conv-sip-404",
+                            "agent_id": agent_id,
+                            "status": "done",
+                            "start_time_unix_secs": int(started_at.timestamp()),
+                        }
+                    ]
+                },
+            )
+        )
+
+        sip_url = f"{_EL_BASE}/conversational_ai/conversations/conv-sip-404/sip_messages"
+        respx.get(sip_url).mock(
+            return_value=httpx.Response(404, json={"detail": "Not found"})
+        )
+
+        settings = _make_settings()
+        with patch("app.outbound.probe.async_session_factory", factory):
+            await probe_call_evidence(
+                session_id=session_id,
+                agent_id=agent_id,
+                to_number="+14155552671",
+                settings=settings,
+                delay=0,
+            )
+
+        assert cs.reconciled_at is None
+        db = factory.return_value
+        db.commit.assert_not_called()
+
+
+class TestIsSipRoutingFailureUnit:
+    """Unit tests for the _is_sip_routing_failure helper directly."""
+
+    def _make_conv(
+        self,
+        status: str | None = "done",
+        call_successful: str | None = None,
+    ) -> MagicMock:
+        conv = MagicMock()
+        conv.status = status
+        conv.call_successful = call_successful
+        return conv
+
+    def test_sip_404_done_no_success_is_failure(self):
+        from app.outbound.probe import _is_sip_routing_failure
+
+        assert _is_sip_routing_failure(self._make_conv("done", None), 404) is True
+
+    def test_sip_404_failed_status_is_failure(self):
+        from app.outbound.probe import _is_sip_routing_failure
+
+        assert _is_sip_routing_failure(self._make_conv("failed", None), 404) is True
+
+    def test_sip_486_failed_is_failure(self):
+        from app.outbound.probe import _is_sip_routing_failure
+
+        assert _is_sip_routing_failure(self._make_conv("failed", None), 486) is True
+
+    def test_sip_503_done_is_failure(self):
+        from app.outbound.probe import _is_sip_routing_failure
+
+        assert _is_sip_routing_failure(self._make_conv("done", "false"), 503) is True
+
+    def test_sip_200_success_is_not_failure(self):
+        from app.outbound.probe import _is_sip_routing_failure
+
+        assert _is_sip_routing_failure(self._make_conv("done", "success"), 200) is False
+
+    def test_sip_200_no_call_successful_is_not_failure(self):
+        """SIP 200 is never a routing failure regardless of call_successful."""
+        from app.outbound.probe import _is_sip_routing_failure
+
+        assert _is_sip_routing_failure(self._make_conv("done", None), 200) is False
+
+    def test_none_sip_status_code_is_not_failure(self):
+        """Without an explicit SIP error code we cannot confirm failure."""
+        from app.outbound.probe import _is_sip_routing_failure
+
+        assert _is_sip_routing_failure(self._make_conv("failed", None), None) is False
+
+    def test_sip_404_success_call_is_not_failure(self):
+        """If call_successful='success', do not override even with 4xx SIP code."""
+        from app.outbound.probe import _is_sip_routing_failure
+
+        # Unusual combination but must not classify as failure to avoid false positives
+        assert _is_sip_routing_failure(self._make_conv("done", "success"), 404) is False
+
+    def test_sip_404_processing_conv_status_is_not_failure(self):
+        """Conversation status 'processing' is not a terminal failure state."""
+        from app.outbound.probe import _is_sip_routing_failure
+
+        assert _is_sip_routing_failure(self._make_conv("processing", None), 404) is False

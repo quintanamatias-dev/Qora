@@ -10,6 +10,20 @@ Design decisions (from design.md):
   - Idempotent: if reconciled_at is already set, exits immediately without API calls
   - 8-second default delay to allow ElevenLabs SIP state to settle after INVITE
 
+SIP routing failure detection (production fix):
+  When ElevenLabs accepts the call (returns conversation_id + sip_call_id) but
+  Telnyx returns SIP 4xx/5xx (e.g. 404 UNALLOCATED_NUMBER), the conversation ends
+  almost immediately with no real interaction. The probe detects this pattern and
+  transitions the session to 'no_answer' so the operator can retry immediately
+  instead of waiting up to 30 minutes for the stale sweep.
+
+  Detection criteria (both must be true):
+    1. SIP status code is 4xx or 5xx (explicit routing failure).
+    2. Conversation status is "failed" OR "ended" / "done" with call_successful != "success"
+       (i.e. no real interaction happened).
+
+  When detected: telephony_status → 'no_answer', SIP fields written, reconciled_at set.
+
 Usage:
     import asyncio
     from app.outbound.probe import probe_call_evidence
@@ -47,6 +61,31 @@ _PROBE_CONVERSATION_WINDOW_SECONDS = 120
 # How far from started_at a conversation can be and still be considered a match.
 # Within this window + a small buffer for processing time.
 _MATCH_WINDOW_SECONDS = 60
+
+# SIP routing failure detection thresholds.
+#
+# A conversation that ended within this many seconds is considered "quick" — a
+# strong signal that the SIP route failed before the phone ever rang. SIP
+# 4xx/5xx responses arrive within a couple of seconds of the INVITE; any
+# conversation that ended in under 10 seconds almost certainly never had real
+# interaction.
+_SIP_QUICK_FAILURE_DURATION_SECONDS = 10
+
+# SIP status code ranges that represent routing failures.
+# 4xx = client errors (404 Not Found, 486 Busy, 487 Cancelled…)
+# 5xx = server errors (500 Internal, 503 Unavailable…)
+_SIP_FAILURE_STATUS_MIN = 400
+
+# Conversation statuses that indicate the call ended without real interaction.
+# ElevenLabs may report "failed", "done", or "ended" for a SIP-routed call that
+# was rejected before the remote party answered.
+_SIP_FAILURE_CONV_STATUSES = frozenset({"failed", "done", "ended"})
+
+# Values of call_successful that confirm the call reached a real interaction.
+# When call_successful is this value AND the SIP status is 200, it is NOT a
+# routing failure. Any other value (None, "false", "unknown") combined with a
+# 4xx/5xx SIP response is treated as a routing failure.
+_SIP_CALL_SUCCESSFUL_VALUES = frozenset({"success", "true"})
 
 
 # Module-level reference patched in tests and set at runtime.
@@ -198,7 +237,27 @@ async def _run_probe(
             sip_response.sip_messages
         )
 
-        # Step 5: Write to CallSession and commit
+        # Step 5: Detect SIP routing failure and update telephony_status.
+        #
+        # When ElevenLabs accepts the call but Telnyx returns SIP 4xx/5xx
+        # (e.g. 404 UNALLOCATED_NUMBER), the conversation ends almost immediately
+        # with no real interaction. Detect this pattern and transition the session
+        # to 'no_answer' so the operator can retry right away instead of waiting
+        # up to 30 minutes for the stale sweep.
+        if _is_sip_routing_failure(best_conv, sip_status_code):
+            cs.telephony_status = "no_answer"
+            logger.warning(
+                "probe_detected_sip_routing_failure",
+                session_id=session_id,
+                conversation_id=best_conv.conversation_id,
+                sip_call_id=sip_call_id,
+                sip_status_code=sip_status_code,
+                sip_reason=sip_reason,
+                conversation_status=best_conv.status,
+                call_successful=best_conv.call_successful,
+            )
+
+        # Step 6: Write SIP fields and reconciliation metadata, then commit.
         cs.sip_call_id = sip_call_id
         cs.sip_status_code = sip_status_code
         cs.sip_reason = sip_reason
@@ -296,6 +355,52 @@ def _extract_sip_fields(sip_messages: list) -> tuple[str | None, int | None, str
             reason_phrase = msg.reason_phrase
 
     return call_id, status_code, reason_phrase
+
+
+def _is_sip_routing_failure(conv, sip_status_code: int | None) -> bool:
+    """Return True if the probe evidence indicates a SIP routing failure.
+
+    A routing failure is detected when ALL of the following are true:
+      1. The SIP final response code is 4xx or 5xx (explicit rejection).
+      2. The conversation status indicates the call ended without real interaction
+         (status is "failed", "done", or "ended").
+      3. The call was NOT successful (call_successful is not "success" / "true").
+
+    If sip_status_code is None (e.g. probe got conversation list but SIP messages
+    had no status code), this function returns False — we cannot confirm failure
+    without an explicit error code.
+
+    This intentionally does NOT use conversation duration because the ElevenLabs
+    conversations list endpoint does not reliably return duration for quick SIP
+    failures. The combination of SIP 4xx/5xx + non-success conversation status is
+    a sufficient and more reliable signal.
+
+    Args:
+        conv: ConversationSummary from list_recent_conversations.
+        sip_status_code: Final SIP response code extracted from get_sip_messages,
+                         or None if no status code was found.
+
+    Returns:
+        True if this looks like a SIP routing failure; False otherwise.
+    """
+    if sip_status_code is None:
+        return False
+
+    # Check for SIP 4xx/5xx — explicit routing/rejection error
+    if sip_status_code < _SIP_FAILURE_STATUS_MIN:
+        return False
+
+    # Check conversation status — must be a terminal failure-like status
+    conv_status = (conv.status or "").lower()
+    if conv_status not in _SIP_FAILURE_CONV_STATUSES:
+        return False
+
+    # Call was NOT a real successful interaction
+    call_successful = (conv.call_successful or "").lower()
+    if call_successful in _SIP_CALL_SUCCESSFUL_VALUES:
+        return False
+
+    return True
 
 
 def _resolve_session_factory():
