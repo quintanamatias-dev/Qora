@@ -175,6 +175,33 @@ Fill in this table before beginning measurement:
 
 **Proceed to [measurement-protocol.md](./measurement-protocol.md) only when all 10 items are confirmed.**
 
+---
+
+## 4.1 Voicemail Detection (CRITICAL — Production Cost Protection)
+
+Without voicemail detection, the agent talks to answering machines for 3-5+ minutes per unanswered call, incurring full billing. Configure these three layers:
+
+### Layer 1: ElevenLabs `voicemail_detection` System Tool (Primary)
+
+| Step | Action | Status |
+|------|--------|--------|
+| 1 | In ElevenLabs dashboard → Agent → Tools → Enable `voicemail_detection` | `[ ] confirmed` |
+| 2 | Set `voicemail_message` to empty string (hang up immediately, don't leave a message) | `[ ] confirmed` |
+| 3 | Test with a number known to go to voicemail — verify call ends within seconds | `[ ] confirmed` |
+
+### Layer 2: System Prompt Instruction (Fallback)
+
+The agent's system-prompt includes a `<voicemail_detection>` section instructing it to hang up immediately upon detecting a recorded message, beep, or operator announcement. This is already deployed in the code.
+
+### Layer 3: Max Call Duration (Safety Net)
+
+| Step | Action | Status |
+|------|--------|--------|
+| 1 | In ElevenLabs dashboard → Agent → Settings → Set max call duration to 120s (2 min) | `[ ] confirmed` |
+| 2 | Verify with a test call that exceeds 2 min → call should auto-terminate | `[ ] confirmed` |
+
+> **Why 120s?** A typical lead qualification call runs 60-90s. If the agent hasn't completed or detected voicemail by 120s, something is wrong. The cost of a false positive (cutting a real call at 2 min) is much lower than the cost of a 5-min voicemail conversation.
+
 If any item is blocked, document the blocker in `measurement-protocol.md` under the **Blockers** section before attempting any test call.
 
 ---
