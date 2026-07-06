@@ -286,3 +286,159 @@ async def test_agent_save_when_el_api_down_saves_agent_sync_status_error(sync_ap
         from app.tenants.service import get_agent
         agent = await get_agent(sess, agent_id)
         assert agent.elevenlabs_sync_status == "error"
+
+
+# ---------------------------------------------------------------------------
+# sdd/elevenlabs-config — Task 4.1 RED→GREEN
+# Integration: sync-elevenlabs with all three config groups → PATCH has all blocks
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_resync_endpoint_with_all_three_config_groups_patch_body(sync_app):
+    """GIVEN agent with all three config groups (soft_timeout + voicemail + max_duration)
+    WHEN POST .../sync-elevenlabs is called
+    THEN the PATCH body sent to ElevenLabs contains all three blocks.
+
+    Spec: sdd/elevenlabs-config — Scenario: All three config blocks present
+    """
+    import json as _json
+    client, db_module = sync_app
+    agent_id = await _get_qora_demo_agent_id(client)
+
+    # Set all three config groups on the agent (qora-demo already has voicemail+max_duration from seed)
+    await client.patch(
+        f"/api/v1/clients/qora-demo/agents/{agent_id}",
+        json={
+            "soft_timeout_seconds": 3.0,
+            "voicemail_detection_enabled": True,
+            "max_call_duration_seconds": 120,
+        },
+    )
+
+    captured: dict = {}
+
+    def capture(request, route):
+        captured["body"] = _json.loads(request.content)
+        return httpx.Response(200, json={"ok": True})
+
+    respx.patch(
+        "https://api.elevenlabs.io/v1/convai/agents/agent_8201kra4wjhve0srcwgbtwfetr5n"
+    ).mock(side_effect=capture)
+
+    resp = await client.post(
+        f"/api/v1/clients/qora-demo/agents/{agent_id}/sync-elevenlabs"
+    )
+    assert resp.status_code == 200
+    assert resp.json()["sync_status"] == "synced"
+
+    body = captured.get("body", {})
+    # All three blocks in the PATCH payload
+    assert "turn" in body.get("conversation_config", {}), "missing soft_timeout_config block"
+    assert "max_duration_seconds" in body.get("conversation_config", {}), "missing max_duration block"
+    assert "voicemail_detection" in body.get("platform_settings", {}), "missing voicemail_detection block"
+
+
+# ---------------------------------------------------------------------------
+# sdd/elevenlabs-config — Task 4.2 RED→GREEN
+# Integration: agent create with voicemail + max_duration + EL ID → background sync fires
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_agent_create_with_voicemail_and_max_duration_triggers_sync(sync_app):
+    """GIVEN AgentCreate with elevenlabs_agent_id + voicemail_detection_enabled + max_call_duration_seconds
+    WHEN POST .../agents is called
+    THEN agent saved (201), background sync fires, sync_status becomes 'synced'.
+
+    Spec: sdd/elevenlabs-config — Requirement: Background Sync Upgrade
+    """
+    import asyncio as _asyncio
+    client, db_module = sync_app
+
+    respx.patch("https://api.elevenlabs.io/v1/convai/agents/el-vm-agent").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+
+    resp = await client.post(
+        "/api/v1/clients/qora-demo/agents",
+        json={
+            "slug": "agent-vm-test",
+            "name": "Agent VM Test",
+            "voice_id": "voice-vm",
+            "elevenlabs_agent_id": "el-vm-agent",
+            "voicemail_detection_enabled": True,
+            "max_call_duration_seconds": 180,
+        },
+    )
+    assert resp.status_code == 201
+    agent_id = resp.json()["agent_id"]
+
+    # Allow background task to complete
+    await _asyncio.sleep(0.3)
+
+    async with db_module.async_session_factory() as sess:
+        from app.tenants.service import get_agent
+        agent = await get_agent(sess, agent_id)
+        assert agent.elevenlabs_sync_status == "synced"
+        assert agent.elevenlabs_last_synced_at is not None
+        assert agent.voicemail_detection_enabled is True
+        assert agent.max_call_duration_seconds == 180
+
+
+# ---------------------------------------------------------------------------
+# sdd/elevenlabs-config — Task 4.3 RED→GREEN
+# Integration: sync with only voicemail set → PATCH has only voicemail block
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_resync_endpoint_with_only_voicemail_sends_only_voicemail_block(sync_app):
+    """GIVEN agent with only voicemail_detection_enabled set (no soft_timeout, no max_duration)
+    WHEN POST .../sync-elevenlabs is called
+    THEN PATCH body contains only platform_settings.voicemail_detection.
+
+    Spec: sdd/elevenlabs-config — NULL-Means-Skip Semantics
+    """
+    import json as _json
+    client, db_module = sync_app
+
+    # Create an agent with only voicemail set
+    create_resp = await client.post(
+        "/api/v1/clients/qora-demo/agents",
+        json={
+            "slug": "agent-vm-only",
+            "name": "Agent VM Only",
+            "voice_id": "voice-vm-only",
+            "elevenlabs_agent_id": "el-vm-only-agent",
+            "voicemail_detection_enabled": False,
+        },
+    )
+    assert create_resp.status_code == 201
+    agent_id = create_resp.json()["agent_id"]
+
+    captured: dict = {}
+
+    def capture(request, route):
+        captured["body"] = _json.loads(request.content)
+        return httpx.Response(200, json={"ok": True})
+
+    respx.patch(
+        "https://api.elevenlabs.io/v1/convai/agents/el-vm-only-agent"
+    ).mock(side_effect=capture)
+
+    resp = await client.post(
+        f"/api/v1/clients/qora-demo/agents/{agent_id}/sync-elevenlabs"
+    )
+    assert resp.status_code == 200
+    assert resp.json()["sync_status"] == "synced"
+
+    body = captured.get("body", {})
+    assert "voicemail_detection" in body.get("platform_settings", {}), "missing voicemail_detection"
+    assert body["platform_settings"]["voicemail_detection"]["enabled"] is False
+    # These blocks must NOT be present
+    assert "turn" not in body.get("conversation_config", {}), "unexpected soft_timeout block"
+    assert "max_duration_seconds" not in body.get("conversation_config", {}), "unexpected max_duration"
