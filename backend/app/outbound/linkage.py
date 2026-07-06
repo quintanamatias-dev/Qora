@@ -173,6 +173,20 @@ async def link_outbound_session_by_webhook(
     if cs.elevenlabs_conversation_id is None:
         cs.elevenlabs_conversation_id = conversation_id
 
+    # Retroactive ringing→connected transition (call-state-machine design).
+    # If the session is still 'ringing' when the session-end webhook fires,
+    # we know the call was accepted (SIP 200 OK reached the agent) even though
+    # no intermediate 'connected' assignment was made. Retroactively set
+    # 'connected' here to preserve state machine fidelity before → completed.
+    # This is cosmetically logged but does not change the net outcome (completed).
+    if cs.telephony_status == "ringing":
+        cs.telephony_status = "connected"
+        logger.info(
+            "outbound_webhook_retroactive_ringing_to_connected",
+            session_id=cs.id,
+            conversation_id=conversation_id,
+        )
+
     # Mark completed — webhook evidence is the ONLY path to this status.
     #
     # Intentional contradiction with update_telephony_status_on_session_end():
@@ -317,7 +331,8 @@ async def _find_orphan_outbound_session(
     # with the conversation_id — the session still needs linkage.
     # Excludes: completed (already done),
     # recurrent_error (repeated failures — not a live conversation).
-    _ORPHAN_STATUSES = ("dialing", "ringing", "in_call", "failed", "stale_in_call", "no_answer")
+    # Spec: call-state-machine — 'connected' replaces the phantom 'in_call' state.
+    _ORPHAN_STATUSES = ("dialing", "ringing", "connected", "failed", "stale_in_call", "no_answer")
 
     stmt = (
         select(CallSession)

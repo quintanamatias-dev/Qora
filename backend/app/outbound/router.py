@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.calls.states import CallStatus
 from app.core.auth import require_api_key
 from app.core.config import Settings
 from app.core.logging import get_logger
@@ -250,7 +251,10 @@ async def trigger_outbound_call(
     from app.calls.models import CallSession
     from sqlalchemy import select
 
-    _ACTIVE_STATUSES = {"dialing", "ringing", "in_call"}
+    # Spec: call-state-machine — Requirement: Concurrency Guard Updated
+    # Active set is {dialing, ringing, connected}; in_call is gone.
+    # Spec: MODIFIED: Manual Trigger Endpoint — 409 body now includes active_session_id.
+    _ACTIVE_STATUSES = {CallStatus.dialing, CallStatus.ringing, CallStatus.connected}
     stmt = select(CallSession).where(
         CallSession.lead_id == lead_id,
         CallSession.telephony_status.in_(_ACTIVE_STATUSES),
@@ -260,11 +264,14 @@ async def trigger_outbound_call(
     if active_session is not None:
         raise HTTPException(
             status_code=409,
-            detail=(
-                f"Lead '{lead_id}' already has an active call "
-                f"(session_id={active_session.id}, status={active_session.telephony_status}). "
-                "Cannot start a duplicate call."
-            ),
+            detail={
+                "message": (
+                    f"Lead '{lead_id}' already has an active call. "
+                    "Cannot start a duplicate call."
+                ),
+                "active_session_id": active_session.id,
+                "telephony_status": active_session.telephony_status,
+            },
         )
 
     # ------------------------------------------------------------------

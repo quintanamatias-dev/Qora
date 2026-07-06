@@ -88,9 +88,13 @@ class CallSession(Base):
     provider_call_id: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
     # telephony_provider: always "elevenlabs" for now; stored for future multi-provider support.
     telephony_provider: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
-    # telephony_status: provider-reported state machine.
-    # dialing → ringing → in_call → completed | no_answer | failed | recurrent_error
+    # telephony_status: provider-reported state machine (call-state-machine formal enum).
+    # queued → dialing → ringing → connected → completed | voicemail
+    #                           ↘ no_answer | stale_in_call
+    #                  ↘ failed | recurrent_error
     # NULL for inbound/pre-C2 sessions. "completed" ONLY set by webhook evidence (FAS-safe).
+    # "in_call" was a phantom state (never assigned in production) — renamed to "connected".
+    # See backend/app/calls/states.py for the formal CallStatus enum and transition table.
     telephony_status: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
     # telephony_error: human-readable error detail; populated on failure/retry.
     telephony_error: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
@@ -133,6 +137,14 @@ class CallSession(Base):
     # NULL for pre-C3 sessions and sessions that were reconciled on the first attempt.
     # Default 0 so new unreconciled sessions start at zero without a migration null-check.
     reconciliation_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # call-state-machine: structured failure reason for telephony-layer outcomes.
+    # Set to 'sip_routing_error' by the probe/sweep when a SIP 4xx/5xx routing failure
+    # is detected. NULL for sessions with no structured failure (normal calls, voicemail,
+    # inbound sessions, and pre-migration rows).
+    # Stored on CallSession (not CallAnalysis) because this is telephony metadata,
+    # not post-call GPT analysis — design.md AD: outcome_reason placement.
+    outcome_reason: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<CallSession id={self.id!r} status={self.status!r}>"

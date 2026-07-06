@@ -534,19 +534,23 @@ class TestReconciliationAttemptsMigration:
         )
 
     def test_reconciliation_attempts_column_absent_after_downgrade(self, tmp_path):
-        """After alembic downgrade -1 (from 0007 to 0006), column is gone.
+        """After alembic downgrade from 0007 to 0006, reconciliation_attempts is gone.
 
-        GIVEN a database at head (revision 0007)
+        GIVEN a database at revision 0007 (reconciliation_attempts migration)
         WHEN alembic downgrade -1 runs
         THEN reconciliation_attempts no longer exists in call_sessions.
+
+        Note: We upgrade to the specific 0007 revision (not head) so this test
+        remains stable when newer migrations are added on top of 0007.
         """
         from alembic import command
 
         db_file = tmp_path / "test_0007_downgrade.db"
         cfg = self._make_alembic_config(db_file)
 
-        # Upgrade to head first.
-        command.upgrade(cfg, "head")
+        # Upgrade to 0007 specifically (not head) so test is stable when new
+        # migrations are added. The reconciliation_attempts column was added in 0007.
+        command.upgrade(cfg, "20260704_0007")
 
         # Verify column exists before downgrade.
         conn = sqlite3.connect(str(db_file))

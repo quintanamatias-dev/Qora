@@ -29,6 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.calls.models import CallSession
+from app.calls.states import CallStatus
 from app.core.logging import get_logger
 from app.elevenlabs.models import OutboundCallRequest, OutboundCallResult
 from app.elevenlabs.service import ElevenLabsService
@@ -37,7 +38,14 @@ from app.outbound.phone import validate_e164
 logger = get_logger(__name__)
 
 # Active telephony statuses — a session in any of these blocks a new dial attempt.
-_ACTIVE_TELEPHONY_STATUSES = {"dialing", "ringing", "in_call"}
+# Spec: call-state-machine — Requirement: Concurrency Guard Updated
+# {dialing, ringing, connected} replaces the old {dialing, ringing, in_call}.
+# in_call was a phantom state (never assigned in production) — replaced by connected.
+_ACTIVE_TELEPHONY_STATUSES = {
+    CallStatus.dialing,
+    CallStatus.ringing,
+    CallStatus.connected,
+}
 
 # ---------------------------------------------------------------------------
 # Background task strong-reference registry (FIX: GC safety for fire-and-forget)
@@ -687,7 +695,8 @@ async def _find_active_call_session(
 ) -> CallSession | None:
     """Return the first active CallSession for a lead, or None.
 
-    Active = telephony_status in {dialing, ringing, in_call}.
+    Active = telephony_status in {dialing, ringing, connected}.
+    Spec: call-state-machine — Requirement: Concurrency Guard Updated
     Spec: outbound-call-trigger — Requirement: Concurrent Call Guard
     """
     stmt = select(CallSession).where(

@@ -125,7 +125,7 @@ class TestFASSafeWebhookLinkage:
         """
         from app.outbound.linkage import link_outbound_session_by_webhook
 
-        cs = _make_outbound_call_session(telephony_status="in_call")
+        cs = _make_outbound_call_session(telephony_status="connected")
 
         db = _make_db()
         # No session found — DB returns None (webhook not fired yet)
@@ -143,8 +143,8 @@ class TestFASSafeWebhookLinkage:
             "link_outbound_session_by_webhook must return None when no session is found. "
             "SIP state alone must never auto-complete telephony_status."
         )
-        # The cs object must be untouched — telephony_status stays 'in_call'
-        assert cs.telephony_status == "in_call", (
+        # The cs object must be untouched — telephony_status stays 'connected'
+        assert cs.telephony_status == "connected", (
             "in_call status must not be modified without explicit webhook evidence."
         )
 
@@ -164,7 +164,7 @@ class TestFASSafeWebhookLinkage:
         from app.outbound.linkage import link_outbound_session_by_webhook
 
         cs = _make_outbound_call_session(
-            telephony_status="in_call",
+            telephony_status="connected",
             provider_call_id="el-call-abc123",
             elevenlabs_conversation_id=None,
         )
@@ -275,7 +275,7 @@ class TestFASSafeWebhookLinkage:
         from app.outbound.linkage import link_outbound_session_by_webhook
 
         cs = _make_outbound_call_session(
-            telephony_status="in_call",
+            telephony_status="connected",
             elevenlabs_conversation_id="conv-el-in-call",
         )
 

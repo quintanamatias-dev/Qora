@@ -40,16 +40,23 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.calls.models import CallSession
+from app.calls.states import CallStatus
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
 # Active telephony statuses that can become stuck if a webhook never arrives.
 # All three are potential stuck states:
-#   dialing  — API call was made but ElevenLabs never confirmed (provider timeout)
-#   ringing  — SIP INVITE sent but no answer or no webhook
-#   in_call  — SIP 200 OK received but conversation webhook never fired (FAS scenario)
-_STALE_TELEPHONY_STATUSES = frozenset({"dialing", "ringing", "in_call"})
+#   dialing   — API call was made but ElevenLabs never confirmed (provider timeout)
+#   ringing   — SIP INVITE sent but no answer or no webhook
+#   connected — SIP 200 OK received but conversation webhook never fired (FAS scenario)
+# Spec: call-state-machine — Requirement: Concurrency Guard Updated
+# 'in_call' is replaced by 'connected' (former was a phantom state, never assigned).
+_STALE_TELEPHONY_STATUSES = frozenset({
+    CallStatus.dialing,
+    CallStatus.ringing,
+    CallStatus.connected,
+})
 
 # Sessions older than this ceiling are considered stale.
 # Design decision: 30 minutes (design.md "30-min ceiling").
@@ -77,11 +84,12 @@ async def sweep_stale_outbound_sessions(db: AsyncSession) -> int:
     """Find stale outbound telephony sessions and transition them.
 
     A session is stale if:
-    - telephony_status is in {dialing, ringing, in_call}
+    - telephony_status is in {dialing, ringing, connected}
     - started_at is older than the status-specific threshold:
-        * 'ringing'          → STALE_RINGING_THRESHOLD_MINUTES (5 min)
-        * 'dialing', 'in_call' → STALE_TELEPHONY_THRESHOLD_MINUTES (30 min)
+        * 'ringing'             → STALE_RINGING_THRESHOLD_MINUTES (5 min)
+        * 'dialing', 'connected' → STALE_TELEPHONY_THRESHOLD_MINUTES (30 min)
 
+    'connected' replaces the former phantom 'in_call' state.
     The shorter threshold for 'ringing' is a safety net for SIP routing failures
     (e.g. Telnyx 404 UNALLOCATED_NUMBER) where the probe could not fetch evidence.
     A session stuck in 'ringing' for more than 5 minutes almost certainly means
@@ -114,12 +122,13 @@ async def sweep_stale_outbound_sessions(db: AsyncSession) -> int:
             or_(
                 # 'ringing' uses the shorter 5-minute threshold
                 and_(
-                    CallSession.telephony_status == "ringing",
+                    CallSession.telephony_status == CallStatus.ringing,
                     CallSession.started_at < ringing_cutoff,
                 ),
-                # 'dialing' and 'in_call' use the standard 30-minute threshold
+                # 'dialing' and 'connected' use the standard 30-minute threshold.
+                # 'connected' replaces the former phantom 'in_call' state.
                 and_(
-                    CallSession.telephony_status.in_({"dialing", "in_call"}),
+                    CallSession.telephony_status.in_({CallStatus.dialing, CallStatus.connected}),
                     CallSession.started_at < default_cutoff,
                 ),
             )

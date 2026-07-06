@@ -133,7 +133,7 @@ class TestEndFallbackMustCloseSessionAfterLinking:
         linked_session = _make_outbound_session(
             session_id="sess-fallback-001",
             status="initiated",
-            telephony_status="in_call",
+            telephony_status="connected",
         )
         closed_session = _make_closed_session(
             session_id="sess-fallback-001",
@@ -214,7 +214,7 @@ class TestEndFallbackMustCloseSessionAfterLinking:
             status="initiated",       # not yet closed
             duration_seconds=None,    # not yet set
             closed_reason=None,       # not yet set
-            telephony_status="in_call",
+            telephony_status="connected",
         )
 
         closed_session = _make_closed_session(
@@ -466,7 +466,7 @@ class TestEndFallbackSessionLifecycleIntegration:
             client_id = "client-a"
             lead_id = "lead-001"
             status = "initiated"
-            telephony_status = "in_call"
+            telephony_status = "connected"
             provider_call_id = "el-call-close-test"
             elevenlabs_conversation_id = None
             session_end_received = False

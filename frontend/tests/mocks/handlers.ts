@@ -754,4 +754,19 @@ export const handlers = [
   http.post('/api/v1/clients/:clientId/leads/:leadId/call', () => {
     return HttpResponse.json({ status: 'dialing', call_session_id: 'cs-default-001' })
   }),
+
+  // ── call-state-machine: Status polling endpoint ───────────────────────────
+  // GET /api/v1/calls/:sessionId/status
+  // Default handler: returns a non-terminal ringing response.
+  // Tests that need specific status values can override via server.use().
+  http.get('/api/v1/calls/:sessionId/status', ({ params }) => {
+    return HttpResponse.json({
+      session_id: params.sessionId as string,
+      telephony_status: 'ringing',
+      outcome_reason: null,
+      started_at: new Date().toISOString(),
+      duration_seconds: null,
+      is_terminal: false,
+    })
+  }),
 ]

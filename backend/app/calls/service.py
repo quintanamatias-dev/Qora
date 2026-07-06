@@ -693,6 +693,16 @@ async def close_session(
     from app.outbound.linkage import update_telephony_status_on_session_end
     update_telephony_status_on_session_end(cs)
 
+    # call-state-machine: Voicemail heuristic.
+    # After telephony_status is set (by update_telephony_status_on_session_end above),
+    # apply the voicemail heuristic for outbound sessions. If the call was very short
+    # (< 30s) with zero user turns, it likely reached voicemail — flag it so the
+    # operator knows and can retry without counting it as a real conversation.
+    # Design: combined duration+turns heuristic reduces false positives vs either alone.
+    # Log all decisions for the first 2 weeks of production data for threshold tuning.
+    if cs.telephony_status == "completed" and cs.duration_seconds is not None:
+        _apply_voicemail_heuristic(cs)
+
     # Merge sibling sessions BEFORE flush so summarizer sees full transcript (Issue #22)
     merged_ids = await _merge_sibling_sessions(session, completed_session=cs)
 
@@ -728,6 +738,57 @@ async def close_session(
         _schedule_summarize(session_id)
 
     return cs, False
+
+
+# ---------------------------------------------------------------------------
+# Voicemail heuristic (call-state-machine)
+# ---------------------------------------------------------------------------
+
+#: Duration threshold below which a completed outbound call is suspected to be
+#: a voicemail pickup. Combined with zero user turns for higher confidence.
+#: Design: 30s / 0 turns; may need tuning after production data — log for review.
+_VOICEMAIL_MAX_DURATION_SECONDS: float = 30.0
+
+
+def _apply_voicemail_heuristic(cs: "CallSession") -> None:
+    """Detect and flag voicemail pickups on completed outbound sessions.
+
+    Heuristic: duration_seconds < 30 AND total_user_turns == 0 → voicemail.
+    Sets telephony_status = 'voicemail' on the session (in memory — caller flushes).
+
+    Design: combined heuristic reduces false positives vs either check alone.
+    Only applies to outbound sessions (telephony_status not None).
+    Logs ALL decisions so operators can tune thresholds from production data.
+
+    Args:
+        cs: CallSession ORM instance. Mutated in place.
+    """
+    if cs.telephony_status is None:
+        return  # inbound session — no voicemail heuristic
+
+    duration = cs.duration_seconds or 0.0
+    user_turns = cs.total_user_turns or 0
+
+    is_voicemail = (duration < _VOICEMAIL_MAX_DURATION_SECONDS) and (user_turns == 0)
+
+    structlog.get_logger().info(
+        "voicemail_heuristic_evaluated",
+        session_id=cs.id,
+        duration_seconds=duration,
+        total_user_turns=user_turns,
+        threshold_duration=_VOICEMAIL_MAX_DURATION_SECONDS,
+        detected_voicemail=is_voicemail,
+    )
+
+    if is_voicemail:
+        cs.telephony_status = "voicemail"
+        structlog.get_logger().info(
+            "voicemail_heuristic_applied",
+            session_id=cs.id,
+            duration_seconds=duration,
+            total_user_turns=user_turns,
+            previous_telephony_status="completed",
+        )
 
 
 # ---------------------------------------------------------------------------

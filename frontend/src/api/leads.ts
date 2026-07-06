@@ -6,7 +6,7 @@
  */
 
 import { apiFetch } from './client'
-import type { Lead, CreateLeadPayload, LeadContextPreview, DimensionRollups, CallTriggerResponse } from './types'
+import type { Lead, CreateLeadPayload, LeadContextPreview, DimensionRollups, CallTriggerResponse, CallStatusResponse } from './types'
 
 /**
  * GET /api/v1/leads?client_id=<clientId>
@@ -94,4 +94,18 @@ export async function triggerCall(
     `/api/v1/clients/${encodeURIComponent(clientId)}/leads/${encodeURIComponent(leadId)}/call`,
     { method: 'POST' }
   )
+}
+
+/**
+ * GET /api/v1/calls/{sessionId}/status
+ * Returns the current telephony status of an outbound call session.
+ *
+ * Spec: call-status-polling — Requirement: Status Polling Endpoint
+ * Called every 3s from useCallPolling. Stop when response.is_terminal === true.
+ *
+ * Throws ApiError on 404 (session not found) or 429 (rate limited).
+ * No external HTTP calls on the server — response latency < 500ms.
+ */
+export async function getCallStatus(sessionId: string): Promise<CallStatusResponse> {
+  return apiFetch<CallStatusResponse>(`/api/v1/calls/${encodeURIComponent(sessionId)}/status`)
 }

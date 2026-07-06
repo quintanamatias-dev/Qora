@@ -159,6 +159,51 @@ export interface CallTriggerResponse {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// call-state-machine — Telephony status types (call-status-polling)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * All possible telephony_status values from the backend state machine.
+ * Spec: call-state-machine — Requirement: CallStatus Enum
+ * Matches backend app.calls.states.CallStatus StrEnum exactly.
+ */
+export type TelephonyStatus =
+  | 'queued'
+  | 'dialing'
+  | 'ringing'
+  | 'connected'
+  | 'voicemail'
+  | 'completed'
+  | 'no_answer'
+  | 'failed'
+  | 'recurrent_error'
+  | 'stale_in_call'
+
+/** Terminal telephony statuses — polling stops when is_terminal is true. */
+export const TERMINAL_TELEPHONY_STATUSES = new Set<TelephonyStatus>([
+  'completed',
+  'no_answer',
+  'failed',
+  'recurrent_error',
+  'stale_in_call',
+  'voicemail',
+])
+
+/**
+ * Response from GET /api/v1/calls/{session_id}/status.
+ * Spec: call-status-polling — Requirement: Status Polling Endpoint
+ */
+export interface CallStatusResponse {
+  session_id: string
+  telephony_status: TelephonyStatus
+  outcome_reason: string | null
+  started_at: string | null
+  duration_seconds: number | null
+  /** True when telephony_status is a terminal state — frontend stops polling. */
+  is_terminal: boolean
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Call Sessions
 // ──────────────────────────────────────────────────────────────────────────────
 

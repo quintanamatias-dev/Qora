@@ -225,7 +225,7 @@ async def test_active_session_overlap_produces_failure_code_in_dial_result():
 
     active_session = MagicMock()
     active_session.id = "active-sess-final"
-    active_session.telephony_status = "in_call"
+    active_session.telephony_status="connected"
 
     mock_db = AsyncMock()
     active_result = MagicMock()
