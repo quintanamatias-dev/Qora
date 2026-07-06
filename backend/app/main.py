@@ -37,7 +37,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, FastAPI, Request, Response
+from fastapi import APIRouter, FastAPI, Request
 
 # Load ALL .env variables into os.environ so per-client credentials
 # (e.g. QUINTANA_AIRTABLE_API_KEY) are available via os.environ.get().
