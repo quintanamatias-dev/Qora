@@ -256,6 +256,11 @@ class JobExecutor:
                 payload_str = job.payload
                 await db.commit()
 
+            # Bind job context to structlog contextvars (B9 PR2).
+            # All log lines for this job carry job_id + job_type automatically.
+            from app.core.context import bind_job_context as _bind_job_context
+            _bind_job_context(job_id=job_id, job_type=job_type)
+
             logger.info(
                 "job_started",
                 job_id=job_id,
@@ -353,6 +358,20 @@ class JobExecutor:
                         job_type=job_type,
                         attempts=job.attempts,
                     )
+                    # Capture dead-letter to Sentry with job context tags (B9 PR2).
+                    # Sentry is a no-op when DSN is not configured.
+                    try:
+                        import sentry_sdk as _sentry_sdk
+                        with _sentry_sdk.new_scope() as scope:
+                            scope.set_tag("job_id", job_id)
+                            scope.set_tag("job_type", job_type)
+                            if error_obj:
+                                _sentry_sdk.capture_message(
+                                    f"Dead-letter job: {job_type} — {error_obj.get('message', 'unknown error')}",
+                                    level="error",
+                                )
+                    except Exception:
+                        pass  # Sentry capture must never interrupt job lifecycle
                     self._active_job_ids.discard(job_id)
                     return
                 else:

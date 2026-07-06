@@ -35,6 +35,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI, Request
@@ -53,6 +54,7 @@ from starlette.staticfiles import StaticFiles  # noqa: E402
 from app.core.config import Settings  # noqa: E402
 from app.core.errors import register_error_handlers  # noqa: E402
 from app.core.logging import setup_logging, get_logger  # noqa: E402
+from app.core.sentry import init_sentry  # noqa: E402
 from app.middleware.correlation import CorrelationMiddleware  # noqa: E402
 import app.jobs.handlers  # noqa: F401  (side-effect: registers summarize handler)
 
@@ -116,6 +118,10 @@ async def lifespan(app: FastAPI):
         port=settings.port,
         log_level=settings.log_level,
     )
+
+    # 2a. Initialize Sentry (B9 PR2) — no-op when SENTRY_DSN is absent.
+    # Must run before DB init so Sentry captures any startup exceptions.
+    init_sentry(settings)
 
     # 2b. Validate per-client CRM integration credentials (B8).
     # Scans backend/clients/*/crm.yaml; hard-fails if any active integration
@@ -244,14 +250,28 @@ _APP_VERSION = "0.1.0"  # Kept in sync with create_app() FastAPI(version=...)
 
 
 @api_v1_router.get("/health", tags=["meta"])
-async def health_check():
-    """Health check — returns service status, version, and uptime."""
+async def health_check(detail: bool = False):
+    """Health check — returns service status, version, and uptime.
+
+    Query params:
+        detail: When true, includes per-dependency check results with latency.
+
+    Status codes:
+        200 — healthy (all deps ok) or degraded (non-critical dep down)
+        503 — unhealthy (critical dependency — database — is unreachable)
+
+    Spec: sdd/b9-observability/spec — capability: health-readiness
+    """
+    from app.core.health import check_health
+    from fastapi.responses import JSONResponse
+
+    result = await check_health(detail=detail)
     uptime = time.monotonic() - _APP_START_TIME if _APP_START_TIME > 0 else 0.0
-    return {
-        "status": "healthy",
-        "uptime_seconds": round(uptime, 1),
-        "version": _APP_VERSION,
-    }
+    result["uptime_seconds"] = round(uptime, 1)
+    result["version"] = _APP_VERSION
+
+    http_status = 503 if result["status"] == "unhealthy" else 200
+    return JSONResponse(content=result, status_code=http_status)
 
 
 # Register domain routers
