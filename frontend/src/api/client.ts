@@ -17,6 +17,19 @@ const BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 const API_KEY = import.meta.env.VITE_API_KEY ?? ''
 
 function errorMessageFromBody(status: number, body: unknown): string {
+  // Primary: parse canonical error envelope {error: {code, message, request_id}}
+  // This is the format returned by the global exception handlers (B9 observability).
+  if (body && typeof body === 'object' && 'error' in body) {
+    const envelope = (body as { error: unknown }).error
+    if (envelope && typeof envelope === 'object' && 'message' in envelope) {
+      const message = (envelope as { message: unknown }).message
+      if (typeof message === 'string' && message.length > 0) return message
+    }
+  }
+
+  // Fallback: parse legacy FastAPI {detail: ...} shape for backward compatibility.
+  // This handles any endpoints that do not yet go through the global handlers,
+  // or responses from external services that still use the detail format.
   if (body && typeof body === 'object' && 'detail' in body) {
     const detail = (body as { detail: unknown }).detail
     if (typeof detail === 'string') return detail
@@ -33,6 +46,7 @@ function errorMessageFromBody(status: number, body: unknown): string {
     }
     if (detail != null) return JSON.stringify(detail)
   }
+
   return `API ${status}`
 }
 

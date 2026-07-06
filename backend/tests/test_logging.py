@@ -22,8 +22,18 @@ import structlog
 
 
 def _reset_structlog():
-    """Reset structlog to unconfigured state between tests."""
+    """Reset structlog to unconfigured state between tests.
+
+    Also restores root logger handlers and level to prevent test isolation leakage:
+    setup_logging() installs a ProcessorFormatter on the root logger and sets its
+    level to INFO — both must be undone to avoid affecting subsequent tests that
+    use stdlib loggers.
+    """
     structlog.reset_defaults()
+    # Restore root logger to clean state so other tests' stdlib loggers work normally
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.setLevel(logging.WARNING)  # Restore to default WARNING level
 
 
 # ---------------------------------------------------------------------------
