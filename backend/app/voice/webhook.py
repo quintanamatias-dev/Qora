@@ -808,6 +808,16 @@ async def _process_custom_llm_request(
         conversation_id = f"demo-{uuid.uuid4().hex[:12]}"
         conv_state = session_store.get((client_id, conversation_id))
 
+    # Bind voice session context to structlog contextvars (B9 PR2).
+    # All log lines emitted from this point carry call_session_id + conversation_id.
+    # The custom LLM extra body does not carry a dedicated call_session_id field;
+    # we use conversation_id as the canonical session identifier for both fields.
+    from app.core.context import bind_voice_context as _bind_voice_context
+    _bind_voice_context(
+        call_session_id=conversation_id,
+        conversation_id=conversation_id,
+    )
+
     # Declare variables populated by either the cached or per-turn path
     agent = None
     system_content: str = ""
