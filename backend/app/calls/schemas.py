@@ -134,6 +134,38 @@ class ElevenLabsPostCallPayload(BaseModel):
     model_config = {"extra": "allow"}
 
 
+# ---------------------------------------------------------------------------
+# call-status-polling — Polling endpoint schema
+# ---------------------------------------------------------------------------
+
+# Statuses that represent a terminal outcome — no further transitions expected.
+# Frontend should stop polling when is_terminal=True.
+# Spec: call-status-polling — Requirement: Short-Circuit on Terminal State.
+_TERMINAL_STATUSES: frozenset[str] = frozenset({
+    "completed",
+    "no_answer",
+    "failed",
+    "recurrent_error",
+    "stale_in_call",  # sweep-marked stuck session — no further progression
+    "voicemail",      # detected by heuristic — call ended without real conversation
+})
+
+
+class CallStatusResponse(BaseModel):
+    """Response for GET /api/v1/calls/{session_id}/status — call status polling.
+
+    Spec: call-status-polling — Requirement: Status Polling Endpoint.
+    Frontend polls this endpoint every 3s to update the call state badge.
+    """
+
+    session_id: str
+    telephony_status: str
+    outcome_reason: str | None = None
+    started_at: datetime | None = None
+    duration_seconds: float | None = None
+    is_terminal: bool
+
+
 class CallAnalysisResponse(BaseModel):
     """Full analysis response for GET /calls/{session_id}/analysis.
 

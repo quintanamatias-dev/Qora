@@ -19,9 +19,12 @@ from typing import Any
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
+import time
+
 from app.calls.schemas import (
     CallAnalysisResponse,
     CallMetricsResponse,
+    CallStatusResponse,
     ElevenLabsPostCallData,
     ElevenLabsPostCallPayload,
     EndSessionRequest,
@@ -29,6 +32,7 @@ from app.calls.schemas import (
     MetricsPeriod,
     SessionTranscriptResponse,
     TranscriptTurnResponse,
+    _TERMINAL_STATUSES,
 )
 from app.calls.service import (
     _schedule_summarize,
@@ -52,6 +56,37 @@ from app.outbound.linkage import link_outbound_session_by_webhook
 router = APIRouter(prefix="/calls", tags=["calls"])
 
 logger = structlog.get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Rate limiter for GET /{session_id}/status
+#
+# Spec: call-status-polling — Requirement: Rate Limiting
+#   Max 1 req/s per session_id. Exceeded → HTTP 429 + Retry-After.
+#   No DB query executed when rate limited.
+#
+# In-process dict: safe for single-process MVP. Keys are session_ids,
+# values are the monotonic timestamp of the last allowed request.
+# ---------------------------------------------------------------------------
+_STATUS_RATE_LIMIT: dict[str, float] = {}
+_RATE_LIMIT_WINDOW_SECONDS: float = 1.0
+
+
+def _clear_rate_limit_state() -> None:
+    """Clear all rate limit state — for use in tests only."""
+    _STATUS_RATE_LIMIT.clear()
+
+
+def _is_rate_limited(session_id: str) -> bool:
+    """Return True if the session_id is rate limited (last request < 1s ago)."""
+    last_ts = _STATUS_RATE_LIMIT.get(session_id)
+    if last_ts is None:
+        return False
+    return (time.monotonic() - last_ts) < _RATE_LIMIT_WINDOW_SECONDS
+
+
+def _record_status_request(session_id: str) -> None:
+    """Record that a status request was served for session_id."""
+    _STATUS_RATE_LIMIT[session_id] = time.monotonic()
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +496,50 @@ async def end_call_session(conversation_id: str, body: EndSessionRequest):
 # ---------------------------------------------------------------------------
 # Read-only inspection endpoints
 # ---------------------------------------------------------------------------
+
+
+@router.get("/{session_id}/status", response_model=CallStatusResponse, dependencies=[Depends(require_api_key)])
+async def get_call_status(session_id: str) -> CallStatusResponse:
+    """Get the current telephony status of a call session for frontend polling.
+
+    Spec: call-status-polling — Requirement: Status Polling Endpoint
+    Rate limit: max 1 request/second per session_id (Retry-After header on 429).
+    Response latency: < 500ms, no external HTTP calls.
+
+    Returns:
+        CallStatusResponse with telephony_status, outcome_reason, is_terminal.
+
+    Raises:
+        HTTP 404: session_id not found.
+        HTTP 429: rate limit exceeded for this session_id.
+    """
+    from fastapi import HTTPException, Response
+
+    # Rate limit check BEFORE any DB query (spec: no DB query on 429)
+    if _is_rate_limited(session_id):
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded for session {session_id!r}. Max 1 request/second.",
+            headers={"Retry-After": str(int(_RATE_LIMIT_WINDOW_SECONDS))},
+        )
+
+    async with db_session() as db:
+        cs = await get_session(db, session_id)
+        if cs is None:
+            raise HTTPException(status_code=404, detail="Call session not found")
+
+        _record_status_request(session_id)
+
+        is_terminal = cs.telephony_status in _TERMINAL_STATUSES
+
+        return CallStatusResponse(
+            session_id=cs.id,
+            telephony_status=cs.telephony_status or "",
+            outcome_reason=getattr(cs, "outcome_reason", None),
+            started_at=cs.started_at,
+            duration_seconds=cs.duration_seconds,
+            is_terminal=is_terminal,
+        )
 
 
 @router.get("/{session_id}", dependencies=[Depends(require_api_key)])
