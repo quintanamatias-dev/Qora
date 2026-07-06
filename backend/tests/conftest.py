@@ -92,6 +92,29 @@ def _inject_test_api_key(monkeypatch):
     monkeypatch.setenv("QORA_API_KEY", _TEST_API_KEY)
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _disable_webhook_auth_in_tests():
+    """Disable webhook auth for all tests.
+
+    The project .env may have QORA_WEBHOOK_AUTH_ENABLED=true for production use,
+    but tests do not send X-Webhook-Secret headers (original design intent).
+    Setting this to false restores the original open test behavior.
+
+    Tests that need to verify webhook auth enforcement must override
+    QORA_WEBHOOK_AUTH_ENABLED via their own monkeypatch/env setup — see
+    test_webhook_auth_cors.py and test_fail_closed_outbound_webhook_auth.py.
+    """
+    import os
+
+    original = os.environ.get("QORA_WEBHOOK_AUTH_ENABLED")
+    os.environ["QORA_WEBHOOK_AUTH_ENABLED"] = "false"
+    yield
+    if original is None:
+        os.environ.pop("QORA_WEBHOOK_AUTH_ENABLED", None)
+    else:
+        os.environ["QORA_WEBHOOK_AUTH_ENABLED"] = original
+
+
 @pytest.fixture(autouse=True)
 def _disable_outbound_calls_in_tests(monkeypatch):
     """Force ENABLE_OUTBOUND_CALLS=false for the test environment.

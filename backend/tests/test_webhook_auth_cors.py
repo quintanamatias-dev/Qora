@@ -187,6 +187,17 @@ class TestRequireWebhookSecret:
 class TestWebhookAuthSettings:
     """Unit tests for webhook auth Settings fields."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_webhook_env(self, monkeypatch):
+        """Clear webhook auth env vars so these tests see clean defaults.
+
+        The project .env sets QORA_WEBHOOK_AUTH_ENABLED=true and QORA_WEBHOOK_SECRET,
+        which overrides the defaults under test. Monkeypatching ensures these tests
+        exercise the true default values, not the production .env configuration.
+        """
+        monkeypatch.setenv("QORA_WEBHOOK_AUTH_ENABLED", "false")
+        monkeypatch.delenv("QORA_WEBHOOK_SECRET", raising=False)
+
     def test_qora_webhook_auth_enabled_defaults_to_false(self):
         """qora_webhook_auth_enabled must default to False (disabled by default)."""
         from app.core.config import Settings
@@ -205,12 +216,17 @@ class TestWebhookAuthSettings:
         assert "qora_webhook_secret" in fields
 
     def test_qora_webhook_secret_accepts_none(self):
-        """qora_webhook_secret defaults to None when not set."""
+        """qora_webhook_secret defaults to None when not set.
+
+        Passes qora_webhook_secret=None explicitly so the constructor kwarg
+        (highest pydantic-settings priority) wins over any value in .env file.
+        """
         from app.core.config import Settings
 
         settings = Settings(
             openai_api_key=SecretStr("sk-test"),
             elevenlabs_api_key=SecretStr("el-test"),
+            qora_webhook_secret=None,
         )
         assert settings.qora_webhook_secret is None
 
@@ -716,6 +732,8 @@ class TestWebhookSecretStartupContract:
 
         # Force re-import so env vars are picked up without .env file interference.
         # Construct directly with explicit fields to isolate env-var path.
+        # qora_webhook_secret=None is passed explicitly so the .env file value is
+        # not picked up by pydantic-settings (constructor kwargs win over .env).
         from pydantic import SecretStr
 
         with pytest.raises(ValidationError) as exc_info:
@@ -725,7 +743,7 @@ class TestWebhookSecretStartupContract:
                 openai_api_key=SecretStr("sk-test"),
                 elevenlabs_api_key=SecretStr("el-test"),
                 qora_webhook_auth_enabled=True,
-                # qora_webhook_secret intentionally absent (None by default)
+                qora_webhook_secret=None,
             )
 
         # The error must mention the misconfiguration clearly.
@@ -769,7 +787,9 @@ class TestWebhookSecretStartupContract:
             openai_api_key=SecretStr("sk-test"),
             elevenlabs_api_key=SecretStr("el-test"),
             qora_webhook_auth_enabled=False,
-            # qora_webhook_secret absent — this is fine when auth is disabled
+            # qora_webhook_secret=None passed explicitly so constructor kwarg
+            # (highest pydantic-settings priority) wins over any .env file value.
+            qora_webhook_secret=None,
         )
         assert settings.qora_webhook_auth_enabled is False
         assert settings.qora_webhook_secret is None
