@@ -1,7 +1,11 @@
 """QORA ElevenLabs Service — programmatic agent configuration.
 
-Provides ElevenLabsService.sync_soft_timeout() which sends a partial PATCH
-to the ElevenLabs ConvAI agent API to configure soft timeout settings.
+Provides:
+- ElevenLabsService.sync_soft_timeout() — DEPRECATED (use sync_agent_config).
+  Sends a partial PATCH with only the soft_timeout_config block.
+- ElevenLabsService.sync_agent_config() — Unified config sync (sdd/elevenlabs-config).
+  Sends a single PATCH combining soft_timeout, voicemail_detection, and max_duration.
+  NULL agent fields → that block is omitted from the payload (NULL-means-skip).
 
 Design decisions (from design.md):
 - Per-call httpx.AsyncClient (matches webhook.py get_signed_url pattern — infrequent calls)
@@ -10,7 +14,7 @@ Design decisions (from design.md):
 - Structured logging on error (http_status, elevenlabs_agent_id)
 - Never raises to the caller — always returns SyncResult
 - Skips (no HTTP call) when elevenlabs_agent_id is None
-- Skips (no HTTP call) when all soft_timeout fields are None
+- Skips (no HTTP call) when all config fields are None (_build_config_payload returns {})
 """
 
 from __future__ import annotations
@@ -60,6 +64,45 @@ class ElevenLabsService:
 
     def __init__(self, settings) -> None:
         self._settings = settings
+
+    async def sync_agent_config(self, agent) -> SyncResult:
+        """Send a single unified PATCH to configure all ElevenLabs agent settings.
+
+        Combines soft_timeout_config, voicemail_detection, and max_duration_seconds
+        into one PATCH payload. NULL agent fields → that block is omitted (NULL-means-skip).
+
+        Skip conditions (no HTTP call):
+        - agent.elevenlabs_agent_id is None
+        - _build_config_payload(agent) returns {} (all config fields NULL)
+
+        Retry: exactly one retry on 5xx responses.
+        Timeout: 10 seconds per attempt.
+        On failure: logs structured error, returns SyncResult(outcome="error").
+        Never raises to caller.
+
+        DEPRECATION NOTE: sync_soft_timeout is deprecated. Call this method instead.
+
+        Spec: sdd/elevenlabs-config — Requirement: Unified Config Sync
+        """
+        # Guard: no ElevenLabs agent binding
+        if agent.elevenlabs_agent_id is None:
+            return SyncResult(outcome="skipped")
+
+        payload = _build_config_payload(agent)
+        if not payload:
+            # All config fields are NULL — nothing to configure
+            return SyncResult(outcome="skipped")
+
+        url = f"{_ELEVENLABS_BASE_URL}/convai/agents/{agent.elevenlabs_agent_id}"
+        api_key = self._settings.elevenlabs_api_key.get_secret_value()
+        headers = {"xi-api-key": api_key, "Content-Type": "application/json"}
+
+        return await _patch_with_retry(
+            url=url,
+            payload=payload,
+            headers=headers,
+            elevenlabs_agent_id=agent.elevenlabs_agent_id,
+        )
 
     async def sync_soft_timeout(self, agent) -> SyncResult:
         """Send a partial PATCH to configure soft timeout on an ElevenLabs agent.
@@ -562,6 +605,58 @@ def _build_soft_timeout_payload(
         use_llm_generated_message=use_llm_generated_message,
     )
     return config.to_patch_payload()
+
+
+def _build_config_payload(agent) -> dict:
+    """Build the unified PATCH payload for sync_agent_config.
+
+    Merges up to three config blocks from agent DB fields:
+    - soft_timeout_config (via existing _build_soft_timeout_payload)
+    - platform_settings.voicemail_detection (from agent.voicemail_detection_enabled)
+    - conversation_config.max_duration_seconds (from agent.max_call_duration_seconds)
+
+    NULL-means-skip: if an agent field is NULL, that block is omitted entirely.
+    Returns {} when all fields are NULL (caller must skip the HTTP call).
+
+    Spec: sdd/elevenlabs-config — Requirement: NULL-Means-Skip Semantics
+    """
+    payload: dict = {}
+
+    # --- Soft timeout block ---
+    soft_timeout_partial = _build_soft_timeout_payload(
+        timeout_seconds=agent.soft_timeout_seconds,
+        message=agent.soft_timeout_message,
+        use_llm_generated_message=agent.soft_timeout_use_llm,
+    )
+    # soft_timeout_partial is {} when all three soft_timeout fields are None
+    if soft_timeout_partial:
+        # Merge into conversation_config (soft_timeout returns the full nested dict)
+        for key, val in soft_timeout_partial.items():
+            if key not in payload:
+                payload[key] = {}
+            if isinstance(val, dict):
+                payload[key].update(val)
+            else:
+                payload[key] = val
+
+    # --- Voicemail detection block ---
+    # voicemail_detection_enabled is nullable bool; None means skip the block entirely.
+    if agent.voicemail_detection_enabled is not None:
+        if "platform_settings" not in payload:
+            payload["platform_settings"] = {}
+        payload["platform_settings"]["voicemail_detection"] = {
+            "enabled": bool(agent.voicemail_detection_enabled)
+        }
+
+    # --- Max call duration block ---
+    if agent.max_call_duration_seconds is not None:
+        if "conversation_config" not in payload:
+            payload["conversation_config"] = {}
+        payload["conversation_config"]["max_duration_seconds"] = int(
+            agent.max_call_duration_seconds
+        )
+
+    return payload
 
 
 async def _patch_with_retry(
