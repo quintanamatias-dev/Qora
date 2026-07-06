@@ -797,8 +797,8 @@ class TestProbeDetectsSipRoutingFailure:
 
         cs = self._make_ringing_session(session_id=session_id)
         cs.started_at = started_at
-        # Simulate session already in_call (answered)
-        cs.telephony_status = "in_call"
+        # Simulate session already connected (call was answered — in_call renamed to connected)
+        cs.telephony_status = "connected"
         factory = _make_db_with_session(cs)
 
         respx.get(_CONVERSATIONS_URL).mock(
@@ -846,8 +846,9 @@ class TestProbeDetectsSipRoutingFailure:
             )
 
         # SIP 200 + call_successful='success' must NOT change telephony_status
-        assert cs.telephony_status == "in_call", (
-            f"SIP 200 OK must not flip telephony_status to 'no_answer', "
+        # Spec: call-state-machine — probe does not flip status on successful SIP 200
+        assert cs.telephony_status == "connected", (
+            f"SIP 200 OK must not flip telephony_status away from 'connected', "
             f"got {cs.telephony_status!r}"
         )
         # But SIP fields ARE written

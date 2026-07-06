@@ -88,9 +88,13 @@ class CallSession(Base):
     provider_call_id: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
     # telephony_provider: always "elevenlabs" for now; stored for future multi-provider support.
     telephony_provider: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
-    # telephony_status: provider-reported state machine.
-    # dialing → ringing → in_call → completed | no_answer | failed | recurrent_error
+    # telephony_status: provider-reported state machine (call-state-machine formal enum).
+    # queued → dialing → ringing → connected → completed | voicemail
+    #                           ↘ no_answer | stale_in_call
+    #                  ↘ failed | recurrent_error
     # NULL for inbound/pre-C2 sessions. "completed" ONLY set by webhook evidence (FAS-safe).
+    # "in_call" was a phantom state (never assigned in production) — renamed to "connected".
+    # See backend/app/calls/states.py for the formal CallStatus enum and transition table.
     telephony_status: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
     # telephony_error: human-readable error detail; populated on failure/retry.
     telephony_error: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)

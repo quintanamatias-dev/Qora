@@ -624,7 +624,7 @@ class TestB4SweepUsesSessionEndReceivedEvidence:
         from app.outbound.sweep import sweep_stale_outbound_sessions
 
         stale = _make_outbound_session(
-            telephony_status="in_call",
+            telephony_status="connected",
             started_at=_utcnow() - timedelta(minutes=45),
             elevenlabs_conversation_id="conv-el-exists",  # conv_id set
             session_end_received=False,                   # but no session-end
@@ -651,7 +651,7 @@ class TestB4SweepUsesSessionEndReceivedEvidence:
         from app.outbound.sweep import sweep_stale_outbound_sessions
 
         stale = _make_outbound_session(
-            telephony_status="in_call",
+            telephony_status="connected",
             started_at=_utcnow() - timedelta(minutes=45),
             elevenlabs_conversation_id="conv-el-exists",
             session_end_received=True,  # session-end webhook fired
@@ -676,7 +676,7 @@ class TestB4SweepUsesSessionEndReceivedEvidence:
         from app.outbound.sweep import sweep_stale_outbound_sessions
 
         stale = _make_outbound_session(
-            telephony_status="in_call",
+            telephony_status="connected",
             started_at=_utcnow() - timedelta(minutes=45),
             elevenlabs_conversation_id=None,
             session_end_received=False,
@@ -703,7 +703,7 @@ class TestB4SessionEndReceivedSetByCloseSession:
         """
         from app.outbound.linkage import update_telephony_status_on_session_end
 
-        cs = _make_outbound_session(telephony_status="in_call", session_end_received=False)
+        cs = _make_outbound_session(telephony_status="connected", session_end_received=False)
 
         result = update_telephony_status_on_session_end(cs)
 
@@ -818,21 +818,21 @@ class TestB5RouteIntegrationBehavior:
 
         stale_with_end = _make_outbound_session(
             session_id="sess-end",
-            telephony_status="in_call",
+            telephony_status="connected",
             started_at=_utcnow() - timedelta(minutes=45),
             session_end_received=True,
             elevenlabs_conversation_id="conv-el-abc",
         )
         stale_conv_only = _make_outbound_session(
             session_id="sess-conv",
-            telephony_status="in_call",
+            telephony_status="connected",
             started_at=_utcnow() - timedelta(minutes=45),
             session_end_received=False,
             elevenlabs_conversation_id="conv-el-xyz",
         )
         stale_no_evidence = _make_outbound_session(
             session_id="sess-none",
-            telephony_status="in_call",
+            telephony_status="connected",
             started_at=_utcnow() - timedelta(minutes=45),
             session_end_received=False,
             elevenlabs_conversation_id=None,

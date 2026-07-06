@@ -40,7 +40,7 @@ def _utcnow() -> datetime:
 
 def _make_outbound_session(
     session_id: str = "session-stale-001",
-    telephony_status: str = "in_call",
+    telephony_status: str = "connected",  # 'in_call' renamed to 'connected' (call-state-machine)
     started_at: datetime | None = None,
     elevenlabs_conversation_id: str | None = None,
     session_end_received: bool = False,
@@ -98,7 +98,7 @@ class TestStaleSweepNoWebhook:
         from app.outbound.sweep import sweep_stale_outbound_sessions
 
         stale = _make_outbound_session(
-            telephony_status="in_call",
+            telephony_status="connected",
             started_at=_utcnow() - timedelta(minutes=45),
             elevenlabs_conversation_id=None,
         )
@@ -123,7 +123,7 @@ class TestStaleSweepNoWebhook:
         from app.outbound.sweep import sweep_stale_outbound_sessions
 
         stale = _make_outbound_session(
-            telephony_status="in_call",
+            telephony_status="connected",
             started_at=_utcnow() - timedelta(minutes=60),
             elevenlabs_conversation_id=None,
         )
@@ -179,7 +179,7 @@ class TestStaleSweepWithWebhookEvidence:
         from app.outbound.sweep import sweep_stale_outbound_sessions
 
         stale = _make_outbound_session(
-            telephony_status="in_call",
+            telephony_status="connected",
             started_at=_utcnow() - timedelta(minutes=45),
             elevenlabs_conversation_id="conv-el-evidence-exists",
             session_end_received=True,  # session-end webhook confirmed
@@ -253,7 +253,7 @@ class TestStaleSweepBoundaryConditions:
         sessions = [
             _make_outbound_session(
                 session_id=f"session-stale-{i:03d}",
-                telephony_status="in_call",
+                telephony_status="connected",
                 started_at=_utcnow() - timedelta(minutes=40 + i),
                 elevenlabs_conversation_id=None,
             )
@@ -286,7 +286,7 @@ class TestStaleSweepCommit:
         from app.outbound.sweep import sweep_stale_outbound_sessions
 
         stale = _make_outbound_session(
-            telephony_status="in_call",
+            telephony_status="connected",
             started_at=_utcnow() - timedelta(minutes=45),
             elevenlabs_conversation_id=None,
         )
