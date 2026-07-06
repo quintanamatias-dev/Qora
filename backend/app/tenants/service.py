@@ -453,13 +453,16 @@ async def seed_qora_demo(session: AsyncSession) -> None:
         # Note: create_client() auto-creates the default Agent with the correct name and
         # system_prompt (passed via system_prompt_override → system_prompt on Agent).
 
-        # Always set elevenlabs_agent_id and TTS values on the newly seeded agent.
+        # Always set elevenlabs_agent_id, TTS values, and EL config on the newly seeded agent.
         agent = await get_default_agent(session, "qora-demo")
         if agent is not None:
             agent.elevenlabs_agent_id = el_agent_id
             agent.tts_speed = _QORA_DEMO_TTS_SPEED
             agent.tts_stability = _QORA_DEMO_TTS_STABILITY
             agent.tts_similarity_boost = _QORA_DEMO_TTS_SIMILARITY_BOOST
+            # sdd/elevenlabs-config: seed demo agent with voicemail detection + max duration
+            agent.voicemail_detection_enabled = True
+            agent.max_call_duration_seconds = 120
             await session.flush()
     else:
         # AD-2: Idempotent corrections — update elevenlabs_agent_id and system_prompt
@@ -473,6 +476,13 @@ async def seed_qora_demo(session: AsyncSession) -> None:
             # Fix stale system_prompt if it no longer matches the current constant
             if agent.system_prompt != _QORA_EXPLAINER_SYSTEM_PROMPT:
                 agent.system_prompt = _QORA_EXPLAINER_SYSTEM_PROMPT
+                updated = True
+            # sdd/elevenlabs-config: idempotently set EL config fields if missing
+            if agent.voicemail_detection_enabled is None:
+                agent.voicemail_detection_enabled = True
+                updated = True
+            if agent.max_call_duration_seconds is None:
+                agent.max_call_duration_seconds = 120
                 updated = True
             if updated:
                 await session.flush()
@@ -521,6 +531,8 @@ async def create_agent(
     soft_timeout_seconds: float | None = None,
     soft_timeout_message: str | None = None,
     soft_timeout_use_llm: bool | None = None,
+    voicemail_detection_enabled: bool | None = None,
+    max_call_duration_seconds: int | None = None,
 ) -> Agent:
     """Create and persist a new Agent record.
 
@@ -584,6 +596,8 @@ async def create_agent(
         soft_timeout_seconds=soft_timeout_seconds,
         soft_timeout_message=soft_timeout_message,
         soft_timeout_use_llm=soft_timeout_use_llm,
+        voicemail_detection_enabled=voicemail_detection_enabled,
+        max_call_duration_seconds=max_call_duration_seconds,
     )
     session.add(agent)
     await session.flush()

@@ -749,7 +749,7 @@ async def sync_to_elevenlabs(agent_id: str, settings) -> None:
             return
 
         service = ElevenLabsService(settings=settings)
-        result = await service.sync_soft_timeout(agent)
+        result = await service.sync_agent_config(agent)
 
         # Update sync status based on outcome
         if result.outcome == "synced":

@@ -140,13 +140,20 @@ def _agent_to_response(agent: Agent) -> AgentResponse:
         soft_timeout_use_llm=getattr(agent, "soft_timeout_use_llm", None),
         elevenlabs_sync_status=getattr(agent, "elevenlabs_sync_status", None),
         elevenlabs_last_synced_at=getattr(agent, "elevenlabs_last_synced_at", None),
+        # ElevenLabs agent config sync (sdd/elevenlabs-config)
+        voicemail_detection_enabled=getattr(agent, "voicemail_detection_enabled", None),
+        max_call_duration_seconds=getattr(agent, "max_call_duration_seconds", None),
     )
 
 
-_SOFT_TIMEOUT_FIELDS = frozenset({
+_SYNC_FIELDS = frozenset({
+    # Soft timeout config (sdd/elevenlabs-provisioning)
     "soft_timeout_seconds",
     "soft_timeout_message",
     "soft_timeout_use_llm",
+    # Agent config sync — new fields (sdd/elevenlabs-config)
+    "voicemail_detection_enabled",
+    "max_call_duration_seconds",
 })
 
 
@@ -155,21 +162,25 @@ def _should_trigger_sync(agent: Agent, changed_fields: set[str] | None = None) -
 
     Conditions (both must be true):
     1. Agent has elevenlabs_agent_id bound
-    2. At least one soft-timeout field is set (not all None), OR changed_fields
-       includes a soft-timeout field (for update path)
+    2. At least one EL config field is set (not all None), OR changed_fields
+       includes a sync-triggering field (for update path)
+
+    Spec: sdd/elevenlabs-config — Requirement: Background Sync Upgrade
     """
     if not getattr(agent, "elevenlabs_agent_id", None):
         return False
 
     if changed_fields is not None:
-        # Update path: only trigger if a soft-timeout field was actually changed
-        return bool(changed_fields & _SOFT_TIMEOUT_FIELDS)
+        # Update path: only trigger if a sync field was actually changed
+        return bool(changed_fields & _SYNC_FIELDS)
 
-    # Create path: trigger if any soft-timeout field is non-None
+    # Create path: trigger if any EL config field is non-None
     return (
         agent.soft_timeout_seconds is not None
         or agent.soft_timeout_message is not None
         or agent.soft_timeout_use_llm is not None
+        or agent.voicemail_detection_enabled is not None
+        or agent.max_call_duration_seconds is not None
     )
 
 
@@ -250,6 +261,8 @@ async def create_agent(
             soft_timeout_seconds=payload.soft_timeout_seconds,
             soft_timeout_message=payload.soft_timeout_message,
             soft_timeout_use_llm=payload.soft_timeout_use_llm,
+            voicemail_detection_enabled=payload.voicemail_detection_enabled,
+            max_call_duration_seconds=payload.max_call_duration_seconds,
         )
     except ValueError as exc:
         msg = str(exc)
@@ -309,7 +322,7 @@ async def sync_agent_to_elevenlabs(
     from app.elevenlabs.service import ElevenLabsService
 
     service = ElevenLabsService(settings=settings)
-    result = await service.sync_soft_timeout(agent)
+    result = await service.sync_agent_config(agent)
 
     synced_at = None
     if result.outcome == "synced":
