@@ -37,7 +37,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, FastAPI, Request, Response
+from fastapi import APIRouter, FastAPI, Request
 
 # Load ALL .env variables into os.environ so per-client credentials
 # (e.g. QUINTANA_AIRTABLE_API_KEY) are available via os.environ.get().
@@ -48,62 +48,18 @@ from fastapi import APIRouter, FastAPI, Request, Response
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env", override=False)
 from fastapi.responses import FileResponse, RedirectResponse  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint  # noqa: E402
 from starlette.staticfiles import StaticFiles  # noqa: E402
 
 from app.core.config import Settings  # noqa: E402
+from app.core.errors import register_error_handlers  # noqa: E402
 from app.core.logging import setup_logging, get_logger  # noqa: E402
+from app.middleware.correlation import CorrelationMiddleware  # noqa: E402
 import app.jobs.handlers  # noqa: F401  (side-effect: registers summarize handler)
 
 logger = get_logger(__name__)
 
 # Track app start time for health uptime
 _APP_START_TIME: float = 0.0
-
-
-# ---------------------------------------------------------------------------
-# Request logging middleware
-# ---------------------------------------------------------------------------
-
-
-class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """Log every request with method, path, status, and latency."""
-
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
-        start_time = time.monotonic()
-
-        logger.info(
-            "request_started",
-            method=request.method,
-            path=request.url.path,
-        )
-
-        try:
-            response = await call_next(request)
-            latency_ms = (time.monotonic() - start_time) * 1000
-            logger.info(
-                "request_completed",
-                method=request.method,
-                path=request.url.path,
-                status_code=response.status_code,
-                latency_ms=round(latency_ms, 2),
-            )
-            return response
-
-        except Exception as exc:
-            latency_ms = (time.monotonic() - start_time) * 1000
-            logger.error(
-                "request_error",
-                method=request.method,
-                path=request.url.path,
-                error_type=type(exc).__name__,
-                error_message=str(exc),
-                latency_ms=round(latency_ms, 2),
-                exc_info=True,
-            )
-            raise
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +109,7 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
 
     # 2. Configure logging
-    setup_logging(settings.log_level)
+    setup_logging(settings.log_level, settings.log_format)
     logger.info(
         "qora_startup",
         host=settings.host,
@@ -411,13 +367,20 @@ def create_app(docs_enabled: bool | None = None) -> FastAPI:
     # B8: read from settings.qora_allowed_origins — routes through the Settings validator.
     _allowed_origins = _parse_allowed_origins(_settings.qora_allowed_origins)
 
-    _new_app.add_middleware(RequestLoggingMiddleware)
+    # Register global exception handlers (canonical error envelope).
+    # Must be done before middleware registration so handlers are wired correctly.
+    register_error_handlers(_new_app)
+
+    # CORS must be registered before CorrelationMiddleware in the middleware stack
+    # because add_middleware() prepends — the last add_middleware call runs outermost.
+    # Desired ASGI order (outermost → innermost): CorrelationMiddleware → CORS → Router
     _new_app.add_middleware(
         CORSMiddleware,
         allow_origins=_allowed_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    _new_app.add_middleware(CorrelationMiddleware)
 
     _new_app.include_router(api_v1_router)
 

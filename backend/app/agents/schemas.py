@@ -18,10 +18,10 @@ responses.
 
 from __future__ import annotations
 
-import logging
 import re
 from datetime import datetime
 
+import structlog
 from pydantic import BaseModel, field_validator, Field
 
 # Slug must be all lowercase alphanumeric + hyphens, no leading/trailing hyphen.
@@ -32,7 +32,7 @@ _SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
 # This avoids duplicating tool names — single source of truth in app.tools.registry.
 from app.tools.registry import TOOL_DEFINITIONS as _TOOL_DEFS, _REMOVED_TOOLS  # noqa: E402
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 QORA_TOOL_NAMES: frozenset[str] = frozenset(_TOOL_DEFS.keys())
 
@@ -61,9 +61,9 @@ def strip_deprecated_tools(tool_names: list[str]) -> list[str]:
     for name in tool_names:
         if name in _REMOVED_TOOLS:
             logger.warning(
-                "deprecated_tool_stripped: tool_name=%s — removed in Phase 2; "
-                "use capture_data for data capture",
-                name,
+                "deprecated_tool_stripped",
+                tool_name=name,
+                message="removed in Phase 2; use capture_data for data capture",
             )
         else:
             stripped.append(name)
