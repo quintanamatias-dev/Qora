@@ -810,9 +810,11 @@ async def _process_custom_llm_request(
 
     # Bind voice session context to structlog contextvars (B9 PR2).
     # All log lines emitted from this point carry call_session_id + conversation_id.
+    # The custom LLM extra body does not carry a dedicated call_session_id field;
+    # we use conversation_id as the canonical session identifier for both fields.
     from app.core.context import bind_voice_context as _bind_voice_context
     _bind_voice_context(
-        call_session_id=extra.call_session_id or "",
+        call_session_id=conversation_id,
         conversation_id=conversation_id,
     )
 

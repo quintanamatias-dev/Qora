@@ -120,7 +120,8 @@ def init_sentry(settings: "Settings") -> None:
         return
 
     dsn = getattr(settings, "sentry_dsn", None)
-    if not dsn:
+    # Guard: must be a non-empty string (MagicMock or None both short-circuit here)
+    if not isinstance(dsn, str) or not dsn.strip():
         return
 
     environment = getattr(settings, "sentry_environment", "production")
