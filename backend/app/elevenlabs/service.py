@@ -107,6 +107,11 @@ class ElevenLabsService:
     async def sync_soft_timeout(self, agent) -> SyncResult:
         """Send a partial PATCH to configure soft timeout on an ElevenLabs agent.
 
+        .. deprecated::
+            Use :meth:`sync_agent_config` instead. This method only sends the
+            soft_timeout_config block; sync_agent_config sends a unified PATCH
+            combining all three config blocks in a single HTTP round-trip.
+
         Sends ONLY the soft_timeout_config block — never a full agent body.
 
         Skip conditions (no HTTP call):
