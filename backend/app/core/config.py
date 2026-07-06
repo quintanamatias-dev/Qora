@@ -154,6 +154,18 @@ class Settings(BaseSettings):
     enable_job_executor: bool = False
 
     # ------------------------------------------------------------------
+    # Observability — Sentry (Phase B9 PR2)
+    # ------------------------------------------------------------------
+    # Optional Sentry DSN. When absent (None), Sentry is NOT initialized
+    # and the application operates normally without error tracking.
+    # Set SENTRY_DSN=https://key@sentry.io/123 to enable.
+    sentry_dsn: str | None = None
+    # Sentry environment tag — typically "production", "staging", or "development".
+    sentry_environment: str = "production"
+    # App version included in Sentry release tag. Matches pyproject.toml version.
+    app_version: str = "0.1.0"
+
+    # ------------------------------------------------------------------
     # Outbound Call Trigger (Phase C2)
     # ------------------------------------------------------------------
     # Feature flag: gates ALL real telephony actions. Default False — no calls
