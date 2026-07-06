@@ -134,6 +134,14 @@ class CallSession(Base):
     # Default 0 so new unreconciled sessions start at zero without a migration null-check.
     reconciliation_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    # call-state-machine: structured failure reason for telephony-layer outcomes.
+    # Set to 'sip_routing_error' by the probe/sweep when a SIP 4xx/5xx routing failure
+    # is detected. NULL for sessions with no structured failure (normal calls, voicemail,
+    # inbound sessions, and pre-migration rows).
+    # Stored on CallSession (not CallAnalysis) because this is telephony metadata,
+    # not post-call GPT analysis — design.md AD: outcome_reason placement.
+    outcome_reason: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"<CallSession id={self.id!r} status={self.status!r}>"
 
