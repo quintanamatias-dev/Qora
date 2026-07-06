@@ -697,10 +697,14 @@ class TestProbeDetectsSipRoutingFailure:
                 delay=0,
             )
 
-        assert cs.telephony_status == "no_answer", (
-            f"SIP 404 routing failure must transition telephony_status to 'no_answer', "
+        # Spec: call-state-machine MODIFIED — SIP routing failures now set
+        # telephony_status='failed' + outcome_reason='sip_routing_error'
+        # (previously 'no_answer') for distinguishability.
+        assert cs.telephony_status == "failed", (
+            f"SIP 404 routing failure must transition telephony_status to 'failed', "
             f"got {cs.telephony_status!r}"
         )
+        assert cs.outcome_reason == "sip_routing_error"
         assert cs.sip_status_code == 404
         assert cs.sip_reason == "Not Found"
         assert cs.sip_call_id == "otb_6001kwq98hjae6mv22tyyw13m2p1"
@@ -771,7 +775,9 @@ class TestProbeDetectsSipRoutingFailure:
                 delay=0,
             )
 
-        assert cs.telephony_status == "no_answer"
+        # Spec: call-state-machine MODIFIED — SIP routing failures now set failed+sip_routing_error
+        assert cs.telephony_status == "failed"
+        assert cs.outcome_reason == "sip_routing_error"
         assert cs.sip_status_code == 486
 
     @pytest.mark.asyncio

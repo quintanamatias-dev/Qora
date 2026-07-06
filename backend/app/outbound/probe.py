@@ -22,7 +22,10 @@ SIP routing failure detection (production fix):
     2. Conversation status is "failed" OR "ended" / "done" with call_successful != "success"
        (i.e. no real interaction happened).
 
-  When detected: telephony_status → 'no_answer', SIP fields written, reconciled_at set.
+  When detected: telephony_status → 'failed', outcome_reason='sip_routing_error',
+  SIP fields written, reconciled_at set.
+  Spec: call-state-machine MODIFIED: SIP routing failures now set failed+sip_routing_error
+  (previously no_answer) for distinguishability.
 
 Usage:
     import asyncio
@@ -242,10 +245,13 @@ async def _run_probe(
         # When ElevenLabs accepts the call but Telnyx returns SIP 4xx/5xx
         # (e.g. 404 UNALLOCATED_NUMBER), the conversation ends almost immediately
         # with no real interaction. Detect this pattern and transition the session
-        # to 'no_answer' so the operator can retry right away instead of waiting
-        # up to 30 minutes for the stale sweep.
+        # to 'failed' + outcome_reason='sip_routing_error' so the operator can
+        # distinguish SIP routing failures from normal no-answer outcomes.
+        # Spec: call-sip-observability MODIFIED: Post-Dial Background Probe
+        # (previously set no_answer; now sets failed + sip_routing_error for clarity)
         if _is_sip_routing_failure(best_conv, sip_status_code):
-            cs.telephony_status = "no_answer"
+            cs.telephony_status = "failed"
+            cs.outcome_reason = "sip_routing_error"
             logger.warning(
                 "probe_detected_sip_routing_failure",
                 session_id=session_id,
@@ -255,6 +261,7 @@ async def _run_probe(
                 sip_reason=sip_reason,
                 conversation_status=best_conv.status,
                 call_successful=best_conv.call_successful,
+                outcome_reason="sip_routing_error",
             )
 
         # Step 6: Write SIP fields and reconciliation metadata, then commit.
