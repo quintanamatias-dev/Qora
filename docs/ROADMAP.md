@@ -1,7 +1,7 @@
 # Qora Production Roadmap
 
 > Living document. Update as items are completed or scope changes.
-> Last updated: 2026-06-30
+> Last updated: 2026-07-06
 
 ## Current State
 
@@ -16,6 +16,8 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 - Scheduler queue (creates scheduled calls, does not dial)
 - Admin panel with agent config, integration setup, tools management
 - Lead list/detail with custom fields, call history, transcripts
+- Call state machine with formal telephony states (CallStatus StrEnum, polling endpoint, voicemail heuristic)
+- Structured logging with request correlation, canonical error envelopes, optional Sentry, PII scrubbing
 
 **What does NOT work yet:**
 - No real phone calls (outbound or inbound)
@@ -57,7 +59,7 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 | B6 | Webhook signature verification | - [x] | Completed in PR #111: opt-in webhook secret auth for initiation and Custom LLM routes |
 | B7 | CORS lockdown | - [x] | Completed in PR #111: configurable `QORA_ALLOWED_ORIGINS` replaces hardcoded allow-all for production |
 | B8 | Secrets management | - [x] | Completed in PRs #113, #115: startup validation, active CRM credential checks, root `.env` convention, pre-flight script, operator runbook |
-| B9 | Structured logging + error monitoring | - [x] | Completed in PRs #125, #126: correlation middleware (X-Request-ID), canonical error handling, LOG_FORMAT toggle, stdlib bridge, voice/job context binding, optional Sentry (SENTRY_DSN), PII filter, health ?detail=true, zero live-call latency impact |
+| B9 | Structured logging + error monitoring | - [x] | Completed in PRs #135, #136: raw ASGI correlation middleware (X-Request-ID), canonical error envelope, LOG_FORMAT toggle, stdlib bridge, voice/job context binding, optional Sentry (SENTRY_DSN), PII scrubber, health ?detail=true, zero live-call latency impact. 50 tests. |
 | B10 | Background job durability | - [x] | Completed in PRs #119, #120, #121, #122: DB-backed executor, durable summarize/CRM/transcript jobs, feature flag, off-call only |
 
 ---
@@ -146,13 +148,13 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 ## Suggested Execution Order
 
 ```
-Phase A (lead view)     ████████░░░░░░░░░░░░  ← START HERE
-Phase B (deploy)        ░░░░████████░░░░░░░░  ← parallel with late A
+Phase A (lead view)     ████████████████████  ✅ COMPLETE
+Phase B (deploy)        ████████████████░░░░  8/10 done (B2 deploy, B3 Postgres pending)
 Phase C (outbound)      ░░░░░░░░░░░░████████  ← after B deployed
 Phase D (inbound)       ░░░░░░░░░░░░░░░░████  ← after C stable
 Phase E (operations)    ░░░░░░░░████████████  ← continuous from B onward
 ```
 
-Phase A is pure product value with zero infrastructure risk.
-Phase B enables everything else.
+Phase A is complete.
+Phase B enables everything else — 2 items remaining: public deploy (B2) and PostgreSQL (B3).
 Phase C is the first real revenue milestone.

@@ -1,7 +1,11 @@
 """QORA ElevenLabs Service — programmatic agent configuration.
 
-Provides ElevenLabsService.sync_soft_timeout() which sends a partial PATCH
-to the ElevenLabs ConvAI agent API to configure soft timeout settings.
+Provides:
+- ElevenLabsService.sync_soft_timeout() — DEPRECATED (use sync_agent_config).
+  Sends a partial PATCH with only the soft_timeout_config block.
+- ElevenLabsService.sync_agent_config() — Unified config sync (sdd/elevenlabs-config).
+  Sends a single PATCH combining soft_timeout, voicemail_detection, and max_duration.
+  NULL agent fields → that block is omitted from the payload (NULL-means-skip).
 
 Design decisions (from design.md):
 - Per-call httpx.AsyncClient (matches webhook.py get_signed_url pattern — infrequent calls)
@@ -10,7 +14,7 @@ Design decisions (from design.md):
 - Structured logging on error (http_status, elevenlabs_agent_id)
 - Never raises to the caller — always returns SyncResult
 - Skips (no HTTP call) when elevenlabs_agent_id is None
-- Skips (no HTTP call) when all soft_timeout fields are None
+- Skips (no HTTP call) when all config fields are None (_build_config_payload returns {})
 """
 
 from __future__ import annotations
@@ -61,8 +65,52 @@ class ElevenLabsService:
     def __init__(self, settings) -> None:
         self._settings = settings
 
+    async def sync_agent_config(self, agent) -> SyncResult:
+        """Send a single unified PATCH to configure all ElevenLabs agent settings.
+
+        Combines soft_timeout_config, voicemail_detection, and max_duration_seconds
+        into one PATCH payload. NULL agent fields → that block is omitted (NULL-means-skip).
+
+        Skip conditions (no HTTP call):
+        - agent.elevenlabs_agent_id is None
+        - _build_config_payload(agent) returns {} (all config fields NULL)
+
+        Retry: exactly one retry on 5xx responses.
+        Timeout: 10 seconds per attempt.
+        On failure: logs structured error, returns SyncResult(outcome="error").
+        Never raises to caller.
+
+        DEPRECATION NOTE: sync_soft_timeout is deprecated. Call this method instead.
+
+        Spec: sdd/elevenlabs-config — Requirement: Unified Config Sync
+        """
+        # Guard: no ElevenLabs agent binding
+        if agent.elevenlabs_agent_id is None:
+            return SyncResult(outcome="skipped")
+
+        payload = _build_config_payload(agent)
+        if not payload:
+            # All config fields are NULL — nothing to configure
+            return SyncResult(outcome="skipped")
+
+        url = f"{_ELEVENLABS_BASE_URL}/convai/agents/{agent.elevenlabs_agent_id}"
+        api_key = self._settings.elevenlabs_api_key.get_secret_value()
+        headers = {"xi-api-key": api_key, "Content-Type": "application/json"}
+
+        return await _patch_with_retry(
+            url=url,
+            payload=payload,
+            headers=headers,
+            elevenlabs_agent_id=agent.elevenlabs_agent_id,
+        )
+
     async def sync_soft_timeout(self, agent) -> SyncResult:
         """Send a partial PATCH to configure soft timeout on an ElevenLabs agent.
+
+        .. deprecated::
+            Use :meth:`sync_agent_config` instead. This method only sends the
+            soft_timeout_config block; sync_agent_config sends a unified PATCH
+            combining all three config blocks in a single HTTP round-trip.
 
         Sends ONLY the soft_timeout_config block — never a full agent body.
 
@@ -564,6 +612,78 @@ def _build_soft_timeout_payload(
     return config.to_patch_payload()
 
 
+def _build_config_payload(agent) -> dict:
+    """Build the unified PATCH payload for sync_agent_config.
+
+    Merges up to three config blocks from agent DB fields:
+    - conversation_config.turn.soft_timeout_config (via _build_soft_timeout_payload)
+    - conversation_config.agent.prompt.built_in_tools.voicemail_detection
+      (from agent.voicemail_detection_enabled)
+    - conversation_config.conversation.max_duration_seconds
+      (from agent.max_call_duration_seconds)
+
+    NULL-means-skip: if an agent field is NULL, that block is omitted entirely.
+    Returns {} when all fields are NULL (caller must skip the HTTP call).
+
+    Correct paths verified from live ElevenLabs API GET response (2026-07-07).
+
+    Spec: sdd/elevenlabs-config — Requirement: NULL-Means-Skip Semantics
+    """
+    payload: dict = {}
+
+    # --- Soft timeout block ---
+    # _build_soft_timeout_payload returns {"conversation_config": {"turn": {"soft_timeout_config": {...}}}}
+    # or {} when all three soft_timeout fields are None.
+    soft_timeout_partial = _build_soft_timeout_payload(
+        timeout_seconds=agent.soft_timeout_seconds,
+        message=agent.soft_timeout_message,
+        use_llm_generated_message=agent.soft_timeout_use_llm,
+    )
+    if soft_timeout_partial:
+        # Merge top-level keys (conversation_config) into payload
+        for key, val in soft_timeout_partial.items():
+            if key not in payload:
+                payload[key] = {}
+            if isinstance(val, dict):
+                payload[key].update(val)
+            else:
+                payload[key] = val
+
+    # --- Voicemail detection block ---
+    # Correct path: conversation_config.agent.prompt.built_in_tools.voicemail_detection
+    # voicemail_detection_enabled is nullable bool; None means skip the block entirely.
+    # True  → {"system_tool_type": "voicemail_detection"} (enable built-in tool)
+    # False → None (explicit null to disable — ElevenLabs interprets null as disabled)
+    if agent.voicemail_detection_enabled is not None:
+        if "conversation_config" not in payload:
+            payload["conversation_config"] = {}
+        cc = payload["conversation_config"]
+        if "agent" not in cc:
+            cc["agent"] = {}
+        if "prompt" not in cc["agent"]:
+            cc["agent"]["prompt"] = {}
+        if "built_in_tools" not in cc["agent"]["prompt"]:
+            cc["agent"]["prompt"]["built_in_tools"] = {}
+        if agent.voicemail_detection_enabled:
+            cc["agent"]["prompt"]["built_in_tools"]["voicemail_detection"] = {
+                "system_tool_type": "voicemail_detection"
+            }
+        else:
+            cc["agent"]["prompt"]["built_in_tools"]["voicemail_detection"] = None
+
+    # --- Max call duration block ---
+    # Correct path: conversation_config.conversation.max_duration_seconds
+    if agent.max_call_duration_seconds is not None:
+        if "conversation_config" not in payload:
+            payload["conversation_config"] = {}
+        cc = payload["conversation_config"]
+        if "conversation" not in cc:
+            cc["conversation"] = {}
+        cc["conversation"]["max_duration_seconds"] = int(agent.max_call_duration_seconds)
+
+    return payload
+
+
 async def _patch_with_retry(
     url: str,
     payload: dict,
@@ -654,7 +774,7 @@ async def sync_to_elevenlabs(agent_id: str, settings) -> None:
             return
 
         service = ElevenLabsService(settings=settings)
-        result = await service.sync_soft_timeout(agent)
+        result = await service.sync_agent_config(agent)
 
         # Update sync status based on outcome
         if result.outcome == "synced":

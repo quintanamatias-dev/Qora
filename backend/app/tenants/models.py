@@ -94,6 +94,14 @@ class Agent(Base):
     elevenlabs_phone_number_id: Mapped[str | None] = mapped_column(
         String, nullable=True, default=None
     )
+    # ElevenLabs agent config sync — sdd/elevenlabs-config
+    # NULL = skip that config block in the unified PATCH payload (preserve dashboard settings).
+    voicemail_detection_enabled: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True, default=None
+    )
+    max_call_duration_seconds: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=None
+    )
     # ElevenLabs sync tracking columns
     elevenlabs_sync_status: Mapped[str | None] = mapped_column(
         String, nullable=True, default=None
