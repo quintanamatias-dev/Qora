@@ -27,6 +27,8 @@ from pydantic import BaseModel, field_validator, Field
 # Slug must be all lowercase alphanumeric + hyphens, no leading/trailing hyphen.
 # Allows single alphanumeric chars (e.g. "a", "1").
 _SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
+# ElevenLabs agent IDs: alphanumeric + underscores (e.g. "agent_8201kra4wjhve0srcwgbtwfetr5n").
+_EL_AGENT_ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 # Derive known tool names from the canonical TOOL_DEFINITIONS dict.
 # This avoids duplicating tool names — single source of truth in app.tools.registry.
@@ -122,11 +124,21 @@ class AgentCreate(BaseModel):
     # ElevenLabs agent config sync (sdd/elevenlabs-config)
     # NULL = skip that config block in the PATCH payload (preserve dashboard settings).
     voicemail_detection_enabled: bool | None = None
-    max_call_duration_seconds: int | None = None
+    max_call_duration_seconds: int | None = Field(default=None, ge=30, le=7200)
     # C2: ElevenLabs phone number resource ID for SIP trunk outbound-call API.
     # Seeded from ELEVENLABS_PHONE_NUMBER_ID env var; configurable via API.
     # NULL = no outbound calling configured for this agent.
     elevenlabs_phone_number_id: str | None = None
+
+    @field_validator("elevenlabs_agent_id")
+    @classmethod
+    def validate_elevenlabs_agent_id(cls, v: str | None) -> str | None:
+        if v is not None and not _EL_AGENT_ID_RE.match(v):
+            raise ValueError(
+                "elevenlabs_agent_id must contain only letters, digits, "
+                f"underscores, and hyphens. Got: {v!r}"
+            )
+        return v
 
     @field_validator("slug")
     @classmethod
@@ -175,9 +187,19 @@ class AgentUpdate(BaseModel):
     soft_timeout_use_llm: bool | None = None
     # ElevenLabs agent config sync (sdd/elevenlabs-config)
     voicemail_detection_enabled: bool | None = None
-    max_call_duration_seconds: int | None = None
+    max_call_duration_seconds: int | None = Field(default=None, ge=30, le=7200)
     # C2: ElevenLabs phone number resource ID (optional PATCH field).
     elevenlabs_phone_number_id: str | None = None
+
+    @field_validator("elevenlabs_agent_id")
+    @classmethod
+    def validate_elevenlabs_agent_id(cls, v: str | None) -> str | None:
+        if v is not None and not _EL_AGENT_ID_RE.match(v):
+            raise ValueError(
+                "elevenlabs_agent_id must contain only letters, digits, "
+                f"underscores, and hyphens. Got: {v!r}"
+            )
+        return v
 
     @field_validator("tools_enabled")
     @classmethod
