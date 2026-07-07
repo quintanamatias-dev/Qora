@@ -385,6 +385,9 @@ def test_build_config_payload_all_three_set():
     """_build_config_payload returns merged dict with all three blocks when all fields set.
 
     Spec: sdd/elevenlabs-config — Scenario: All three config blocks present
+    Correct paths verified from live ElevenLabs API GET response (2026-07-07):
+    - voicemail: conversation_config.agent.prompt.built_in_tools.voicemail_detection
+    - max_duration: conversation_config.conversation.max_duration_seconds
     """
     from app.elevenlabs.service import _build_config_payload
 
@@ -400,11 +403,13 @@ def test_build_config_payload_all_three_set():
     assert "conversation_config" in payload
     assert "turn" in payload["conversation_config"]
     assert "soft_timeout_config" in payload["conversation_config"]["turn"]
-    assert "platform_settings" in payload
-    assert "voicemail_detection" in payload["platform_settings"]
-    assert payload["platform_settings"]["voicemail_detection"]["enabled"] is True
-    assert "max_duration_seconds" in payload["conversation_config"]
-    assert payload["conversation_config"]["max_duration_seconds"] == 120
+    # Voicemail goes under conversation_config.agent.prompt.built_in_tools (NOT platform_settings)
+    assert "platform_settings" not in payload
+    built_in_tools = payload["conversation_config"]["agent"]["prompt"]["built_in_tools"]
+    assert "voicemail_detection" in built_in_tools
+    assert built_in_tools["voicemail_detection"] == {"system_tool_type": "voicemail_detection"}
+    # max_duration goes under conversation_config.conversation.max_duration_seconds
+    assert payload["conversation_config"]["conversation"]["max_duration_seconds"] == 120
 
 
 def test_build_config_payload_only_soft_timeout():
@@ -428,7 +433,12 @@ def test_build_config_payload_only_soft_timeout():
 
 
 def test_build_config_payload_only_voicemail():
-    """_build_config_payload with only voicemail set returns only voicemail block."""
+    """_build_config_payload with only voicemail set returns only voicemail block.
+
+    When voicemail_detection_enabled is False, voicemail_detection is set to None
+    to explicitly disable. When True, system_tool_type is set.
+    Correct path: conversation_config.agent.prompt.built_in_tools.voicemail_detection
+    """
     from app.elevenlabs.service import _build_config_payload
 
     agent = _make_agent(
@@ -440,14 +450,19 @@ def test_build_config_payload_only_voicemail():
     )
     payload = _build_config_payload(agent)
 
-    assert "platform_settings" in payload
-    assert payload["platform_settings"]["voicemail_detection"]["enabled"] is False
+    assert "platform_settings" not in payload
+    built_in_tools = payload["conversation_config"]["agent"]["prompt"]["built_in_tools"]
+    assert "voicemail_detection" in built_in_tools
+    assert built_in_tools["voicemail_detection"] is None  # False → explicit disable via null
     assert "turn" not in payload.get("conversation_config", {})
-    assert "max_duration_seconds" not in payload.get("conversation_config", {})
+    assert "conversation" not in payload.get("conversation_config", {})
 
 
 def test_build_config_payload_only_max_duration():
-    """_build_config_payload with only max_call_duration_seconds set returns only max_duration block."""
+    """_build_config_payload with only max_call_duration_seconds set returns only max_duration block.
+
+    Correct path: conversation_config.conversation.max_duration_seconds
+    """
     from app.elevenlabs.service import _build_config_payload
 
     agent = _make_agent(
@@ -460,8 +475,9 @@ def test_build_config_payload_only_max_duration():
     payload = _build_config_payload(agent)
 
     assert "conversation_config" in payload
-    assert payload["conversation_config"]["max_duration_seconds"] == 300
+    assert payload["conversation_config"]["conversation"]["max_duration_seconds"] == 300
     assert "turn" not in payload.get("conversation_config", {})
+    assert "agent" not in payload.get("conversation_config", {})
     assert "platform_settings" not in payload
 
 
@@ -519,8 +535,11 @@ async def test_sync_agent_config_all_three_blocks_sends_single_patch():
     assert route.call_count == 1
     body = captured["body"]
     assert "turn" in body.get("conversation_config", {})
-    assert "max_duration_seconds" in body.get("conversation_config", {})
-    assert "voicemail_detection" in body.get("platform_settings", {})
+    assert "max_duration_seconds" in body.get("conversation_config", {}).get("conversation", {})
+    built_in_tools = body.get("conversation_config", {}).get("agent", {}).get("prompt", {}).get("built_in_tools", {})
+    assert "voicemail_detection" in built_in_tools
+    assert built_in_tools["voicemail_detection"] == {"system_tool_type": "voicemail_detection"}
+    assert "platform_settings" not in body
 
 
 @pytest.mark.asyncio
@@ -555,7 +574,8 @@ async def test_sync_agent_config_partial_only_soft_timeout():
     body = captured["body"]
     assert "turn" in body.get("conversation_config", {})
     assert "platform_settings" not in body
-    assert "max_duration_seconds" not in body.get("conversation_config", {})
+    assert "agent" not in body.get("conversation_config", {})
+    assert "conversation" not in body.get("conversation_config", {})
 
 
 @pytest.mark.asyncio

@@ -334,10 +334,13 @@ async def test_resync_endpoint_with_all_three_config_groups_patch_body(sync_app)
     assert resp.json()["sync_status"] == "synced"
 
     body = captured.get("body", {})
-    # All three blocks in the PATCH payload
+    # All three blocks in the PATCH payload (correct paths verified from live ElevenLabs API 2026-07-07)
     assert "turn" in body.get("conversation_config", {}), "missing soft_timeout_config block"
-    assert "max_duration_seconds" in body.get("conversation_config", {}), "missing max_duration block"
-    assert "voicemail_detection" in body.get("platform_settings", {}), "missing voicemail_detection block"
+    assert "max_duration_seconds" in body.get("conversation_config", {}).get("conversation", {}), "missing max_duration block"
+    built_in_tools = body.get("conversation_config", {}).get("agent", {}).get("prompt", {}).get("built_in_tools", {})
+    assert "voicemail_detection" in built_in_tools, "missing voicemail_detection block"
+    assert built_in_tools["voicemail_detection"] == {"system_tool_type": "voicemail_detection"}
+    assert "platform_settings" not in body, "voicemail must NOT be under platform_settings"
 
 
 # ---------------------------------------------------------------------------
@@ -437,8 +440,10 @@ async def test_resync_endpoint_with_only_voicemail_sends_only_voicemail_block(sy
     assert resp.json()["sync_status"] == "synced"
 
     body = captured.get("body", {})
-    assert "voicemail_detection" in body.get("platform_settings", {}), "missing voicemail_detection"
-    assert body["platform_settings"]["voicemail_detection"]["enabled"] is False
+    assert "platform_settings" not in body, "voicemail must NOT be under platform_settings"
+    built_in_tools = body.get("conversation_config", {}).get("agent", {}).get("prompt", {}).get("built_in_tools", {})
+    assert "voicemail_detection" in built_in_tools, "missing voicemail_detection"
+    assert built_in_tools["voicemail_detection"] is None  # False → explicit null to disable
     # These blocks must NOT be present
     assert "turn" not in body.get("conversation_config", {}), "unexpected soft_timeout block"
-    assert "max_duration_seconds" not in body.get("conversation_config", {}), "unexpected max_duration"
+    assert "conversation" not in body.get("conversation_config", {}), "unexpected max_duration block"

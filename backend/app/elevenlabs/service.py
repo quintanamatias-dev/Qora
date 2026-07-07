@@ -616,26 +616,31 @@ def _build_config_payload(agent) -> dict:
     """Build the unified PATCH payload for sync_agent_config.
 
     Merges up to three config blocks from agent DB fields:
-    - soft_timeout_config (via existing _build_soft_timeout_payload)
-    - platform_settings.voicemail_detection (from agent.voicemail_detection_enabled)
-    - conversation_config.max_duration_seconds (from agent.max_call_duration_seconds)
+    - conversation_config.turn.soft_timeout_config (via _build_soft_timeout_payload)
+    - conversation_config.agent.prompt.built_in_tools.voicemail_detection
+      (from agent.voicemail_detection_enabled)
+    - conversation_config.conversation.max_duration_seconds
+      (from agent.max_call_duration_seconds)
 
     NULL-means-skip: if an agent field is NULL, that block is omitted entirely.
     Returns {} when all fields are NULL (caller must skip the HTTP call).
+
+    Correct paths verified from live ElevenLabs API GET response (2026-07-07).
 
     Spec: sdd/elevenlabs-config — Requirement: NULL-Means-Skip Semantics
     """
     payload: dict = {}
 
     # --- Soft timeout block ---
+    # _build_soft_timeout_payload returns {"conversation_config": {"turn": {"soft_timeout_config": {...}}}}
+    # or {} when all three soft_timeout fields are None.
     soft_timeout_partial = _build_soft_timeout_payload(
         timeout_seconds=agent.soft_timeout_seconds,
         message=agent.soft_timeout_message,
         use_llm_generated_message=agent.soft_timeout_use_llm,
     )
-    # soft_timeout_partial is {} when all three soft_timeout fields are None
     if soft_timeout_partial:
-        # Merge into conversation_config (soft_timeout returns the full nested dict)
+        # Merge top-level keys (conversation_config) into payload
         for key, val in soft_timeout_partial.items():
             if key not in payload:
                 payload[key] = {}
@@ -645,21 +650,36 @@ def _build_config_payload(agent) -> dict:
                 payload[key] = val
 
     # --- Voicemail detection block ---
+    # Correct path: conversation_config.agent.prompt.built_in_tools.voicemail_detection
     # voicemail_detection_enabled is nullable bool; None means skip the block entirely.
+    # True  → {"system_tool_type": "voicemail_detection"} (enable built-in tool)
+    # False → None (explicit null to disable — ElevenLabs interprets null as disabled)
     if agent.voicemail_detection_enabled is not None:
-        if "platform_settings" not in payload:
-            payload["platform_settings"] = {}
-        payload["platform_settings"]["voicemail_detection"] = {
-            "enabled": bool(agent.voicemail_detection_enabled)
-        }
+        if "conversation_config" not in payload:
+            payload["conversation_config"] = {}
+        cc = payload["conversation_config"]
+        if "agent" not in cc:
+            cc["agent"] = {}
+        if "prompt" not in cc["agent"]:
+            cc["agent"]["prompt"] = {}
+        if "built_in_tools" not in cc["agent"]["prompt"]:
+            cc["agent"]["prompt"]["built_in_tools"] = {}
+        if agent.voicemail_detection_enabled:
+            cc["agent"]["prompt"]["built_in_tools"]["voicemail_detection"] = {
+                "system_tool_type": "voicemail_detection"
+            }
+        else:
+            cc["agent"]["prompt"]["built_in_tools"]["voicemail_detection"] = None
 
     # --- Max call duration block ---
+    # Correct path: conversation_config.conversation.max_duration_seconds
     if agent.max_call_duration_seconds is not None:
         if "conversation_config" not in payload:
             payload["conversation_config"] = {}
-        payload["conversation_config"]["max_duration_seconds"] = int(
-            agent.max_call_duration_seconds
-        )
+        cc = payload["conversation_config"]
+        if "conversation" not in cc:
+            cc["conversation"] = {}
+        cc["conversation"]["max_duration_seconds"] = int(agent.max_call_duration_seconds)
 
     return payload
 
