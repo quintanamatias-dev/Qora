@@ -1,7 +1,7 @@
 # Qora Production Roadmap
 
 > Living document. Update as items are completed or scope changes.
-> Last updated: 2026-07-06
+> Last updated: 2026-07-07
 
 ## Current State
 
@@ -20,7 +20,7 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 - Structured logging with request correlation, canonical error envelopes, optional Sentry, PII scrubbing
 
 **What does NOT work yet:**
-- No real phone calls (outbound or inbound)
+- No real phone calls to production leads (outbound tested in dev; inbound not implemented)
 - No public deployment (local + ngrok only)
 - SQLite only (no production DB)
 - No operator login (API key auth exists; JWT/managed auth planned)
@@ -75,14 +75,14 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
-| C1 | Choose telephony path | - [ ] | Evaluate Twilio native vs SIP vs Batch API for cost/control/latency |
-| C2 | Implement outbound dialer worker | - [ ] | Takes pending ScheduledCall, initiates real call via chosen path |
-| C3 | Extend ScheduledCall state machine | - [ ] | pending → dialing → ringing → connected / no_answer / busy / voicemail / failed / completed |
-| C4 | Phone number management | - [ ] | Assign numbers per client or shared pool, caller ID policy |
-| C5 | Voicemail detection policy | - [ ] | ElevenLabs supports voicemail_detection; define Qora behavior |
-| C6 | Failed/busy/no-answer handling | - [ ] | Retry policy, backoff, max attempts |
-| C7 | Store telephony metadata | - [ ] | Provider call IDs, duration, cost, quality metrics |
-| C8 | End-to-end outbound test | - [ ] | Place a real call to a test number, verify full pipeline |
+| C1 | Choose telephony path | - [x] | Provider selected: **Telnyx SIP trunk** via ElevenLabs ConvAI outbound-call API. Formal 20-call measurement deferred to post-deployment — see `docs/telephony/measurement-protocol.md`. |
+| C2 | Implement outbound dialer worker | - [x] | PR #130. `dial_outbound_call()` with feature flag, E.164 validation, per-lead asyncio Lock, concurrent guard, FAS-safe completion. Battle-tested with production fixes (duplicate SIP call, no_answer overwrite). |
+| C3 | Call state machine + polling | - [x] | PR #133. `CallStatus` StrEnum with 10 states, explicit transition table, `GET /calls/{id}/status` polling endpoint (1 req/s rate limit), voicemail heuristic, SIP failure surfacing, frontend `useCallPolling` hook + real-time state badges. 73 backend + 8 frontend tests. |
+| C4 | Phone number management | - [x] | Single number sufficient for pilot. `Agent.elevenlabs_phone_number_id` supports per-agent phone numbers. Deferred: multi-number pool, shared-pool rotation. |
+| C5 | Voicemail detection policy | - [x] | 3-layer protection (PRs #132, #138): ElevenLabs `voicemail_detection` built-in tool via API, system prompt `<voicemail_detection>` instruction, `max_call_duration_seconds=120` via API. All managed programmatically by `sync_agent_config()`. |
+| C6 | Failed/busy/no-answer handling | - [ ] | States exist (`no_answer`, `failed`, `recurrent_error`). Current: no retry on ambiguous timeout (safe default). One retry on transient error. Deferred: backoff schedule, max-attempts counter, automatic redialing. |
+| C7 | Store telephony metadata | - [x] | SIP observability fields captured: `provider_call_id`, `sip_call_id`, `sip_status_code`, `sip_reason`, `reconciled_at`, `reconciliation_source`. Post-dial probe + background sweep. Deferred: cost/quality metrics (E-phase). |
+| C8 | End-to-end outbound test | - [x] | Tested during development with real calls (PRs #130, #132, #133). Live test confirmed: call connected, user spoke with agent, post-call analysis completed. Formal 20-call measurement deferred. |
 
 ---
 
@@ -140,7 +140,7 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 | Issue | Related Phase | Notes |
 |-------|--------------|-------|
 | Generated API types instead of manual TypeScript sync | B | Reduce frontend/backend type drift |
-| Programmatic ElevenLabs sync beyond soft timeout | C | Background music, turn timeout, eagerness, phone settings |
+| Programmatic ElevenLabs sync beyond soft timeout | C | Background music, turn timeout, eagerness — voicemail_detection + max_duration done (PR #138) |
 | Production runbook | E | Document operational procedures |
 
 ---
@@ -150,11 +150,12 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 ```
 Phase A (lead view)     ████████████████████  ✅ COMPLETE
 Phase B (deploy)        ████████████████░░░░  8/10 done (B2 deploy, B3 Postgres pending)
-Phase C (outbound)      ░░░░░░░░░░░░████████  ← after B deployed
-Phase D (inbound)       ░░░░░░░░░░░░░░░░████  ← after C stable
+Phase C (outbound)      ██████████████░░░░░░  7/8 done (C6 retry policy deferred)
+Phase D (inbound)       ░░░░░░░░░░░░░░░░████  ← after C stable + deployed
 Phase E (operations)    ░░░░░░░░████████████  ← continuous from B onward
 ```
 
 Phase A is complete.
 Phase B enables everything else — 2 items remaining: public deploy (B2) and PostgreSQL (B3).
-Phase C is the first real revenue milestone.
+Phase C outbound telephony is functionally complete — tested with real calls.
+Permanent telephony reference: `docs/telephony-integration.md`.

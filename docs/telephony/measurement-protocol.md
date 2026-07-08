@@ -1,5 +1,12 @@
 # Measurement Protocol: Telephony Provider Validation
 
+> **Status**: DEFERRED. Formal 20-call measurement is deferred until post-deployment.
+> The measurement protocol remains valid for future provider performance evaluation
+> and agent quality benchmarking. It is NOT a gate for proceeding to production.
+>
+> Outbound calls have been validated through development testing (PRs #130, #132, #133).
+> Known bugs found and fixed during live testing are documented in `docs/telephony-integration.md`.
+
 > **Phase C1 — Objective Latency and Quality Measurement**
 >
 > This document governs how test calls are placed, what is measured, how results are
