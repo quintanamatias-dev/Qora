@@ -339,7 +339,10 @@ async def test_resync_endpoint_with_all_three_config_groups_patch_body(sync_app)
     assert "max_duration_seconds" in body.get("conversation_config", {}).get("conversation", {}), "missing max_duration block"
     built_in_tools = body.get("conversation_config", {}).get("agent", {}).get("prompt", {}).get("built_in_tools", {})
     assert "voicemail_detection" in built_in_tools, "missing voicemail_detection block"
-    assert built_in_tools["voicemail_detection"] == {"system_tool_type": "voicemail_detection"}
+    assert built_in_tools["voicemail_detection"] == {
+        "name": "voicemail_detection",
+        "params": {"system_tool_type": "voicemail_detection"},
+    }
     assert "platform_settings" not in body, "voicemail must NOT be under platform_settings"
 
 

@@ -652,8 +652,10 @@ def _build_config_payload(agent) -> dict:
     # --- Voicemail detection block ---
     # Correct path: conversation_config.agent.prompt.built_in_tools.voicemail_detection
     # voicemail_detection_enabled is nullable bool; None means skip the block entirely.
-    # True  → {"system_tool_type": "voicemail_detection"} (enable built-in tool)
+    # True  → SystemToolConfig-Input with name + params (enable built-in tool)
     # False → None (explicit null to disable — ElevenLabs interprets null as disabled)
+    # Note: PATCH input uses SystemToolConfig-Input schema which requires "name" and
+    # "params" fields. The GET response returns a different shape (type/name/params).
     if agent.voicemail_detection_enabled is not None:
         if "conversation_config" not in payload:
             payload["conversation_config"] = {}
@@ -666,7 +668,8 @@ def _build_config_payload(agent) -> dict:
             cc["agent"]["prompt"]["built_in_tools"] = {}
         if agent.voicemail_detection_enabled:
             cc["agent"]["prompt"]["built_in_tools"]["voicemail_detection"] = {
-                "system_tool_type": "voicemail_detection"
+                "name": "voicemail_detection",
+                "params": {"system_tool_type": "voicemail_detection"},
             }
         else:
             cc["agent"]["prompt"]["built_in_tools"]["voicemail_detection"] = None

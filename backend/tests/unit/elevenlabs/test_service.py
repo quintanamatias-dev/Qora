@@ -407,7 +407,10 @@ def test_build_config_payload_all_three_set():
     assert "platform_settings" not in payload
     built_in_tools = payload["conversation_config"]["agent"]["prompt"]["built_in_tools"]
     assert "voicemail_detection" in built_in_tools
-    assert built_in_tools["voicemail_detection"] == {"system_tool_type": "voicemail_detection"}
+    assert built_in_tools["voicemail_detection"] == {
+        "name": "voicemail_detection",
+        "params": {"system_tool_type": "voicemail_detection"},
+    }
     # max_duration goes under conversation_config.conversation.max_duration_seconds
     assert payload["conversation_config"]["conversation"]["max_duration_seconds"] == 120
 
@@ -538,7 +541,10 @@ async def test_sync_agent_config_all_three_blocks_sends_single_patch():
     assert "max_duration_seconds" in body.get("conversation_config", {}).get("conversation", {})
     built_in_tools = body.get("conversation_config", {}).get("agent", {}).get("prompt", {}).get("built_in_tools", {})
     assert "voicemail_detection" in built_in_tools
-    assert built_in_tools["voicemail_detection"] == {"system_tool_type": "voicemail_detection"}
+    assert built_in_tools["voicemail_detection"] == {
+        "name": "voicemail_detection",
+        "params": {"system_tool_type": "voicemail_detection"},
+    }
     assert "platform_settings" not in body
 
 
