@@ -7,6 +7,7 @@ Single-char slugs (all lowercase letters or digits) are also valid.
 from __future__ import annotations
 
 import json
+import math
 import re
 from datetime import datetime
 
@@ -99,6 +100,39 @@ class _SchedulerValidatorMixin(BaseModel):
                 )
         return v
 
+    @field_validator("scheduler_backoff_multiplier", check_fields=False)
+    @classmethod
+    def validate_backoff_multiplier(cls, v: float | None) -> float | None:
+        """Validate scheduler_backoff_multiplier is finite, >= 1.0, and <= 10.0.
+
+        Rejects:
+        - 0 or negative: would produce zero/shrinking delays → immediate/excess retries
+        - < 1.0: delay shrinks per attempt (inverted backoff)
+        - NaN / Inf: undefined or infinite delay
+        - > 10.0: excessively large escalation factor
+
+        Valid range: [1.0, 10.0] finite.
+        Default 1.0 = flat delay (preserves existing behaviour exactly).
+        """
+        if v is None:
+            return v
+        if not math.isfinite(v):
+            raise ValueError(
+                f"scheduler_backoff_multiplier must be a finite number, got {v!r}. "
+                "NaN and Inf are not valid multiplier values."
+            )
+        if v < 1.0:
+            raise ValueError(
+                f"scheduler_backoff_multiplier must be >= 1.0, got {v}. "
+                "Values below 1.0 would shrink or negate the retry delay."
+            )
+        if v > 10.0:
+            raise ValueError(
+                f"scheduler_backoff_multiplier must be <= 10.0, got {v}. "
+                "Values above 10.0 produce excessively large retry delays."
+            )
+        return v
+
     @model_validator(mode="after")
     def validate_hour_window(self) -> "_SchedulerValidatorMixin":
         """Validate that start_hour < end_hour when both are provided."""
@@ -130,6 +164,8 @@ class ClientCreate(_SchedulerValidatorMixin):
     scheduler_allowed_hours_end: int = 20
     scheduler_retry_on_outcomes: str = '["call_again","follow_up"]'
     scheduler_timezone: str = "America/Argentina/Buenos_Aires"
+    # C6: Backoff multiplier for recontact delay escalation. Default 1.0 = flat delay.
+    scheduler_backoff_multiplier: float = 1.0
 
     @field_validator("client_id")
     @classmethod
@@ -163,6 +199,8 @@ class ClientUpdate(_SchedulerValidatorMixin):
     scheduler_allowed_hours_end: int | None = None
     scheduler_retry_on_outcomes: str | None = None
     scheduler_timezone: str | None = None
+    # C6: Backoff multiplier for recontact delay escalation.
+    scheduler_backoff_multiplier: float | None = None
 
 
 class ClientResponse(BaseModel):
@@ -183,5 +221,7 @@ class ClientResponse(BaseModel):
     scheduler_allowed_hours_end: int = 20
     scheduler_retry_on_outcomes: str = '["call_again","follow_up"]'
     scheduler_timezone: str = "America/Argentina/Buenos_Aires"
+    # C6: Backoff multiplier for recontact delay escalation.
+    scheduler_backoff_multiplier: float = 1.0
 
     model_config = {"from_attributes": True}

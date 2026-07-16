@@ -182,6 +182,12 @@ class Client(Base):
     scheduler_timezone: Mapped[str] = mapped_column(
         String, nullable=False, default="America/Argentina/Buenos_Aires"
     )
+    # C6: Per-client backoff multiplier for recontact delay escalation.
+    # Formula: delay = cooldown_minutes × (backoff_multiplier ^ (attempt_number − 1))
+    # Default 1.0 = flat delay (preserves existing behavior for all current clients).
+    scheduler_backoff_multiplier: Mapped[float] = mapped_column(
+        Float, nullable=False, default=1.0
+    )
 
     # ---------------------------------------------------------------------------
     # Next Action Engine configuration (qora-next-action, Issue #47)

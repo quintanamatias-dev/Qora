@@ -417,6 +417,11 @@ async def _run_summarizer(session_id: str, db: AsyncSession, *, durable: bool = 
                 getattr(client_row, "analysis_language", "Spanish") or "Spanish"
             )
 
+    # C6: Capture telephony_status BEFORE the rollback below expires cs attributes.
+    # Accessing cs.telephony_status after rollback would trigger a lazy-load outside
+    # a valid async greenlet context — this causes MissingGreenlet in SQLAlchemy.
+    _cs_telephony_status: str | None = getattr(cs, "telephony_status", None)
+
     # ── CLOSE READ TRANSACTION before the LLM call ───────────────────────────
     # Rolling back releases any implicit read transaction without discarding data
     # (nothing was written). This prevents the SQLite WAL checkpoint from making
@@ -438,6 +443,7 @@ async def _run_summarizer(session_id: str, db: AsyncSession, *, durable: bool = 
             client_rules=client_rules,
             analysis_language=analysis_language,
             session_id=session_id,
+            telephony_status=_cs_telephony_status,  # C6: pass for voicemail rule
         )
     except Exception as gpt_exc:
         error_msg = str(gpt_exc)
@@ -605,6 +611,7 @@ async def _call_gpt_summarize(
     client_rules: "Any | None" = None,
     analysis_language: str = "Spanish",
     session_id: str | None = None,
+    telephony_status: "str | None" = None,
 ) -> tuple[str, dict[str, Any]]:
     """Run 6 universal dimensions, the 2-phase interest pipeline, profile facts pipeline,
     misc notes pipeline, data corrections pipeline, and post-analysis next_action pipeline.
@@ -916,6 +923,7 @@ async def _call_gpt_summarize(
                 problem=ctx_problem,
                 lead=lead_snapshot,
                 client=client_rules,
+                telephony_status=telephony_status,  # C6: voicemail recontact rule
             )
             na_result = await run_next_action_pipeline(na_ctx, client)
             fields["next_action_suggested"] = na_result.action

@@ -37,6 +37,19 @@ from app.outbound.phone import validate_e164
 
 logger = get_logger(__name__)
 
+# ---------------------------------------------------------------------------
+# C6: Structured outcome reason taxonomy (string constants)
+# ---------------------------------------------------------------------------
+
+#: All valid outcome_reason values for CallSession.outcome_reason.
+OUTCOME_REASONS: frozenset[str] = frozenset({
+    "sip_routing_error",    # Existing — SIP routing/configuration error
+    "provider_transient",   # C6 NEW — transient provider failure (retriable)
+    "provider_permanent",   # C6 NEW — permanent provider failure (do not retry)
+    "config_error",         # C6 NEW — Qora config error (agent not configured)
+    "timeout_ambiguous",    # C6 NEW — ReadTimeout (ambiguous, not retried)
+})
+
 # Active telephony statuses — a session in any of these blocks a new dial attempt.
 # Spec: call-state-machine — Requirement: Concurrency Guard Updated
 # {dialing, ringing, connected} replaces the old {dialing, ringing, in_call}.
@@ -527,14 +540,17 @@ async def dial_outbound_call(
 
         if result.error_category == "permanent":
             # Permanent system error — no retry
+            # C6: Record structured reason for operator review
             call_session.telephony_status = "failed"
             call_session.telephony_error = result.error_detail
+            call_session.outcome_reason = "provider_permanent"
             await db.commit()
 
             logger.error(
                 "outbound_call_permanent_error",
                 call_session_id=call_session_id,
                 error_detail=result.error_detail,
+                outcome_reason="provider_permanent",
             )
             return DialResult(
                 status="failed",
@@ -554,11 +570,13 @@ async def dial_outbound_call(
             # the stale-session sweep resolves the true outcome. This preserves the
             # no-silent-failure invariant — the operator sees a failed row with an
             # explanatory telephony_error rather than an eternal 'dialing'.
+            # C6: Record structured reason.
             call_session.telephony_status = "failed"
             call_session.telephony_error = (
                 f"ambiguous_timeout (provider may have placed a call; not retried): "
                 f"{result.error_detail}"
             )
+            call_session.outcome_reason = "timeout_ambiguous"
             await db.commit()
 
             logger.error(
@@ -621,10 +639,12 @@ async def dial_outbound_call(
             return DialResult(status="dialing", call_session_id=call_session_id)
 
         # Both attempts failed
+        # C6: Set structured outcome reason and schedule Qora-owned tech retry.
         call_session.telephony_status = "recurrent_error"
         call_session.telephony_error = (
             f"attempt_1: {result.error_detail}; attempt_2: {retry_result.error_detail}"
         )
+        call_session.outcome_reason = "provider_transient"
         await db.commit()
 
         logger.error(
@@ -632,7 +652,49 @@ async def dial_outbound_call(
             call_session_id=call_session_id,
             attempt_1=result.error_detail,
             attempt_2=retry_result.error_detail,
+            outcome_reason="provider_transient",
         )
+
+        # C6: Schedule a Qora-owned technical retry (max=2, 5min delay).
+        # Does NOT increment the lead's recontact counter.
+        #
+        # Persistence contract: schedule_tech_retry() calls create_scheduled_call(),
+        # which only does db.flush() — the ScheduledCall is NOT yet durable. The
+        # manual outbound route returns after dial_outbound_call() and may close the
+        # session without an explicit commit, silently rolling back the scheduled row
+        # even though the logs say "tech_retry_scheduled".
+        #
+        # Fix: commit() here when schedule_tech_retry() succeeds (returns non-None).
+        # This is safe because:
+        # - The recurrent_error CallSession was already committed above (line ~648).
+        # - schedule_tech_retry() is isolated: it only writes a ScheduledCall row.
+        # - auto_schedule() is called from summarizer.py in a separate transaction
+        #   context; this commit does NOT affect its transaction semantics.
+        try:
+            from app.scheduler.service import schedule_tech_retry
+
+            _tech_retry_sc = await schedule_tech_retry(
+                db,
+                session_id=call_session_id,
+                lead_id=str(lead.id),
+                client_id=str(client.id),
+                agent_id=getattr(agent, "id", None),
+            )
+            if _tech_retry_sc is not None:
+                # Durably commit the ScheduledCall so it survives session close.
+                await db.commit()
+                logger.info(
+                    "outbound_tech_retry_committed",
+                    call_session_id=call_session_id,
+                    scheduled_call_id=_tech_retry_sc.id,
+                )
+        except Exception as _tr_exc:
+            logger.warning(
+                "outbound_tech_retry_schedule_failed",
+                call_session_id=call_session_id,
+                error=str(_tr_exc),
+            )
+
         return DialResult(
             status="recurrent_error",
             call_session_id=call_session_id,
