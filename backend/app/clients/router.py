@@ -83,6 +83,7 @@ def _client_to_response(client: Client, agent_count: int = 0) -> ClientResponse:
         scheduler_allowed_hours_end=client.scheduler_allowed_hours_end,
         scheduler_retry_on_outcomes=client.scheduler_retry_on_outcomes,
         scheduler_timezone=client.scheduler_timezone,
+        scheduler_backoff_multiplier=client.scheduler_backoff_multiplier,
     )
 
 
@@ -144,6 +145,7 @@ async def create_client(
             scheduler_allowed_hours_end=payload.scheduler_allowed_hours_end,
             scheduler_retry_on_outcomes=payload.scheduler_retry_on_outcomes,
             scheduler_timezone=payload.scheduler_timezone,
+            scheduler_backoff_multiplier=payload.scheduler_backoff_multiplier,
         )
         await session.commit()
     except IntegrityError:

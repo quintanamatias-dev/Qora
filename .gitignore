@@ -46,6 +46,9 @@ coverage.xml
 .mcp.json
 Plugin/
 
+# Local code intelligence indexes
+.codegraph/
+
 # macOS
 .DS_Store
 .AppleDouble

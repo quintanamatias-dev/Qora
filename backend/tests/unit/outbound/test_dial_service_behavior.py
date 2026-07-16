@@ -570,13 +570,20 @@ async def test_transient_error_retries_exactly_once_then_recurrent_error():
             new_callable=AsyncMock,
             return_value={},
         ):
-            result = await dial_outbound_call(
-                db=mock_db,
-                lead=_make_lead(),
-                agent=_make_agent(),
-                client=_make_client(),
-                settings=_make_settings(),
-            )
+            # C6: patch schedule_tech_retry so it doesn't invoke DB.add
+            # (which would overwrite session_obj with a ScheduledCall).
+            with patch(
+                "app.scheduler.service.schedule_tech_retry",
+                new_callable=AsyncMock,
+                return_value=None,
+            ):
+                result = await dial_outbound_call(
+                    db=mock_db,
+                    lead=_make_lead(),
+                    agent=_make_agent(),
+                    client=_make_client(),
+                    settings=_make_settings(),
+                )
 
     # Exactly 2 API calls — no more
     assert mock_api.call_count == 2, (

@@ -100,6 +100,9 @@ class NextActionContext:
     problem: "ProblemAxis"
     lead: LeadSnapshot
     client: ClientRules
+    # C6: telephony_status at session-end — used by voicemail recontact rule (P3.5).
+    # None when context is built without telephony state (e.g. GPT-only path).
+    telephony_status: "str | None" = None
 
 
 # ---------------------------------------------------------------------------
@@ -397,6 +400,36 @@ def _rule_interest_outcome(ctx: NextActionContext) -> NextActionResult | None:
     return None
 
 
+def _rule_voicemail_recontact(ctx: NextActionContext) -> NextActionResult | None:
+    """P3.5 — Voicemail session → schedule recontact via client policy.
+
+    C6: When telephony_status == 'voicemail', the call hit voicemail and was
+    terminated. Schedule a recontact using the client's cooldown/hours config.
+    This rule fires AFTER P3 (commitments) and BEFORE P4 (no-useful-conversation)
+    to keep voicemail as a business outcome (not a no-useful-conversation signal).
+
+    Does NOT increment recontact counter here — auto_schedule() handles counting.
+    """
+    if ctx.telephony_status != "voicemail":
+        return None
+
+    now_utc = datetime.now(timezone.utc)
+    next_at = _calculate_retry_scheduled_at(
+        now_utc=now_utc,
+        cooldown_minutes=ctx.client.scheduler_cooldown_minutes,
+        start_hour=ctx.client.scheduler_allowed_hours_start,
+        end_hour=ctx.client.scheduler_allowed_hours_end,
+        tz_str=ctx.client.scheduler_timezone,
+    )
+    return NextActionResult(
+        action="retry_call",
+        reason="Voicemail detected: scheduled recontact via client policy",
+        confidence="high",
+        decided_by="rules",
+        next_action_at=next_at,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Rules list — evaluation order defines priority
 # ---------------------------------------------------------------------------
@@ -405,6 +438,7 @@ _RULES: list[Callable[[NextActionContext], NextActionResult | None]] = [
     _rule_hard_stops,  # P1
     _rule_max_attempts,  # P2
     _rule_commitment_based,  # P3
+    _rule_voicemail_recontact,  # P3.5 — C6: voicemail recontact
     _rule_no_useful_conversation,  # P4
     _rule_interest_outcome,  # P5
 ]

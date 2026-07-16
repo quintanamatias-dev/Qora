@@ -36,6 +36,8 @@ async def create_client(
     scheduler_timezone: str = "America/Argentina/Buenos_Aires",
     # Issue #35 — Per-client extraction configuration (JSON string or None)
     extraction_config: str | None = None,
+    # C6: Backoff multiplier for recontact delay escalation. Default 1.0 = flat delay.
+    scheduler_backoff_multiplier: float = 1.0,
 ) -> Client:
     """Create and persist a new Client record and its default Agent.
 
@@ -74,6 +76,7 @@ async def create_client(
         scheduler_retry_on_outcomes=scheduler_retry_on_outcomes,
         scheduler_timezone=scheduler_timezone,
         extraction_config=extraction_config,
+        scheduler_backoff_multiplier=scheduler_backoff_multiplier,
     )
     session.add(client)
     await session.flush()  # Flush to DB within current transaction

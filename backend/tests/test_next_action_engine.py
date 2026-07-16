@@ -1038,11 +1038,14 @@ class TestRulesPriorityOrder:
         else:
             pytest.fail("No rule fired for do_not_contact context")
 
-    def test_rules_list_has_five_entries(self):
-        """_RULES contains exactly 5 rule functions (P1-P5)."""
+    def test_rules_list_has_six_entries(self):
+        """_RULES contains exactly 6 rule functions (P1-P3.5-P5).
+
+        C6 added _rule_voicemail_recontact as P3.5 between P3 and P4.
+        """
         from app.analysis.universal.next_action import _RULES
 
-        assert len(_RULES) == 5
+        assert len(_RULES) == 6
 
     def test_evaluate_rules_returns_first_match(self):
         """_evaluate_rules() returns first non-None result."""

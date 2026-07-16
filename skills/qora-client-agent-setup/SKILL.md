@@ -52,11 +52,13 @@ backend/clients/{client-id}/
 |-----------|--------|
 | New tenant/client | Create Client row, create filesystem dir, create demo lead |
 | New voice agent | Create Agent row with slug + `elevenlabs_agent_id`, write `system-prompt.md` |
-| Outbound call needed | Set `elevenlabs_phone_number_id` on Agent, set `ENABLE_OUTBOUND_CALLS=true` in `.env`, enable scheduler |
+| Outbound call needed | Set `elevenlabs_phone_number_id` on Agent, set `ENABLE_OUTBOUND_CALLS=true` in `.env`, enable scheduler, set `voicemail_detection_enabled=True` and sync |
 | Custom LLM fails | Verify ngrok URL externally, inspect ElevenLabs server URL, check `client_id` in path |
 | Agent speaks as another tenant | Check Custom LLM URL path `client_id` and initiation webhook `client_id` |
 | Need runtime skill | Add `.agent-skill.md` under `backend/clients/{id}/agents/{slug}/skills/`, register in `registry.yaml` |
 | Prompt needs updating | Edit `system-prompt.md` — do NOT edit DB directly |
+| Recontact policy | Set `scheduler_backoff_multiplier` on Client (default 1.0=flat, 1.5=escalating). Use Quintana example values as reference. |
+| Voicemail behavior | Set `voicemail_detection_enabled=True` on Agent + add `<voicemail_detection>` section in `system-prompt.md` instructing immediate call termination |
 | Webhook auth needed | Generate secret, set `QORA_WEBHOOK_SECRET` in `.env`, set in ElevenLabs Security panel, then enable `QORA_WEBHOOK_AUTH_ENABLED=true` |
 
 ## Complete Setup: 5 Phases, 40 Steps
@@ -86,18 +88,33 @@ Full reference: `docs/agent-setup-checklist.md`
 16. **Webhook auth**: `QORA_WEBHOOK_SECRET={generated}` + `QORA_WEBHOOK_AUTH_ENABLED=true`
 17. Per-client CRM key, e.g. `{CLIENT_NAME}_AIRTABLE_API_KEY`
 
-### Phase 3 — Qora DB: Client + Agent Records (9 steps)
+### Phase 3 — Qora DB: Client + Agent Records (12 steps)
 
 18. Create `Client` row: `id={client_id}`, `name`, `voice_id`, `is_active=True`
-19. Set scheduler fields if outbound: `scheduler_enabled=True`, `scheduler_max_attempts`, `scheduler_allowed_hours_start/end`, `scheduler_timezone`
-20. Set `next_action_*` fields if using next-action pipeline
-21. Set `analysis_language` (default: `"Spanish"`)
-22. Create `Agent` row: `client_id`, `slug`, `name`, `voice_id`, `is_default=True`, `is_active=True`
-23. Set `elevenlabs_agent_id` on Agent (from step 1)
-24. Set `model`, `temperature`, `max_tokens`
-25. Set `tools_enabled` (JSON array of tool names)
-26. **Outbound only**: Set `elevenlabs_phone_number_id` on Agent (from step 8)
-27. Set TTS fields: `tts_speed`, `tts_stability`, `tts_similarity_boost`, `tts_model`
+19. Set scheduler/recontact fields if outbound: `scheduler_enabled=True`, `scheduler_max_attempts`, `scheduler_cooldown_minutes`, `scheduler_allowed_hours_start/end`, `scheduler_timezone`
+20. **C6**: Set `scheduler_backoff_multiplier` (float, default `1.0`). Use `1.0` for flat delay, higher values for escalating recontact delays. Example: Quintana uses `1.5`.
+21. Set `next_action_*` fields if using next-action pipeline
+22. Set `analysis_language` (default: `"Spanish"`)
+23. Create `Agent` row: `client_id`, `slug`, `name`, `voice_id`, `is_default=True`, `is_active=True`
+24. Set `elevenlabs_agent_id` on Agent (from step 1)
+25. Set `model`, `temperature`, `max_tokens`
+26. Set `tools_enabled` (JSON array of tool names)
+27. **Outbound only**: Set `elevenlabs_phone_number_id` on Agent (from step 8)
+28. Set TTS fields: `tts_speed`, `tts_stability`, `tts_similarity_boost`, `tts_model`
+29. **Outbound/C6**: Set `voicemail_detection_enabled=True` on Agent to enable ElevenLabs voicemail detection tool. Sync via `POST /agents/{id}/sync-elevenlabs` after setting.
+
+#### Quintana Seguros Recontact Policy Example (C6 reference values)
+
+| Field | Value | Notes |
+|-------|-------|-------|
+| `scheduler_enabled` | `True` | Outbound scheduler active |
+| `scheduler_max_attempts` | `5` | Max recontact attempts |
+| `scheduler_cooldown_minutes` | `60` | Base delay (1 hour) |
+| `scheduler_backoff_multiplier` | `1.5` | Escalating delay: attempt 1=60min, 2=90min, 3=135min |
+| `scheduler_allowed_hours_start` | `9` | Start at 9am local |
+| `scheduler_allowed_hours_end` | `20` | End at 8pm local |
+| `scheduler_timezone` | `America/Argentina/Buenos_Aires` | Client timezone |
+| `voicemail_detection_enabled` | `True` | ElevenLabs voicemail tool enabled |
 
 ### Phase 4 — Filesystem Content (8 steps)
 

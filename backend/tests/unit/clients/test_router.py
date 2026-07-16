@@ -724,3 +724,162 @@ async def test_create_client_name_with_special_chars_slugified(
     assert data["client_id"] == "acme-corp"
     # name preserved as-is in response
     assert data["name"] == "Acme Corp!"
+
+
+# ---------------------------------------------------------------------------
+# Phase C6 — Fifth pre-commit reliability remediation
+# B5: scheduler_backoff_multiplier is not passed through the router
+# ---------------------------------------------------------------------------
+
+
+async def test_create_client_response_includes_backoff_multiplier_default(
+    clients_app: AsyncClient,
+):
+    """POST /clients response must include scheduler_backoff_multiplier with default 1.0.
+
+    Proves _client_to_response() maps scheduler_backoff_multiplier from the ORM object.
+    Before the fix: field is absent from _client_to_response(), so the response would
+    fall back to the ClientResponse Pydantic default (1.0) even if a custom value was
+    stored — masking the pass-through bug; but the field MUST be present in the response.
+    """
+    response = await clients_app.post(
+        "/api/v1/clients",
+        json={
+            "client_id": "backoff-default-test",
+            "name": "Backoff Default Test",
+            "voice_id": "v1",
+        },
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert "scheduler_backoff_multiplier" in data, (
+        "POST /clients response must include scheduler_backoff_multiplier. "
+        "_client_to_response() is missing this field."
+    )
+    assert data["scheduler_backoff_multiplier"] == 1.0, (
+        f"Default scheduler_backoff_multiplier must be 1.0, got {data.get('scheduler_backoff_multiplier')!r}"
+    )
+
+
+async def test_create_client_custom_backoff_multiplier_preserved_in_response(
+    clients_app: AsyncClient,
+):
+    """POST /clients with scheduler_backoff_multiplier=2.5 must return 2.5 in response.
+
+    This is the primary contract test: proves that:
+    1. The router passes scheduler_backoff_multiplier from ClientCreate to tenant_service.create_client()
+    2. _client_to_response() maps the DB-stored value back into the response
+
+    Before the fix: the router omits scheduler_backoff_multiplier when calling
+    create_client(), so the DB stores default 1.0 regardless of what the caller sent.
+    Response would return 1.0 instead of 2.5.
+    """
+    response = await clients_app.post(
+        "/api/v1/clients",
+        json={
+            "client_id": "backoff-custom-test",
+            "name": "Backoff Custom Test",
+            "voice_id": "v1",
+            "scheduler_backoff_multiplier": 2.5,
+        },
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["scheduler_backoff_multiplier"] == 2.5, (
+        f"scheduler_backoff_multiplier=2.5 sent in request must be 2.5 in response, "
+        f"got {data.get('scheduler_backoff_multiplier')!r}. "
+        "The router is not passing scheduler_backoff_multiplier to tenant_service.create_client(), "
+        "or _client_to_response() is not mapping it from the ORM object."
+    )
+
+
+async def test_get_client_response_includes_backoff_multiplier(
+    clients_app: AsyncClient,
+):
+    """GET /clients/{id} response must include scheduler_backoff_multiplier.
+
+    After creating a client with custom backoff, GET must return the stored value.
+    Proves _client_to_response() maps the field correctly on read paths too.
+    """
+    # Create with custom value
+    create_resp = await clients_app.post(
+        "/api/v1/clients",
+        json={
+            "client_id": "backoff-read-test",
+            "name": "Backoff Read Test",
+            "voice_id": "v1",
+            "scheduler_backoff_multiplier": 3.0,
+        },
+    )
+    assert create_resp.status_code == 201
+
+    # Read back and verify
+    get_resp = await clients_app.get("/api/v1/clients/backoff-read-test")
+    assert get_resp.status_code == 200
+    data = get_resp.json()
+    assert "scheduler_backoff_multiplier" in data, (
+        "GET /clients/{id} response must include scheduler_backoff_multiplier."
+    )
+    assert data["scheduler_backoff_multiplier"] == 3.0, (
+        f"GET response must return the stored value 3.0, got {data.get('scheduler_backoff_multiplier')!r}"
+    )
+
+
+async def test_list_clients_response_includes_backoff_multiplier(
+    clients_app: AsyncClient,
+):
+    """GET /clients list response must include scheduler_backoff_multiplier per item.
+
+    Proves _client_to_response() maps the field on the list path.
+    """
+    await clients_app.post(
+        "/api/v1/clients",
+        json={
+            "client_id": "backoff-list-test",
+            "name": "Backoff List Test",
+            "voice_id": "v1",
+            "scheduler_backoff_multiplier": 2.0,
+        },
+    )
+
+    list_resp = await clients_app.get("/api/v1/clients")
+    assert list_resp.status_code == 200
+    items = list_resp.json()
+    assert len(items) >= 1
+    target = next((c for c in items if c["client_id"] == "backoff-list-test"), None)
+    assert target is not None
+    assert "scheduler_backoff_multiplier" in target, (
+        "GET /clients list must include scheduler_backoff_multiplier in each item."
+    )
+    assert target["scheduler_backoff_multiplier"] == 2.0, (
+        f"List item must return stored value 2.0, got {target.get('scheduler_backoff_multiplier')!r}"
+    )
+
+
+async def test_patch_client_backoff_multiplier_update_preserved(
+    clients_app: AsyncClient,
+):
+    """PATCH /clients/{id} with scheduler_backoff_multiplier updates and returns new value.
+
+    Proves the update path also maps the field correctly via _client_to_response().
+    """
+    # Create with default
+    await clients_app.post(
+        "/api/v1/clients",
+        json={
+            "client_id": "backoff-patch-test",
+            "name": "Backoff Patch Test",
+            "voice_id": "v1",
+        },
+    )
+
+    # Patch with custom value
+    patch_resp = await clients_app.patch(
+        "/api/v1/clients/backoff-patch-test",
+        json={"scheduler_backoff_multiplier": 4.5},
+    )
+    assert patch_resp.status_code == 200
+    data = patch_resp.json()
+    assert data["scheduler_backoff_multiplier"] == 4.5, (
+        f"PATCH response must return updated value 4.5, got {data.get('scheduler_backoff_multiplier')!r}"
+    )

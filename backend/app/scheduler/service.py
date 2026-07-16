@@ -2,7 +2,7 @@
 
 Core functions:
 - calculate_scheduled_at(): UTC/TZ clamping (pure function)
-- create_scheduled_call(): persist a new ScheduledCall
+- create_scheduled_call(): stage a new ScheduledCall (flushed, caller must commit)
 - auto_schedule(): rules engine for post-call auto-scheduling
 - cancel_scheduled_call(): pending/in_progress → cancelled
 - reschedule_call(): update scheduled_at on pending records
@@ -29,6 +29,16 @@ from app.scheduler.models import VALID_TRANSITIONS, ScheduledCall
 logger = structlog.get_logger(__name__)
 
 _TICK_INTERVAL_SECONDS = 60
+
+# ---------------------------------------------------------------------------
+# C6: Tech-retry constants (hardcoded MVP — extract to Client column if needed)
+# ---------------------------------------------------------------------------
+
+#: Maximum number of Qora-owned technical retries per lead (separate from recontact).
+_TECH_RETRY_MAX_ATTEMPTS: int = 2
+
+#: Fixed delay (minutes) for tech retries — independent of client cooldown.
+_TECH_RETRY_DELAY_MINUTES: int = 5
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +93,27 @@ def calculate_scheduled_at(
     return clamped_local.astimezone(timezone.utc)
 
 
+def calculate_backoff_delay(
+    cooldown_minutes: int,
+    backoff_multiplier: float,
+    attempt_number: int,
+) -> float:
+    """Calculate recontact delay applying the exponential backoff formula.
+
+    Formula: delay = cooldown_minutes × (backoff_multiplier ^ (attempt_number − 1))
+    A multiplier of 1.0 produces a flat delay identical to the original behavior.
+
+    Args:
+        cooldown_minutes: Base cooldown from client config.
+        backoff_multiplier: Escalation factor (1.0 = flat, 2.0 = double per attempt).
+        attempt_number: 1-indexed attempt count for this lead.
+
+    Returns:
+        Delay in minutes (float).
+    """
+    return cooldown_minutes * (backoff_multiplier ** (attempt_number - 1))
+
+
 # ---------------------------------------------------------------------------
 # CRUD helpers
 # ---------------------------------------------------------------------------
@@ -101,14 +132,19 @@ async def create_scheduled_call(
     notes: str | None,
     agent_id: str | None = None,
 ) -> ScheduledCall:
-    """Persist a new ScheduledCall with status=pending.
+    """Stage a new ScheduledCall with status=pending.
+
+    The row is added to the session and flushed (visible within the current
+    transaction) but NOT committed. The caller is responsible for calling
+    db.commit() to make the row durable. Failing to commit before the session
+    is closed will silently roll back the ScheduledCall.
 
     Args:
         db: Active async DB session.
         client_id: Client tenant ID.
         lead_id: Lead being scheduled.
         scheduled_at: UTC datetime for the call.
-        trigger_reason: One of: auto_retry | followup_tool | manual.
+        trigger_reason: One of: auto_retry | followup_tool | manual | tech_retry.
         source_session_id: Session that triggered this (or None).
         attempt_number: Which attempt this is (1-indexed).
         max_attempts: Max attempts copied from client config at creation time.
@@ -116,7 +152,7 @@ async def create_scheduled_call(
         agent_id: Optional Agent UUID to associate with this scheduled call.
 
     Returns:
-        The persisted ScheduledCall instance.
+        The staged ScheduledCall instance (flushed, not yet committed).
     """
     sc = ScheduledCall(
         id=str(uuid.uuid4()),
@@ -405,11 +441,14 @@ async def auto_schedule(
         logger.info("auto_schedule_skipped_duplicate", lead_id=lead_id)
         return None
 
-    # Rule 5: max_attempts guard — count all historical attempts for this lead
+    # Rule 5: max_attempts guard — count only auto_retry (recontact) rows.
+    # C6: tech_retry rows are managed separately and must NOT count toward
+    # the lead recontact limit. Filter by trigger_reason to isolate counters.
     all_attempts = await db.execute(
         select(ScheduledCall).where(
             ScheduledCall.lead_id == lead_id,
             ScheduledCall.client_id == client_id,
+            ScheduledCall.trigger_reason != "tech_retry",
         )
     )
     attempt_count = len(list(all_attempts.scalars().all()))
@@ -464,11 +503,20 @@ async def auto_schedule(
             elif isinstance(nat, datetime):
                 scheduled_at = nat
 
-    # Fallback: use calculate_scheduled_at if no override
+    # Fallback: use calculate_scheduled_at with backoff formula if no override.
+    # C6: apply scheduler_backoff_multiplier to escalate delay per attempt.
     if scheduled_at is None:
+        backoff_multiplier = getattr(client, "scheduler_backoff_multiplier", 1.0) or 1.0
+        effective_cooldown = int(
+            calculate_backoff_delay(
+                cooldown_minutes=client.scheduler_cooldown_minutes,
+                backoff_multiplier=backoff_multiplier,
+                attempt_number=attempt_count + 1,
+            )
+        )
         scheduled_at = calculate_scheduled_at(
             now_utc=now_utc,
-            cooldown_minutes=client.scheduler_cooldown_minutes,
+            cooldown_minutes=effective_cooldown,
             start_hour=client.scheduler_allowed_hours_start,
             end_hour=client.scheduler_allowed_hours_end,
             tz_str=client.scheduler_timezone,
@@ -493,6 +541,119 @@ async def auto_schedule(
         lead_id=lead_id,
         scheduled_at=scheduled_at.isoformat(),
         attempt_number=attempt_count + 1,
+    )
+    return sc
+
+
+# ---------------------------------------------------------------------------
+# C6: Tech-retry lane — Qora-owned technical error retry
+# ---------------------------------------------------------------------------
+
+
+async def schedule_tech_retry(
+    db: AsyncSession,
+    *,
+    session_id: str,
+    lead_id: str,
+    client_id: str,
+    agent_id: str | None = None,
+) -> ScheduledCall | None:
+    """Schedule a Qora-owned technical retry for a transient provider failure.
+
+    Unlike auto_schedule (client-owned recontact), tech retry:
+    - Uses a hardcoded 5-minute delay (independent of client cooldown/hours).
+    - Has a fixed max of 2 retries per lead (independent of client max_attempts).
+    - Uses trigger_reason='tech_retry' so counters are isolated from auto_retry.
+    - Does NOT increment the lead's recontact attempt counter.
+
+    Returns:
+        Staged (flushed, not committed) ScheduledCall on success.
+        None if max tech retries reached OR an active (pending/in_progress)
+        tech_retry already exists for this lead (dedup guard).
+    """
+    # Dedup guard: if a pending or in_progress tech retry already exists for this lead,
+    # do not create another one. This prevents duplicate pending rows when
+    # schedule_tech_retry is called multiple times before the first retry executes.
+    active_tech_retry_result = await db.execute(
+        select(ScheduledCall).where(
+            ScheduledCall.lead_id == lead_id,
+            ScheduledCall.client_id == client_id,
+            ScheduledCall.trigger_reason == "tech_retry",
+            ScheduledCall.status.in_(["pending", "in_progress"]),
+        )
+    )
+    active_tech_retry = active_tech_retry_result.scalar_one_or_none()
+    if active_tech_retry is not None:
+        logger.info(
+            "tech_retry_skipped_active_exists",
+            lead_id=lead_id,
+            client_id=client_id,
+            active_id=active_tech_retry.id,
+        )
+        return None
+
+    # Count existing tech_retry rows for this lead (isolated counter — all statuses)
+    tech_attempts_result = await db.execute(
+        select(ScheduledCall).where(
+            ScheduledCall.lead_id == lead_id,
+            ScheduledCall.client_id == client_id,
+            ScheduledCall.trigger_reason == "tech_retry",
+        )
+    )
+    tech_count = len(list(tech_attempts_result.scalars().all()))
+
+    if tech_count >= _TECH_RETRY_MAX_ATTEMPTS:
+        logger.info(
+            "tech_retry_max_reached",
+            lead_id=lead_id,
+            client_id=client_id,
+            tech_count=tech_count,
+            max=_TECH_RETRY_MAX_ATTEMPTS,
+        )
+        return None
+
+    # Resolve agent from source session or client default (same pattern as auto_schedule)
+    resolved_agent_id = agent_id
+    if resolved_agent_id is None:
+        from app.calls.models import CallSession
+
+        session_result = await db.execute(
+            select(CallSession).where(CallSession.id == session_id)
+        )
+        source_session = session_result.scalar_one_or_none()
+        if source_session is not None and source_session.agent_id:
+            resolved_agent_id = source_session.agent_id
+
+    if resolved_agent_id is None:
+        from app.tenants.service import get_default_agent
+
+        default_agent = await get_default_agent(db, client_id)
+        if default_agent is not None:
+            resolved_agent_id = default_agent.id
+
+    now_utc = datetime.now(timezone.utc)
+    scheduled_at = now_utc + timedelta(minutes=_TECH_RETRY_DELAY_MINUTES)
+
+    sc = await create_scheduled_call(
+        db,
+        client_id=client_id,
+        lead_id=lead_id,
+        scheduled_at=scheduled_at,
+        trigger_reason="tech_retry",
+        source_session_id=session_id,
+        attempt_number=tech_count + 1,
+        max_attempts=_TECH_RETRY_MAX_ATTEMPTS,
+        notes="Qora-owned technical retry: transient provider failure",
+        agent_id=resolved_agent_id,
+    )
+
+    logger.info(
+        "tech_retry_scheduled",
+        client_id=client_id,
+        lead_id=lead_id,
+        session_id=session_id,
+        attempt_number=tech_count + 1,
+        scheduled_at=scheduled_at.isoformat(),
     )
     return sc
 
