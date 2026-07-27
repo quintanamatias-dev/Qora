@@ -73,8 +73,8 @@ Slice 1 depends on it.
 
 ### 1.7 `get_active_scheduled_call_for_lead` multi-row fix (D7)
 
-- [ ] 1.7.1 RED: `tests/unit/scheduler/test_service.py` — two active (`pending`/`in_progress`) rows for one lead (the D1-confirmed reachable state) → `get_active_scheduled_call_for_lead` returns one row instead of raising `MultipleResultsFound`. (~10 lines)
-- [ ] 1.7.2 GREEN: `backend/app/scheduler/service.py:223-237` — replace `scalar_one_or_none()` with `.order_by(ScheduledCall.scheduled_at).limit(1)` + `result.scalars().first()`. (~5 lines)
+- [x] 1.7.1 RED: `tests/unit/scheduler/test_service.py` — two active (`pending`/`in_progress`) rows for one lead (the D1-confirmed reachable state) → `get_active_scheduled_call_for_lead` returns one row instead of raising `MultipleResultsFound`. (~10 lines)
+- [x] 1.7.2 GREEN: `backend/app/scheduler/service.py:223-237` — replace `scalar_one_or_none()` with `.order_by(ScheduledCall.scheduled_at).limit(1)` + `result.scalars().first()`. (~5 lines)
 
 ### 1.8 REFACTOR + slice-1 close-out
 

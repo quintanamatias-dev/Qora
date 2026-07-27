@@ -239,15 +239,26 @@ async def get_active_scheduled_call_for_lead(
     client_id: str,
     lead_id: str,
 ) -> ScheduledCall | None:
-    """Return the pending/in_progress ScheduledCall for a lead, if any."""
+    """Return the pending/in_progress ScheduledCall for a lead, if any.
+
+    D7 (C6b): more than one active row per lead is a reachable state (design.md
+    D1 — e.g. a stale in_progress row alongside a freshly-created pending
+    recontact). scalar_one_or_none() would raise MultipleResultsFound in that
+    case; instead, order by scheduled_at and deterministically return the
+    earliest active row rather than crash the caller (auto_schedule's dedup
+    guard).
+    """
     result = await db.execute(
-        select(ScheduledCall).where(
+        select(ScheduledCall)
+        .where(
             ScheduledCall.lead_id == lead_id,
             ScheduledCall.client_id == client_id,
             ScheduledCall.status.in_(["pending", "in_progress"]),
         )
+        .order_by(ScheduledCall.scheduled_at)
+        .limit(1)
     )
-    return result.scalar_one_or_none()
+    return result.scalars().first()
 
 
 async def cancel_scheduled_call(
