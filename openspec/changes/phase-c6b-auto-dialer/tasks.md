@@ -78,8 +78,8 @@ Slice 1 depends on it.
 
 ### 1.8 REFACTOR + slice-1 close-out
 
-- [ ] 1.8.1 Full-suite gate: `cd backend && python3 -m pytest tests/ -q` — must stay at 3251+N passing, 0 regressions.
-- [ ] 1.8.2 Verify flag-off parity manually: run one `run_scheduler_cycle` with `enable_auto_dialer=False` against `tick_db`, assert `scheduler_tick_promoted` fires and zero `auto_dialer_*` events — the proposal's byte-for-byte guarantee.
+- [x] 1.8.1 Full-suite gate: `cd backend && python3 -m pytest tests/ -q` — must stay at 3251+N passing, 0 regressions. Result: 3273 passed (baseline 3251 + 22, 0 regressions).
+- [x] 1.8.2 Verify flag-off parity manually: run one `run_scheduler_cycle` with `enable_auto_dialer=False` against `tick_db`, assert `scheduler_tick_promoted` fires and zero `auto_dialer_*` events — the proposal's byte-for-byte guarantee. Result: `test_run_scheduler_cycle_flag_off_only_promotes_no_auto_dialer_events` (added under 1.5.1) PASSED — confirms the guarantee holds after 1.6/1.7.
 
 ## Phase 2 (Slice 2 / PR 2): Outcome-Driven Completion + Decision 8 — ~280 lines
 
