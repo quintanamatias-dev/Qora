@@ -21,7 +21,9 @@ from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import structlog
+import sqlalchemy as sa
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.scheduler.models import VALID_TRANSITIONS, ScheduledCall
@@ -39,6 +41,17 @@ _TECH_RETRY_MAX_ATTEMPTS: int = 2
 
 #: Fixed delay (minutes) for tech retries — independent of client cooldown.
 _TECH_RETRY_DELAY_MINUTES: int = 5
+
+# ---------------------------------------------------------------------------
+# Phase C6b: Auto-dialer runner constants
+# ---------------------------------------------------------------------------
+
+#: Claim timeout (minutes) — a claimed row with no dial attempt past this
+#: window is considered stranded (class a). Reaped in Slice 3.
+_CLAIM_TIMEOUT_MINUTES: int = 10
+
+#: Age-out cap (hours) for stranded rows — bounds a crash-loop. Reaped in Slice 3.
+_MAX_STRANDED_HOURS: int = 6
 
 
 # ---------------------------------------------------------------------------
@@ -656,6 +669,104 @@ async def schedule_tech_retry(
         scheduled_at=scheduled_at.isoformat(),
     )
     return sc
+
+
+# ---------------------------------------------------------------------------
+# Phase C6b: Auto-dialer CAS claim
+#
+# Two guards prevent double-dialing a lead across processes:
+#   (a) an atomic conditional UPDATE, dial only when rowcount == 1
+#   (b) uq_scheduled_calls_active_lead — at most one in_progress row per lead
+# _claim_one is the single documented exception to D8 (_set_scheduled_call_status):
+# it is a raw Core UPDATE, not an ORM instance write, because the claim must be
+# a single atomic statement the DB can evaluate without a prior SELECT-then-write
+# race window.
+# ---------------------------------------------------------------------------
+
+
+async def _claim_one(db: AsyncSession, sc_id: str, now: datetime) -> bool:
+    """Atomically claim a pending ScheduledCall. True iff this process won.
+
+    Design: openspec/changes/phase-c6b-auto-dialer/design.md — The Claim
+    Statement (verbatim contract).
+    """
+    stmt = (
+        sa.update(ScheduledCall)
+        .where(ScheduledCall.id == sc_id, ScheduledCall.status == "pending")
+        .values(status="in_progress", updated_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    try:
+        result = await db.execute(stmt)
+        await db.commit()
+    except IntegrityError:
+        # uq_scheduled_calls_active_lead — another row for this lead is
+        # already in_progress (e.g. auto_retry claimed first, this is the
+        # lead's parked tech_retry). Expected under contention.
+        await db.rollback()
+        logger.warning(
+            "auto_dialer_claim_conflict",
+            scheduled_call_id=sc_id,
+            reason="lead_already_in_progress",
+        )
+        return False
+    if result.rowcount != 1:
+        logger.warning(
+            "auto_dialer_claim_conflict",
+            scheduled_call_id=sc_id,
+            reason="lost_race",
+            rowcount=result.rowcount,
+        )
+        return False
+    return True
+
+
+async def claim_due_scheduled_calls(
+    db: AsyncSession, limit: int
+) -> list[ScheduledCall]:
+    """Claim up to `limit` due pending ScheduledCalls via the CAS above.
+
+    The candidate SELECT is advisory (bounded, ordered by scheduled_at); the
+    per-row UPDATE in _claim_one is authoritative. Returns only the rows this
+    process actually won — losers are silently excluded (already logged by
+    _claim_one).
+    """
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(ScheduledCall)
+        .where(
+            ScheduledCall.status == "pending",
+            ScheduledCall.scheduled_at <= now,
+        )
+        .order_by(ScheduledCall.scheduled_at)
+        .limit(limit)
+    )
+    candidates = list(result.scalars().all())
+    if candidates:
+        logger.info(
+            "auto_dialer_cycle_started",
+            candidates=len(candidates),
+            limit=limit,
+        )
+
+    claimed: list[ScheduledCall] = []
+    for sc in candidates:
+        won = await _claim_one(db, sc.id, now)
+        if not won:
+            continue
+        # _claim_one committed via a raw Core UPDATE (synchronize_session=False) —
+        # refresh so this ORM instance reflects the new status/updated_at before
+        # the caller (claim_due_scheduled_calls / dial loop) reads or writes it.
+        await db.refresh(sc)
+        claimed.append(sc)
+        logger.info(
+            "auto_dialer_claimed",
+            scheduled_call_id=sc.id,
+            lead_id=sc.lead_id,
+            trigger_reason=sc.trigger_reason,
+            attempt_number=sc.attempt_number,
+        )
+    return claimed
 
 
 # ---------------------------------------------------------------------------

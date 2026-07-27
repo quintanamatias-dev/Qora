@@ -53,8 +53,8 @@ Slice 1 depends on it.
 
 ### 1.3 CAS claim
 
-- [ ] 1.3.1 RED: `tests/unit/scheduler/test_service.py` (or new `test_auto_dialer_claim.py`) — `_claim_one` returns `True` once and `False` for the loser on the same row (simulate race via pre-set status); a second lead-row claim raises `IntegrityError` inside `_claim_one`, is caught, logged as `auto_dialer_claim_conflict`, and returns `False`. (~25 lines)
-- [ ] 1.3.2 GREEN: `backend/app/scheduler/service.py` — add `_CLAIM_TIMEOUT_MINUTES=10`, `_MAX_STRANDED_HOURS=6`, `_claim_one(db, sc_id, now)` per the design's verbatim CAS `UPDATE ... WHERE status='pending'` + `IntegrityError` catch; bounded candidate `SELECT` (`status='pending' AND scheduled_at<=now ORDER BY scheduled_at LIMIT settings.auto_dialer_max_concurrent_dials`); `claim_due_scheduled_calls(db, limit)` wrapping both. (~50 lines)
+- [x] 1.3.1 RED: `tests/unit/scheduler/test_service.py` (or new `test_auto_dialer_claim.py`) — `_claim_one` returns `True` once and `False` for the loser on the same row (simulate race via pre-set status); a second lead-row claim raises `IntegrityError` inside `_claim_one`, is caught, logged as `auto_dialer_claim_conflict`, and returns `False`. (~25 lines)
+- [x] 1.3.2 GREEN: `backend/app/scheduler/service.py` — add `_CLAIM_TIMEOUT_MINUTES=10`, `_MAX_STRANDED_HOURS=6`, `_claim_one(db, sc_id, now)` per the design's verbatim CAS `UPDATE ... WHERE status='pending'` + `IntegrityError` catch; bounded candidate `SELECT` (`status='pending' AND scheduled_at<=now ORDER BY scheduled_at LIMIT settings.auto_dialer_max_concurrent_dials`); `claim_due_scheduled_calls(db, limit)` wrapping both. (~50 lines)
 
 ### 1.4 `_set_scheduled_call_status` transition helper (D8)
 
