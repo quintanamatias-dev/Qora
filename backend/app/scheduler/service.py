@@ -574,15 +574,20 @@ async def schedule_tech_retry(
     """Schedule a Qora-owned technical retry for a transient provider failure.
 
     Unlike auto_schedule (client-owned recontact), tech retry:
-    - Uses a hardcoded 5-minute delay (independent of client cooldown/hours).
+    - Uses a hardcoded 5-minute delay, independent of client cooldown — but
+      clamped to the client's allowed-hours window (Decision 7, C6b): a
+      candidate landing outside [scheduler_allowed_hours_start,
+      scheduler_allowed_hours_end) in the client's scheduler_timezone rolls
+      forward to the next allowed window instead of firing immediately.
     - Has a fixed max of 2 retries per lead (independent of client max_attempts).
     - Uses trigger_reason='tech_retry' so counters are isolated from auto_retry.
     - Does NOT increment the lead's recontact attempt counter.
 
     Returns:
         Staged (flushed, not committed) ScheduledCall on success.
-        None if max tech retries reached OR an active (pending/in_progress)
-        tech_retry already exists for this lead (dedup guard).
+        None if max tech retries reached, an active (pending/in_progress)
+        tech_retry already exists for this lead (dedup guard), OR the client
+        cannot be found.
     """
     # Dedup guard: if a pending or in_progress tech retry already exists for this lead,
     # do not create another one. This prevents duplicate pending rows when
@@ -644,8 +649,36 @@ async def schedule_tech_retry(
         if default_agent is not None:
             resolved_agent_id = default_agent.id
 
+    # Decision 7 (C6b): clamp the candidate to the client's allowed-hours
+    # window — reuses calculate_scheduled_at() (the same clamp auto_schedule
+    # already uses) instead of duplicating clamp logic. Inside the window
+    # this is byte-for-byte the original now+5min behaviour.
+    from app.tenants.models import Client
+
+    client = await db.get(Client, client_id)
+    if client is None:
+        logger.warning(
+            "tech_retry_client_not_found", client_id=client_id, lead_id=lead_id
+        )
+        return None  # FK would reject the insert anyway
+
     now_utc = datetime.now(timezone.utc)
-    scheduled_at = now_utc + timedelta(minutes=_TECH_RETRY_DELAY_MINUTES)
+    raw_at = now_utc + timedelta(minutes=_TECH_RETRY_DELAY_MINUTES)
+    scheduled_at = calculate_scheduled_at(
+        now_utc=now_utc,
+        cooldown_minutes=_TECH_RETRY_DELAY_MINUTES,
+        start_hour=client.scheduler_allowed_hours_start,
+        end_hour=client.scheduler_allowed_hours_end,
+        tz_str=client.scheduler_timezone,
+    )
+    if scheduled_at != raw_at:
+        logger.warning(
+            "tech_retry_deferred_to_allowed_hours",
+            lead_id=lead_id,
+            raw_scheduled_at=raw_at.isoformat(),
+            scheduled_at=scheduled_at.isoformat(),
+            deferred_minutes=int((scheduled_at - raw_at).total_seconds() // 60),
+        )
 
     sc = await create_scheduled_call(
         db,

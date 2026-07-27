@@ -32,7 +32,7 @@ T3. No extra commit when schedule_tech_retry returns None (max reached or dedup)
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
@@ -236,6 +236,162 @@ async def test_tech_retry_row_survives_session_close_after_commit(persistence_db
     )
     assert row.status == "pending", (
         f"New tech retry must have status='pending', got {row.status!r}"
+    )
+
+
+# ===========================================================================
+# Decision 7 (C6b Slice 1, task 1.6) — allowed-hours clamp for tech_retry
+#
+# schedule_tech_retry previously used a fixed `now + 5min` delay regardless
+# of the client's allowed-hours window, so a retry could dial someone at
+# 2am. Fix: reuse calculate_scheduled_at() — the SAME clamp auto_schedule
+# already uses — so a candidate landing outside
+# [scheduler_allowed_hours_start, scheduler_allowed_hours_end) in the
+# client's scheduler_timezone rolls forward to the next allowed window
+# instead of firing immediately. Inside the window, behavior is unchanged
+# (byte-for-byte the original now+5min).
+# ===========================================================================
+
+
+async def _make_source_call_session(persistence_db, *, telephony_status: str) -> str:
+    """Create and commit a CallSession for durability tests; return its id."""
+    from app.calls.models import CallSession
+
+    async with persistence_db.async_session_factory() as sess:
+        cs = CallSession(
+            id=str(uuid.uuid4()),
+            client_id="quintana-seguros",
+            lead_id="durability-lead-001",
+            status="initiated",
+            telephony_provider="elevenlabs",
+            telephony_status=telephony_status,
+            started_at=datetime.now(timezone.utc),
+            created_at=datetime.now(timezone.utc),
+        )
+        sess.add(cs)
+        await sess.commit()
+        return cs.id
+
+
+async def test_tech_retry_outside_allowed_hours_clamps_to_next_window(
+    persistence_db,
+):
+    """Candidate landing at 23:58 local clamps to next day's allowed_hours_start.
+
+    quintana-seguros defaults (app.tenants.service.create_client): scheduler_
+    allowed_hours_start=9, scheduler_allowed_hours_end=20, scheduler_timezone=
+    America/Argentina/Buenos_Aires (UTC-3, no DST). now+5min lands at 23:58
+    local -> outside [9, 20) -> clamps forward to 09:00 local the NEXT day.
+    """
+    from app.scheduler.service import schedule_tech_retry, calculate_scheduled_at
+
+    session_id = await _make_source_call_session(
+        persistence_db, telephony_status="recurrent_error"
+    )
+
+    # UTC 2026-05-02T02:53:00 -> Buenos Aires (UTC-3) local 2026-05-01 23:53:00.
+    # +5min candidate -> local 23:58:00 -> outside [9, 20) -> clamps forward.
+    fixed_now = datetime(2026, 5, 2, 2, 53, 0, tzinfo=timezone.utc)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now if tz is not None else fixed_now.replace(tzinfo=None)
+
+    with patch("app.scheduler.service.datetime", FrozenDateTime):
+        async with persistence_db.async_session_factory() as sess:
+            sc = await schedule_tech_retry(
+                sess,
+                session_id=session_id,
+                lead_id="durability-lead-001",
+                client_id="quintana-seguros",
+            )
+            await sess.commit()
+
+    expected = calculate_scheduled_at(
+        now_utc=fixed_now,
+        cooldown_minutes=5,
+        start_hour=9,
+        end_hour=20,
+        tz_str="America/Argentina/Buenos_Aires",
+    )
+
+    assert sc is not None, "schedule_tech_retry must still create a ScheduledCall"
+    assert sc.scheduled_at == expected, (
+        f"Expected clamped scheduled_at={expected}, got {sc.scheduled_at}"
+    )
+    assert sc.scheduled_at != fixed_now + timedelta(minutes=5), (
+        "Clamped scheduled_at must differ from the raw now+5min delay — "
+        "this is the regression this test guards against."
+    )
+
+
+async def test_tech_retry_inside_allowed_hours_unchanged(persistence_db):
+    """Candidate landing at 14:00 local (inside window) stays exactly now+5min.
+
+    Regression guard: Decision 7 must NOT change behavior inside the window —
+    this is the "byte-for-byte unchanged" contract from design.md D6.
+    """
+    from app.scheduler.service import schedule_tech_retry
+
+    session_id = await _make_source_call_session(
+        persistence_db, telephony_status="recurrent_error"
+    )
+
+    # UTC 2026-05-01T16:55:00 -> Buenos Aires local 13:55:00.
+    # +5min candidate -> local 14:00:00 -> inside [9, 20) -> unchanged.
+    fixed_now = datetime(2026, 5, 1, 16, 55, 0, tzinfo=timezone.utc)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now if tz is not None else fixed_now.replace(tzinfo=None)
+
+    with patch("app.scheduler.service.datetime", FrozenDateTime):
+        async with persistence_db.async_session_factory() as sess:
+            sc = await schedule_tech_retry(
+                sess,
+                session_id=session_id,
+                lead_id="durability-lead-001",
+                client_id="quintana-seguros",
+            )
+            await sess.commit()
+
+    assert sc is not None
+    assert sc.scheduled_at == fixed_now + timedelta(minutes=5), (
+        f"Inside the allowed-hours window scheduled_at must be exactly "
+        f"now+5min (unchanged), got {sc.scheduled_at}"
+    )
+
+
+async def test_tech_retry_returns_none_when_client_not_found(persistence_db):
+    """client_id not found -> returns None, logs tech_retry_client_not_found.
+
+    Decision 7 adds a client lookup (needed for scheduler_allowed_hours_*/
+    scheduler_timezone). A missing client must fail closed with a WARNING
+    instead of raising — the FK would reject the insert anyway.
+    """
+    import structlog.testing
+
+    from app.scheduler.service import schedule_tech_retry
+
+    session_id = await _make_source_call_session(
+        persistence_db, telephony_status="recurrent_error"
+    )
+
+    with structlog.testing.capture_logs() as cap:
+        async with persistence_db.async_session_factory() as sess:
+            sc = await schedule_tech_retry(
+                sess,
+                session_id=session_id,
+                lead_id="durability-lead-001",
+                client_id="nonexistent-client",
+            )
+
+    assert sc is None, "Missing client must yield None, not raise"
+    events = [e.get("event") for e in cap]
+    assert "tech_retry_client_not_found" in events, (
+        f"Expected tech_retry_client_not_found warning, got events: {events}"
     )
 
 

@@ -68,8 +68,8 @@ Slice 1 depends on it.
 
 ### 1.6 Decision 7 — allowed-hours clamp for `tech_retry` (independently revertable commit)
 
-- [ ] 1.6.1 RED: `tests/unit/outbound/test_c6_tech_retry_persistence.py` — tech retry scheduled at 23:58 local → `scheduled_at` is next day's `scheduler_allowed_hours_start` in the client's `scheduler_timezone`; tech retry scheduled at 14:00 local (inside window) → exactly `now + 5min`, byte-for-byte unchanged. (~20 lines)
-- [ ] 1.6.2 GREEN: `backend/app/scheduler/service.py::schedule_tech_retry` (`:634-635`) — replace fixed `now + 5min` with `calculate_scheduled_at(now_utc=now_utc, cooldown_minutes=_TECH_RETRY_DELAY_MINUTES, start_hour=..., end_hour=..., tz_str=...)`; `client is None` guard returns `None` + `tech_retry_client_not_found` warning; `tech_retry_deferred_to_allowed_hours` WARNING log when clamped; correct the now-false docstring at `:564` ("independent of client cooldown/hours") in the same commit. (~35 lines)
+- [x] 1.6.1 RED: `tests/unit/outbound/test_c6_tech_retry_persistence.py` — tech retry scheduled at 23:58 local → `scheduled_at` is next day's `scheduler_allowed_hours_start` in the client's `scheduler_timezone`; tech retry scheduled at 14:00 local (inside window) → exactly `now + 5min`, byte-for-byte unchanged. (~20 lines)
+- [x] 1.6.2 GREEN: `backend/app/scheduler/service.py::schedule_tech_retry` (`:634-635`) — replace fixed `now + 5min` with `calculate_scheduled_at(now_utc=now_utc, cooldown_minutes=_TECH_RETRY_DELAY_MINUTES, start_hour=..., end_hour=..., tz_str=...)`; `client is None` guard returns `None` + `tech_retry_client_not_found` warning; `tech_retry_deferred_to_allowed_hours` WARNING log when clamped; correct the now-false docstring at `:564` ("independent of client cooldown/hours") in the same commit. (~35 lines)
 
 ### 1.7 `get_active_scheduled_call_for_lead` multi-row fix (D7)
 
