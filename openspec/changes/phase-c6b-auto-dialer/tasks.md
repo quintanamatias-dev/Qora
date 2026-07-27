@@ -58,13 +58,13 @@ Slice 1 depends on it.
 
 ### 1.4 `_set_scheduled_call_status` transition helper (D8)
 
-- [ ] 1.4.1 RED: `tests/unit/scheduler/test_service.py` — helper sets `status` + `updated_at`, flushes, and is used by every new write site in this slice (assert via call-site test, not a standalone transition-table test — enforcement stays deferred per proposal scope decision). (~10 lines)
-- [ ] 1.4.2 GREEN: `backend/app/scheduler/service.py` — add private `_set_scheduled_call_status(db, sc, new_status)`. (~10 lines)
+- [x] 1.4.1 RED: `tests/unit/scheduler/test_service.py` — helper sets `status` + `updated_at`, flushes, and is used by every new write site in this slice (assert via call-site test, not a standalone transition-table test — enforcement stays deferred per proposal scope decision). (~10 lines)
+- [x] 1.4.2 GREEN: `backend/app/scheduler/service.py` — add private `_set_scheduled_call_status(db, sc, new_status)`. (~10 lines)
 
 ### 1.5 Dial loop + cycle restructure
 
-- [ ] 1.5.1 RED: `tests/integration/scheduler/test_tick.py` — `DialResult.failed`/`recurrent_error` → claimed row's `sc.status == "failed"`; `DialResult.dialing` → stays `in_progress` with `outcome_session_id` set; flag-off cycle (`enable_auto_dialer=False`) executes only `mark_due_calls_in_progress` (no `auto_dialer_*` events, byte-for-byte unchanged). (~35 lines)
-- [ ] 1.5.2 GREEN: `backend/app/scheduler/service.py` — extract `run_scheduler_cycle(db, settings)` from `scheduler_tick`'s loop body; branch per design's data-flow diagram (reaper stub deferred to Slice 3 — call site added now, no-op until 1.6 lands its real body is NOT needed here, reaper is Slice 3 only); dial branch calls `claim_due_scheduled_calls` then `asyncio.gather` over `dial_outbound_call(..., scheduled_call=sc)` (local import, matching existing style), sets terminal/`outcome_session_id` per `DialResult`; emits `auto_dialer_cycle_started`, `auto_dialer_claimed`, `auto_dialer_dial_attempted`, `auto_dialer_dial_accepted`, `auto_dialer_dial_failed`, `auto_dialer_dial_exception` (forced `failed` on unexpected raise, since `dial_outbound_call`'s never-raises contract is a contract, not a guarantee). (~30 lines)
+- [x] 1.5.1 RED: `tests/integration/scheduler/test_tick.py` — `DialResult.failed`/`recurrent_error` → claimed row's `sc.status == "failed"`; `DialResult.dialing` → stays `in_progress` with `outcome_session_id` set; flag-off cycle (`enable_auto_dialer=False`) executes only `mark_due_calls_in_progress` (no `auto_dialer_*` events, byte-for-byte unchanged). (~35 lines)
+- [x] 1.5.2 GREEN: `backend/app/scheduler/service.py` — extract `run_scheduler_cycle(db, settings)` from `scheduler_tick`'s loop body; branch per design's data-flow diagram (reaper stub deferred to Slice 3 — call site added now, no-op until 1.6 lands its real body is NOT needed here, reaper is Slice 3 only); dial branch calls `claim_due_scheduled_calls` then `asyncio.gather` over `dial_outbound_call(..., scheduled_call=sc)` (local import, matching existing style), sets terminal/`outcome_session_id` per `DialResult`; emits `auto_dialer_cycle_started`, `auto_dialer_claimed`, `auto_dialer_dial_attempted`, `auto_dialer_dial_accepted`, `auto_dialer_dial_failed`, `auto_dialer_dial_exception` (forced `failed` on unexpected raise, since `dial_outbound_call`'s never-raises contract is a contract, not a guarantee). (~30 lines)
 
 ### 1.6 Decision 7 — allowed-hours clamp for `tech_retry` (independently revertable commit)
 

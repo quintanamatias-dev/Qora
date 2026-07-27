@@ -769,6 +769,23 @@ async def claim_due_scheduled_calls(
     return claimed
 
 
+async def _set_scheduled_call_status(
+    db: AsyncSession, sc: ScheduledCall, new_status: str
+) -> None:
+    """Single write seam for ScheduledCall.status transitions (D8).
+
+    VALID_TRANSITIONS enforcement stays deferred (proposal scope decision),
+    but every new status write in this slice routes through this helper so
+    the follow-up enforcement change has exactly one seam to swap instead of
+    a scattered set of hand-rolled if/raise checks. The CAS claim (_claim_one)
+    is the single documented exception — a raw Core UPDATE, not an ORM
+    instance write.
+    """
+    sc.status = new_status
+    sc.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+
+
 # ---------------------------------------------------------------------------
 # Background tick — mark due calls as in_progress
 # ---------------------------------------------------------------------------
@@ -809,19 +826,127 @@ async def mark_due_calls_in_progress(db: AsyncSession) -> int:
     return len(due_calls)
 
 
+# ---------------------------------------------------------------------------
+# Phase C6b: Dial loop — dials rows this process claimed
+# ---------------------------------------------------------------------------
+
+
+async def _dial_claimed_scheduled_call(
+    db: AsyncSession, sc: ScheduledCall, settings
+) -> None:
+    """Dial one claimed ScheduledCall and persist the outcome.
+
+    dial_outbound_call() never raises by contract, but that contract is not a
+    guarantee (design.md — Observability: auto_dialer_dial_exception) — an
+    unexpected exception here still forces the row to failed rather than
+    leaving it stranded in_progress with no outcome_session_id.
+
+    Imports dial_outbound_call locally, matching scheduler_tick's existing
+    local-import style and the patch seam design.md's Testing Strategy pins
+    for unit tests (patch("app.outbound.service.dial_outbound_call")).
+    """
+    from app.leads.service import get_lead
+    from app.tenants.models import Agent
+    from app.tenants.service import get_client, get_default_agent
+    from app.outbound.service import dial_outbound_call
+
+    logger.info(
+        "auto_dialer_dial_attempted",
+        scheduled_call_id=sc.id,
+        lead_id=sc.lead_id,
+    )
+
+    try:
+        lead = await get_lead(db, sc.lead_id)
+        client = await get_client(db, sc.client_id)
+        agent = (
+            await db.get(Agent, sc.agent_id)
+            if sc.agent_id
+            else await get_default_agent(db, sc.client_id)
+        )
+        result = await dial_outbound_call(
+            db,
+            lead=lead,
+            agent=agent,
+            client=client,
+            settings=settings,
+            scheduled_call=sc,
+        )
+    except Exception as exc:
+        logger.error(
+            "auto_dialer_dial_exception",
+            scheduled_call_id=sc.id,
+            lead_id=sc.lead_id,
+            error=str(exc),
+        )
+        await _set_scheduled_call_status(db, sc, "failed")
+        await db.commit()
+        return
+
+    if result.status == "dialing":
+        sc.outcome_session_id = result.call_session_id
+        await db.commit()
+        logger.info(
+            "auto_dialer_dial_accepted",
+            scheduled_call_id=sc.id,
+            call_session_id=result.call_session_id,
+        )
+        return
+
+    # "failed" or "recurrent_error" — dial_outbound_call's own schedule_tech_retry
+    # lane handles rescheduling; this ScheduledCall's own outcome is terminal.
+    logger.error(
+        "auto_dialer_dial_failed",
+        scheduled_call_id=sc.id,
+        lead_id=sc.lead_id,
+        failure_code=result.failure_code,
+        error=result.error,
+    )
+    await _set_scheduled_call_status(db, sc, "failed")
+    await db.commit()
+
+
+async def run_scheduler_cycle(db: AsyncSession, settings) -> None:
+    """One scheduler_tick cycle — extracted so tests drive one cycle instead
+    of the infinite while-True loop.
+
+    Design: openspec/changes/phase-c6b-auto-dialer/design.md — Technical Approach.
+
+        if enable_auto_dialer AND enable_outbound_calls
+               -> claim_due_scheduled_calls(db, limit)   # CAS, replaces bulk promote
+               -> asyncio.gather(dial…)
+        else   -> mark_due_calls_in_progress(db)         # unchanged
+
+    With enable_auto_dialer=False the executed path is byte-for-byte today's
+    behaviour — the tick does not even query for dial candidates.
+    """
+    if settings.enable_auto_dialer and settings.enable_outbound_calls:
+        claimed = await claim_due_scheduled_calls(
+            db, settings.auto_dialer_max_concurrent_dials
+        )
+        if claimed:
+            await asyncio.gather(
+                *(_dial_claimed_scheduled_call(db, sc, settings) for sc in claimed)
+            )
+    else:
+        count = await mark_due_calls_in_progress(db)
+        if count > 0:
+            logger.info("scheduler_tick_complete", promoted=count)
+
+
 async def scheduler_tick() -> None:
-    """Async background loop — runs every 60 seconds, marks due calls in_progress.
+    """Async background loop — runs every 60 seconds.
 
     Registered in main.py lifespan. Survives DB errors without crashing.
     """
+    from app.core.config import Settings
     from app.core.database import get_session
 
     while True:
         await asyncio.sleep(_TICK_INTERVAL_SECONDS)
         try:
+            settings = Settings()
             async with get_session() as db:
-                count = await mark_due_calls_in_progress(db)
-                if count > 0:
-                    logger.info("scheduler_tick_complete", promoted=count)
+                await run_scheduler_cycle(db, settings)
         except Exception as exc:
             logger.warning("scheduler_tick_failed", error=str(exc))

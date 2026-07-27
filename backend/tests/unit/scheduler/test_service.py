@@ -665,3 +665,52 @@ async def test_auto_schedule_triggers_with_follow_up_on_fresh_client(tmp_path):
         "auto_schedule should create a ScheduledCall when next_action='follow_up' "
         "and default scheduler_retry_on_outcomes includes 'follow_up'"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase C6b — RED: _set_scheduled_call_status transition helper (D8 seam)
+# ---------------------------------------------------------------------------
+
+
+async def test_set_scheduled_call_status_updates_status_and_timestamp(sched_db):
+    """_set_scheduled_call_status sets status + updated_at and flushes.
+
+    D8: every new status write in this slice routes through this single
+    helper (the CAS claim's raw Core UPDATE is the one documented exception)
+    so a future VALID_TRANSITIONS enforcement change has one seam to swap.
+    Enforcement itself stays deferred per the proposal's scope decision — this
+    test only proves the helper's own write behavior, exercised at its real
+    call site (the dial loop, see test_tick.py's run_scheduler_cycle tests).
+    """
+    from app.scheduler.service import (
+        _set_scheduled_call_status,
+        create_scheduled_call,
+        get_scheduled_call,
+    )
+
+    now = datetime.now(timezone.utc) + timedelta(hours=1)
+    async with sched_db.async_session_factory() as sess:
+        sc = await create_scheduled_call(
+            sess,
+            client_id="quintana-seguros",
+            lead_id="sched-lead-001",
+            scheduled_at=now,
+            trigger_reason="manual",
+            source_session_id=None,
+            attempt_number=1,
+            max_attempts=3,
+            notes=None,
+        )
+        await sess.commit()
+        sc_id = sc.id
+
+    async with sched_db.async_session_factory() as sess:
+        sc = await get_scheduled_call(sess, sc_id)
+        before_updated_at = sc.updated_at
+        await _set_scheduled_call_status(sess, sc, "failed")
+        await sess.commit()
+
+    async with sched_db.async_session_factory() as sess:
+        refreshed = await get_scheduled_call(sess, sc_id)
+        assert refreshed.status == "failed"
+        assert refreshed.updated_at >= before_updated_at
