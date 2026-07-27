@@ -42,8 +42,8 @@ Slice 1 depends on it.
 
 ### 1.1 Config flags + validator
 
-- [ ] 1.1.1 RED: `tests/core/test_config.py` — `enable_auto_dialer=True` + `enable_outbound_calls=False` raises `ValueError` at Settings init; `auto_dialer_max_concurrent_dials < 1` rejected by field validator. (~15 lines)
-- [ ] 1.1.2 GREEN: `backend/app/core/config.py` — add `enable_auto_dialer: bool = False`, `auto_dialer_max_concurrent_dials: int = 1` (field_validator `>= 1`), `validate_auto_dialer_requires_outbound` `model_validator(mode="after")` declared after `validate_outbound_requires_webhook_auth` (`:311`), mirroring its raise-not-warn shape. (~30 lines)
+- [x] 1.1.1 RED: `tests/core/test_config.py` — `enable_auto_dialer=True` + `enable_outbound_calls=False` raises `ValueError` at Settings init; `auto_dialer_max_concurrent_dials < 1` rejected by field validator. (~15 lines)
+- [x] 1.1.2 GREEN: `backend/app/core/config.py` — add `enable_auto_dialer: bool = False`, `auto_dialer_max_concurrent_dials: int = 1` (field_validator `>= 1`), `validate_auto_dialer_requires_outbound` `model_validator(mode="after")` declared after `validate_outbound_requires_webhook_auth` (`:311`), mirroring its raise-not-warn shape. (~30 lines)
 
 ### 1.2 Migration: duplicate resolution + partial unique index
 

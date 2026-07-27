@@ -216,3 +216,65 @@ class TestConditionalWebhookSecret:
                 qora_webhook_auth_enabled=True,
                 qora_webhook_secret=None,
             )
+
+
+# ---------------------------------------------------------------------------
+# Phase C6b — RED: enable_auto_dialer flag + concurrency setting + validator
+# ---------------------------------------------------------------------------
+
+
+class TestAutoDialerConfig:
+    """Settings must gate the auto-dialer behind enable_outbound_calls."""
+
+    def test_auto_dialer_defaults_to_false(self):
+        """enable_auto_dialer defaults to False — the dialer never runs unless opted in."""
+        settings = _make_settings()
+        assert settings.enable_auto_dialer is False
+
+    def test_max_concurrent_dials_defaults_to_one(self):
+        """auto_dialer_max_concurrent_dials defaults to 1 (human-parity first behaviour)."""
+        settings = _make_settings()
+        assert settings.auto_dialer_max_concurrent_dials == 1
+
+    def test_auto_dialer_true_with_outbound_false_raises(self):
+        """enable_auto_dialer=True + enable_outbound_calls=False fails startup loudly.
+
+        Spec (proposal decision 6): a startup validator fails loudly if the dialer
+        is enabled while manual outbound dialing is not — a silent no-op would make
+        the operator believe the dialer is running.
+        """
+        with pytest.raises((ValueError, ValidationError)) as exc_info:
+            _make_settings(
+                enable_auto_dialer=True,
+                enable_outbound_calls=False,
+            )
+        error_text = str(exc_info.value).upper()
+        assert "ENABLE_AUTO_DIALER" in error_text or "AUTO_DIALER" in error_text
+
+    def test_auto_dialer_true_with_outbound_true_allows_startup(self):
+        """enable_auto_dialer=True + enable_outbound_calls=True (+ webhook auth) succeeds."""
+        settings = _make_settings(
+            enable_auto_dialer=True,
+            enable_outbound_calls=True,
+            qora_webhook_auth_enabled=True,
+            qora_webhook_secret=SecretStr("strong-webhook-secret"),
+        )
+        assert settings.enable_auto_dialer is True
+
+    def test_auto_dialer_false_with_outbound_false_allows_startup(self):
+        """Default combination (both off) is always valid."""
+        settings = _make_settings(
+            enable_auto_dialer=False,
+            enable_outbound_calls=False,
+        )
+        assert settings.enable_auto_dialer is False
+
+    def test_max_concurrent_dials_below_one_rejected(self):
+        """auto_dialer_max_concurrent_dials < 1 is rejected by the field validator."""
+        with pytest.raises((ValueError, ValidationError)):
+            _make_settings(auto_dialer_max_concurrent_dials=0)
+
+    def test_max_concurrent_dials_negative_rejected(self):
+        """A negative concurrency limit is rejected."""
+        with pytest.raises((ValueError, ValidationError)):
+            _make_settings(auto_dialer_max_concurrent_dials=-1)
