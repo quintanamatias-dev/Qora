@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -80,6 +80,19 @@ class ScheduledCall(Base):
     __table_args__ = (
         # Composite index for duplicate-guard query: (lead_id, status)
         Index("ix_scheduled_calls_lead_status", "lead_id", "status"),
+        # Phase C6b (D1/D3): at most one in_progress ScheduledCall per lead.
+        # Scoped to status='in_progress' ONLY — a pending tech_retry alongside
+        # an in_progress auto_retry is a normal, reachable state (see
+        # alembic/versions/20260727_0011_auto_dialer_active_lead_index.py).
+        # Model parity for ORM/test-DB creation; the real schema authority is
+        # the Alembic migration's raw CREATE UNIQUE INDEX (both dialects).
+        Index(
+            "uq_scheduled_calls_active_lead",
+            "lead_id",
+            unique=True,
+            sqlite_where=text("status = 'in_progress'"),
+            postgresql_where=text("status = 'in_progress'"),
+        ),
     )
 
     def __repr__(self) -> str:  # pragma: no cover

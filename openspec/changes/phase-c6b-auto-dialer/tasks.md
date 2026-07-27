@@ -47,9 +47,9 @@ Slice 1 depends on it.
 
 ### 1.2 Migration: duplicate resolution + partial unique index
 
-- [ ] 1.2.1 RED: `tests/integration/scheduler/test_migration.py` — seed two `in_progress` rows for one lead, run migration `20260727_0011_auto_dialer_active_lead_index`, assert exactly one survives (`in_progress`), the other is `failed` with the auto-resolve note, and `uq_scheduled_calls_active_lead` exists. Assert the operator-visible log includes the retired-row count. (~25 lines)
-- [ ] 1.2.2 GREEN: new `backend/alembic/versions/20260727_0011_auto_dialer_active_lead_index.py` (`down_revision="20260716_0010"`) — step 1: window-function `UPDATE` retiring all but the newest `in_progress` row per lead, log `rowcount`; step 2: `CREATE UNIQUE INDEX uq_scheduled_calls_active_lead ON scheduled_calls (lead_id) WHERE status = 'in_progress'` via raw `op.execute`; `downgrade()` drops the index only (step 1 is documented as irreversible in the migration docstring). (~70 lines)
-- [ ] 1.2.3 GREEN: `backend/app/scheduler/models.py.__table_args__` — add matching `Index("uq_scheduled_calls_active_lead", "lead_id", unique=True, sqlite_where=..., postgresql_where=...)` for ORM/test-DB parity. (~5 lines)
+- [x] 1.2.1 RED: `tests/integration/scheduler/test_migration.py` — seed two `in_progress` rows for one lead, run migration `20260727_0011_auto_dialer_active_lead_index`, assert exactly one survives (`in_progress`), the other is `failed` with the auto-resolve note, and `uq_scheduled_calls_active_lead` exists. Assert the operator-visible log includes the retired-row count. (~25 lines)
+- [x] 1.2.2 GREEN: new `backend/alembic/versions/20260727_0011_auto_dialer_active_lead_index.py` (`down_revision="20260716_0010"`) — step 1: window-function `UPDATE` retiring all but the newest `in_progress` row per lead, log `rowcount`; step 2: `CREATE UNIQUE INDEX uq_scheduled_calls_active_lead ON scheduled_calls (lead_id) WHERE status = 'in_progress'` via raw `op.execute`; `downgrade()` drops the index only (step 1 is documented as irreversible in the migration docstring). (~70 lines)
+- [x] 1.2.3 GREEN: `backend/app/scheduler/models.py.__table_args__` — add matching `Index("uq_scheduled_calls_active_lead", "lead_id", unique=True, sqlite_where=..., postgresql_where=...)` for ORM/test-DB parity. (~5 lines)
 
 ### 1.3 CAS claim
 
