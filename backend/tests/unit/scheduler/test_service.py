@@ -665,3 +665,119 @@ async def test_auto_schedule_triggers_with_follow_up_on_fresh_client(tmp_path):
         "auto_schedule should create a ScheduledCall when next_action='follow_up' "
         "and default scheduler_retry_on_outcomes includes 'follow_up'"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase C6b — RED: _set_scheduled_call_status transition helper (D8 seam)
+# ---------------------------------------------------------------------------
+
+
+async def test_set_scheduled_call_status_updates_status_and_timestamp(sched_db):
+    """_set_scheduled_call_status sets status + updated_at and flushes.
+
+    D8: every new status write in this slice routes through this single
+    helper (the CAS claim's raw Core UPDATE is the one documented exception)
+    so a future VALID_TRANSITIONS enforcement change has one seam to swap.
+    Enforcement itself stays deferred per the proposal's scope decision — this
+    test only proves the helper's own write behavior, exercised at its real
+    call site (the dial loop, see test_tick.py's run_scheduler_cycle tests).
+    """
+    from app.scheduler.service import (
+        _set_scheduled_call_status,
+        create_scheduled_call,
+        get_scheduled_call,
+    )
+
+    now = datetime.now(timezone.utc) + timedelta(hours=1)
+    async with sched_db.async_session_factory() as sess:
+        sc = await create_scheduled_call(
+            sess,
+            client_id="quintana-seguros",
+            lead_id="sched-lead-001",
+            scheduled_at=now,
+            trigger_reason="manual",
+            source_session_id=None,
+            attempt_number=1,
+            max_attempts=3,
+            notes=None,
+        )
+        await sess.commit()
+        sc_id = sc.id
+
+    async with sched_db.async_session_factory() as sess:
+        sc = await get_scheduled_call(sess, sc_id)
+        before_updated_at = sc.updated_at
+        await _set_scheduled_call_status(sess, sc, "failed")
+        await sess.commit()
+
+    async with sched_db.async_session_factory() as sess:
+        refreshed = await get_scheduled_call(sess, sc_id)
+        assert refreshed.status == "failed"
+
+
+# ---------------------------------------------------------------------------
+# C6b Slice 1 task 1.7 — get_active_scheduled_call_for_lead multi-row fix (D7)
+# ---------------------------------------------------------------------------
+
+
+async def test_get_active_scheduled_call_for_lead_two_active_rows_no_raise(sched_db):
+    """Two active (pending/in_progress) rows for one lead: returns one, no raise.
+
+    design.md D1 confirms this state is reachable in practice (e.g. a stale
+    in_progress row alongside a freshly-created pending recontact). Before
+    this fix, get_active_scheduled_call_for_lead used scalar_one_or_none(),
+    which raises sqlalchemy.exc.MultipleResultsFound in this exact scenario —
+    crashing auto_schedule's dedup guard instead of degrading gracefully.
+    Fix: order by scheduled_at and take the first row deterministically.
+    """
+    from app.scheduler.service import (
+        create_scheduled_call,
+        get_active_scheduled_call_for_lead,
+    )
+
+    now = datetime.now(timezone.utc)
+
+    async with sched_db.async_session_factory() as sess:
+        sc1 = await create_scheduled_call(
+            sess,
+            client_id="quintana-seguros",
+            lead_id="sched-lead-001",
+            scheduled_at=now + timedelta(minutes=5),
+            trigger_reason="tech_retry",
+            source_session_id=None,
+            attempt_number=1,
+            max_attempts=2,
+            notes=None,
+        )
+        sc1.status = "in_progress"  # earliest scheduled_at, in_progress
+        sc2 = await create_scheduled_call(
+            sess,
+            client_id="quintana-seguros",
+            lead_id="sched-lead-001",
+            scheduled_at=now + timedelta(hours=1),
+            trigger_reason="auto_retry",
+            source_session_id=None,
+            attempt_number=1,
+            max_attempts=3,
+            notes=None,
+        )
+        # sc2 stays "pending" (create_scheduled_call default) — this pairing
+        # does not violate uq_scheduled_calls_active_lead (only one row is
+        # in_progress at a time).
+        await sess.commit()
+        sc1_id = sc1.id
+
+    async with sched_db.async_session_factory() as sess:
+        # Must not raise sqlalchemy.exc.MultipleResultsFound.
+        result = await get_active_scheduled_call_for_lead(
+            sess,
+            client_id="quintana-seguros",
+            lead_id="sched-lead-001",
+        )
+
+    assert result is not None
+    # Deterministic: earliest scheduled_at wins (sc1, in_progress).
+    assert result.id == sc1_id, (
+        f"Expected the earliest-scheduled active row ({sc1_id}), got {result.id}"
+    )
+    assert result.status == "in_progress"
