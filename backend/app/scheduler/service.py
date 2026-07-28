@@ -856,18 +856,25 @@ async def mark_due_calls_in_progress(db: AsyncSession) -> int:
     if not due_calls:
         return 0
 
+    promoted_ids: list[str] = []
     for sc in due_calls:
-        sc.status = "in_progress"
-        sc.updated_at = now
+        # Snapshot before the flush — a SAVEPOINT rollback expires this row.
+        sc_id, sc_lead_id = sc.id, sc.lead_id
+        try:
+            async with db.begin_nested():
+                sc.status = "in_progress"
+                sc.updated_at = now
+                await db.flush()
+        except IntegrityError:
+            logger.warning(
+                "scheduler_tick_promote_conflict", scheduled_call_id=sc_id, lead_id=sc_lead_id
+            )
+            continue
+        promoted_ids.append(sc_id)
 
-    await db.flush()
-
-    logger.info(
-        "scheduler_tick_promoted",
-        count=len(due_calls),
-        ids=[sc.id for sc in due_calls],
-    )
-    return len(due_calls)
+    if promoted_ids:
+        logger.info("scheduler_tick_promoted", count=len(promoted_ids), ids=promoted_ids)
+    return len(promoted_ids)
 
 
 # ---------------------------------------------------------------------------

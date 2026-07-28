@@ -145,6 +145,43 @@ def _auto_dialer_settings(tmp_path_db_url: str, *, enable_auto_dialer: bool):
     )
 
 
+from app.scheduler.service import create_scheduled_call, mark_due_calls_in_progress
+from app.leads.service import create_lead
+
+
+async def _mk_call(sess, lead_id, scheduled_at, **overrides):
+    kwargs = dict(
+        client_id="quintana-seguros", lead_id=lead_id, scheduled_at=scheduled_at,
+        trigger_reason="manual", source_session_id=None, attempt_number=1,
+        max_attempts=3, notes=None,
+    )
+    kwargs.update(overrides)
+    return await create_scheduled_call(sess, **kwargs)
+
+
+# Phase C6b Slice 1 — BOUNDED CORRECTION: F1, F2, F3, F4
+
+
+async def test_mark_due_calls_in_progress_same_lead_conflict_skips_without_wedging(tick_db):
+    """F1: same-lead conflict is skipped (not wedged); other leads still promote same cycle."""
+    now = datetime.now(timezone.utc)
+    async with tick_db.async_session_factory() as sess:
+        a = await _mk_call(sess, "tick-lead-001", now - timedelta(minutes=10))
+        b = await _mk_call(sess, "tick-lead-001", now - timedelta(minutes=5), trigger_reason="tech_retry", max_attempts=2)
+        await create_lead(sess, client_id="quintana-seguros", name="Other", phone="+5411000099", lead_id="tick-lead-002")
+        other = await _mk_call(sess, "tick-lead-002", now - timedelta(minutes=1))
+        await sess.commit()
+
+        count = await mark_due_calls_in_progress(sess)
+        await sess.commit()
+        assert count == 2, f"Expected 2 promotions (1 conflict skipped), got {count}"
+
+        for sc in (a, b, other):
+            await sess.refresh(sc)
+        assert sorted([a.status, b.status]) == ["in_progress", "pending"]
+        assert other.status == "in_progress"
+
+
 async def test_run_scheduler_cycle_dial_failed_marks_scheduled_call_failed(tick_db):
     """DialResult.status='failed' (or 'recurrent_error') -> claimed row -> failed."""
     from unittest.mock import AsyncMock, patch
