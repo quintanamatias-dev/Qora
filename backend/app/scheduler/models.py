@@ -29,7 +29,7 @@ def _utcnow() -> datetime:
 #: Terminal states (completed, cancelled, expired, failed) have empty lists.
 VALID_TRANSITIONS: dict[str, list[str]] = {
     "pending": ["in_progress", "cancelled", "expired"],
-    "in_progress": ["completed", "failed", "cancelled"],
+    "in_progress": ["completed", "failed", "cancelled", "pending"],  # F2: release
     "completed": [],
     "failed": [],
     "cancelled": [],

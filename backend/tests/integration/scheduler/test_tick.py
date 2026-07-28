@@ -145,8 +145,19 @@ def _auto_dialer_settings(tmp_path_db_url: str, *, enable_auto_dialer: bool):
     )
 
 
-from app.scheduler.service import create_scheduled_call, mark_due_calls_in_progress
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch as _patch
+from zoneinfo import ZoneInfo
+import structlog.testing as _structlog_testing
+from app.scheduler.service import (
+    create_scheduled_call,
+    mark_due_calls_in_progress,
+    _dial_claimed_scheduled_call,
+    calculate_scheduled_at,
+)
 from app.leads.service import create_lead
+
+_IN_WINDOW_UTC = datetime(2026, 7, 20, 17, 0, tzinfo=timezone.utc)  # inside default allowed hours (F2)
 
 
 async def _mk_call(sess, lead_id, scheduled_at, **overrides):
@@ -182,6 +193,26 @@ async def test_mark_due_calls_in_progress_same_lead_conflict_skips_without_wedgi
         assert other.status == "in_progress"
 
 
+async def test_dial_claimed_scheduled_call_outside_allowed_hours_releases_to_pending():
+    """F2: overdue row outside allowed hours is released to pending, not dialed."""
+    tz = ZoneInfo("America/Argentina/Buenos_Aires")
+    now_utc = datetime(2026, 7, 20, 3, 0, tzinfo=tz).astimezone(timezone.utc)  # 03:00 local
+    expected_next = calculate_scheduled_at(now_utc, 0, 9, 20, "America/Argentina/Buenos_Aires")
+    sc = SimpleNamespace(id="sc-1", lead_id="l-1", client_id="c-1", scheduled_at=now_utc - timedelta(days=1))
+    client = SimpleNamespace(scheduler_allowed_hours_start=9, scheduler_allowed_hours_end=20, scheduler_timezone=str(tz))
+    fake_dial = AsyncMock()
+
+    with _patch("app.tenants.service.get_client", AsyncMock(return_value=client)), \
+            _patch("app.outbound.service.dial_outbound_call", fake_dial), \
+            _structlog_testing.capture_logs() as cap:
+        await _dial_claimed_scheduled_call(AsyncMock(), sc, None, now_utc=now_utc)
+
+    fake_dial.assert_not_called()
+    assert "auto_dialer_dial_outside_allowed_hours" in [e.get("event") for e in cap]
+    assert sc.status == "pending"
+    assert sc.scheduled_at == expected_next
+
+
 async def test_run_scheduler_cycle_dial_failed_marks_scheduled_call_failed(tick_db):
     """DialResult.status='failed' (or 'recurrent_error') -> claimed row -> failed."""
     from unittest.mock import AsyncMock, patch
@@ -213,7 +244,7 @@ async def test_run_scheduler_cycle_dial_failed_marks_scheduled_call_failed(tick_
     )
     async with tick_db.async_session_factory() as sess:
         with patch("app.outbound.service.dial_outbound_call", fake_dial):
-            await run_scheduler_cycle(sess, settings)
+            await run_scheduler_cycle(sess, settings, now_utc=_IN_WINDOW_UTC)  # F2: stay in-window
 
     async with tick_db.async_session_factory() as sess:
         result = await sess.execute(
@@ -256,7 +287,7 @@ async def test_run_scheduler_cycle_dial_dialing_stays_in_progress_with_session(
     )
     async with tick_db.async_session_factory() as sess:
         with patch("app.outbound.service.dial_outbound_call", fake_dial):
-            await run_scheduler_cycle(sess, settings)
+            await run_scheduler_cycle(sess, settings, now_utc=_IN_WINDOW_UTC)  # F2: stay in-window
 
     async with tick_db.async_session_factory() as sess:
         result = await sess.execute(

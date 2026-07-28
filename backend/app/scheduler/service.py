@@ -883,14 +883,15 @@ async def mark_due_calls_in_progress(db: AsyncSession) -> int:
 
 
 async def _dial_claimed_scheduled_call(
-    db: AsyncSession, sc: ScheduledCall, settings
+    db: AsyncSession, sc: ScheduledCall, settings, *, now_utc: datetime | None = None
 ) -> None:
     """Dial one claimed ScheduledCall and persist the outcome.
 
     dial_outbound_call() never raises by contract, but that contract is not a
     guarantee (design.md — Observability: auto_dialer_dial_exception) — an
     unexpected exception here still forces the row to failed rather than
-    leaving it stranded in_progress with no outcome_session_id.
+    leaving it stranded in_progress with no outcome_session_id. Also
+    re-validates allowed-hours at DIAL time (F2 below).
 
     Imports dial_outbound_call locally, matching scheduler_tick's existing
     local-import style and the patch seam design.md's Testing Strategy pins
@@ -908,8 +909,30 @@ async def _dial_claimed_scheduled_call(
     )
 
     try:
-        lead = await get_lead(db, sc.lead_id)
+        now_utc = now_utc or datetime.now(timezone.utc)
         client = await get_client(db, sc.client_id)
+
+        # F2: don't dial an overdue row outside the client's allowed hours.
+        if client is not None:
+            next_allowed_at = calculate_scheduled_at(
+                now_utc=now_utc,
+                cooldown_minutes=0,
+                start_hour=client.scheduler_allowed_hours_start,
+                end_hour=client.scheduler_allowed_hours_end,
+                tz_str=client.scheduler_timezone,
+            )
+            if next_allowed_at != now_utc:
+                sc.scheduled_at = next_allowed_at
+                await _set_scheduled_call_status(db, sc, "pending")
+                await db.commit()
+                logger.warning(
+                    "auto_dialer_dial_outside_allowed_hours",
+                    scheduled_call_id=sc.id, lead_id=sc.lead_id,
+                    next_allowed_at=next_allowed_at.isoformat(),
+                )
+                return
+
+        lead = await get_lead(db, sc.lead_id)
         agent = (
             await db.get(Agent, sc.agent_id)
             if sc.agent_id
@@ -957,7 +980,9 @@ async def _dial_claimed_scheduled_call(
     await db.commit()
 
 
-async def run_scheduler_cycle(db: AsyncSession, settings) -> None:
+async def run_scheduler_cycle(
+    db: AsyncSession, settings, *, now_utc: datetime | None = None
+) -> None:
     """One scheduler_tick cycle — extracted so tests drive one cycle instead
     of the infinite while-True loop.
 
@@ -977,7 +1002,7 @@ async def run_scheduler_cycle(db: AsyncSession, settings) -> None:
         )
         if claimed:
             await asyncio.gather(
-                *(_dial_claimed_scheduled_call(db, sc, settings) for sc in claimed)
+                *(_dial_claimed_scheduled_call(db, sc, settings, now_utc=now_utc) for sc in claimed)
             )
     else:
         count = await mark_due_calls_in_progress(db)
