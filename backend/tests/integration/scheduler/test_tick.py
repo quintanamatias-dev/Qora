@@ -213,6 +213,23 @@ async def test_dial_claimed_scheduled_call_outside_allowed_hours_releases_to_pen
     assert sc.scheduled_at == expected_next
 
 
+async def test_dial_claimed_scheduled_call_skips_do_not_call_lead():
+    """F3: do_not_call set after scheduling blocks the dial and cancels the row."""
+    sc = SimpleNamespace(id="sc-1", lead_id="l-1", client_id="c-1")
+    lead = SimpleNamespace(do_not_call=True)
+    fake_dial = AsyncMock()
+
+    with _patch("app.tenants.service.get_client", AsyncMock(return_value=None)), \
+            _patch("app.leads.service.get_lead", AsyncMock(return_value=lead)), \
+            _patch("app.outbound.service.dial_outbound_call", fake_dial), \
+            _structlog_testing.capture_logs() as cap:
+        await _dial_claimed_scheduled_call(AsyncMock(), sc, None)
+
+    fake_dial.assert_not_called()
+    assert "auto_dialer_dial_skipped_do_not_call" in [e.get("event") for e in cap]
+    assert sc.status == "cancelled"
+
+
 async def test_run_scheduler_cycle_dial_failed_marks_scheduled_call_failed(tick_db):
     """DialResult.status='failed' (or 'recurrent_error') -> claimed row -> failed."""
     from unittest.mock import AsyncMock, patch

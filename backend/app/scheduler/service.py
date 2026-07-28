@@ -891,7 +891,7 @@ async def _dial_claimed_scheduled_call(
     guarantee (design.md — Observability: auto_dialer_dial_exception) — an
     unexpected exception here still forces the row to failed rather than
     leaving it stranded in_progress with no outcome_session_id. Also
-    re-validates allowed-hours at DIAL time (F2 below).
+    re-validates allowed-hours and do_not_call at DIAL time (F2/F3 below).
 
     Imports dial_outbound_call locally, matching scheduler_tick's existing
     local-import style and the patch seam design.md's Testing Strategy pins
@@ -933,6 +933,16 @@ async def _dial_claimed_scheduled_call(
                 return
 
         lead = await get_lead(db, sc.lead_id)
+
+        # F3: re-check do_not_call — auto_schedule only checked it once.
+        if lead is not None and lead.do_not_call:
+            await _set_scheduled_call_status(db, sc, "cancelled")
+            await db.commit()
+            logger.warning(
+                "auto_dialer_dial_skipped_do_not_call", scheduled_call_id=sc.id, lead_id=sc.lead_id
+            )
+            return
+
         agent = (
             await db.get(Agent, sc.agent_id)
             if sc.agent_id
