@@ -208,9 +208,9 @@ class Settings(BaseSettings):
     # Design: openspec/changes/phase-c6b-auto-dialer/design.md
     enable_auto_dialer: bool = False
 
-    # Operator-configurable concurrency limit — bounds simultaneous in-flight
-    # dials per scheduler_tick cycle. Default 1 makes the first production
-    # behaviour identical to a human clicking "Call Now" one at a time.
+    # Bounds how many due rows are CLAIMED per cycle. F4: dials run
+    # SEQUENTIALLY (shared AsyncSession isn't concurrency-safe) — this is
+    # claim batch size, not dial concurrency. Default 1 = "Call Now" parity.
     auto_dialer_max_concurrent_dials: int = 1
 
     model_config = {

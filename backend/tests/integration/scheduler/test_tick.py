@@ -154,6 +154,7 @@ from app.scheduler.service import (
     mark_due_calls_in_progress,
     _dial_claimed_scheduled_call,
     calculate_scheduled_at,
+    run_scheduler_cycle,
 )
 from app.leads.service import create_lead
 
@@ -364,6 +365,51 @@ async def test_run_scheduler_cycle_flag_off_only_promotes_no_auto_dialer_events(
         )
         updated = result.scalar_one()
         assert updated.status == "in_progress"
+
+
+async def test_run_scheduler_cycle_dials_sequentially_survives_one_failure(tick_db):
+    """F4: dials run sequentially on the shared session; one raising doesn't
+    stop siblings from reaching a terminal status."""
+    from app.scheduler import service as svc
+    from app.scheduler.models import ScheduledCall
+    from sqlalchemy import select
+
+    past = datetime.now(timezone.utc) - timedelta(minutes=10)
+    async with tick_db.async_session_factory() as sess:
+        for i in range(3):
+            await create_lead(sess, client_id="quintana-seguros", name=f"F4-{i}", phone=f"+54110002{i}", lead_id=f"f4-lead-{i}")
+        sc_ids = [(await _mk_call(sess, f"f4-lead-{i}", past + timedelta(seconds=i))).id for i in range(3)]
+        await sess.commit()
+
+    settings = _auto_dialer_settings("sqlite+aiosqlite:///unused", enable_auto_dialer=True)
+    settings.auto_dialer_max_concurrent_dials = 3
+    order = []
+
+    async def fake_dial(db, sc, settings, *, now_utc=None):
+        order.append(("enter", sc.id))
+        if sc.id == sc_ids[1]:
+            raise RuntimeError("boom")
+        await svc._set_scheduled_call_status(db, sc, "failed")
+        await db.commit()
+        order.append(("exit", sc.id))
+
+    async with tick_db.async_session_factory() as sess:
+        with _patch.object(svc, "_dial_claimed_scheduled_call", fake_dial):
+            await run_scheduler_cycle(sess, settings, now_utc=_IN_WINDOW_UTC)
+
+    # Sequential: row 2's "enter" never appears before row 1's "exit" — proves
+    # no two dials touched the shared session concurrently.
+    assert order == [
+        ("enter", sc_ids[0]), ("exit", sc_ids[0]),
+        ("enter", sc_ids[1]),
+        ("enter", sc_ids[2]), ("exit", sc_ids[2]),
+    ]
+
+    async with tick_db.async_session_factory() as sess:
+        rows = (await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id.in_([sc_ids[0], sc_ids[2]]))
+        )).scalars().all()
+    assert all(r.status == "failed" for r in rows), rows
 
 
 async def test_scheduler_tick_loop_survives_exception():

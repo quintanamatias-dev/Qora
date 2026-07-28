@@ -1000,7 +1000,7 @@ async def run_scheduler_cycle(
 
         if enable_auto_dialer AND enable_outbound_calls
                -> claim_due_scheduled_calls(db, limit)   # CAS, replaces bulk promote
-               -> asyncio.gather(dial…)
+               -> dial claimed rows SEQUENTIALLY          # F4: shared AsyncSession
         else   -> mark_due_calls_in_progress(db)         # unchanged
 
     With enable_auto_dialer=False the executed path is byte-for-byte today's
@@ -1010,10 +1010,13 @@ async def run_scheduler_cycle(
         claimed = await claim_due_scheduled_calls(
             db, settings.auto_dialer_max_concurrent_dials
         )
-        if claimed:
-            await asyncio.gather(
-                *(_dial_claimed_scheduled_call(db, sc, settings, now_utc=now_utc) for sc in claimed)
-            )
+        for sc in claimed:
+            try:
+                await _dial_claimed_scheduled_call(db, sc, settings, now_utc=now_utc)
+            except Exception as exc:
+                logger.error(
+                    "auto_dialer_dial_unhandled_exception", scheduled_call_id=sc.id, error=str(exc)
+                )
     else:
         count = await mark_due_calls_in_progress(db)
         if count > 0:
