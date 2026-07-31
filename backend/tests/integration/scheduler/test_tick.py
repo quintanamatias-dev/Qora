@@ -810,6 +810,67 @@ async def test_reap_class_b_missing_call_session_fails(tick_db):
         assert updated.status == "failed"
 
 
+# ---------------------------------------------------------------------------
+# 3.5 — tick wiring + full-cycle no-stranding proof
+# ---------------------------------------------------------------------------
+
+
+async def test_run_scheduler_cycle_reaps_before_claim_no_row_stranded(tick_db):
+    """3.5: clock advanced past both timeouts -> no row remains in_progress
+    after two cycles. This is also the gate to flip enable_auto_dialer=true.
+    """
+    from app.calls.models import CallSession
+    from app.scheduler.service import run_scheduler_cycle
+    from app.scheduler.models import ScheduledCall
+    from sqlalchemy import select
+
+    now = _IN_WINDOW_UTC
+    call_session_id = "cs-e2e-reap-001"
+
+    async with tick_db.async_session_factory() as sess:
+        # class (a): never dialed, past the 10-min claim timeout, attempts
+        # exhausted -> failed directly. (The pending-release-and-reclaim
+        # interaction with mark_due_calls_in_progress is covered separately
+        # by the 3.2 release-clamp tests; this test isolates the "no row
+        # remains in_progress" guarantee itself.)
+        never_dialed = await _mk_stranded_call(
+            sess, "tick-lead-001", updated_at=now - timedelta(minutes=15),
+            scheduled_at=now - timedelta(minutes=20), attempt_number=3, max_attempts=3,
+        )
+        never_dialed_id = never_dialed.id
+
+        # class (b): dialed, linked CallSession terminal past the 30-min sweep.
+        await create_lead(sess, client_id="quintana-seguros", name="Reap E2E", phone="+5411000077", lead_id="reap-lead-002")
+        sess.add(CallSession(
+            id=call_session_id, client_id="quintana-seguros", lead_id="reap-lead-002",
+            status="completed", telephony_provider="elevenlabs", telephony_status="stale_in_call",
+            started_at=now - timedelta(minutes=45),
+        ))
+        dialed = await _mk_stranded_call(
+            sess, "reap-lead-002", updated_at=now - timedelta(minutes=35),
+            scheduled_at=now - timedelta(minutes=45),
+            outcome_session_id=call_session_id, attempt_number=1, max_attempts=3,
+        )
+        dialed_id = dialed.id
+
+    settings = _auto_dialer_settings("sqlite+aiosqlite:///unused", enable_auto_dialer=False)
+    settings.enable_outbound_calls = True  # reaper runs independent of enable_auto_dialer
+
+    async with tick_db.async_session_factory() as sess:
+        await run_scheduler_cycle(sess, settings, now_utc=now)
+    async with tick_db.async_session_factory() as sess:
+        await run_scheduler_cycle(sess, settings, now_utc=now + timedelta(minutes=1))
+
+    async with tick_db.async_session_factory() as sess:
+        rows = (await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id.in_([never_dialed_id, dialed_id]))
+        )).scalars().all()
+        assert all(r.status != "in_progress" for r in rows), rows
+        by_id = {r.id: r for r in rows}
+        assert by_id[never_dialed_id].status == "failed"
+        assert by_id[dialed_id].status == "failed"
+
+
 async def test_scheduler_tick_loop_survives_exception():
     """scheduler_tick catches exceptions and continues the loop (no crash)."""
     from unittest.mock import AsyncMock

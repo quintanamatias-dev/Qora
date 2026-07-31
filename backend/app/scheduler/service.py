@@ -1294,14 +1294,19 @@ async def run_scheduler_cycle(
 
     Design: openspec/changes/phase-c6b-auto-dialer/design.md — Technical Approach.
 
+        if enable_outbound_calls          -> reap_stranded_scheduled_calls(db)  # slice 3
         if enable_auto_dialer AND enable_outbound_calls
                -> claim_due_scheduled_calls(db, limit)   # CAS, replaces bulk promote
                -> dial claimed rows SEQUENTIALLY          # F4: shared AsyncSession
         else   -> mark_due_calls_in_progress(db)         # unchanged
 
-    With enable_auto_dialer=False the executed path is byte-for-byte today's
-    behaviour — the tick does not even query for dial candidates.
+    With enable_auto_dialer=False AND enable_outbound_calls=False the
+    executed path is byte-for-byte today's behaviour — the tick does not
+    even query for dial candidates.
     """
+    if settings.enable_outbound_calls:
+        await reap_stranded_scheduled_calls(db, now=now_utc)
+
     if settings.enable_auto_dialer and settings.enable_outbound_calls:
         claimed = await claim_due_scheduled_calls(
             db, settings.auto_dialer_max_concurrent_dials
