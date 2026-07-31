@@ -484,6 +484,332 @@ async def test_run_scheduler_cycle_completion_resolves_and_cancels_tech_retry(ti
         assert rows[retry_id].status == "cancelled", "D9: the parked tech_retry must be cancelled"
 
 
+# ---------------------------------------------------------------------------
+# Phase C6b Slice 3 — RED: reap_stranded_scheduled_calls
+#
+# No test places a real call. Rows are seeded directly in in_progress via the
+# ORM (create_scheduled_call always starts pending — see design.md/tasks.md
+# 3.1-3.5) so the exact stranded state (updated_at, outcome_session_id) is
+# under test control. Clock is always injected via reap's `now=` — no sleep,
+# no wall-clock dependence.
+# ---------------------------------------------------------------------------
+
+
+async def _mk_stranded_call(
+    sess, lead_id, *, updated_at, scheduled_at=None, outcome_session_id=None, **overrides
+):
+    """Create a ScheduledCall already in_progress with a controlled updated_at.
+
+    create_scheduled_call always starts a row `pending` — this bypasses that
+    to seed the exact class (a)/(b) stranded state under test.
+    """
+    sc = await _mk_call(
+        sess, lead_id, scheduled_at or updated_at, **overrides
+    )
+    await sess.flush()
+    sc.status = "in_progress"
+    sc.updated_at = updated_at
+    sc.outcome_session_id = outcome_session_id
+    await sess.commit()
+    await sess.refresh(sc)
+    return sc
+
+
+async def test_reap_class_a_attempts_remaining_releases_to_pending(tick_db):
+    """3.1: never-dialed row past claim timeout, attempts remaining -> pending."""
+    import structlog.testing
+    from app.scheduler.service import reap_stranded_scheduled_calls
+    from app.scheduler.models import ScheduledCall
+    from sqlalchemy import select
+
+    now = _IN_WINDOW_UTC
+    stale_updated_at = now - timedelta(minutes=15)  # past the 10-min claim timeout
+    scheduled_at = now - timedelta(minutes=20)  # well within the 6h age-out cap
+
+    async with tick_db.async_session_factory() as sess:
+        sc = await _mk_stranded_call(
+            sess, "tick-lead-001", updated_at=stale_updated_at,
+            scheduled_at=scheduled_at, attempt_number=1, max_attempts=3,
+        )
+        sc_id = sc.id
+
+    with structlog.testing.capture_logs() as cap:
+        async with tick_db.async_session_factory() as sess:
+            await reap_stranded_scheduled_calls(sess, now=now)
+
+    events = [e for e in cap if e.get("event") == "scheduled_call_reaped_stale"]
+    assert len(events) == 1, cap
+    assert events[0]["requeued"] is True
+    assert events[0]["scheduled_call_id"] == sc_id
+
+    async with tick_db.async_session_factory() as sess:
+        updated = (await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id == sc_id)
+        )).scalar_one()
+        assert updated.status == "pending"
+
+
+async def test_reap_class_a_attempts_exhausted_fails(tick_db):
+    """3.1: never-dialed row past claim timeout, attempts exhausted -> failed."""
+    import structlog.testing
+    from app.scheduler.service import reap_stranded_scheduled_calls
+    from app.scheduler.models import ScheduledCall
+    from sqlalchemy import select
+
+    now = _IN_WINDOW_UTC
+    stale_updated_at = now - timedelta(minutes=15)
+    scheduled_at = now - timedelta(minutes=20)
+
+    async with tick_db.async_session_factory() as sess:
+        sc = await _mk_stranded_call(
+            sess, "tick-lead-001", updated_at=stale_updated_at,
+            scheduled_at=scheduled_at, attempt_number=3, max_attempts=3,
+        )
+        sc_id = sc.id
+
+    with structlog.testing.capture_logs() as cap:
+        async with tick_db.async_session_factory() as sess:
+            await reap_stranded_scheduled_calls(sess, now=now)
+
+    events = [e for e in cap if e.get("event") == "scheduled_call_reap_exhausted"]
+    assert len(events) == 1, cap
+    assert events[0]["scheduled_call_id"] == sc_id
+
+    async with tick_db.async_session_factory() as sess:
+        updated = (await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id == sc_id)
+        )).scalar_one()
+        assert updated.status == "failed"
+
+
+async def test_reap_class_a_release_outside_allowed_hours_clamps_forward(tick_db):
+    """3.2: released at 02:00 local -> scheduled_at clamped to the next 09:00."""
+    from app.scheduler.service import reap_stranded_scheduled_calls, calculate_scheduled_at
+    from app.scheduler.models import ScheduledCall
+    from sqlalchemy import select
+
+    now = datetime(2026, 7, 21, 5, 0, tzinfo=timezone.utc)  # 02:00 ART (outside 09-20 window)
+    stale_updated_at = now - timedelta(minutes=15)
+    scheduled_at = now - timedelta(minutes=20)
+    expected_next = calculate_scheduled_at(
+        now, 0, 9, 20, "America/Argentina/Buenos_Aires"
+    )
+
+    async with tick_db.async_session_factory() as sess:
+        sc = await _mk_stranded_call(
+            sess, "tick-lead-001", updated_at=stale_updated_at,
+            scheduled_at=scheduled_at, attempt_number=1, max_attempts=3,
+        )
+        sc_id = sc.id
+
+    async with tick_db.async_session_factory() as sess:
+        await reap_stranded_scheduled_calls(sess, now=now)
+
+    async with tick_db.async_session_factory() as sess:
+        updated = (await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id == sc_id)
+        )).scalar_one()
+        assert updated.status == "pending"
+        actual = updated.scheduled_at
+        if actual.tzinfo is None:
+            actual = actual.replace(tzinfo=timezone.utc)
+        assert actual == expected_next
+
+
+async def test_reap_class_a_release_inside_allowed_hours_keeps_scheduled_at(tick_db):
+    """3.2: released at 14:00 local (inside window) -> scheduled_at unchanged.
+
+    Regression guard: this is what makes the 6h age-out bound a crash loop
+    instead of resetting the clock every reaper pass.
+    """
+    from app.scheduler.service import reap_stranded_scheduled_calls
+    from app.scheduler.models import ScheduledCall
+    from sqlalchemy import select
+
+    now = _IN_WINDOW_UTC  # 14:00 ART
+    stale_updated_at = now - timedelta(minutes=15)
+    scheduled_at = now - timedelta(minutes=20)
+
+    async with tick_db.async_session_factory() as sess:
+        sc = await _mk_stranded_call(
+            sess, "tick-lead-001", updated_at=stale_updated_at,
+            scheduled_at=scheduled_at, attempt_number=1, max_attempts=3,
+        )
+        sc_id = sc.id
+        original_scheduled_at = sc.scheduled_at
+
+    async with tick_db.async_session_factory() as sess:
+        await reap_stranded_scheduled_calls(sess, now=now)
+
+    async with tick_db.async_session_factory() as sess:
+        updated = (await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id == sc_id)
+        )).scalar_one()
+        assert updated.status == "pending"
+        assert updated.scheduled_at == original_scheduled_at
+
+
+async def test_reap_class_a_aged_out_fails_regardless_of_attempts(tick_db):
+    """3.3: class (a) row aged past the 6h cap -> failed, even with attempts remaining."""
+    import structlog.testing
+    from app.scheduler.service import reap_stranded_scheduled_calls
+    from app.scheduler.models import ScheduledCall
+    from sqlalchemy import select
+
+    now = _IN_WINDOW_UTC
+    stale_updated_at = now - timedelta(minutes=15)  # past claim timeout too
+    scheduled_at = now - timedelta(hours=7)  # past the 6h age-out cap
+
+    async with tick_db.async_session_factory() as sess:
+        sc = await _mk_stranded_call(
+            sess, "tick-lead-001", updated_at=stale_updated_at,
+            scheduled_at=scheduled_at, attempt_number=1, max_attempts=3,
+        )
+        sc_id = sc.id
+
+    with structlog.testing.capture_logs() as cap:
+        async with tick_db.async_session_factory() as sess:
+            await reap_stranded_scheduled_calls(sess, now=now)
+
+    events = [e for e in cap if e.get("event") == "scheduled_call_reap_exhausted"]
+    assert len(events) == 1, cap
+
+    async with tick_db.async_session_factory() as sess:
+        updated = (await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id == sc_id)
+        )).scalar_one()
+        assert updated.status == "failed"
+
+
+async def test_reap_class_a_not_yet_past_claim_timeout_is_untouched(tick_db):
+    """Sanity: a row updated recently (within the claim timeout) is not reaped."""
+    from app.scheduler.service import reap_stranded_scheduled_calls
+    from app.scheduler.models import ScheduledCall
+    from sqlalchemy import select
+
+    now = _IN_WINDOW_UTC
+    recent_updated_at = now - timedelta(minutes=2)  # well inside the 10-min timeout
+
+    async with tick_db.async_session_factory() as sess:
+        sc = await _mk_stranded_call(
+            sess, "tick-lead-001", updated_at=recent_updated_at,
+            scheduled_at=now - timedelta(minutes=5), attempt_number=1, max_attempts=3,
+        )
+        sc_id = sc.id
+
+    async with tick_db.async_session_factory() as sess:
+        await reap_stranded_scheduled_calls(sess, now=now)
+
+    async with tick_db.async_session_factory() as sess:
+        updated = (await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id == sc_id)
+        )).scalar_one()
+        assert updated.status == "in_progress"
+
+
+# ---------------------------------------------------------------------------
+# 3.4 — class (b): dialed, completion signal never arrived
+# ---------------------------------------------------------------------------
+
+
+async def test_reap_class_b_terminal_status_resolves_via_shared_mapping(tick_db):
+    """3.4: linked CallSession at a terminal telephony_status -> resolved."""
+    from app.calls.models import CallSession
+    from app.scheduler.service import reap_stranded_scheduled_calls
+    from app.scheduler.models import ScheduledCall
+    from sqlalchemy import select
+
+    now = _IN_WINDOW_UTC
+    call_session_id = "cs-reap-class-b-001"
+
+    async with tick_db.async_session_factory() as sess:
+        sess.add(CallSession(
+            id=call_session_id, client_id="quintana-seguros", lead_id="tick-lead-001",
+            status="completed", telephony_provider="elevenlabs", telephony_status="completed",
+            started_at=now - timedelta(minutes=45),
+        ))
+        sc = await _mk_stranded_call(
+            sess, "tick-lead-001", updated_at=now - timedelta(minutes=2),
+            scheduled_at=now - timedelta(minutes=45),
+            outcome_session_id=call_session_id, attempt_number=1, max_attempts=3,
+        )
+        sc_id = sc.id
+
+    async with tick_db.async_session_factory() as sess:
+        await reap_stranded_scheduled_calls(sess, now=now)
+
+    async with tick_db.async_session_factory() as sess:
+        updated = (await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id == sc_id)
+        )).scalar_one()
+        assert updated.status == "completed"
+
+
+async def test_reap_class_b_non_terminal_status_is_untouched(tick_db):
+    """3.4: non-terminal telephony_status is left for the 30-min sweeper."""
+    from app.calls.models import CallSession
+    from app.scheduler.service import reap_stranded_scheduled_calls
+    from app.scheduler.models import ScheduledCall
+    from sqlalchemy import select
+
+    now = _IN_WINDOW_UTC
+    call_session_id = "cs-reap-class-b-002"
+
+    async with tick_db.async_session_factory() as sess:
+        sess.add(CallSession(
+            id=call_session_id, client_id="quintana-seguros", lead_id="tick-lead-001",
+            status="initiated", telephony_provider="elevenlabs", telephony_status="ringing",
+            started_at=now - timedelta(minutes=45),
+        ))
+        sc = await _mk_stranded_call(
+            sess, "tick-lead-001", updated_at=now - timedelta(minutes=2),
+            scheduled_at=now - timedelta(minutes=45),
+            outcome_session_id=call_session_id, attempt_number=1, max_attempts=3,
+        )
+        sc_id = sc.id
+
+    async with tick_db.async_session_factory() as sess:
+        await reap_stranded_scheduled_calls(sess, now=now)
+
+    async with tick_db.async_session_factory() as sess:
+        updated = (await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id == sc_id)
+        )).scalar_one()
+        assert updated.status == "in_progress"
+
+
+async def test_reap_class_b_missing_call_session_fails(tick_db):
+    """3.4: outcome_session_id points at a CallSession that no longer exists -> failed."""
+    import structlog.testing
+    from app.scheduler.service import reap_stranded_scheduled_calls
+    from app.scheduler.models import ScheduledCall
+    from sqlalchemy import select
+
+    now = _IN_WINDOW_UTC
+
+    async with tick_db.async_session_factory() as sess:
+        sc = await _mk_stranded_call(
+            sess, "tick-lead-001", updated_at=now - timedelta(minutes=2),
+            scheduled_at=now - timedelta(minutes=45),
+            outcome_session_id="cs-does-not-exist", attempt_number=1, max_attempts=3,
+        )
+        sc_id = sc.id
+
+    with structlog.testing.capture_logs() as cap:
+        async with tick_db.async_session_factory() as sess:
+            await reap_stranded_scheduled_calls(sess, now=now)
+
+    events = [e for e in cap if e.get("event") == "scheduled_call_reap_session_missing"]
+    assert len(events) == 1, cap
+    assert events[0]["scheduled_call_id"] == sc_id
+
+    async with tick_db.async_session_factory() as sess:
+        updated = (await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id == sc_id)
+        )).scalar_one()
+        assert updated.status == "failed"
+
+
 async def test_scheduler_tick_loop_survives_exception():
     """scheduler_tick catches exceptions and continues the loop (no crash)."""
     from unittest.mock import AsyncMock
