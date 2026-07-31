@@ -412,6 +412,78 @@ async def test_run_scheduler_cycle_dials_sequentially_survives_one_failure(tick_
     assert all(r.status == "failed" for r in rows), rows
 
 
+# ---------------------------------------------------------------------------
+# Phase C6b Slice 2 — task 2.4.1: end-to-end completion + Decision 8 wiring
+#
+# due row -> claimed -> dialed (fake_dial stands in for the real dial;
+# dial_outbound_call's own accepted-path behavior is already covered by
+# Slice 1's tests) -> close_session -> ScheduledCall.status == "completed";
+# a second pending tech_retry for the same lead is cancelled by the same
+# close_session() call (D9). No test places a real call.
+# ---------------------------------------------------------------------------
+
+
+async def test_run_scheduler_cycle_completion_resolves_and_cancels_tech_retry(tick_db):
+    from app.calls.models import CallSession
+    from app.calls.service import close_session
+    from app.scheduler import service as svc
+    from app.scheduler.models import ScheduledCall
+    from sqlalchemy import select
+
+    past = datetime.now(timezone.utc) - timedelta(minutes=10)
+    call_session_id = "cs-e2e-completion-001"
+
+    async with tick_db.async_session_factory() as sess:
+        primary = await _mk_call(sess, "tick-lead-001", past)
+        stale_retry = await _mk_call(
+            sess, "tick-lead-001", past + timedelta(seconds=1),
+            trigger_reason="tech_retry", max_attempts=2,
+        )
+        await sess.commit()
+        primary_id, retry_id = primary.id, stale_retry.id
+
+    settings = _auto_dialer_settings("sqlite+aiosqlite:///unused", enable_auto_dialer=True)
+
+    async def fake_dial(db, sc, settings, *, now_utc=None):
+        db.add(CallSession(
+            id=call_session_id, client_id="quintana-seguros", lead_id="tick-lead-001",
+            status="initiated", telephony_provider="elevenlabs", telephony_status="ringing",
+            started_at=datetime.now(timezone.utc) - timedelta(seconds=45),
+        ))
+        sc.outcome_session_id = call_session_id
+        await db.commit()
+
+    async with tick_db.async_session_factory() as sess:
+        with _patch.object(svc, "_dial_claimed_scheduled_call", fake_dial):
+            await run_scheduler_cycle(sess, settings, now_utc=_IN_WINDOW_UTC)
+
+    async with tick_db.async_session_factory() as sess:
+        primary_row = (await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id == primary_id)
+        )).scalar_one()
+        assert primary_row.status == "in_progress"
+        assert primary_row.outcome_session_id == call_session_id
+        # limit=1 (default) -> tech_retry (scheduled 1s later) is never claimed.
+        retry_row = (await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id == retry_id)
+        )).scalar_one()
+        assert retry_row.status == "pending"
+
+    async with tick_db.async_session_factory() as sess:
+        await close_session(sess, session_id=call_session_id, closed_reason="session_end")
+        await sess.commit()
+
+    async with tick_db.async_session_factory() as sess:
+        rows = {
+            r.id: r
+            for r in (await sess.execute(
+                select(ScheduledCall).where(ScheduledCall.id.in_([primary_id, retry_id]))
+            )).scalars().all()
+        }
+        assert rows[primary_id].status == "completed"
+        assert rows[retry_id].status == "cancelled", "D9: the parked tech_retry must be cancelled"
+
+
 async def test_scheduler_tick_loop_survives_exception():
     """scheduler_tick catches exceptions and continues the loop (no crash)."""
     from unittest.mock import AsyncMock

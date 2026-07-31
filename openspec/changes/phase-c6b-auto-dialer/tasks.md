@@ -87,24 +87,24 @@ Slice 1 depends on it.
 
 ### 2.1 Mapping table + resolution function
 
-- [ ] 2.1.1 RED: new `tests/unit/scheduler/test_completion_hook.py` — `telephony_status='completed'` → `new_status='completed'`; `'voicemail'` → `'completed'`; `'no_answer'`/`'failed'`/`'recurrent_error'`/`'stale_in_call'` → `'failed'`; no linked `ScheduledCall` → returns `None` (no-op); row not `in_progress` → no-op (idempotent); non-terminal `telephony_status` → no-op. (~35 lines)
-- [ ] 2.1.2 GREEN: `backend/app/scheduler/service.py` — `_TELEPHONY_TO_SCHEDULED_STATUS` dict per design; `resolve_scheduled_call_for_session(db, *, call_session_id, telephony_status, source="close_session")` — mutates in-memory only, caller owns flush/commit. (~40 lines)
+- [x] 2.1.1 RED: new `tests/unit/scheduler/test_completion_hook.py` — `telephony_status='completed'` → `new_status='completed'`; `'voicemail'` → `'completed'`; `'no_answer'`/`'failed'`/`'recurrent_error'`/`'stale_in_call'` → `'failed'`; no linked `ScheduledCall` → returns `None` (no-op); row not `in_progress` → no-op (idempotent); non-terminal `telephony_status` → no-op. (~35 lines)
+- [x] 2.1.2 GREEN: `backend/app/scheduler/service.py` — `_TELEPHONY_TO_SCHEDULED_STATUS` dict per design; `resolve_scheduled_call_for_session(db, *, call_session_id, telephony_status, source="close_session")` — mutates in-memory only, caller owns flush/commit. (~40 lines)
 
 ### 2.2 `close_session` call site + ordering guard
 
-- [ ] 2.2.1 RED: `tests/unit/calls/test_close_session_scheduled_call_hook.py` (new) — hook runs **after** `_apply_voicemail_heuristic` (`:704`) and **before** `_merge_sibling_sessions`/`flush()` (`:707-709`): assert a short-duration zero-turn outbound call resolves the linked `ScheduledCall` to `completed` reading the post-heuristic `voicemail` value, not the pre-heuristic `completed` (regression guard for the ordering bug). Second `close_session` call on the same session → idempotent, no duplicate resolution. Not added to the early `cs.status=="completed"` return (`:658`) — assert a second close via that path is still a no-op for the hook. (~30 lines)
-- [ ] 2.2.2 GREEN: `backend/app/calls/service.py::close_session` — insert `resolve_scheduled_call_for_session(...)` call after `:704`, before `:707`, joining the existing flush. (~15 lines)
+- [x] 2.2.1 RED: `tests/unit/calls/test_close_session_scheduled_call_hook.py` (new) — hook runs **after** `_apply_voicemail_heuristic` (`:704`) and **before** `_merge_sibling_sessions`/`flush()` (`:707-709`): assert a short-duration zero-turn outbound call resolves the linked `ScheduledCall` to `completed` reading the post-heuristic `voicemail` value, not the pre-heuristic `completed` value (regression guard for the ordering bug). Second `close_session` call on the same session → idempotent, no duplicate resolution. Not added to the early `cs.status=="completed"` return (`:658`) — assert a second close via that path is still a no-op for the hook. (~30 lines)
+- [x] 2.2.2 GREEN: `backend/app/calls/service.py::close_session` — insert `resolve_scheduled_call_for_session(...)` call after `:704`, before `:707`, joining the existing flush. (~15 lines)
 
 ### 2.3 Decision 8 — cancel parked `tech_retry` on successful conversation
 
-- [ ] 2.3.1 RED: `tests/unit/scheduler/test_completion_hook.py` — pending `tech_retry` for the lead is `cancelled` (via `_set_scheduled_call_status`) when this session resolves `new_status=='completed'`; pending `tech_retry` is **untouched** when this session resolves `'failed'`; an `in_progress` (already claimed) `tech_retry` is **not** cancelled; no pending `tech_retry` for the lead → no-op with no extra write. (~30 lines)
-- [ ] 2.3.2 GREEN: `backend/app/scheduler/service.py` — add `get_pending_tech_retry_for_lead(db, *, client_id, lead_id)` (filters `trigger_reason=='tech_retry'`, `status=='pending'`); inside `resolve_scheduled_call_for_session`, when `new_status=='completed'`, look it up and cancel via `_set_scheduled_call_status(db, stale_retry, "cancelled")`; emit `tech_retry_cancelled_by_successful_call` WARNING with `scheduled_call_id`, `lead_id`, `resolved_from_session_id`. (~40 lines)
+- [x] 2.3.1 RED: `tests/unit/scheduler/test_completion_hook.py` — pending `tech_retry` for the lead is `cancelled` (via `_set_scheduled_call_status`) when this session resolves `new_status=='completed'`; pending `tech_retry` is **untouched** when this session resolves `'failed'`; an `in_progress` (already claimed) `tech_retry` is **not** cancelled; no pending `tech_retry` for the lead → no-op with no extra write. (~30 lines)
+- [x] 2.3.2 GREEN: `backend/app/scheduler/service.py` — add `get_pending_tech_retry_for_lead(db, *, client_id, lead_id)` (filters `trigger_reason=='tech_retry'`, `status=='pending'`); inside `resolve_scheduled_call_for_session`, when `new_status=='completed'`, look it up and cancel via `_set_scheduled_call_status(db, stale_retry, "cancelled")`; emit `tech_retry_cancelled_by_successful_call` WARNING with `scheduled_call_id`, `lead_id`, `resolved_from_session_id`. (~40 lines)
 
 ### 2.4 Integration + REFACTOR
 
-- [ ] 2.4.1 RED→GREEN: `tests/integration/scheduler/test_tick.py` — end-to-end: due row → claimed → dialed (mocked ElevenLabs) → `close_session` → `ScheduledCall.status == 'completed'`; extend with a second seeded pending `tech_retry` for the same lead → asserted `cancelled` after the same `close_session` call. (~60 lines, spans 2.1–2.3 wiring)
-- [ ] 2.4.2 Full-suite gate: `cd backend && python3 -m pytest tests/ -q` — 0 regressions vs. Slice 1 baseline.
-- [ ] 2.4.3 Update `proposal.md`/`design.md` decision 8 status from "drafted" to "implemented" (doc-only, no code).
+- [x] 2.4.1 RED→GREEN: `tests/integration/scheduler/test_tick.py` — end-to-end: due row → claimed → dialed (mocked ElevenLabs) → `close_session` → `ScheduledCall.status == 'completed'`; extend with a second seeded pending `tech_retry` for the same lead → asserted `cancelled` after the same `close_session` call. (~60 lines, spans 2.1–2.3 wiring)
+- [x] 2.4.2 Full-suite gate: `cd backend && python3 -m pytest tests/ -q` — 0 regressions vs. Slice 1 baseline. Result: 3289 passed (baseline after Slice 1 was 3273; net +16, 0 regressions).
+- [x] 2.4.3 Update `proposal.md`/`design.md` decision 8 status from "drafted" to "implemented" (doc-only, no code).
 
 ## Phase 3 (Slice 3 / PR 3): Stranded-Row Reaper — ~330 lines
 

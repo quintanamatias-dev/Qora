@@ -181,6 +181,10 @@ resolve via reaper class (b). Same mapping table for all three paths.
 
 ### Decision 8 — Cancelling a Parked `tech_retry` on a Successful Conversation
 
+**Status: implemented** (Slice 2 / PR 2). Shipped as `get_pending_tech_retry_for_lead`
++ the cancellation branch inside `resolve_scheduled_call_for_session`,
+`backend/app/scheduler/service.py` — exactly the seam described below.
+
 Same hook, same commit as the mapping above — no new seam. After
 `resolve_scheduled_call_for_session` resolves the just-finished session's own
 `ScheduledCall` (if any) to `new_status == "completed"`, look up whether the
