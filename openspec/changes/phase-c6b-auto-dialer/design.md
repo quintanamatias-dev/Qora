@@ -390,6 +390,34 @@ process, command, or file-classification boundary is introduced.
 4. Rollback: set `ENABLE_AUTO_DIALER=false`; effective on the next 60 s cycle.
    In-flight rows are resolved by the reaper, which keeps running.
 
+### Rollout dry run (Slice 3 gate)
+
+Slice 3 unblocks the flip above — it does not perform it.
+`ENABLE_AUTO_DIALER` stays `false` in `.env.example` and every deployed
+environment after this PR merges (task 3.6.1). Before step 3 above is
+exercised anywhere, run this dry run with the flag still `false`:
+
+1. Deploy with `ENABLE_AUTO_DIALER=false`, `ENABLE_OUTBOUND_CALLS=true`
+   (the reaper needs `enable_outbound_calls` to run at all — it is
+   independent of `enable_auto_dialer`, per the Reaper section above).
+2. For one full 60 s tick cycle, confirm:
+   - `scheduler_tick_promoted` fires for any due row (unchanged bulk-promote
+     path — `enable_auto_dialer=false` means the dial/claim branch never
+     runs).
+   - No `auto_dialer_*` event fires (same byte-for-byte guarantee as
+     before this slice).
+   - `scheduled_call_reaped_stale`, `scheduled_call_reap_exhausted`, or
+     `scheduled_call_reap_session_missing` fire **only** for rows that were
+     genuinely stranded `in_progress` before this deploy (e.g. leftover from
+     a prior incident or manual test) — never for rows created and settled
+     entirely within this dry run, since nothing is claiming/dialing while
+     the flag is off.
+3. Only after that dry run is clean: flip `ENABLE_AUTO_DIALER=true` on one
+   client with `auto_dialer_max_concurrent_dials=1` (step 3 above) and watch
+   for the same reaper events staying silent under normal operation — their
+   presence during steady-state dialing is the loud failure signal the
+   reaper exists to produce.
+
 ## Open Questions
 
 - [ ] None blocking. One accepted consequence recorded above: a tech retry
