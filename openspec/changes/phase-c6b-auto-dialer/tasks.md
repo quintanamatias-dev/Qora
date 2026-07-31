@@ -112,32 +112,32 @@ Slice 1 depends on it.
 
 ### 3.1 Class (a) — never dialed
 
-- [ ] 3.1.1 RED: `tests/integration/scheduler/test_tick.py` — `in_progress` + `outcome_session_id IS NULL` + `updated_at < now-10min` + attempts remaining → released to `pending`, `scheduled_call_reaped_stale` (`requeued=True`); attempts exhausted → `failed`, `scheduled_call_reap_exhausted`. (~30 lines)
-- [ ] 3.1.2 GREEN: `backend/app/scheduler/service.py` — class (a) branch of `reap_stranded_scheduled_calls(db, now=...)`: predicate + `attempt_number < max_attempts` → `pending` via `_set_scheduled_call_status`; else `failed`. (~35 lines)
+- [x] 3.1.1 RED: `tests/integration/scheduler/test_tick.py` — `in_progress` + `outcome_session_id IS NULL` + `updated_at < now-10min` + attempts remaining → released to `pending`, `scheduled_call_reaped_stale` (`requeued=True`); attempts exhausted → `failed`, `scheduled_call_reap_exhausted`. (~30 lines)
+- [x] 3.1.2 GREEN: `backend/app/scheduler/service.py` — class (a) branch of `reap_stranded_scheduled_calls(db, now=...)`: predicate + `attempt_number < max_attempts` → `pending` via `_set_scheduled_call_status`; else `failed`. (~35 lines)
 
 ### 3.2 Release clamp (must rewrite `scheduled_at` only when clamp moves it forward)
 
-- [ ] 3.2.1 RED: `tests/integration/scheduler/test_tick.py` — row released at 02:00 local → `scheduled_at` clamped to next `scheduler_allowed_hours_start` (09:00); row released at 14:00 local (inside window) → `scheduled_at` **unchanged** (regression guard: this is what makes the 6h age-out bound a crash loop instead of resetting every pass). (~20 lines)
-- [ ] 3.2.2 GREEN: reaper class (a) release path — `new_at = calculate_scheduled_at(now, 0, start, end, tz)`; assign `sc.scheduled_at = new_at` **only when `new_at > now`**. (~15 lines)
+- [x] 3.2.1 RED: `tests/integration/scheduler/test_tick.py` — row released at 02:00 local → `scheduled_at` clamped to next `scheduler_allowed_hours_start` (09:00); row released at 14:00 local (inside window) → `scheduled_at` **unchanged** (regression guard: this is what makes the 6h age-out bound a crash loop instead of resetting every pass). (~20 lines)
+- [x] 3.2.2 GREEN: reaper class (a) release path — `new_at = calculate_scheduled_at(now, 0, start, end, tz)`; assign `sc.scheduled_at = new_at` **only when `new_at > now`**. (~15 lines)
 
 ### 3.3 Age-out cap
 
-- [ ] 3.3.1 RED: `tests/integration/scheduler/test_tick.py` — class (a) row with `now - scheduled_at > 6h` → `failed` regardless of remaining attempts, `scheduled_call_reap_exhausted`. (~15 lines)
-- [ ] 3.3.2 GREEN: add `_MAX_STRANDED_HOURS=6` age-out check to the class (a) branch, evaluated before the attempts-remaining check. (~15 lines)
+- [x] 3.3.1 RED: `tests/integration/scheduler/test_tick.py` — class (a) row with `now - scheduled_at > 6h` → `failed` regardless of remaining attempts, `scheduled_call_reap_exhausted`. (~15 lines)
+- [x] 3.3.2 GREEN: add `_MAX_STRANDED_HOURS=6` age-out check to the class (a) branch, evaluated before the attempts-remaining check. (~15 lines)
 
 ### 3.4 Class (b) — dialed, completion signal never arrived
 
-- [ ] 3.4.1 RED: `tests/integration/scheduler/test_tick.py` — `in_progress` + `outcome_session_id NOT NULL` + linked `CallSession` at terminal `telephony_status` → resolved via the Slice-2 shared mapping table; non-terminal `telephony_status` → untouched (left for the 30-min sweeper); `outcome_session_id` pointing at a missing `CallSession` → `failed` + `scheduled_call_reap_session_missing` ERROR. (~35 lines)
-- [ ] 3.4.2 GREEN: class (b) branch of `reap_stranded_scheduled_calls` — loads `CallSession`, reuses `_TELEPHONY_TO_SCHEDULED_STATUS` (Slice 2) for terminal statuses; missing session → treat as class (a) / `failed` + the ERROR event. (~40 lines)
+- [x] 3.4.1 RED: `tests/integration/scheduler/test_tick.py` — `in_progress` + `outcome_session_id NOT NULL` + linked `CallSession` at terminal `telephony_status` → resolved via the Slice-2 shared mapping table; non-terminal `telephony_status` → untouched (left for the 30-min sweeper); `outcome_session_id` pointing at a missing `CallSession` → `failed` + `scheduled_call_reap_session_missing` ERROR. (~35 lines)
+- [x] 3.4.2 GREEN: class (b) branch of `reap_stranded_scheduled_calls` — loads `CallSession`, reuses `_TELEPHONY_TO_SCHEDULED_STATUS` (Slice 2) for terminal statuses; missing session → treat as class (a) / `failed` + the ERROR event. (~40 lines)
 
 ### 3.5 Tick wiring + full-cycle no-stranding proof
 
-- [ ] 3.5.1 RED: `tests/integration/scheduler/test_tick.py` — clock advanced past both the 10-min claim timeout and the 30-min telephony sweep timeout → **no** `ScheduledCall` remains `in_progress` after two cycles. (~25 lines)
-- [ ] 3.5.2 GREEN: `run_scheduler_cycle` — call `reap_stranded_scheduled_calls(db)` whenever `enable_outbound_calls` is true (independent of `enable_auto_dialer`), **before** the claim step per the design's ordering (released/resolved rows must be re-claimable / index-free in the same cycle). (~20 lines)
+- [x] 3.5.1 RED: `tests/integration/scheduler/test_tick.py` — clock advanced past both the 10-min claim timeout and the 30-min telephony sweep timeout → **no** `ScheduledCall` remains `in_progress` after two cycles. (~25 lines)
+- [x] 3.5.2 GREEN: `run_scheduler_cycle` — call `reap_stranded_scheduled_calls(db)` whenever `enable_outbound_calls` is true (independent of `enable_auto_dialer`), **before** the claim step per the design's ordering (released/resolved rows must be re-claimable / index-free in the same cycle). (~20 lines)
 
 ### 3.6 Rollout gate + follow-up close-out (cross-slice, lands with this PR)
 
-- [ ] 3.6.1 Flip `enable_auto_dialer` default check: confirm it is still `False` in every env config (`.env.example`, deploy configs) — this slice unblocks the flip, it does not perform it. Explicit gate, not a footnote.
-- [ ] 3.6.2 File the follow-up issue: enforce `ScheduledCall.VALID_TRANSITIONS` through `_set_scheduled_call_status()` (single seam created across Slices 1–3) — reference `proposal.md`'s deferred-enforcement scope decision.
-- [ ] 3.6.3 Full-suite gate: `cd backend && python3 -m pytest tests/ -q` — 0 regressions vs. Slice 2 baseline.
-- [ ] 3.6.4 Rollout dry run per `design.md` Migration/Rollout: deploy with flag `False`, verify `scheduler_tick_promoted` fires and no `auto_dialer_*`/`scheduled_call_reap*` events except from the reaper on genuinely stale pre-existing rows; only then consider flipping the flag on one client with `auto_dialer_max_concurrent_dials=1`.
+- [x] 3.6.1 Flip `enable_auto_dialer` default check: confirm it is still `False` in every env config (`.env.example`, deploy configs) — this slice unblocks the flip, it does not perform it. Explicit gate, not a footnote. Result: no `.env`, `docker-compose.yml`, or deploy config anywhere in the repo set `ENABLE_AUTO_DIALER`/`AUTO_DIALER_MAX_CONCURRENT_DIALS` — the Python default (`False`) is what's live everywhere. Added an explicit commented-out `.env.example` entry (mirroring the existing `ENABLE_OUTBOUND_CALLS` convention) documenting the gate for operators.
+- [x] 3.6.2 File the follow-up issue: enforce `ScheduledCall.VALID_TRANSITIONS` through `_set_scheduled_call_status()` (single seam created across Slices 1–3) — reference `proposal.md`'s deferred-enforcement scope decision. Result: title/body drafted, deferred to the orchestrator to create via `gh` (not run directly, per instruction).
+- [x] 3.6.3 Full-suite gate: `cd backend && python3 -m pytest tests/ -q` — 0 regressions vs. Slice 2 baseline. Result: 3299 passed (baseline after Slice 2 was 3289; net +10, 0 regressions).
+- [x] 3.6.4 Rollout dry run per `design.md` Migration/Rollout: deploy with flag `False`, verify `scheduler_tick_promoted` fires and no `auto_dialer_*`/`scheduled_call_reap*` events except from the reaper on genuinely stale pre-existing rows; only then consider flipping the flag on one client with `auto_dialer_max_concurrent_dials=1`. Result: documented as a new "Rollout dry run (Slice 3 gate)" subsection in `design.md` Migration/Rollout (doc-only, no code).
