@@ -816,8 +816,9 @@ async def test_reap_class_b_missing_call_session_fails(tick_db):
 
 
 async def test_run_scheduler_cycle_reaps_before_claim_no_row_stranded(tick_db):
-    """3.5: clock advanced past both timeouts -> no row remains in_progress
-    after two cycles. This is also the gate to flip enable_auto_dialer=true.
+    """3.5 (R3-1: reaper now also gated on enable_auto_dialer): clock advanced
+    past both timeouts -> no row remains in_progress after two cycles. This
+    is also the gate to flip enable_auto_dialer=true.
     """
     from app.calls.models import CallSession
     from app.scheduler.service import run_scheduler_cycle
@@ -829,10 +830,12 @@ async def test_run_scheduler_cycle_reaps_before_claim_no_row_stranded(tick_db):
 
     async with tick_db.async_session_factory() as sess:
         # class (a): never dialed, past the 10-min claim timeout, attempts
-        # exhausted -> failed directly. (The pending-release-and-reclaim
-        # interaction with mark_due_calls_in_progress is covered separately
-        # by the 3.2 release-clamp tests; this test isolates the "no row
-        # remains in_progress" guarantee itself.)
+        # exhausted -> failed directly. The mark_due_calls_in_progress
+        # interaction (legacy-promoted rows must stay untouched while
+        # enable_auto_dialer is off) is a *different* scenario, covered by
+        # test_run_scheduler_cycle_reaper_gated_off_leaves_legacy_rows_untouched
+        # below; this test isolates the "no genuinely stranded row survives"
+        # guarantee with the reaper actually running.
         never_dialed = await _mk_stranded_call(
             sess, "tick-lead-001", updated_at=now - timedelta(minutes=15),
             scheduled_at=now - timedelta(minutes=20), attempt_number=3, max_attempts=3,
@@ -853,8 +856,8 @@ async def test_run_scheduler_cycle_reaps_before_claim_no_row_stranded(tick_db):
         )
         dialed_id = dialed.id
 
-    settings = _auto_dialer_settings("sqlite+aiosqlite:///unused", enable_auto_dialer=False)
-    settings.enable_outbound_calls = True  # reaper runs independent of enable_auto_dialer
+    # R3-1: the reaper only runs when enable_auto_dialer is also true.
+    settings = _auto_dialer_settings("sqlite+aiosqlite:///unused", enable_auto_dialer=True)
 
     async with tick_db.async_session_factory() as sess:
         await run_scheduler_cycle(sess, settings, now_utc=now)
@@ -869,6 +872,101 @@ async def test_run_scheduler_cycle_reaps_before_claim_no_row_stranded(tick_db):
         by_id = {r.id: r for r in rows}
         assert by_id[never_dialed_id].status == "failed"
         assert by_id[dialed_id].status == "failed"
+
+
+# ---------------------------------------------------------------------------
+# R3-1 — reaper gated on enable_auto_dialer (not just enable_outbound_calls)
+#
+# Before this fix, enable_auto_dialer=False + enable_outbound_calls=True (the
+# exact production dry-run config above) let the reaper inspect in_progress
+# rows bulk-promoted by mark_due_calls_in_progress -- a legacy path the
+# reaper cannot distinguish from a stale auto-dialer claim.
+# ---------------------------------------------------------------------------
+
+
+async def test_run_scheduler_cycle_reaper_gated_off_leaves_legacy_rows_untouched(
+    tick_db,
+):
+    """R3-1 bug guard: with enable_auto_dialer=False + enable_outbound_calls=True,
+    a row promoted by mark_due_calls_in_progress's real code path must never be
+    reaped, even long past the claim timeout.
+    """
+    import structlog.testing
+    from app.scheduler.service import mark_due_calls_in_progress, run_scheduler_cycle
+    from app.scheduler.models import ScheduledCall
+    from sqlalchemy import select
+
+    past = _IN_WINDOW_UTC - timedelta(minutes=5)
+    async with tick_db.async_session_factory() as sess:
+        sc = await _mk_call(
+            sess, "tick-lead-001", past, attempt_number=3, max_attempts=3,
+        )
+        await sess.commit()
+        sc_id = sc.id
+
+    # Real code path -- not seeded directly as in_progress.
+    async with tick_db.async_session_factory() as sess:
+        count = await mark_due_calls_in_progress(sess)
+        await sess.commit()
+    assert count == 1
+
+    settings = _auto_dialer_settings("sqlite+aiosqlite:///unused", enable_auto_dialer=False)
+    settings.enable_outbound_calls = True  # the exact config this finding covers
+
+    # Advance the injected clock well past the 10-minute claim timeout.
+    later = _IN_WINDOW_UTC + timedelta(minutes=15)
+    with structlog.testing.capture_logs() as cap:
+        async with tick_db.async_session_factory() as sess:
+            await run_scheduler_cycle(sess, settings, now_utc=later)
+
+    reap_events = [e.get("event") for e in cap if str(e.get("event", "")).startswith("scheduled_call_reap")]
+    assert reap_events == [], reap_events
+
+    async with tick_db.async_session_factory() as sess:
+        updated = (await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id == sc_id)
+        )).scalar_one()
+        assert updated.status == "in_progress"
+        assert updated.attempt_number == 3
+
+
+async def test_run_scheduler_cycle_reaper_still_runs_when_auto_dialer_enabled(
+    tick_db,
+):
+    """Positive case: enable_auto_dialer=True + enable_outbound_calls=True still
+    reaps a genuinely stranded row -- the R3-1 gate does not disable reaping.
+    """
+    import structlog.testing
+    from app.scheduler.service import run_scheduler_cycle
+    from app.scheduler.models import ScheduledCall
+    from sqlalchemy import select
+
+    now = _IN_WINDOW_UTC
+    stale_updated_at = now - timedelta(minutes=15)
+    scheduled_at = now - timedelta(minutes=20)
+
+    async with tick_db.async_session_factory() as sess:
+        sc = await _mk_stranded_call(
+            sess, "tick-lead-001", updated_at=stale_updated_at,
+            scheduled_at=scheduled_at, attempt_number=3, max_attempts=3,
+        )
+        sc_id = sc.id
+
+    settings = _auto_dialer_settings("sqlite+aiosqlite:///unused", enable_auto_dialer=True)
+
+    with structlog.testing.capture_logs() as cap:
+        async with tick_db.async_session_factory() as sess:
+            await run_scheduler_cycle(sess, settings, now_utc=now)
+
+    events = [e for e in cap if e.get("event") == "scheduled_call_reap_exhausted"]
+    assert len(events) == 1, cap
+    assert events[0]["scheduled_call_id"] == sc_id
+
+    async with tick_db.async_session_factory() as sess:
+        updated = (await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id == sc_id)
+        )).scalar_one()
+        assert updated.status == "failed"
 
 
 async def test_scheduler_tick_loop_survives_exception():

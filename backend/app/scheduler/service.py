@@ -1257,11 +1257,13 @@ async def reap_stranded_scheduled_calls(
       (a) never dialed — crash between claim and dial
       (b) dialed, completion signal never arrived — lost/failed webhook
 
-    Runs whenever enable_outbound_calls is true, independent of
-    enable_auto_dialer (a row stranded during a brief pilot must still get
-    cleaned up after the flag is switched back off), and BEFORE the claim
-    step in run_scheduler_cycle so released/resolved rows are re-claimable
-    and index-free in the same cycle.
+    Called from run_scheduler_cycle only when BOTH enable_auto_dialer and
+    enable_outbound_calls are true (R3-1) — the same gate as the claim
+    branch, so the only in_progress rows this ever inspects are CAS-claimed
+    by the auto-dialer itself, never legacy rows bulk-promoted by
+    mark_due_calls_in_progress. Runs BEFORE the claim step so
+    released/resolved rows are re-claimable and index-free in the same
+    cycle.
     """
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(minutes=_CLAIM_TIMEOUT_MINUTES)
@@ -1294,8 +1296,12 @@ async def run_scheduler_cycle(
 
     Design: openspec/changes/phase-c6b-auto-dialer/design.md — Technical Approach.
 
-        if enable_outbound_calls          -> reap_stranded_scheduled_calls(db)  # slice 3
         if enable_auto_dialer AND enable_outbound_calls
+               -> reap_stranded_scheduled_calls(db)       # slice 3 (R3-1: same
+                                                            # gate as the claim
+                                                            # branch below — see
+                                                            # "Rollout dry run"
+                                                            # in design.md)
                -> claim_due_scheduled_calls(db, limit)   # CAS, replaces bulk promote
                -> dial claimed rows SEQUENTIALLY          # F4: shared AsyncSession
         else   -> mark_due_calls_in_progress(db)         # unchanged
@@ -1304,10 +1310,9 @@ async def run_scheduler_cycle(
     executed path is byte-for-byte today's behaviour — the tick does not
     even query for dial candidates.
     """
-    if settings.enable_outbound_calls:
+    if settings.enable_auto_dialer and settings.enable_outbound_calls:
         await reap_stranded_scheduled_calls(db, now=now_utc)
 
-    if settings.enable_auto_dialer and settings.enable_outbound_calls:
         claimed = await claim_due_scheduled_calls(
             db, settings.auto_dialer_max_concurrent_dials
         )
