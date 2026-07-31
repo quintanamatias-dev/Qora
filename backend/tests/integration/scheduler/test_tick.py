@@ -894,7 +894,7 @@ async def test_run_scheduler_cycle_reaper_gated_off_leaves_legacy_rows_untouched
     import structlog.testing
     from app.scheduler.service import mark_due_calls_in_progress, run_scheduler_cycle
     from app.scheduler.models import ScheduledCall
-    from sqlalchemy import select
+    from sqlalchemy import select, update
 
     past = _IN_WINDOW_UTC - timedelta(minutes=5)
     async with tick_db.async_session_factory() as sess:
@@ -907,6 +907,14 @@ async def test_run_scheduler_cycle_reaper_gated_off_leaves_legacy_rows_untouched
     # Real code path -- not seeded directly as in_progress.
     async with tick_db.async_session_factory() as sess:
         count = await mark_due_calls_in_progress(sess)
+        # mark_due_calls_in_progress stamps updated_at from real wall-clock time.
+        # Pin it to `past` so staleness is measured against the injected clock
+        # below, not against the calendar date this test happens to run on --
+        # otherwise the class-(a) predicate never matches and the assertions
+        # below pass vacuously, proving nothing about the gate.
+        await sess.execute(
+            update(ScheduledCall).where(ScheduledCall.id == sc_id).values(updated_at=past)
+        )
         await sess.commit()
     assert count == 1
 

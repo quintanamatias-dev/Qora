@@ -393,7 +393,10 @@ process, command, or file-classification boundary is introduced.
    `auto_dialer_max_concurrent_dials=1`. Watch for `auto_dialer_claimed` →
    `auto_dialer_dial_accepted` → `scheduled_call_resolved_from_session`.
 4. Rollback: set `ENABLE_AUTO_DIALER=false`; effective on the next 60 s cycle.
-   In-flight rows are resolved by the reaper, which keeps running.
+   The reaper stops with it (both share the same gate), so rows still
+   `in_progress` from the flag-on window are **not** auto-recovered. Either
+   settle them via `PATCH .../complete` / `POST .../cancel`, or re-enable the
+   flag briefly to let the reaper drain them before rolling back for good.
 
 ### Rollout dry run (Slice 3 gate)
 
