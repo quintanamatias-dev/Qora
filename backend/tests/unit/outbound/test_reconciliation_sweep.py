@@ -56,6 +56,11 @@ def _make_unreconciled_session(
     cs.telephony_status = telephony_status
     cs.telephony_error = telephony_error
     cs.reconciled_at = None  # Not yet reconciled
+    cs.elevenlabs_conversation_id = None
+    cs.session_end_received = False
+    cs.status = "completed"
+    cs.outcome = "unknown"
+    cs.ended_at = datetime.now(timezone.utc) - timedelta(minutes=1)
     cs.sip_call_id = None
     cs.sip_status_code = None
     cs.sip_reason = None
@@ -165,7 +170,7 @@ class TestReconciliationSweepMatchAndWrite:
         )
 
         # Mock: get_sip_messages
-        sip_url = f"{_EL_BASE}/convai/conversations/conv-sweep-001/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-sweep-001/sip-messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(
                 200,
@@ -173,14 +178,13 @@ class TestReconciliationSweepMatchAndWrite:
                     "sip_messages": [
                         {
                             "call_id": "otb_sweep_call_abc",
-                            "method": "INVITE",
                             "direction": "outbound",
+                            "raw_message": "INVITE sip:callee@example.test SIP/2.0\r\nCSeq: 42 INVITE\r\n",
                         },
                         {
                             "call_id": "otb_sweep_call_abc",
-                            "status_code": 487,
-                            "reason_phrase": "Request Terminated",
                             "direction": "inbound",
+                            "raw_message": "SIP/2.0 487 Request Terminated\r\nCSeq: 42 INVITE\r\n",
                         },
                     ]
                 },
@@ -240,7 +244,7 @@ class TestReconciliationSweepMatchAndWrite:
             )
         )
 
-        sip_url = f"{_EL_BASE}/convai/conversations/conv-stale-001/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-stale-001/sip-messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(
                 200,
@@ -248,8 +252,8 @@ class TestReconciliationSweepMatchAndWrite:
                     "sip_messages": [
                         {
                             "call_id": "otb_stale_call",
-                            "status_code": 200,
-                            "reason_phrase": "OK",
+                            "direction": "inbound",
+                            "raw_message": "SIP/2.0 200 OK\r\nCSeq: 7 INVITE\r\n",
                         }
                     ]
                 },
@@ -266,6 +270,119 @@ class TestReconciliationSweepMatchAndWrite:
         assert cs.telephony_status == "stale_in_call", (
             "Sweep must not change telephony_status on reconciliation"
         )
+
+
+class TestReconciliationSweepStoredConversation:
+    """Stored ElevenLabs IDs are authoritative sweep lookup keys."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_reconciles_completed_session_by_exact_stored_id_without_list_call(self):
+        """A completed session with a stored ID uses exact SIP detail, never list matching."""
+        from app.outbound.sweep import reconcile_unreconciled_sessions
+
+        cs = _make_unreconciled_session(
+            session_id="sess-completed-exact-id",
+            telephony_status="completed",
+        )
+        cs.elevenlabs_conversation_id = "conv-completed-exact-id"
+        cs.session_end_received = True
+        cs.status = "completed"
+        cs.outcome = "successful"
+        terminal_state = (cs.telephony_status, cs.session_end_received, cs.status, cs.outcome)
+        db = _make_db_with_sessions([cs])
+
+        list_route = respx.get(_CONVERSATIONS_URL).mock(
+            return_value=httpx.Response(200, json={"conversations": []})
+        )
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-completed-exact-id/sip-messages"
+        respx.get(sip_url).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "sip_messages": [
+                        {
+                            "call_id": "otb_completed_exact",
+                            "direction": "inbound",
+                            "raw_message": "SIP/2.0 487 Request Terminated\r\nCSeq: 17 INVITE\r\n",
+                        }
+                    ]
+                },
+            )
+        )
+
+        count = await reconcile_unreconciled_sessions(db, settings=_make_settings())
+
+        assert count == 1
+        assert list_route.call_count == 0
+        assert cs.sip_call_id == "otb_completed_exact"
+        assert cs.sip_status_code == 487
+        assert cs.reconciled_at is not None
+        assert (cs.telephony_status, cs.session_end_received, cs.status, cs.outcome) == terminal_state
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "pagination",
+        [{"has_more": True}, {"next_cursor": "cursor-next"}],
+        ids=["has-more", "next-cursor"],
+    )
+    @respx.mock
+    async def test_incomplete_sip_page_does_not_stamp_reconciliation_or_terminal_state(
+        self, pagination
+    ):
+        """Partial SIP evidence cannot finalize diagnostics or terminal call state."""
+        from app.outbound.sweep import reconcile_unreconciled_sessions
+
+        started_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+        cs = _make_unreconciled_session(
+            session_id="sess-incomplete-sip-page",
+            started_at=started_at,
+        )
+        cs.elevenlabs_conversation_id = "conv-incomplete-sip-page"
+        cs.session_end_received = True
+        cs.status = "completed"
+        cs.outcome = "successful"
+        terminal_state = (cs.telephony_status, cs.session_end_received, cs.status, cs.outcome)
+        db = _make_db_with_sessions([cs])
+
+        respx.get(_CONVERSATIONS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "conversations": [
+                        {
+                            "conversation_id": "conv-incomplete-sip-page",
+                            "agent_id": "agent-abc",
+                            "start_time_unix_secs": int(started_at.timestamp()),
+                        }
+                    ]
+                },
+            )
+        )
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-incomplete-sip-page/sip-messages"
+        respx.get(sip_url).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "sip_messages": [
+                        {
+                            "call_id": "otb_incomplete_page",
+                            "direction": "inbound",
+                            "raw_message": "SIP/2.0 200 OK\r\nCSeq: 19 INVITE\r\n",
+                        }
+                    ],
+                    **pagination,
+                },
+            )
+        )
+
+        count = await reconcile_unreconciled_sessions(db, settings=_make_settings())
+
+        assert count == 0
+        assert cs.sip_call_id is None
+        assert cs.sip_status_code is None
+        assert cs.reconciled_at is None
+        assert (cs.telephony_status, cs.session_end_received, cs.status, cs.outcome) == terminal_state
 
 
 class TestReconciliationSweepSkipsAlreadyReconciled:
@@ -322,9 +439,10 @@ class TestReconciliationSweepAmbiguousMatch:
         )
         db = _make_db_with_sessions([cs])
 
-        # Two conversations close in time — ambiguous match
+        # Two conversations close in time — ambiguous fallback match.
+        assert cs.elevenlabs_conversation_id is None
         base_ts = int(started_at.timestamp())
-        respx.get(_CONVERSATIONS_URL).mock(
+        route = respx.get(_CONVERSATIONS_URL).mock(
             return_value=httpx.Response(
                 200,
                 json={
@@ -357,6 +475,7 @@ class TestReconciliationSweepAmbiguousMatch:
             "reconciled_at must remain NULL on ambiguous match"
         )
         assert cs.sip_status_code is None
+        assert route.call_count == 1
 
 
 class TestReconciliationSweepCapEnforcement:
@@ -413,7 +532,7 @@ class TestReconciliationSweepCapEnforcement:
 
         # Mock SIP messages for each conversation
         for i in range(cap):
-            sip_url = f"{_EL_BASE}/convai/conversations/conv-cap-{i:03d}/sip_messages"
+            sip_url = f"{_EL_BASE}/convai/conversations/conv-cap-{i:03d}/sip-messages"
             respx.get(sip_url).mock(
                 return_value=httpx.Response(
                     200,
@@ -421,8 +540,8 @@ class TestReconciliationSweepCapEnforcement:
                         "sip_messages": [
                             {
                                 "call_id": f"otb_cap_{i}",
-                                "status_code": 200,
-                                "reason_phrase": "OK",
+                                "direction": "inbound",
+                                "raw_message": "SIP/2.0 200 OK\r\nCSeq: 9 INVITE\r\n",
                             }
                         ]
                     },
@@ -483,7 +602,7 @@ class TestReconciliationSweepAPIErrorResilience:
 
         respx.get(_CONVERSATIONS_URL).mock(side_effect=conversations_side)
 
-        sip_url = f"{_EL_BASE}/convai/conversations/conv-ok-001/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-ok-001/sip-messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(
                 200,
@@ -491,8 +610,8 @@ class TestReconciliationSweepAPIErrorResilience:
                     "sip_messages": [
                         {
                             "call_id": "otb_ok_call",
-                            "status_code": 200,
-                            "reason_phrase": "OK",
+                            "direction": "inbound",
+                            "raw_message": "SIP/2.0 200 OK\r\nCSeq: 11 INVITE\r\n",
                         }
                     ]
                 },
@@ -574,7 +693,7 @@ class TestReconciliationSweepAmbiguousTimeout:
             )
         )
 
-        sip_url = f"{_EL_BASE}/convai/conversations/conv-amb-001/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-amb-001/sip-messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(
                 200,
@@ -582,8 +701,8 @@ class TestReconciliationSweepAmbiguousTimeout:
                     "sip_messages": [
                         {
                             "call_id": "otb_amb_call",
-                            "status_code": 487,
-                            "reason_phrase": "Request Terminated",
+                            "direction": "inbound",
+                            "raw_message": "SIP/2.0 487 Request Terminated\r\nCSeq: 13 INVITE\r\n",
                         }
                     ]
                 },

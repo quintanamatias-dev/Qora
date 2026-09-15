@@ -10,7 +10,7 @@ Tasks:
 
 TDD: Tests written BEFORE probe.py exists.
 All ElevenLabs HTTP is mocked via respx — no live calls.
-DB is mocked via AsyncMock — no real DB needed for unit tests.
+Most paths use AsyncMock; routing-failure concurrency regressions use the migrated test database.
 """
 
 from __future__ import annotations
@@ -53,6 +53,8 @@ def _make_call_session(
     cs.sip_status_code = None
     cs.sip_reason = None
     cs.reconciliation_source = None
+    cs.outcome_reason = None
+    cs.elevenlabs_conversation_id = None
     return cs
 
 
@@ -60,6 +62,8 @@ def _make_db_with_session(cs: MagicMock | None) -> AsyncMock:
     """Return a mock async_session_factory context manager that yields a DB session."""
     db = AsyncMock()
     db.get = AsyncMock(return_value=cs)
+    db.execute = AsyncMock()
+    db.execute.return_value.rowcount = 1
     db.commit = AsyncMock()
     db.refresh = AsyncMock()
     db.__aenter__ = AsyncMock(return_value=db)
@@ -79,6 +83,68 @@ def _make_db_with_session(cs: MagicMock | None) -> AsyncMock:
 
 class TestProbeSuccessfulCapture:
     """Probe finds a matching conversation and writes SIP evidence."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_probe_uses_stored_conversation_id_without_time_search(self):
+        """A stored ElevenLabs conversation ID is authoritative for probe lookup."""
+        from app.outbound.probe import probe_call_evidence
+
+        conversation_id = "conv-direct-001"
+        cs = _make_call_session(reconciled_at=None)
+        cs.elevenlabs_conversation_id = conversation_id
+        factory = _make_db_with_session(cs)
+
+        list_route = respx.get(_CONVERSATIONS_URL).mock(
+            return_value=httpx.Response(200, json={"conversations": []})
+        )
+        detail_route = respx.get(
+            f"{_EL_BASE}/convai/conversations/{conversation_id}"
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "conversation_id": conversation_id,
+                    "status": "done",
+                    "call_successful": "success",
+                },
+            )
+        )
+        sip_route = respx.get(
+            f"{_EL_BASE}/convai/conversations/{conversation_id}/sip-messages"
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "sip_messages": [
+                        {
+                            "call_id": "otb_direct_probe_test",
+                            "method": "INVITE",
+                            "cseq": 1,
+                            "status_code": 200,
+                            "reason_phrase": "OK",
+                            "timestamp": "2026-01-01T00:00:00Z",
+                        }
+                    ]
+                },
+            )
+        )
+
+        with patch("app.outbound.probe.async_session_factory", factory):
+            await probe_call_evidence(
+                session_id=cs.id,
+                agent_id=cs.agent_id,
+                to_number="+14155552671",
+                settings=_make_settings(),
+                delay=0,
+            )
+
+        assert cs.sip_call_id == "otb_direct_probe_test"
+        assert cs.sip_status_code == 200
+        assert cs.reconciled_at is not None
+        assert list_route.call_count == 0
+        assert detail_route.call_count == 1
+        assert sip_route.call_count == 1
 
     @pytest.mark.asyncio
     @respx.mock
@@ -125,7 +191,7 @@ class TestProbeSuccessfulCapture:
         )
 
         # Mock: get_sip_messages → SIP messages with Call-ID + final response
-        sip_url = f"{_EL_BASE}/convai/conversations/conv-match-001/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-match-001/sip-messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(
                 200,
@@ -134,11 +200,14 @@ class TestProbeSuccessfulCapture:
                         {
                             "call_id": "otb_abc_probe_test",
                             "method": "INVITE",
+                            "cseq": 1,
                             "direction": "outbound",
                             "timestamp": started_at.isoformat(),
                         },
                         {
                             "call_id": "otb_abc_probe_test",
+                            "method": "INVITE",
+                            "cseq": 1,
                             "status_code": 200,
                             "reason_phrase": "OK",
                             "direction": "inbound",
@@ -180,6 +249,73 @@ class TestProbeSuccessfulCapture:
         # Verify DB was committed
         db = factory.return_value
         db.commit.assert_called()
+
+
+class TestProbeIncompleteSipPage:
+    """Probe does not reconcile SIP evidence from an incomplete cursor page."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("has_more", "next_cursor"),
+        [(True, None), (False, "cursor-next-page")],
+        ids=["has-more", "next-cursor"],
+    )
+    @respx.mock
+    async def test_probe_leaves_session_unreconciled_for_incomplete_sip_page(
+        self, has_more, next_cursor
+    ):
+        """Incomplete SIP pages cannot establish a final response."""
+        from app.outbound.probe import probe_call_evidence
+
+        conversation_id = "conv-incomplete-page"
+        cs = _make_call_session(reconciled_at=None)
+        cs.elevenlabs_conversation_id = conversation_id
+        cs.telephony_status = "ringing"
+        factory = _make_db_with_session(cs)
+
+        respx.get(f"{_EL_BASE}/convai/conversations/{conversation_id}").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "conversation_id": conversation_id,
+                    "status": "done",
+                    "call_successful": "false",
+                },
+            )
+        )
+        respx.get(f"{_EL_BASE}/convai/conversations/{conversation_id}/sip-messages").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "sip_messages": [
+                        {
+                            "call_id": "otb_incomplete_page",
+                            "method": "INVITE",
+                            "cseq": 1,
+                            "status_code": 404,
+                            "reason_phrase": "Not Found",
+                            "timestamp": "2026-01-01T00:00:00Z",
+                        }
+                    ],
+                    "has_more": has_more,
+                    "next_cursor": next_cursor,
+                },
+            )
+        )
+
+        with patch("app.outbound.probe.async_session_factory", factory):
+            await probe_call_evidence(
+                session_id=cs.id,
+                agent_id=cs.agent_id,
+                to_number="+5491140485464",
+                settings=_make_settings(),
+                delay=0,
+            )
+
+        assert cs.telephony_status == "ringing"
+        assert cs.sip_status_code is None
+        assert cs.reconciled_at is None
+        factory.return_value.commit.assert_not_called()
 
 
 class TestProbeNoMatch:
@@ -459,7 +595,7 @@ class TestServiceHookFiresProbe:
 
         lead = MagicMock()
         lead.id = "lead-001"
-        lead.phone = "+14155552671"
+        lead.phone = "+5491140485464"
 
         agent = MagicMock()
         agent.id = "agent-001"
@@ -507,6 +643,7 @@ class TestServiceHookFiresProbe:
             patch("app.outbound.service.asyncio.create_task", side_effect=fake_create_task),
             patch("app.outbound.service._find_active_call_session", new_callable=AsyncMock, return_value=None),
             patch("app.outbound.service._find_in_progress_scheduled_call", new_callable=AsyncMock, return_value=None),
+            patch("app.outbound.service._persist_accepted_call_session", new_callable=AsyncMock),
             patch("app.outbound.service.CallSession") as MockCallSession,
             patch("app.outbound.dynamic_vars.build_dynamic_variables", new_callable=AsyncMock, return_value={}),
         ):
@@ -545,7 +682,7 @@ class TestServiceHookFiresProbe:
 
         lead = MagicMock()
         lead.id = "lead-002"
-        lead.phone = "+14155552671"
+        lead.phone = "+5491140485464"
 
         agent = MagicMock()
         agent.id = "agent-001"
@@ -560,6 +697,7 @@ class TestServiceHookFiresProbe:
         settings.elevenlabs_api_key = SecretStr("test-key")
 
         db = AsyncMock()
+        db.add = MagicMock()
         db.flush = AsyncMock()
         db.commit = AsyncMock()
 
@@ -663,7 +801,7 @@ class TestProbeDetectsSipRoutingFailure:
             )
         )
 
-        sip_url = f"{_EL_BASE}/convai/conversations/conv-sip-fail-001/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-sip-fail-001/sip-messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(
                 200,
@@ -672,11 +810,14 @@ class TestProbeDetectsSipRoutingFailure:
                         {
                             "call_id": "otb_6001kwq98hjae6mv22tyyw13m2p1",
                             "method": "INVITE",
+                            "cseq": 1,
                             "direction": "outbound",
                             "timestamp": started_at.isoformat(),
                         },
                         {
                             "call_id": "otb_6001kwq98hjae6mv22tyyw13m2p1",
+                            "method": "INVITE",
+                            "cseq": 1,
                             "status_code": 404,
                             "reason_phrase": "Not Found",
                             "direction": "inbound",
@@ -747,7 +888,7 @@ class TestProbeDetectsSipRoutingFailure:
                 },
             )
         )
-        sip_url = f"{_EL_BASE}/convai/conversations/conv-busy-001/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-busy-001/sip-messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(
                 200,
@@ -755,6 +896,8 @@ class TestProbeDetectsSipRoutingFailure:
                     "sip_messages": [
                         {
                             "call_id": "otb_busy_test",
+                            "method": "INVITE",
+                            "cseq": 1,
                             "status_code": 486,
                             "reason_phrase": "Busy Here",
                             "direction": "inbound",
@@ -817,7 +960,7 @@ class TestProbeDetectsSipRoutingFailure:
                 },
             )
         )
-        sip_url = f"{_EL_BASE}/convai/conversations/conv-answered-001/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-answered-001/sip-messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(
                 200,
@@ -825,6 +968,8 @@ class TestProbeDetectsSipRoutingFailure:
                     "sip_messages": [
                         {
                             "call_id": "otb_answered_test",
+                            "method": "INVITE",
+                            "cseq": 1,
                             "status_code": 200,
                             "reason_phrase": "OK",
                             "direction": "inbound",
@@ -854,6 +999,214 @@ class TestProbeDetectsSipRoutingFailure:
         # But SIP fields ARE written
         assert cs.sip_status_code == 200
         assert cs.reconciled_at is not None
+
+
+class TestProbeRoutingFailureAtomicity:
+    """Routing failures must not overwrite independently committed call states."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("persisted_status", "persisted_outcome", "session_end_received"),
+        [
+            ("connected", "webhook_connected", False),
+            ("completed", "webhook_completed", True),
+            ("no_answer", "webhook_no_answer", False),
+            ("failed", "webhook_failed", False),
+            ("voicemail", "webhook_voicemail", True),
+        ],
+    )
+    async def test_probe_preserves_independently_committed_state(
+        self,
+        db_engine,
+        persisted_status,
+        persisted_outcome,
+        session_end_received,
+    ):
+        """A migrated DB preserves a concurrent webhook state during provider I/O."""
+        from app.calls.models import CallSession
+        from app.elevenlabs.models import (
+            ConversationListResponse,
+            ConversationSummary,
+            SipMessage,
+            SipMessagesResponse,
+        )
+        from app.outbound.probe import probe_call_evidence
+        from app.tenants.service import create_client
+
+        session_id = f"probe-race-{persisted_status}"
+        client_id = f"probe-race-client-{persisted_status}"
+        started_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+
+        # First independent session: create the ringing row in the migrated schema.
+        async with db_engine.async_session_factory() as db:
+            await create_client(db, id=client_id, name="Probe Race Client", voice_id="voice-race")
+            db.add(
+                CallSession(
+                    id=session_id,
+                    client_id=client_id,
+                    status="initiated",
+                    agent_id=None,
+                    telephony_status="ringing",
+                    elevenlabs_conversation_id="conv-race-safe",
+                    started_at=started_at,
+                )
+            )
+            await db.commit()
+
+        provider_waiting = asyncio.Event()
+        concurrent_commit_complete = asyncio.Event()
+
+        async def fake_get_conversation_detail(self, *, conversation_id):
+            assert conversation_id == "conv-race-safe"
+            provider_waiting.set()
+            await concurrent_commit_complete.wait()
+            return {"status": "failed", "call_successful": "false"}
+
+        async def fake_get_sip_messages(self, *, conversation_id):
+            assert conversation_id == "conv-race-safe"
+            return SipMessagesResponse.model_validate(
+                {
+                    "sip_messages": [
+                        {
+                            "call_id": "otb_race_safe",
+                            "method": "INVITE",
+                            "cseq": 1,
+                            "status_code": 404,
+                            "reason_phrase": "Not Found",
+                            "timestamp": started_at.isoformat(),
+                        }
+                    ]
+                }
+            )
+
+        with (
+            patch("app.outbound.probe.async_session_factory", db_engine.async_session_factory),
+            patch(
+                "app.elevenlabs.service.ElevenLabsService.get_conversation_detail",
+                new=fake_get_conversation_detail,
+            ),
+            patch(
+                "app.elevenlabs.service.ElevenLabsService.get_sip_messages",
+                new=fake_get_sip_messages,
+            ),
+        ):
+            probe_task = asyncio.create_task(
+                probe_call_evidence(
+                    session_id=session_id,
+                    agent_id="agent-race",
+                    to_number="+5491140485464",
+                    settings=_make_settings(),
+                    delay=0,
+                )
+            )
+            await asyncio.wait_for(provider_waiting.wait(), timeout=1)
+
+            # Second independent session: emulate a webhook commit while provider I/O waits.
+            async with db_engine.async_session_factory() as db:
+                concurrent = await db.get(CallSession, session_id)
+                assert concurrent is not None
+                concurrent.telephony_status = persisted_status
+                concurrent.outcome_reason = persisted_outcome
+                concurrent.session_end_received = session_end_received
+                await db.commit()
+
+            concurrent_commit_complete.set()
+            await probe_task
+
+        # Third fresh DB read proves neither the status transition nor diagnostics changed.
+        async with db_engine.async_session_factory() as db:
+            persisted = await db.get(CallSession, session_id)
+            assert persisted is not None
+            assert persisted.telephony_status == persisted_status
+            assert persisted.outcome_reason == persisted_outcome
+            assert persisted.session_end_received is session_end_received
+            assert persisted.sip_call_id is None
+            assert persisted.sip_status_code is None
+            assert persisted.sip_reason is None
+            assert persisted.reconciled_at is None
+            assert persisted.reconciliation_source is None
+
+    @pytest.mark.asyncio
+    async def test_probe_transitions_ringing_to_failed_and_persists_diagnostics(self, db_engine):
+        """A still-ringing persisted row admits the atomic failure and diagnostics write."""
+        from app.calls.models import CallSession
+        from app.elevenlabs.models import (
+            ConversationListResponse,
+            ConversationSummary,
+            SipMessage,
+            SipMessagesResponse,
+        )
+        from app.outbound.probe import probe_call_evidence
+        from app.tenants.service import create_client
+
+        session_id = "probe-race-ringing"
+        client_id = "probe-race-client-ringing"
+        started_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        async with db_engine.async_session_factory() as db:
+            await create_client(db, id=client_id, name="Probe Ringing Client", voice_id="voice-ringing")
+            db.add(
+                CallSession(
+                    id=session_id,
+                    client_id=client_id,
+                    status="initiated",
+                    agent_id=None,
+                    telephony_status="ringing",
+                    elevenlabs_conversation_id="conv-ringing-failure",
+                    started_at=started_at,
+                )
+            )
+            await db.commit()
+
+        async def fake_get_conversation_detail(self, *, conversation_id):
+            assert conversation_id == "conv-ringing-failure"
+            return {"status": "failed", "call_successful": "false"}
+
+        async def fake_get_sip_messages(self, *, conversation_id):
+            assert conversation_id == "conv-ringing-failure"
+            return SipMessagesResponse.model_validate(
+                {
+                    "sip_messages": [
+                        {
+                            "call_id": "otb_ringing_failure",
+                            "method": "INVITE",
+                            "cseq": 1,
+                            "status_code": 404,
+                            "reason_phrase": "Not Found",
+                            "timestamp": started_at.isoformat(),
+                        }
+                    ]
+                }
+            )
+
+        with (
+            patch("app.outbound.probe.async_session_factory", db_engine.async_session_factory),
+            patch(
+                "app.elevenlabs.service.ElevenLabsService.get_conversation_detail",
+                new=fake_get_conversation_detail,
+            ),
+            patch(
+                "app.elevenlabs.service.ElevenLabsService.get_sip_messages",
+                new=fake_get_sip_messages,
+            ),
+        ):
+            await probe_call_evidence(
+                session_id=session_id,
+                agent_id="agent-race",
+                to_number="+5491140485464",
+                settings=_make_settings(),
+                delay=0,
+            )
+
+        async with db_engine.async_session_factory() as db:
+            persisted = await db.get(CallSession, session_id)
+            assert persisted is not None
+            assert persisted.telephony_status == "failed"
+            assert persisted.outcome_reason == "sip_routing_error"
+            assert persisted.sip_call_id == "otb_ringing_failure"
+            assert persisted.sip_status_code == 404
+            assert persisted.sip_reason == "Not Found"
+            assert persisted.reconciled_at is not None
+            assert persisted.reconciliation_source == "probe"
 
 
 class TestProbeEvidenceUnavailable:
@@ -944,7 +1297,7 @@ class TestProbeEvidenceUnavailable:
             )
         )
 
-        sip_url = f"{_EL_BASE}/convai/conversations/conv-sip-404/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-sip-404/sip-messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(404, json={"detail": "Not found"})
         )
@@ -1026,3 +1379,89 @@ class TestIsSipRoutingFailureUnit:
         from app.outbound.probe import _is_sip_routing_failure
 
         assert _is_sip_routing_failure(self._make_conv("processing", None), 404) is False
+
+
+class TestExtractSipFieldsSelector:
+    """Select only unambiguous final responses for the latest INVITE CSeq."""
+
+    @staticmethod
+    def _sip_message(**fields):
+        from app.elevenlabs.models import SipMessage
+
+        return SipMessage(**fields)
+
+    def test_extract_sip_fields_selects_latest_invite_final_independent_of_order(self):
+        from app.outbound.probe import _extract_sip_fields
+
+        messages = [
+            self._sip_message(
+                call_id="call-1", method="INVITE", cseq=10, status_code=407,
+                reason_phrase="Proxy Authentication Required", timestamp="2026-01-01T00:00:01Z",
+            ),
+            self._sip_message(
+                call_id="call-1", method="INVITE", cseq=11, timestamp="2026-01-01T00:00:02Z",
+            ),
+            self._sip_message(
+                call_id="call-1", method="INVITE", cseq=11, status_code=183,
+                reason_phrase="Session Progress", timestamp="2026-01-01T00:00:03Z",
+            ),
+            self._sip_message(
+                call_id="call-1", method="INVITE", cseq=11, status_code=200,
+                reason_phrase="OK", timestamp="2026-01-01T00:00:04Z",
+            ),
+            self._sip_message(
+                call_id="call-1", method="BYE", cseq=12, status_code=200,
+                reason_phrase="OK", timestamp="2026-01-01T00:00:05Z",
+            ),
+        ]
+
+        expected = ("call-1", 200, "OK")
+        assert _extract_sip_fields(messages) == expected
+        assert _extract_sip_fields(list(reversed(messages))) == expected
+
+    def test_extract_sip_fields_selects_404_after_407_retry(self):
+        """A final response to the retried INVITE wins over its 407 challenge."""
+        from app.outbound.probe import _extract_sip_fields
+
+        messages = [
+            self._sip_message(
+                call_id="call-1", method="INVITE", cseq=10, status_code=407,
+                reason_phrase="Proxy Authentication Required", timestamp="2026-01-01T00:00:01Z",
+            ),
+            self._sip_message(
+                call_id="call-1", method="INVITE", cseq=11, timestamp="2026-01-01T00:00:02Z",
+            ),
+            self._sip_message(
+                call_id="call-1", method="INVITE", cseq=11, status_code=404,
+                reason_phrase="Not Found", timestamp="2026-01-01T00:00:03Z",
+            ),
+        ]
+
+        assert _extract_sip_fields(messages) == ("call-1", 404, "Not Found")
+
+    @pytest.mark.parametrize(
+        "messages",
+        [
+            [
+                _sip_message.__func__(
+                    call_id="call-1", method="INVITE", status_code=200,
+                    reason_phrase="OK", timestamp="2026-01-01T00:00:01Z",
+                )
+            ],
+            [
+                _sip_message.__func__(
+                    call_id="call-1", method="INVITE", cseq=10, status_code=200,
+                    reason_phrase="OK", timestamp="2026-01-01T00:00:01Z",
+                ),
+                _sip_message.__func__(
+                    call_id="call-2", method="INVITE", cseq=10, status_code=486,
+                    reason_phrase="Busy Here", timestamp="2026-01-01T00:00:02Z",
+                ),
+            ],
+        ],
+        ids=["missing-cseq", "conflicting-call-id"],
+    )
+    def test_extract_sip_fields_returns_unknown_for_missing_or_conflicting_evidence(self, messages):
+        from app.outbound.probe import _extract_sip_fields
+
+        assert _extract_sip_fields(messages) == (None, None, None)

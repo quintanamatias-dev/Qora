@@ -336,6 +336,9 @@ class TestReconciliationCandidateExclusion:
             reconciliation_attempts=2,
             started_at=started_at,
         )
+        # This fallback-match scenario has no authoritative stored conversation ID.
+        # A MagicMock attribute would be truthy and get interpolated into the URL.
+        cs.elevenlabs_conversation_id = None
         db = _make_db_with_sessions([cs])
 
         # Mock successful reconciliation: one conversation + SIP messages.
@@ -354,7 +357,7 @@ class TestReconciliationCandidateExclusion:
                 },
             )
         )
-        sip_url = f"{_EL_BASE}/convai/conversations/conv-below-cap/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/conv-below-cap/sip-messages"
         respx.get(sip_url).mock(
             return_value=httpx.Response(
                 200,

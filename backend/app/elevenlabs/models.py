@@ -6,9 +6,11 @@ SyncResult: represents the outcome of a sync attempt.
 
 from __future__ import annotations
 
-from typing import Literal
+from datetime import datetime, timezone
+import re
+from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class SoftTimeoutConfig(BaseModel):
@@ -150,24 +152,38 @@ class ConversationListResponse(BaseModel):
     model_config = {"extra": "ignore"}
 
 
+_MAX_RAW_SIP_CHARS = 4096
+_MAX_CALL_ID_CHARS = 256
+_MAX_REASON_CHARS = 128
+_MAX_TIMESTAMP_CHARS = 64
+_SIP_STATUS_LINE = re.compile(r"^SIP/2\.0\s+(\d{3})(?:\s+([^\r\n]{0,128}))?$")
+_SIP_REQUEST_LINE = re.compile(r"^([A-Z]{1,16})\s+[^\r\n]+\s+SIP/2\.0$")
+_SIP_CSEQ_LINE = re.compile(r"(?mi)^CSeq\s*:\s*(\d{1,10})\s+([A-Z]{1,16})\s*$")
+_SIP_CSEQ_HEADER = re.compile(r"(?mi)^CSeq\s*:")
+_SAFE_REASON = re.compile(r"^[A-Za-z0-9 .,'()/_-]{0,128}$")
+_DIRECTION_ALIASES = {
+    "in": "inbound",
+    "out": "outbound",
+    "inbound": "inbound",
+    "outbound": "outbound",
+}
+
+
+def _timestamp_from_unix_micro(value: object) -> str | None:
+    """Return a UTC ISO timestamp without exposing malformed provider values."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    try:
+        return datetime.fromtimestamp(value / 1_000_000, tz=timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
 class SipMessage(BaseModel):
     """Sanitized SIP message — extracted structured fields only.
 
-    Design: SIP field extraction — allowlist only, never raw bodies.
-
-    Allowed fields (spec: Structured-Field-Only SIP Extraction):
-      call_id       — SIP Call-ID header value (e.g. "otb_...")
-      method        — INVITE, BYE, CANCEL, etc.
-      status_code   — Integer response code (200, 404, 487, etc.)
-      reason_phrase — Human-readable reason ("OK", "Not Found", etc.)
-      direction     — "inbound" / "outbound"
-      timestamp     — ISO 8601 message timestamp
-
-    Explicitly EXCLUDED (spec: secrets excluded):
-      raw_body            — SIP message body (may contain Proxy-Authorization, PII)
-      proxy_authorization — SIP digest credential header
-      authorization       — SIP authorization header
-      from_uri / to_uri   — SIP URIs containing phone numbers
+    Upstream ``raw_message`` and ``error_message`` are reduced before model
+    construction; neither can appear in model dumps, reprs, or validation errors.
     """
 
     call_id: str | None = None
@@ -176,14 +192,107 @@ class SipMessage(BaseModel):
     reason_phrase: str | None = None
     direction: str | None = None
     timestamp: str | None = None
+    cseq: int | None = None
 
-    # Reject any extra fields to prevent raw-body leakage via unknown keys
+    @model_validator(mode="before")
+    @classmethod
+    def sanitize_provider_message(cls, value: Any) -> dict[str, object]:
+        """Allowlist legacy fields or derive safe fields from bounded raw SIP text."""
+        if not isinstance(value, dict):
+            return {}
+
+        sanitized: dict[str, object] = {}
+        call_id = value.get("call_id")
+        if isinstance(call_id, str) and len(call_id) <= _MAX_CALL_ID_CHARS:
+            sanitized["call_id"] = call_id
+        direction = value.get("direction")
+        if isinstance(direction, str) and direction in _DIRECTION_ALIASES:
+            sanitized["direction"] = _DIRECTION_ALIASES[direction]
+
+        raw_message = value.get("raw_message")
+        if isinstance(raw_message, str):
+            if len(raw_message) > _MAX_RAW_SIP_CHARS:
+                return sanitized
+
+            header_section = re.split(r"\r?\n\r?\n", raw_message, maxsplit=1)[0]
+            first_line = header_section.splitlines()[0] if header_section else ""
+            status_match = _SIP_STATUS_LINE.fullmatch(first_line)
+            request_match = _SIP_REQUEST_LINE.fullmatch(first_line)
+            if not status_match and not request_match:
+                return sanitized
+
+            cseq_matches = list(_SIP_CSEQ_LINE.finditer(header_section))
+            if (
+                len(cseq_matches) != 1
+                or len(_SIP_CSEQ_HEADER.findall(header_section)) != 1
+            ):
+                return sanitized
+            cseq_match = cseq_matches[0]
+            cseq_method = cseq_match.group(2)
+            if request_match and request_match.group(1) != cseq_method:
+                return sanitized
+
+            if status_match:
+                status_code = int(status_match.group(1))
+                if not 100 <= status_code <= 699:
+                    return sanitized
+                sanitized["status_code"] = status_code
+                reason = (status_match.group(2) or "").strip()
+                if reason and _SAFE_REASON.fullmatch(reason):
+                    sanitized["reason_phrase"] = reason
+            sanitized["cseq"] = int(cseq_match.group(1))
+            sanitized["method"] = cseq_method
+            timestamp = _timestamp_from_unix_micro(value.get("created_at_unix_micro"))
+            if timestamp is not None:
+                sanitized["timestamp"] = timestamp
+            return sanitized
+
+        # Legacy normalized fixtures are already safe and remain supported.
+        for field in ("method", "reason_phrase", "timestamp"):
+            field_value = value.get(field)
+            limit = (
+                _MAX_REASON_CHARS if field == "reason_phrase" else _MAX_TIMESTAMP_CHARS
+            )
+            if isinstance(field_value, str) and len(field_value) <= limit:
+                sanitized[field] = field_value
+        status_code = value.get("status_code")
+        if (
+            isinstance(status_code, int)
+            and not isinstance(status_code, bool)
+            and 100 <= status_code <= 699
+        ):
+            sanitized["status_code"] = status_code
+        cseq = value.get("cseq")
+        if isinstance(cseq, int) and not isinstance(cseq, bool) and cseq >= 0:
+            sanitized["cseq"] = cseq
+        return sanitized
+
     model_config = {"extra": "ignore"}
 
 
 class SipMessagesResponse(BaseModel):
-    """Response from GET /conversations/{id}/sip_messages."""
+    """Response from GET /sip-messages endpoints, including cursor completeness."""
 
     sip_messages: list[SipMessage] = []
+    has_more: bool | None = None
+    next_cursor: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def sanitize_provider_response(cls, value: Any) -> dict[str, object]:
+        """Drop malformed items before Pydantic can include provider bytes in errors."""
+        if not isinstance(value, dict):
+            return {"sip_messages": []}
+        messages = value.get("sip_messages")
+        sanitized: dict[str, object] = {
+            "sip_messages": [item for item in messages if isinstance(item, dict)]
+            if isinstance(messages, list)
+            else []
+        }
+        if isinstance(value.get("has_more"), bool):
+            sanitized["has_more"] = value["has_more"]
+        if isinstance(value.get("next_cursor"), str):
+            sanitized["next_cursor"] = value["next_cursor"]
+        return sanitized
 
     model_config = {"extra": "ignore"}

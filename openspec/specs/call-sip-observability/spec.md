@@ -2,47 +2,58 @@
 
 ## Purpose
 
-Defines behavior for capturing, storing, and surfacing ElevenLabs/Telnyx SIP
-observability fields on `CallSession`. Covers the post-dial background probe,
-background reconciliation sweep, structured-field-only extraction, idempotency
-guards, ambiguous-state handling, rate-limit safety, and secret-exclusion rules.
+Defines asynchronous, diagnostic-only SIP observability for existing `CallSession`
+fields. It covers the post-dial probe, bounded reconciliation sweep, safe SIP
+normalization, ambiguity handling, rate-limit safety, and secret exclusion. It adds
+no Telnyx webhook, database column, migration, or pagination-fetching behavior.
 
 ---
 
 ## Requirements
 
-### Requirement: Structured-Field-Only SIP Extraction
+### Requirement: Safe SIP Normalization and Evidence Selection
 
-The system MUST extract only the following structured fields from ElevenLabs SIP
-message responses:
+The system MUST retain only these safe, normalized fields on `CallSession`:
 
-| Field | Source | Stored As |
-|---|---|---|
-| SIP Call-ID (`otb_...`) | `Call-ID` header | `CallSession.sip_call_id` |
-| Provider conversation ID | ElevenLabs conversation metadata | `CallSession.elevenlabs_conversation_id` (existing) |
-| Telnyx Session ID / Leg ID | Structured SIP header or provider metadata | `CallSession.sip_call_id` (best available) |
-| Final SIP status code | Last SIP response status line | `CallSession.sip_status_code` |
-| Final SIP reason phrase | Last SIP response reason | `CallSession.sip_reason` |
-| Reconciliation timestamp | System clock at write time | `CallSession.reconciled_at` |
-| Reconciliation source | Literal `"probe"` or `"sweep"` | `CallSession.reconciliation_source` |
+| Field | Stored As |
+|---|---|
+| Provider SIP Call-ID when supplied as the structured `call_id` field | `sip_call_id` |
+| Final SIP status code | `sip_status_code` |
+| Final SIP reason phrase | `sip_reason` |
+| Reconciliation write time | `reconciled_at` |
+| Reconciliation path (`"probe"`, `"sweep"`, or parked `"unreconcilable"`) | `reconciliation_source` |
 
-The system MUST NOT persist raw SIP message bodies, `Proxy-Authorization` headers,
-`Authorization` headers, SIP digest responses, `From`/`To` URI userinfo components
-(phone numbers embedded in SIP URIs), or any credential material extracted from SIP
-messages.
+An upstream `raw_message` MAY be inspected transiently only when it is a string no
+longer than 4096 characters. The normalizer considers only a valid SIP start line
+and one valid `CSeq` header in the header section, and derives only method, status
+code, safe reason phrase, CSeq, and a validated timestamp. No raw bodies,
+authentication material, raw header fields, address fields, or phone fields are
+retained, serialized, logged, or persisted. The bounded, validated protocol
+identifiers and reason fields are allowed fields, not a general semantic-redaction
+feature for arbitrary sensitive substrings they might contain. Oversized, malformed,
+conflicting, or ambiguous raw input produces only unknown safe fields.
 
-#### Scenario: Safe fields extracted — secrets excluded
+Final evidence MUST be selected without relying on provider response order. The
+selector requires exactly one Call-ID across the message set, complete CSeq evidence
+for every `INVITE`, and a single identical final (2xx–6xx) response for the greatest
+`INVITE` CSeq. If those conditions are not met, the SIP call ID, status, and reason
+are unknown.
 
-- GIVEN an ElevenLabs SIP messages API response containing a `Call-ID` header,
-  a `Proxy-Authorization` header, and a final `404 Not Found` status
-- WHEN the probe or sweep processes the response
-- THEN `sip_call_id` is set to the `Call-ID` value
-- AND `sip_status_code` is set to `404`
-- AND `sip_reason` is set to `"Not Found"`
-- AND the `Proxy-Authorization` header value is NOT stored anywhere
-- AND no raw SIP message body is written to the database
+#### Scenario: Raw SIP is normalized without retention
 
-#### Scenario: No SIP messages available — no partial write
+- GIVEN an upstream SIP message contains raw SIP with body, authentication, header, address, or phone data
+- WHEN the probe or sweep processes it
+- THEN only the bounded normalization fields may be used transiently
+- AND no raw body, authentication material, raw header field, address field, or phone field is retained or written to the database
+
+#### Scenario: Ambiguous final evidence is unknown
+
+- GIVEN SIP messages lack a unique Call-ID, complete INVITE CSeqs, or one final response for the latest INVITE CSeq
+- WHEN the probe or sweep selects evidence
+- THEN `sip_call_id`, `sip_status_code`, and `sip_reason` are unknown
+- AND no provider message order is used as a tie-breaker
+
+#### Scenario: No SIP messages available — no reconciliation write
 
 - GIVEN the ElevenLabs SIP messages API returns an empty list
 - WHEN the probe or sweep processes the response
@@ -51,217 +62,140 @@ messages.
 
 ---
 
-### Requirement: CallSession Schema — Nullable Observability Columns
+### Requirement: Existing CallSession Observability Fields
 
-The system MUST add five nullable columns to `CallSession` via a backward-compatible
-Alembic migration:
-
-| Column | Type | Default |
-|---|---|---|
-| `sip_call_id` | `VARCHAR` nullable | NULL |
-| `sip_status_code` | `INTEGER` nullable | NULL |
-| `sip_reason` | `VARCHAR` nullable | NULL |
-| `reconciled_at` | `TIMESTAMP WITH TIME ZONE` nullable | NULL |
-| `reconciliation_source` | `VARCHAR` nullable (`"probe"` \| `"sweep"`) | NULL |
-
-No existing `CallSession` columns MAY be removed or made non-nullable by this migration.
-The migration MUST be reversible via `alembic downgrade` using `DROP COLUMN` only.
-
-#### Scenario: Migration applies without data loss
-
-- GIVEN existing `CallSession` rows with no SIP fields
-- WHEN the Alembic migration runs
-- THEN all five new columns exist with NULL values for all pre-existing rows
-- AND no existing rows are modified in any other way
-
-#### Scenario: Downgrade removes columns safely
-
-- GIVEN the migration has been applied
-- WHEN `alembic downgrade` is run to the prior revision
-- THEN the five columns are dropped
-- AND no other columns or rows are affected
+The implementation uses existing `CallSession` observability fields: nullable
+`sip_call_id`, `sip_status_code`, `sip_reason`, `reconciled_at`, and
+`reconciliation_source`, plus `reconciliation_attempts`. Existing/inbound rows may
+remain NULL where those fields are nullable. This observability repair MUST NOT add a
+Telnyx webhook, database columns, or a schema migration.
 
 ---
 
 ### Requirement: Post-Dial Background Probe
 
-After `initiate_outbound_call()` resolves (whether successful or timed out), the
-system MUST fire a background task (`asyncio.create_task`) that:
+After an accepted dial result or an ambiguous dial timeout, the system MUST fire an
+isolated background task that waits a configurable delay (default 8 seconds) and
+attempts to capture SIP diagnostics. The task MUST catch unhandled exceptions at its
+boundary so it does not change call-trigger HTTP latency or outcome.
 
-1. Waits a configurable delay (default 8 seconds).
-2. Calls `list_recent_conversations` + `get_sip_messages` on the ElevenLabs API.
-3. Matches by `agent_id` + `to_number` + closest `created_at` within a 60-second window.
-4. On match: writes SIP observability fields and sets `reconciliation_source="probe"`.
-5. On no match or any exception: logs the outcome and exits without error propagation.
+The probe MUST exit before API calls when `reconciled_at` is already set. It MUST use
+the persisted `elevenlabs_conversation_id` as the exact, preferred lookup key when
+present. Only when that ID is absent may it list recent agent conversations and select
+exactly one candidate within the configured time window; zero or multiple candidates
+are unknown and produce no write.
 
-The probe MUST be fully isolated: any unhandled exception MUST be caught at the task
-boundary and logged; it MUST NOT affect the call trigger HTTP response status or latency.
+The probe MUST require a non-empty, complete SIP response before writing evidence. A
+response with `has_more=True` or a non-empty `next_cursor` is incomplete: it is
+unknown, no observability fields or reconciliation stamp are written, and no pagination request
+is made by this implementation.
 
-The probe is idempotent: if `reconciled_at` is already set on the `CallSession`, the
-probe MUST exit immediately without making any ElevenLabs API calls.
+When the selected evidence shows a SIP 4xx/5xx routing failure and the conversation
+also indicates a failed, ended, or done non-successful call, the transition to
+`failed` with `outcome_reason="sip_routing_error"` and the probe evidence write MUST
+be one atomic update. That update MUST be admitted only when the persisted
+`telephony_status` is `dialing` or `ringing`; a concurrent connected or terminal state
+is preserved without a probe write. Non-routing evidence is diagnostic and does not
+change call state.
 
-#### Scenario: Successful probe capture
+#### Scenario: Exact conversation ID is preferred
 
-- GIVEN a call was triggered and ElevenLabs has a matching recent conversation
-- WHEN the probe fires 8 seconds after dial
-- THEN `sip_call_id`, `sip_status_code`, `sip_reason`, and `reconciled_at` are written
-- AND `reconciliation_source` is set to `"probe"`
-- AND the call trigger response is not delayed by the probe's execution
+- GIVEN a session has `elevenlabs_conversation_id`
+- WHEN the probe runs
+- THEN it uses that ID directly rather than a time-based conversation list match
 
-#### Scenario: Probe exception — call trigger unaffected
+#### Scenario: Incomplete SIP page is not reconciled
 
-- GIVEN the ElevenLabs API returns a 500 error during probe execution
-- WHEN the probe task encounters the exception
-- THEN the exception is caught and logged at WARNING level or above
-- AND the call trigger endpoint returns its response with normal latency
-- AND `reconciled_at` remains NULL (sweep will retry)
-
-#### Scenario: Probe skipped — already reconciled
-
-- GIVEN `CallSession.reconciled_at` is not NULL when the probe fires
-- WHEN the probe checks the idempotency guard
-- THEN no ElevenLabs API calls are made
-- AND the session is left unchanged
-
----
-
-### Requirement: Background Reconciliation Sweep
-
-The existing stale-session sweep MUST be extended to reconcile sessions where
-`reconciled_at IS NULL`. For each candidate session the sweep MUST:
-
-1. Call `list_recent_conversations` filtered by `agent_id` and the session's time window.
-2. Match the conversation by `to_number` + closest `created_at` timestamp.
-3. On unambiguous match: fetch SIP messages, write observability fields, set
-   `reconciliation_source="sweep"` and `reconciled_at` to current UTC time.
-4. On ambiguous match (multiple conversations for same number within window): log the
-   ambiguity at WARNING level, skip the write, and leave `reconciled_at` NULL for the
-   next sweep cycle.
-5. On no match: log at INFO level; leave `reconciled_at` NULL.
-
-Candidate sessions MUST be limited to those with `telephony_status IN ('failed',
-'stale_in_call')` OR `session_end_received=True` with no existing SIP evidence.
-
-The sweep MUST cap ElevenLabs API calls at a configurable maximum per cycle (default: 10
-sessions). Sessions beyond the cap are deferred to the next sweep cycle.
-
-The sweep MUST NOT alter `telephony_status` based on reconciliation evidence alone.
-Reconciliation is read-only for call state.
-
-#### Scenario: Unambiguous sweep match — evidence written
-
-- GIVEN a `CallSession` with `telephony_status='failed'` and `reconciled_at IS NULL`
-- AND ElevenLabs returns exactly one matching conversation for that agent + number + window
-- WHEN the sweep processes the session
-- THEN SIP observability fields are written
-- AND `reconciliation_source` is set to `"sweep"`
-- AND `telephony_status` is NOT changed
-
-#### Scenario: Ambiguous sweep match — safe skip
-
-- GIVEN two calls to the same number were made within the time window
-- WHEN the sweep tries to match conversations
-- THEN both conversation candidates are logged at WARNING level
-- AND no SIP fields are written for that session
+- GIVEN the SIP response reports `has_more=True` or a `next_cursor`
+- WHEN the probe runs
+- THEN the evidence is unknown
 - AND `reconciled_at` remains NULL
+- AND the probe does not fetch another page
 
-#### Scenario: Sweep rate-limit cap respected
+#### Scenario: Probe routing failure preserves concurrent state
 
-- GIVEN 15 unreconciled sessions are eligible
-- WHEN the sweep runs with a cap of 10
-- THEN exactly 10 sessions are processed (the oldest eligible first)
-- AND the remaining 5 sessions are left for the next sweep cycle
+- GIVEN a SIP routing failure is detected after the probe began
+- AND the persisted session is no longer `dialing` or `ringing`
+- WHEN the atomic probe update runs
+- THEN no failure transition or probe reconciliation write occurs
+- AND the persisted state is preserved
 
 ---
 
-### Requirement: Ambiguous ReadTimeout / Unknown State Handling
+### Requirement: Bounded Background Reconciliation Sweep
 
-When a `CallSession` has `telephony_error LIKE '%ambiguous_timeout%'` and
-`reconciled_at IS NULL`, the sweep MUST treat it as a reconciliation candidate and
-attempt to discover provider evidence.
+The reconciliation sweep provides bounded diagnostic backfill only. It considers
+unreconciled `failed` and `stale_in_call` sessions, plus `completed` sessions only
+when they already have an exact `elevenlabs_conversation_id`; candidates are ordered
+oldest first and limited by `reconciliation_sweep_cap` (default 10). Candidates at or
+above `reconciliation_max_attempts` are excluded.
 
-The system MUST NOT dispatch a new outbound call as a result of reconciliation.
-If no provider evidence is found after sweep attempts, the session MUST remain
-in its current terminal state (`failed`) and be visible to operators via the admin API
-with the original `telephony_error` intact.
+For each candidate, the sweep MUST prefer the exact stored conversation ID. It MAY
+list recent conversations only when that ID is absent, and then MUST require exactly
+one candidate within the configured time window. Empty or ambiguous fallback results
+remain unreconciled. The sweep MUST not guess from phone-number or time proximity
+alone when multiple matches exist.
 
-#### Scenario: Ambiguous timeout — provider evidence found by sweep
+The sweep MUST require a complete, non-empty SIP response. `has_more=True` or a
+non-empty `next_cursor` means unknown evidence: it MUST not write fields or a reconciliation
+stamp and MUST not fetch another page. A complete non-empty response may be stamped
+as `"sweep"` even when its safe evidence selector returns unknown fields.
 
-- GIVEN a `CallSession` with `telephony_error='ambiguous_timeout (...)'`
-- AND ElevenLabs has a matching conversation with SIP 487 status
-- WHEN the sweep processes the session
-- THEN `sip_status_code=487`, `sip_reason`, and `reconciled_at` are written
-- AND `telephony_error` retains its original value (not overwritten)
-- AND no new call is dispatched
+This backfill MUST NOT mutate `telephony_status`, terminal state, session-end evidence,
+or outcome fields. On a per-session exception it increments
+`reconciliation_attempts`; after the configured maximum it parks only the diagnostic
+reconciliation with `reconciled_at` and `reconciliation_source="unreconcilable"`.
 
-#### Scenario: Ambiguous timeout — no provider evidence found
+#### Scenario: Completed session receives diagnostic-only backfill
 
-- GIVEN a `CallSession` with `telephony_error='ambiguous_timeout (...)'`
-- AND ElevenLabs returns no matching conversations for that agent + number + window
-- WHEN the sweep processes the session
-- THEN no SIP fields are written
-- AND `telephony_status` and `telephony_error` remain unchanged
-- AND the session remains visible to operators with its existing error text
+- GIVEN a completed session has an exact stored `elevenlabs_conversation_id` and no reconciliation stamp
+- WHEN the bounded sweep finds complete SIP evidence
+- THEN it may write observability diagnostics with `reconciliation_source="sweep"`
+- AND its terminal status and outcome fields are unchanged
+
+#### Scenario: Ambiguous fallback match is skipped
+
+- GIVEN a candidate has no stored conversation ID and more than one recent conversation is within the match window
+- WHEN the sweep runs
+- THEN no SIP fields or reconciliation stamp are written
+- AND no candidate is selected by provider response order
+
+---
+
+### Requirement: Ambiguous Dial Outcome Handling
+
+A `failed` session with ambiguous dial-timeout evidence and no reconciliation stamp is
+eligible for the bounded sweep under the ordinary failed-session rule. Reconciliation
+MUST NOT dispatch a new outbound call. Whether evidence is found, unavailable, or
+parked after the retry limit, it MUST NOT alter the session's telephony state or
+existing error/outcome fields.
 
 ---
 
 ### Requirement: ElevenLabs API Client Methods
 
-The system MUST implement four new async methods on `ElevenLabsService`:
+`ElevenLabsService` provides these async API methods using the existing
+`ELEVENLABS_API_KEY` credential:
 
 | Method | ElevenLabs Endpoint | Purpose |
 |---|---|---|
-| `list_recent_conversations(agent_id, time_window_seconds)` | `GET /conversational_ai/conversations` | Find conversations matching a time window |
-| `get_conversation_detail(conversation_id)` | `GET /conversations/{id}` | Full conversation metadata |
-| `get_sip_messages(conversation_id)` | `GET /conversations/{id}/sip_messages` | SIP message sequence for a conversation |
-| `get_sip_messages_by_phone(phone_number_id)` | `GET /phone_numbers/{id}/sip_messages` | Fallback SIP lookup by phone ID |
+| `list_recent_conversations(agent_id, time_window_seconds)` | `GET /convai/conversations` | List candidate conversations |
+| `get_conversation_detail(conversation_id)` | `GET /convai/conversations/{id}` | Resolve stored conversation metadata for the probe |
+| `get_sip_messages(conversation_id)` | `GET /convai/conversations/{id}/sip-messages` | Read one SIP message page for a conversation |
+| `get_sip_messages_by_phone(phone_number_id)` | `GET /convai/phone-numbers/{id}/sip-messages` | Available phone-resource SIP lookup method |
 
-All four methods MUST use the existing `ELEVENLABS_API_KEY` credential. No new secrets
-or credentials are required.
-
-On HTTP 429 from any of these endpoints, the method MUST apply exponential backoff with
-at least one retry before propagating the error to the caller.
-
-On any other non-2xx response, the method MUST raise a typed exception (not return None
-silently) so callers can log and handle the failure explicitly.
-
-#### Scenario: Rate-limit — exponential backoff applied
-
-- GIVEN the ElevenLabs API returns HTTP 429
-- WHEN `list_recent_conversations` is called
-- THEN the method waits and retries at least once with exponential backoff
-- AND only raises after exhausting retries
-
-#### Scenario: Non-429 error — typed exception raised
-
-- GIVEN the ElevenLabs API returns HTTP 404
-- WHEN `get_sip_messages` is called
-- THEN a typed exception is raised
-- AND the caller (probe or sweep) catches it and logs it
+On HTTP 429, these methods MUST apply existing exponential backoff with at least one
+retry before propagating failure. Other non-2xx responses MUST raise the typed
+`ElevenLabsAPIError`; callers catch and log them. The SIP methods do not currently
+send a cursor or fetch additional pages.
 
 ---
 
 ### Requirement: Test Coverage — No Live SIP
 
-All new code paths that call ElevenLabs SIP or conversation APIs MUST be covered by
-unit or integration tests using mocked HTTP responses. No test in the suite MAY make a
-live HTTP call to ElevenLabs or Telnyx.
-
-Tests MUST cover:
-
-- Probe fires and writes correct fields on successful ElevenLabs match
-- Probe catches exception and does not propagate it
-- Probe exits early when `reconciled_at` is already set
-- Sweep writes fields on unambiguous match
-- Sweep skips and logs on ambiguous match
-- Sweep respects the per-cycle API call cap
-- Migration applies and downgrades cleanly (SQLite in-memory acceptable)
-- Structured-field extraction excludes `Proxy-Authorization` and raw bodies
-
-#### Scenario: Mocked ElevenLabs probe test
-
-- GIVEN a mocked `list_recent_conversations` returning a matching conversation
-- AND a mocked `get_sip_messages` returning a `Call-ID`, `404`, and reason
-- WHEN the probe runs against the mocked responses
-- THEN `CallSession.sip_call_id`, `sip_status_code`, and `sip_reason` are set correctly
-- AND no real HTTP call is made
+SIP and conversation API paths MUST be covered with mocked HTTP responses; no test
+may make a live HTTP call to ElevenLabs or Telnyx. Coverage MUST include safe bounded
+raw-SIP normalization and exclusion, latest-INVITE-CSeq evidence selection, exact-ID
+preference and ambiguity-safe fallback, incomplete-page no-stamp behavior, bounded
+completed-session diagnostic backfill, and the probe's persisted-state atomic failure
+guard.

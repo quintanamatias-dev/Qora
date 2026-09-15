@@ -46,6 +46,8 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import update
+
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -112,11 +114,11 @@ async def probe_call_evidence(
       1. Wait `delay` seconds to allow ElevenLabs SIP state to settle.
       2. Open its own DB session — request session may be closed by this point.
       3. Load CallSession; if reconciled_at is already set, exit (idempotent guard).
-      4. Call list_recent_conversations(agent_id, window) to find matching conversations.
-      5. Match by closest start_time_unix_secs to the session's started_at.
-      6. Call get_sip_messages(conversation_id) for the matched conversation.
-      7. Extract the final SIP response (last status_code + reason_phrase) and Call-ID.
-      8. Write sip_call_id, sip_status_code, sip_reason, reconciled_at='probe', commit.
+      4. If available, use the stored ElevenLabs conversation ID to fetch detail directly;
+         otherwise list recent conversations and match by closest start time.
+      5. Call get_sip_messages(conversation_id) for the resolved conversation.
+      6. Extract the final SIP response (last status_code + reason_phrase) and Call-ID.
+      7. Write sip_call_id, sip_status_code, sip_reason, reconciled_at='probe', commit.
 
     Args:
         session_id: UUID of the CallSession to enrich.
@@ -176,44 +178,65 @@ async def _run_probe(
 
         el_service = ElevenLabsService(settings=settings)
 
-        # Step 1: List recent conversations for this agent
-        try:
-            conv_list = await el_service.list_recent_conversations(
-                agent_id=agent_id,
-                time_window_seconds=_PROBE_CONVERSATION_WINDOW_SECONDS,
-            )
-        except Exception as exc:
-            logger.warning(
-                "probe_list_conversations_failed",
-                session_id=session_id,
-                agent_id=agent_id,
-                error=str(exc),
-            )
-            return
+        conversation_id = cs.elevenlabs_conversation_id
+        if conversation_id:
+            # The outbound API supplied an authoritative conversation ID. Use it
+            # directly rather than performing the time-based fallback lookup.
+            from app.elevenlabs.models import ConversationSummary
 
-        if not conv_list.conversations:
-            logger.info(
-                "probe_no_conversations_found",
-                session_id=session_id,
-                agent_id=agent_id,
+            try:
+                conversation_detail = await el_service.get_conversation_detail(
+                    conversation_id=conversation_id
+                )
+                best_conv = ConversationSummary.model_validate(
+                    {**conversation_detail, "conversation_id": conversation_id}
+                )
+            except Exception as exc:
+                logger.warning(
+                    "probe_get_conversation_detail_failed",
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    error=str(exc),
+                )
+                return
+        else:
+            # Fallback for sessions created before a conversation ID was persisted.
+            try:
+                conv_list = await el_service.list_recent_conversations(
+                    agent_id=agent_id,
+                    time_window_seconds=_PROBE_CONVERSATION_WINDOW_SECONDS,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "probe_list_conversations_failed",
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    error=str(exc),
+                )
+                return
+
+            if not conv_list.conversations:
+                logger.info(
+                    "probe_no_conversations_found",
+                    session_id=session_id,
+                    agent_id=agent_id,
+                )
+                return
+
+            session_ts = cs.started_at.timestamp() if cs.started_at else 0.0
+            best_conv = _find_best_match(
+                conv_list.conversations, session_ts, session_id=session_id, agent_id=agent_id
             )
-            return
 
-        # Step 2: Match by closest start_time_unix_secs to started_at
-        session_ts = cs.started_at.timestamp() if cs.started_at else 0.0
-        best_conv = _find_best_match(
-            conv_list.conversations, session_ts, session_id=session_id, agent_id=agent_id
-        )
+            if best_conv is None:
+                logger.info(
+                    "probe_no_matching_conversation",
+                    session_id=session_id,
+                    agent_id=agent_id,
+                )
+                return
 
-        if best_conv is None:
-            logger.info(
-                "probe_no_matching_conversation",
-                session_id=session_id,
-                agent_id=agent_id,
-            )
-            return
-
-        # Step 3: Fetch SIP messages for the matched conversation
+        # Step 2: Fetch SIP messages for the resolved conversation
         try:
             sip_response = await el_service.get_sip_messages(
                 conversation_id=best_conv.conversation_id
@@ -235,6 +258,19 @@ async def _run_probe(
             )
             return
 
+        # A partial page cannot establish the final response for the dialog. Do not
+        # record a provisional status or mark this session reconciled; the sweep can
+        # retry after ElevenLabs exposes a complete page.
+        if sip_response.has_more is True or sip_response.next_cursor:
+            logger.info(
+                "probe_incomplete_sip_page",
+                session_id=session_id,
+                conversation_id=best_conv.conversation_id,
+                has_more=sip_response.has_more,
+                has_next_cursor=bool(sip_response.next_cursor),
+            )
+            return
+
         # Step 4: Extract SIP fields — allowlist only (spec: Structured-Field-Only)
         sip_call_id, sip_status_code, sip_reason = _extract_sip_fields(
             sip_response.sip_messages
@@ -249,9 +285,46 @@ async def _run_probe(
         # distinguish SIP routing failures from normal no-answer outcomes.
         # Spec: call-sip-observability MODIFIED: Post-Dial Background Probe
         # (previously set no_answer; now sets failed + sip_routing_error for clarity)
+        reconciled_at = datetime.now(timezone.utc)
         if _is_sip_routing_failure(best_conv, sip_status_code):
+            # Do not use the loaded ORM object's status as a predicate: a webhook may
+            # have independently committed connected or terminal state while the probe
+            # was fetching provider evidence. This conditional update makes the failed
+            # transition and SIP reconciliation one atomic database operation.
+            result = await db.execute(
+                update(CallSession)
+                .where(
+                    CallSession.id == session_id,
+                    CallSession.telephony_status.in_(("dialing", "ringing")),
+                )
+                .values(
+                    telephony_status="failed",
+                    outcome_reason="sip_routing_error",
+                    sip_call_id=sip_call_id,
+                    sip_status_code=sip_status_code,
+                    sip_reason=sip_reason,
+                    reconciled_at=reconciled_at,
+                    reconciliation_source="probe",
+                )
+            )
+            if result.rowcount != 1:
+                logger.info(
+                    "probe_sip_routing_failure_state_preserved",
+                    session_id=session_id,
+                    conversation_id=best_conv.conversation_id,
+                )
+                return
+
+            # The UPDATE predicate, rather than this ORM snapshot, admitted the
+            # transition. Keep the in-session representation consistent for callers
+            # and tests; these assignments are redundant within the same transaction.
             cs.telephony_status = "failed"
             cs.outcome_reason = "sip_routing_error"
+            cs.sip_call_id = sip_call_id
+            cs.sip_status_code = sip_status_code
+            cs.sip_reason = sip_reason
+            cs.reconciled_at = reconciled_at
+            cs.reconciliation_source = "probe"
             logger.warning(
                 "probe_detected_sip_routing_failure",
                 session_id=session_id,
@@ -263,13 +336,13 @@ async def _run_probe(
                 call_successful=best_conv.call_successful,
                 outcome_reason="sip_routing_error",
             )
-
-        # Step 6: Write SIP fields and reconciliation metadata, then commit.
-        cs.sip_call_id = sip_call_id
-        cs.sip_status_code = sip_status_code
-        cs.sip_reason = sip_reason
-        cs.reconciled_at = datetime.now(timezone.utc)
-        cs.reconciliation_source = "probe"
+        else:
+            # Step 6: Write SIP fields and reconciliation metadata, then commit.
+            cs.sip_call_id = sip_call_id
+            cs.sip_status_code = sip_status_code
+            cs.sip_reason = sip_reason
+            cs.reconciled_at = reconciled_at
+            cs.reconciliation_source = "probe"
 
         await db.commit()
 
@@ -330,14 +403,12 @@ def _find_best_match(
 
 
 def _extract_sip_fields(sip_messages: list) -> tuple[str | None, int | None, str | None]:
-    """Extract Call-ID, final status code, and reason phrase from SIP messages.
+    """Select unambiguous final INVITE evidence from SIP messages.
 
-    Spec: Structured-Field-Only SIP Extraction — only allowlisted fields.
-
-    Extracts:
-      - call_id: from the first message that has one (stable across the dialog)
-      - sip_status_code + sip_reason: from the LAST message with a status_code
-        (final SIP response in the dialog)
+    A SIP dialog may contain provisional responses, authentication retries, and
+    successful BYE responses. Select only a 2xx–6xx response for the greatest
+    INVITE CSeq; return unknown when the structured evidence cannot identify one
+    dialog and one final response without relying on provider response order.
 
     Never returns raw SIP bodies, Proxy-Authorization, or URI userinfo.
 
@@ -345,23 +416,35 @@ def _extract_sip_fields(sip_messages: list) -> tuple[str | None, int | None, str
         sip_messages: List of SipMessage objects from ElevenLabsService.
 
     Returns:
-        Tuple of (call_id, status_code, reason_phrase) — all may be None.
+        Tuple of (call_id, status_code, reason_phrase), or all None when unknown.
     """
-    call_id: str | None = None
-    status_code: int | None = None
-    reason_phrase: str | None = None
+    call_ids = {msg.call_id for msg in sip_messages if msg.call_id}
+    if len(call_ids) != 1:
+        return None, None, None
 
-    for msg in sip_messages:
-        # Extract Call-ID from first message that has it (stable across dialog)
-        if call_id is None and msg.call_id:
-            call_id = msg.call_id
+    invite_messages = [msg for msg in sip_messages if msg.method == "INVITE"]
+    if not invite_messages or any(msg.cseq is None for msg in invite_messages):
+        return None, None, None
 
-        # Track the final response: keep updating as we iterate (last wins)
-        if msg.status_code is not None:
-            status_code = msg.status_code
-            reason_phrase = msg.reason_phrase
+    latest_invite_cseq = max(msg.cseq for msg in invite_messages)
+    final_responses = [
+        msg
+        for msg in invite_messages
+        if msg.cseq == latest_invite_cseq
+        and msg.status_code is not None
+        and 200 <= msg.status_code <= 699
+    ]
+    if not final_responses:
+        return None, None, None
 
-    return call_id, status_code, reason_phrase
+    final_evidence = {
+        (msg.status_code, msg.reason_phrase) for msg in final_responses
+    }
+    if len(final_evidence) != 1:
+        return None, None, None
+
+    status_code, reason_phrase = final_evidence.pop()
+    return call_ids.pop(), status_code, reason_phrase
 
 
 def _is_sip_routing_failure(conv, sip_status_code: int | None) -> bool:
