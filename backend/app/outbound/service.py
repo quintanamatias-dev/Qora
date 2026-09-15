@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import case, select, type_coerce, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.calls.models import CallSession
@@ -155,9 +155,9 @@ async def dial_outbound_call(
       5. Build dynamic variables
       6. Call ElevenLabsService.initiate_outbound_call()
       7. On accepted: update status to 'ringing', store provider_call_id + metadata
-      8. On transient error: update status to 'failed', retry once
+      8. On transient error: log the first error and retry once while status remains 'dialing'
          - On retry accepted: status → 'ringing'
-         - On retry transient: status → 'recurrent_error'
+         - On retry transient: status → 'recurrent_error' with both error details
       9. On no_answer (ring timeout): status → 'no_answer' on session, no retry
      10. On permanent error: status → 'failed', no retry
 
@@ -485,19 +485,9 @@ async def dial_outbound_call(
         # the committed 'dialing' / 'ringing' row.
         # ------------------------------------------------------------------
         if result.outcome == "accepted":
-            call_session.provider_call_id = result.provider_call_id
-            call_session.telephony_status = "ringing"
-            # Store only safe allowlisted fields — strip PII and internal routing data
-            safe_metadata = _extract_safe_provider_metadata(result.provider_metadata)
-            call_session.provider_metadata = safe_metadata
-            # Persist the ElevenLabs conversation_id so the custom-llm endpoint can
-            # link an incoming conversation back to this CallSession (and its lead).
-            # The outbound-call API returns conversation_id; it is the session key
-            # custom-llm uses. Only set when present — never overwrite with None.
-            _conversation_id = (safe_metadata or {}).get("conversation_id")
-            if _conversation_id:
-                call_session.elevenlabs_conversation_id = _conversation_id
-            await db.commit()
+            await _persist_accepted_call_session(
+                db, call_session, result, expected_status="dialing"
+            )
 
             logger.info(
                 "outbound_call_accepted",
@@ -602,10 +592,10 @@ async def dial_outbound_call(
                 error=call_session.telephony_error,
             )
 
-        # Transient error — retry once
-        call_session.telephony_status = "failed"
-        call_session.telephony_error = f"attempt_1: {result.error_detail}"
-        await db.flush()
+        # Transient error — log and retry once without changing the durable
+        # pre-dial state. Keeping the committed row in 'dialing' means the active
+        # guard remains effective throughout the retry while avoiding an
+        # intermediate write that can contend with an independent webhook commit.
 
         logger.warning(
             "outbound_call_transient_error_retrying",
@@ -618,18 +608,13 @@ async def dial_outbound_call(
         retry_result = await el_service.initiate_outbound_call(outbound_request)
 
         if retry_result.outcome == "accepted":
-            call_session.provider_call_id = retry_result.provider_call_id
-            call_session.telephony_status = "ringing"
-            # Store only safe allowlisted fields — strip PII and internal routing data
-            safe_metadata = _extract_safe_provider_metadata(retry_result.provider_metadata)
-            call_session.provider_metadata = safe_metadata
-            # Persist the ElevenLabs conversation_id for custom-llm linkage (see the
-            # first-attempt accepted branch above for rationale).
-            _conversation_id = (safe_metadata or {}).get("conversation_id")
-            if _conversation_id:
-                call_session.elevenlabs_conversation_id = _conversation_id
-            call_session.telephony_error = None  # clear first-attempt error on retry success
-            await db.commit()
+            await _persist_accepted_call_session(
+                db,
+                call_session,
+                retry_result,
+                expected_status="dialing",
+                clear_telephony_error=True,
+            )
 
             logger.info(
                 "outbound_call_retry_accepted",
@@ -749,6 +734,76 @@ def _extract_safe_provider_metadata(raw: dict | None) -> dict | None:
         return None if raw is None else {}
     safe = {k: v for k, v in raw.items() if k in _SAFE_PROVIDER_METADATA_FIELDS}
     return safe
+
+
+async def _persist_accepted_call_session(
+    db: AsyncSession,
+    call_session: CallSession,
+    result: OutboundCallResult,
+    *,
+    expected_status: str,
+    clear_telephony_error: bool = False,
+) -> None:
+    """Persist an accepted result without regressing newer webhook evidence."""
+    safe_metadata = _extract_safe_provider_metadata(result.provider_metadata)
+    conversation_id = (safe_metadata or {}).get("conversation_id")
+    still_expected = CallSession.telephony_status == expected_status
+
+    # Every literal is explicitly coerced to its mapped column type. In
+    # particular, SQLite cannot bind a raw dict inside CASE without JSON's bind
+    # processor, and a late accepted response must remain portable across DBs.
+    values = {
+        CallSession.telephony_status: case(
+            (
+                still_expected,
+                type_coerce("ringing", CallSession.telephony_status.type),
+            ),
+            else_=CallSession.telephony_status,
+        ),
+        # A webhook can complete before the provider response arrives. Keep its
+        # state and evidence, but backfill response fields that the webhook did
+        # not know yet. Never replace a provider value already recorded there.
+        CallSession.provider_call_id: case(
+            (
+                CallSession.provider_call_id.is_(None),
+                type_coerce(result.provider_call_id, CallSession.provider_call_id.type),
+            ),
+            else_=CallSession.provider_call_id,
+        ),
+        CallSession.provider_metadata: case(
+            (
+                CallSession.provider_metadata.is_(None),
+                type_coerce(safe_metadata, CallSession.provider_metadata.type),
+            ),
+            else_=CallSession.provider_metadata,
+        ),
+    }
+    if clear_telephony_error:
+        values[CallSession.telephony_error] = case(
+            (still_expected, type_coerce(None, CallSession.telephony_error.type)),
+            else_=CallSession.telephony_error,
+        )
+    if conversation_id:
+        values[CallSession.elevenlabs_conversation_id] = case(
+            (
+                CallSession.elevenlabs_conversation_id.is_(None),
+                type_coerce(
+                    conversation_id,
+                    CallSession.elevenlabs_conversation_id.type,
+                ),
+            ),
+            else_=CallSession.elevenlabs_conversation_id,
+        )
+
+    await db.execute(
+        update(CallSession)
+        .where(CallSession.id == call_session.id)
+        .values(values)
+    )
+    await db.commit()
+    # Refresh rather than mutating the detached/stale object for mocks. This
+    # leaves no pending stale attributes that a later flush could write back.
+    await db.refresh(call_session)
 
 
 async def _find_active_call_session(

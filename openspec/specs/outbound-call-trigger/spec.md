@@ -130,10 +130,9 @@ skip ahead without a corresponding event.
 | `ringing` | `in_call` | SIP 200 OK received from provider |
 | `in_call` | `completed` | Conversation webhook session-end fired |
 | `ringing` | `no_answer` | Provider reports no answer / ring timeout |
-| `dialing` | `failed` | ElevenLabs API returned transient error (first attempt) |
-| `failed` | `dialing` | System retries automatically (once, transient only) |
-| `dialing` | `failed` | Second transient error after retry |
-| `failed` | `recurrent_error` | Second consecutive failure recorded |
+| `dialing` | `dialing` | First transient error is logged; one retry begins without an intermediate durable state change |
+| `dialing` | `ringing` | Retry accepted by ElevenLabs |
+| `dialing` | `recurrent_error` | Second transient error after retry; both error details are persisted |
 | `dialing` | `failed` | Permanent / non-retryable error |
 
 #### Scenario: Happy path transitions
@@ -163,9 +162,9 @@ failures MUST NOT be retried.
 
 - GIVEN the ElevenLabs API returns a transient error (5xx, timeout, rate limit)
 - WHEN the first attempt fails
-- THEN `telephony_status=failed` is recorded with `telephony_error` populated
-- AND the system initiates exactly one retry
-- AND `telephony_error` is updated with the retry result
+- THEN `telephony_status=dialing` remains durably active while the first error is logged
+- AND the system initiates exactly one retry without an intermediate failed-state write
+- AND an accepted retry clears any retryable error, while a second transient failure persists both error details
 
 #### Scenario: Second transient failure — recurrent_error
 

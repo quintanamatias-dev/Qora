@@ -35,7 +35,7 @@ def _make_settings(enable_outbound: bool = True):
     return s
 
 
-def _make_lead(phone: str = "+14155552671", lead_id: str = "lead-beh-001"):
+def _make_lead(phone: str = "+541155551234", lead_id: str = "lead-beh-001"):
     lead = MagicMock()
     lead.id = lead_id
     lead.phone = phone
@@ -266,7 +266,7 @@ async def test_call_session_has_dialing_status_at_flush_time():
 
 
 @pytest.mark.asyncio
-async def test_accepted_path_persists_expected_fields():
+async def test_accepted_path_runs_mock_persistence_path():
     """GIVEN ElevenLabs API returns outcome='accepted'
     WHEN dial_outbound_call completes
     THEN CallSession has telephony_status='ringing', provider_call_id set,
@@ -318,20 +318,15 @@ async def test_accepted_path_persists_expected_fields():
         f"got {mock_api.call_count}"
     )
 
-    # Verify session fields were updated
+    # Mock sessions cannot model a database refresh. Real-session regressions below
+    # assert fields; this unit test only verifies the persistence path is invoked.
     assert session_obj is not None, "A CallSession must be created"
-    assert session_obj.telephony_status == "ringing", (
-        f"After accepted, telephony_status must be 'ringing', got {session_obj.telephony_status!r}"
-    )
-    assert session_obj.provider_call_id == "el-call-ACCEPTED-001", (
-        f"provider_call_id must be set from API response, got {session_obj.provider_call_id!r}"
-    )
-    # commit must be called
+    assert mock_db.execute.await_count >= 3
     assert mock_db.commit.call_count >= 1, "db.commit() must be called after accepted response"
 
 
 @pytest.mark.asyncio
-async def test_accepted_path_stores_conversation_id_for_custom_llm_linkage():
+async def test_accepted_path_runs_mock_conversation_linkage_path():
     """GIVEN the accepted provider_metadata contains a conversation_id
     WHEN dial_outbound_call completes
     THEN CallSession.elevenlabs_conversation_id is set to that conversation_id.
@@ -380,14 +375,7 @@ async def test_accepted_path_stores_conversation_id_for_custom_llm_linkage():
 
     assert result.status == "dialing"
     assert session_obj is not None
-    assert session_obj.elevenlabs_conversation_id == "conv_abc123", (
-        "elevenlabs_conversation_id must be stored from provider_metadata for "
-        f"custom-llm linkage, got {session_obj.elevenlabs_conversation_id!r}"
-    )
-    # conversation_id and sip_call_id must survive the allowlist into provider_metadata
-    assert session_obj.provider_metadata is not None
-    assert session_obj.provider_metadata.get("conversation_id") == "conv_abc123"
-    assert session_obj.provider_metadata.get("sip_call_id") == "otb_xyz789"
+    assert mock_db.execute.await_count >= 3
 
 
 # ---------------------------------------------------------------------------
@@ -617,7 +605,7 @@ async def test_transient_error_retries_exactly_once_then_recurrent_error():
 
 
 @pytest.mark.asyncio
-async def test_transient_then_accepted_on_retry():
+async def test_transient_then_accepted_on_retry_runs_mock_persistence_path():
     """GIVEN ElevenLabs returns transient error on attempt 1, accepted on attempt 2
     WHEN dial_outbound_call handles it
     THEN status='dialing', telephony_status='ringing', provider_call_id set,
@@ -665,15 +653,7 @@ async def test_transient_then_accepted_on_retry():
     assert result.call_session_id is not None
 
     assert session_obj is not None
-    assert session_obj.telephony_status == "ringing", (
-        f"After retry-accepted, telephony_status must be 'ringing', got {session_obj.telephony_status!r}"
-    )
-    assert session_obj.provider_call_id == "el-call-RETRY-OK"
-    # Error should be cleared on retry success
-    assert session_obj.telephony_error is None, (
-        f"telephony_error must be cleared (None) after successful retry, "
-        f"got {session_obj.telephony_error!r}"
-    )
+    assert mock_db.execute.await_count >= 3
 
 
 # ---------------------------------------------------------------------------
@@ -1007,3 +987,388 @@ async def test_conversation_initiation_client_data_always_includes_custom_llm_ex
     assert "custom_llm_extra_body" in cicd
     assert cicd["custom_llm_extra_body"]["client_id"] == client.id
     assert cicd["custom_llm_extra_body"]["lead_id"] == str(lead.id)
+
+
+# ---------------------------------------------------------------------------
+# TEST: Real-session late provider responses must not regress webhook evidence
+# ---------------------------------------------------------------------------
+
+
+async def _seed_dial_records(db_engine, suffix: str):
+    """Create the persisted tenant, agent, and lead required for a real dial."""
+    from app.leads.models import Lead
+    from app.tenants.models import Agent, Client
+
+    client = Client(
+        id=f"client-late-{suffix}",
+        name=f"Late response client {suffix}",
+        voice_id="voice-late-response",
+    )
+    agent = Agent(
+        id=f"agent-late-{suffix}",
+        client_id=client.id,
+        slug=f"late-{suffix}",
+        name="Late Response Agent",
+        voice_id="voice-late-response",
+        elevenlabs_agent_id="el-agent-late-response",
+        elevenlabs_phone_number_id="pn-late-response",
+    )
+    lead = Lead(
+        id=f"lead-late-{suffix}",
+        client_id=client.id,
+        name="Late Response Lead",
+        phone="+541155551234",
+        status="new",
+    )
+    async with db_engine.async_session_factory() as db:
+        db.add_all([client, agent, lead])
+        await db.commit()
+    return client, agent, lead
+
+
+async def _commit_webhook_completion(db_engine, *, client_id: str, lead_id: str) -> None:
+    """Commit actual webhook linkage plus newer diagnostic evidence in another session."""
+    from app.outbound.linkage import link_outbound_session_by_webhook
+
+    async with db_engine.async_session_factory() as webhook_db:
+        call_session = await link_outbound_session_by_webhook(
+            webhook_db,
+            conversation_id="webhook-conversation-id",
+            client_id=client_id,
+            lead_id=lead_id,
+        )
+        assert call_session is not None
+        call_session.telephony_error = "webhook diagnostic evidence"
+        await webhook_db.commit()
+
+
+async def _get_persisted_call_session(db_engine, session_id: str):
+    from app.calls.models import CallSession
+
+    async with db_engine.async_session_factory() as verification_db:
+        return await verification_db.get(CallSession, session_id)
+
+
+@pytest.mark.asyncio
+async def test_first_accepted_late_response_preserves_committed_webhook_completion(db_engine):
+    """A first accepted response must not regress separately committed webhook evidence."""
+    from app.outbound.service import dial_outbound_call
+
+    client, agent, lead = await _seed_dial_records(db_engine, "first")
+    accepted = _accepted_result(call_id="provider-first-call-id")
+    accepted.provider_metadata = {
+        "conversation_id": "provider-conversation-id",
+        "cost": 0.05,
+        "unsafe": "must-not-persist",
+    }
+
+    async def _accepted_after_webhook(_request):
+        await _commit_webhook_completion(
+            db_engine, client_id=client.id, lead_id=lead.id
+        )
+        return accepted
+
+    async with db_engine.async_session_factory() as dial_db:
+        with patch(
+            "app.elevenlabs.service.ElevenLabsService.initiate_outbound_call",
+            new_callable=AsyncMock,
+            side_effect=_accepted_after_webhook,
+        ), patch(
+            "app.outbound.dynamic_vars.build_dynamic_variables",
+            new_callable=AsyncMock,
+            return_value={},
+        ), patch("app.outbound.service._fire_probe"):
+            result = await dial_outbound_call(
+                db=dial_db,
+                lead=lead,
+                agent=agent,
+                client=client,
+                settings=_make_settings(),
+            )
+
+    persisted = await _get_persisted_call_session(db_engine, result.call_session_id)
+    assert result.status == "dialing"
+    assert persisted is not None
+    assert persisted.telephony_status == "completed"
+    assert persisted.telephony_error == "webhook diagnostic evidence"
+    assert persisted.session_end_received is True
+    assert persisted.elevenlabs_conversation_id == "webhook-conversation-id"
+    assert persisted.provider_call_id == "provider-first-call-id"
+    assert persisted.provider_metadata == {
+        "conversation_id": "provider-conversation-id",
+        "cost": 0.05,
+    }
+
+
+@pytest.mark.asyncio
+async def test_retry_accepted_late_response_preserves_committed_webhook_completion(db_engine):
+    """A retry accepted response must provide the same real-session guarantee."""
+    from app.outbound.service import dial_outbound_call
+
+    client, agent, lead = await _seed_dial_records(db_engine, "retry")
+    transient = _transient_result("503 before webhook completion")
+    accepted = _accepted_result(call_id="provider-retry-call-id")
+    accepted.provider_metadata = {
+        "conversation_id": "provider-retry-conversation-id",
+        "cost": 0.07,
+    }
+    attempts = 0
+
+    async def _transient_then_accepted_after_webhook(_request):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return transient
+        await _commit_webhook_completion(
+            db_engine, client_id=client.id, lead_id=lead.id
+        )
+        return accepted
+
+    async with db_engine.async_session_factory() as dial_db:
+        with patch(
+            "app.elevenlabs.service.ElevenLabsService.initiate_outbound_call",
+            new_callable=AsyncMock,
+            side_effect=_transient_then_accepted_after_webhook,
+        ), patch(
+            "app.outbound.dynamic_vars.build_dynamic_variables",
+            new_callable=AsyncMock,
+            return_value={},
+        ), patch("app.outbound.service._fire_probe"):
+            result = await dial_outbound_call(
+                db=dial_db,
+                lead=lead,
+                agent=agent,
+                client=client,
+                settings=_make_settings(),
+            )
+
+    persisted = await _get_persisted_call_session(db_engine, result.call_session_id)
+    assert attempts == 2
+    assert result.status == "dialing"
+    assert persisted is not None
+    assert persisted.telephony_status == "completed"
+    assert persisted.telephony_error == "webhook diagnostic evidence"
+    assert persisted.session_end_received is True
+    assert persisted.elevenlabs_conversation_id == "webhook-conversation-id"
+    assert persisted.provider_call_id == "provider-retry-call-id"
+    assert persisted.provider_metadata == {
+        "conversation_id": "provider-retry-conversation-id",
+        "cost": 0.07,
+    }
+
+
+@pytest.mark.asyncio
+async def test_accepted_path_persists_expected_fields(db_engine):
+    """Accepted responses persist allowed fields through a real database session."""
+    from app.outbound.service import dial_outbound_call
+
+    client, agent, lead = await _seed_dial_records(db_engine, "accepted-fields")
+    accepted = _accepted_result("provider-accepted-fields")
+    accepted.provider_metadata = {
+        "conversation_id": "provider-conversation-fields",
+        "cost": 0.10,
+        "billed_duration_seconds": 30,
+        "unsafe": "must-not-persist",
+    }
+
+    async with db_engine.async_session_factory() as dial_db:
+        with patch(
+            "app.elevenlabs.service.ElevenLabsService.initiate_outbound_call",
+            new_callable=AsyncMock,
+            return_value=accepted,
+        ) as provider, patch(
+            "app.outbound.dynamic_vars.build_dynamic_variables",
+            new_callable=AsyncMock,
+            return_value={},
+        ), patch("app.outbound.service._fire_probe"):
+            result = await dial_outbound_call(
+                db=dial_db, lead=lead, agent=agent, client=client, settings=_make_settings()
+            )
+
+    persisted = await _get_persisted_call_session(db_engine, result.call_session_id)
+    assert provider.await_count == 1
+    assert result.status == "dialing"
+    assert persisted is not None
+    assert persisted.telephony_status == "ringing"
+    assert persisted.telephony_error is None
+    assert persisted.provider_call_id == "provider-accepted-fields"
+    assert persisted.elevenlabs_conversation_id == "provider-conversation-fields"
+    assert persisted.provider_metadata == {
+        "conversation_id": "provider-conversation-fields",
+        "cost": 0.10,
+        "billed_duration_seconds": 30,
+    }
+
+
+@pytest.mark.asyncio
+async def test_accepted_path_stores_conversation_id_for_custom_llm_linkage(db_engine):
+    """A real accepted response stores its conversation ID for Custom LLM linkage."""
+    from app.outbound.service import dial_outbound_call
+
+    client, agent, lead = await _seed_dial_records(db_engine, "accepted-conversation")
+    accepted = _accepted_result("provider-conversation-link")
+    accepted.provider_metadata = {"conversation_id": "conversation-link", "sip_call_id": "sip-link"}
+
+    async with db_engine.async_session_factory() as dial_db:
+        with patch(
+            "app.elevenlabs.service.ElevenLabsService.initiate_outbound_call",
+            new_callable=AsyncMock,
+            return_value=accepted,
+        ) as provider, patch(
+            "app.outbound.dynamic_vars.build_dynamic_variables",
+            new_callable=AsyncMock,
+            return_value={},
+        ), patch("app.outbound.service._fire_probe"):
+            result = await dial_outbound_call(
+                db=dial_db, lead=lead, agent=agent, client=client, settings=_make_settings()
+            )
+
+    persisted = await _get_persisted_call_session(db_engine, result.call_session_id)
+    assert provider.await_count == 1
+    assert persisted is not None
+    assert persisted.elevenlabs_conversation_id == "conversation-link"
+    assert persisted.provider_metadata == {
+        "conversation_id": "conversation-link",
+        "sip_call_id": "sip-link",
+    }
+
+
+@pytest.mark.asyncio
+async def test_transient_then_accepted_on_retry(db_engine):
+    """A real retry transitions the still-dialing record to ringing and clears errors."""
+    from app.outbound.service import dial_outbound_call
+
+    client, agent, lead = await _seed_dial_records(db_engine, "retry-accepted")
+    transient = _transient_result("503 retry me")
+    accepted = _accepted_result("provider-retry-accepted")
+    accepted.provider_metadata = {"conversation_id": "conversation-retry", "cost": 0.07}
+
+    async with db_engine.async_session_factory() as dial_db:
+        with patch(
+            "app.elevenlabs.service.ElevenLabsService.initiate_outbound_call",
+            new_callable=AsyncMock,
+            side_effect=[transient, accepted],
+        ) as provider, patch(
+            "app.outbound.dynamic_vars.build_dynamic_variables",
+            new_callable=AsyncMock,
+            return_value={},
+        ), patch("app.outbound.service._fire_probe"):
+            result = await dial_outbound_call(
+                db=dial_db, lead=lead, agent=agent, client=client, settings=_make_settings()
+            )
+
+    persisted = await _get_persisted_call_session(db_engine, result.call_session_id)
+    assert provider.await_count == 2
+    assert result.status == "dialing"
+    assert persisted is not None
+    assert persisted.telephony_status == "ringing"
+    assert persisted.telephony_error is None
+    assert persisted.provider_call_id == "provider-retry-accepted"
+    assert persisted.elevenlabs_conversation_id == "conversation-retry"
+    assert persisted.provider_metadata == {"conversation_id": "conversation-retry", "cost": 0.07}
+
+
+@pytest.mark.asyncio
+async def test_transient_retry_keeps_durable_dialing_state_active_for_independent_guard(db_engine):
+    """The retry starts while a separate session can still observe an active dial."""
+    from app.outbound.service import _find_active_call_session, dial_outbound_call
+
+    client, agent, lead = await _seed_dial_records(db_engine, "retry-guard")
+    transient = _transient_result("503 before retry")
+    accepted = _accepted_result("provider-retry-guard")
+    attempts = 0
+
+    async def _provider(_request):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return transient
+        async with db_engine.async_session_factory() as guard_db:
+            active = await _find_active_call_session(guard_db, lead.id)
+            assert active is not None
+            assert active.telephony_status == "dialing"
+        return accepted
+
+    async with db_engine.async_session_factory() as dial_db:
+        with patch(
+            "app.elevenlabs.service.ElevenLabsService.initiate_outbound_call",
+            new_callable=AsyncMock,
+            side_effect=_provider,
+        ), patch(
+            "app.outbound.dynamic_vars.build_dynamic_variables",
+            new_callable=AsyncMock,
+            return_value={},
+        ), patch("app.outbound.service._fire_probe"):
+            result = await dial_outbound_call(
+                db=dial_db, lead=lead, agent=agent, client=client, settings=_make_settings()
+            )
+
+    assert attempts == 2
+    assert result.status == "dialing"
+
+
+@pytest.mark.parametrize("path, requires_retry", [("first", False), ("retry", True)])
+@pytest.mark.parametrize(
+    "advanced_status",
+    ["connected", "voicemail", "completed", "failed", "no_answer", "recurrent_error", "stale_in_call"],
+)
+@pytest.mark.asyncio
+async def test_late_accepted_response_preserves_independent_advanced_state(
+    db_engine, path, requires_retry, advanced_status
+):
+    """First and retry acceptance never overwrite newer independent call evidence."""
+    from sqlalchemy import select
+
+    from app.calls.models import CallSession
+    from app.outbound.service import dial_outbound_call
+
+    client, agent, lead = await _seed_dial_records(db_engine, f"advanced-{path}-{advanced_status}")
+    transient = _transient_result("503 before advanced evidence")
+    accepted = _accepted_result(f"provider-{path}-{advanced_status}")
+    accepted.provider_metadata = {"conversation_id": f"provider-{advanced_status}", "cost": 0.03}
+    attempts = 0
+    authoritative_metadata = {"call_id": f"authoritative-{advanced_status}", "cost": 0.99}
+
+    async def _provider(_request):
+        nonlocal attempts
+        attempts += 1
+        if requires_retry and attempts == 1:
+            return transient
+        async with db_engine.async_session_factory() as evidence_db:
+            call_session = (await evidence_db.execute(
+                select(CallSession).where(CallSession.lead_id == lead.id)
+            )).scalar_one()
+            call_session.telephony_status = advanced_status
+            call_session.telephony_error = f"authoritative {advanced_status} error"
+            call_session.outcome_reason = "sip_routing_error"
+            call_session.session_end_received = True
+            call_session.elevenlabs_conversation_id = f"authoritative-conversation-{advanced_status}"
+            call_session.provider_call_id = f"authoritative-provider-{advanced_status}"
+            call_session.provider_metadata = authoritative_metadata
+            await evidence_db.commit()
+        return accepted
+
+    async with db_engine.async_session_factory() as dial_db:
+        with patch(
+            "app.elevenlabs.service.ElevenLabsService.initiate_outbound_call",
+            new_callable=AsyncMock,
+            side_effect=_provider,
+        ), patch(
+            "app.outbound.dynamic_vars.build_dynamic_variables",
+            new_callable=AsyncMock,
+            return_value={},
+        ), patch("app.outbound.service._fire_probe"):
+            result = await dial_outbound_call(
+                db=dial_db, lead=lead, agent=agent, client=client, settings=_make_settings()
+            )
+
+    persisted = await _get_persisted_call_session(db_engine, result.call_session_id)
+    assert attempts == (2 if requires_retry else 1)
+    assert persisted is not None
+    assert persisted.telephony_status == advanced_status
+    assert persisted.telephony_error == f"authoritative {advanced_status} error"
+    assert persisted.outcome_reason == "sip_routing_error"
+    assert persisted.session_end_received is True
+    assert persisted.elevenlabs_conversation_id == f"authoritative-conversation-{advanced_status}"
+    assert persisted.provider_call_id == f"authoritative-provider-{advanced_status}"
+    assert persisted.provider_metadata == authoritative_metadata
