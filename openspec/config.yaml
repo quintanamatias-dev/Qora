@@ -1,0 +1,72 @@
+schema: spec-driven
+
+# Repository-derived initialization context; session choices are not defaults.
+project: Qora
+strict_tdd: true
+
+context: |
+  Qora is a multi-tenant AI voice call-center platform.
+  Backend: Python >=3.11, FastAPI, Pydantic 2, async SQLAlchemy,
+  SQLite/aiosqlite, Alembic; dependencies in backend/pyproject.toml.
+  Frontend: React 19, TypeScript, Vite 6, Tailwind CSS 4,
+  TanStack Query; npm scripts in frontend/package.json.
+  External integrations include ElevenLabs voice and OpenAI.
+  docs/architecture.md is the documented architecture source of truth.
+  Existing OpenSpec specs and active/archived changes must be preserved.
+  No prior sdd-init project context file or config.yaml was found under openspec/.
+  Strict TDD is supported by existing RED/GREEN tasks and verification
+  evidence in phase-b-secrets-management and phase-b-db-migration-foundation;
+  this config makes that workflow explicit, not a test-runner enforcement claim.
+  Project developer skills live in skills/*/SKILL.md; product voice-agent
+  capabilities live under backend/clients/*/agents/*/skills/*.agent-skill.md.
+  .atl/skill-registry.md already exists and is not modified by initialization.
+  Phone normalization must account for the existing outbound-call-trigger
+  spec: reject invalid E.164 before creating call sessions or calling providers,
+  preserve tenant isolation, authentication, feature flags, and cost consent.
+  Country defaults and ambiguous-number behavior require explicit specification.
+  Model routing remains owned by installed agent configuration.
+
+testing:
+  backend:
+    runner: pytest
+    command: "cd backend && python3 -m pytest tests/ -q"
+    configuration: backend/pytest.ini
+    additional_configuration: backend/pyproject.toml
+    discovery: "tests/test_*.py (recursive); Test* classes; test_* functions"
+    asyncio_mode: auto
+    integration_marker: "integration (may require external services or DB)"
+  frontend:
+    runner: vitest
+    command: "cd frontend && npm test"
+    configuration: frontend/vitest.config.ts
+    environment: jsdom
+    setup: frontend/tests/setup.ts
+    discovery:
+      - "src/**/*.test.{ts,tsx}"
+      - "tests/**/*.test.{ts,tsx}"
+    allow_only: false
+  safety: "Use isolated fixtures and mocked providers; live calls require explicit authorization."
+  initialization: "No tests or provider calls executed for this configuration-only initialization."
+
+rules:
+  proposal:
+    - Define bounded scope, non-goals, risks, and rollback before implementation.
+    - Use transported session preflight; do not infer persistent delivery or execution defaults.
+  specs:
+    - Specify observable requirements with concrete Given/When/Then scenarios.
+    - Preserve existing OpenSpec contracts; explicitly identify intended requirement changes.
+  design:
+    - Trace affected boundaries and tenant isolation using repository evidence.
+    - Resolve ambiguous phone-number policy before implementation; never assume a country silently.
+  tasks:
+    - Plan small test-first work units with RED, GREEN, and REFACTOR evidence.
+    - Forecast review size against the current-session budget and honor its delivery decision gate.
+  apply:
+    - Under strict_tdd, observe the relevant failing test before production changes, then make it pass and refactor.
+    - Preserve unrelated changes, protected paths, secrets, and human authorization gates.
+    - Do not commit, deploy, publish, or make live provider calls without authorization.
+  verify:
+    - Record actual commands, results, and unrun checks; never treat historical reports as current passing evidence.
+    - Verify focused behavior and relevant regressions with isolated tests and mocked integrations.
+  archive:
+    - Preserve existing artifacts and reconcile only approved specification changes.
