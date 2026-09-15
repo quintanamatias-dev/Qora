@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Qora: contexto del sistema local",
+    "quality_profile": "showcase",
+    "viewBox": [1080, 660]
+  },
+  "components": [
+    {"id":"elevenlabs","type":"external","label":"ElevenLabs","sublabel":"voz, webhooks y telefonía","pos":[30,104],"size":[150,54]},
+    {"id":"voice","type":"backend","label":"Runtime de voz","sublabel":"inicio, contexto, sesión y SSE","pos":[235,104],"size":[160,54]},
+    {"id":"openai","type":"external","label":"OpenAI","sublabel":"LLM de streaming","pos":[450,104],"size":[150,54]},
+    {"id":"tools","type":"backend","label":"Herramientas","sublabel":"lead, captura y skills","pos":[665,104],"size":[160,54]},
+    {"id":"operator","type":"external","label":"Operador","sublabel":"navegador","pos":[30,356],"size":[135,54]},
+    {"id":"frontend","type":"frontend","label":"Frontend React","sublabel":"UI operativa","pos":[235,356],"size":[160,54]},
+    {"id":"api","type":"backend","label":"API FastAPI","sublabel":"/api/v1 y routers de dominio","pos":[450,356],"size":[160,54]},
+    {"id":"database","type":"database","label":"Persistencia ORM","sublabel":"entidades operativas y jobs","pos":[665,356],"size":[170,54]},
+    {"id":"postcall","type":"backend","label":"Post-llamada","sublabel":"resumen, jobs y scheduler","pos":[860,356],"size":[160,54]},
+    {"id":"airtable","type":"external","label":"Airtable / CRM","sublabel":"integración configurable","pos":[860,530],"size":[160,54]}
+  ],
+  "connections": [
+    {"id":"elevenlabs-voice","from":"elevenlabs","to":"voice","label":"webhooks de voz","variant":"emphasis","labelDy":-34},
+    {"id":"voice-openai","from":"voice","to":"openai","label":"SSE LLM","variant":"emphasis","labelDy":-34},
+    {"id":"tools-database","from":"tools","to":"database","label":"lectura o captura","fromSide":"bottom","toSide":"top","labelDx":72},
+    {"id":"operator-frontend","from":"operator","to":"frontend","label":"navegación","variant":"emphasis","labelDy":-34},
+    {"id":"frontend-api","from":"frontend","to":"api","label":"fetch /api/v1","variant":"emphasis","labelAt":[423,422]},
+    {"id":"api-database","from":"api","to":"database","label":"ORM async","labelDy":-34},
+    {"id":"database-postcall","from":"database","to":"postcall","label":"cierre y trabajos","labelDy":75},
+    {"id":"postcall-airtable","from":"postcall","to":"airtable","label":"sync CRM","variant":"dashed","fromSide":"bottom","toSide":"top","labelAt":[1045,422]}
+  ],
+  "cards": [
+    {"dot":"cyan","title":"Alcance observado","items":["El frontend navega hacia una API versionada","La voz combina sesión, LLM y herramientas","La persistencia conecta los caminos durables"]},
+    {"dot":"amber","title":"Límite del mapa","items":["Jobs y llamadas salientes dependen de flags","Las integraciones externas no se ejecutaron","El código local no prueba la configuración en ejecución"]}
+  ]
+}

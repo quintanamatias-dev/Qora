@@ -1,0 +1,64 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Qora: recorrido de contacto en dos llamadas",
+    "subtitle": "Escenario genérico y simulado; la agenda y el espejo CRM son decisiones separadas.",
+    "animation": "trace",
+    "visual_preset": "signal-flow",
+    "quality_profile": "showcase",
+    "viewBox": [1240, 676],
+    "views": [
+      {"id":"prepare","label":"Preparar","focus":["scheduler","call_one"],"note":"Una llamada elegible entra al recorrido; esta vista no representa marcado real."},
+      {"id":"converse","label":"Conversar","focus":["call_one","capture","transcript"],"note":"El agente conversa y captura solo campos configurados."},
+      {"id":"remember-decide","label":"Recordar y decidir","focus":["analysis","contact_memory","schedule","crm_mirror"],"note":"Análisis complementarios, persistencia, evaluación de agenda y espejo CRM no comparten causalidad inversa."},
+      {"id":"resume","label":"Retomar","focus":["call_two","follow_up"],"note":"La segunda llamada usa contexto recuperado y termina en una próxima acción informada."}
+    ]
+  },
+  "lanes": [
+    {"id":"contact","label":"Contacto"},
+    {"id":"conversation","label":"Conversación"},
+    {"id":"memory","label":"Memoria y análisis"},
+    {"id":"operations","label":"Operación","variant":"exception"}
+  ],
+  "phases": [
+    {"id":"prepare","label":"Preparar","fromCol":0,"toCol":0},
+    {"id":"converse","label":"Conversar","fromCol":1,"toCol":2,"variant":"emphasis"},
+    {"id":"remember","label":"Recordar y decidir","fromCol":3,"toCol":4,"variant":"security"},
+    {"id":"resume","label":"Retomar","fromCol":5,"toCol":5,"variant":"emphasis"}
+  ],
+  "groups": [
+    {"id":"call_one_group","label":"Llamada 1","lane":"conversation","fromCol":1,"toCol":2,"variant":"emphasis"},
+    {"id":"post_call_group","label":"Post-llamada paralelo","lane":"memory","fromCol":3,"toCol":4,"variant":"default"},
+    {"id":"call_two_group","label":"Llamada 2","lane":"conversation","fromCol":5,"toCol":5,"variant":"emphasis"}
+  ],
+  "mainPath": ["scheduler","call_one","capture","transcript","analysis","contact_memory","schedule","call_two","follow_up"],
+  "nodes": [
+    {"id":"scheduler","lane":"conversation","col":0,"type":"backend","label":"Scheduler","sublabel":"llamada elegible","width":135},
+    {"id":"call_one","lane":"conversation","col":1,"type":"frontend","label":"Llamada 1","sublabel":"contacto ↔ agente","tag":"simulada","width":140},
+    {"id":"capture","lane":"conversation","col":2,"type":"messagebus","label":"Capturar datos","sublabel":"solo esquema configurado","width":145},
+    {"id":"transcript","lane":"contact","col":2,"type":"database","label":"Transcript + resultado","sublabel":"cierre de llamada","width":150},
+    {"id":"analysis","lane":"memory","col":3,"type":"backend","label":"Análisis posterior","sublabel":"6 ejes + 4 pipelines","tag":"paralelo","width":155},
+    {"id":"contact_memory","lane":"memory","col":4,"type":"database","label":"Memoria del contacto","sublabel":"resumen + hechos + análisis","tag":"atómico","width":155},
+    {"id":"schedule","lane":"operations","col":4,"type":"backend","label":"Evaluar agenda","sublabel":"reglas y guardas","width":145},
+    {"id":"crm_mirror","lane":"operations","col":5,"type":"external","label":"CRM / sistema interno","sublabel":"espejo configurable o no-op","width":165},
+    {"id":"call_two","lane":"conversation","col":5,"type":"frontend","label":"Llamada 2","sublabel":"contexto recuperado","tag":"mañana simulado","width":145},
+    {"id":"follow_up","lane":"contact","col":5,"type":"backend","label":"Próxima acción","sublabel":"seguimiento informado","width":145}
+  ],
+  "edges": [
+    {"id":"scheduler-call-one","from":"scheduler","to":"call_one","label":"programada","role":"main","variant":"emphasis"},
+    {"id":"call-one-capture","from":"call_one","to":"capture","label":"campos declarados","role":"main"},
+    {"id":"capture-transcript","from":"capture","to":"transcript","label":"conversación cerrada","role":"main"},
+    {"id":"transcript-analysis","from":"transcript","to":"analysis","label":"post-llamada","role":"main","variant":"emphasis"},
+    {"id":"analysis-memory","from":"analysis","to":"contact_memory","label":"persistir juntos","role":"main","variant":"security"},
+    {"id":"memory-schedule","from":"contact_memory","to":"schedule","label":"después de persistir","role":"main","variant":"security"},
+    {"id":"schedule-call-two","from":"schedule","to":"call_two","label":"si regla elegible","role":"main","variant":"emphasis"},
+    {"id":"memory-call-two","from":"contact_memory","to":"call_two","label":"historia resumida","role":"branch","variant":"dashed"},
+    {"id":"call-two-follow-up","from":"call_two","to":"follow_up","label":"resultado","role":"main"},
+    {"id":"memory-crm","from":"contact_memory","to":"crm_mirror","label":"espejo posterior","role":"async","variant":"dashed"}
+  ],
+  "cards": [
+    {"dot":"cyan","title":"Hecho de código","items":["La persistencia precede a la evaluación de agenda.","La agenda evalúa habilitación, acción, opt-out, duplicados e intentos."]},
+    {"dot":"violet","title":"Límite del escenario","items":["Mañana es una regla elegida para este ejemplo.","El CRM no agenda ni representa un cierre automático."]}
+  ]
+}

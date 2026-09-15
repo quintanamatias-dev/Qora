@@ -1,0 +1,43 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Qora: ejecución acotada de herramientas",
+    "quality_profile": "showcase",
+    "viewBox": [1500, 652]
+  },
+  "lanes": [
+    {"id":"voice","label":"Turno de voz"},
+    {"id":"guard","label":"Autorización","variant":"exception"},
+    {"id":"tool","label":"Dispatcher y handler"},
+    {"id":"result","label":"Registro"}
+  ],
+  "phases": [
+    {"id":"detect","label":"Detección", "fromCol":0,"toCol":1},
+    {"id":"authorize","label":"Guardas", "fromCol":2,"toCol":3,"variant":"security"},
+    {"id":"execute","label":"Ejecución", "fromCol":4,"toCol":5,"variant":"emphasis"}
+  ],
+  "mainPath": ["call","parse","scope","dispatch","handler","persist","followup"],
+  "nodes": [
+    {"id":"call","lane":"voice","col":0,"type":"external","label":"Tool call","width":125},
+    {"id":"parse","lane":"voice","col":1,"type":"backend","label":"Webhook SSE","width":125},
+    {"id":"scope","lane":"guard","col":2,"type":"security","label":"Sesión presente","width":130},
+    {"id":"rejected","lane":"guard","col":3,"type":"security","label":"Rechazada","width":130},
+    {"id":"dispatch","lane":"tool","col":3,"type":"backend","label":"Dispatcher","width":130},
+    {"id":"handler","lane":"tool","col":4,"type":"backend","label":"Handler activo","width":135},
+    {"id":"persist","lane":"result","col":4,"type":"database","label":"Transcripción","width":135},
+    {"id":"followup","lane":"voice","col":5,"type":"backend","label":"Segundo LLM","width":135}
+  ],
+  "edges": [
+    {"id":"detect-call","from":"call","to":"parse","label":"detecta","role":"main"},
+    {"id":"authorize-call","from":"parse","to":"scope","label":"no load_skill","variant":"emphasis","role":"main"},
+    {"id":"scope-dispatch","from":"scope","to":"dispatch","label":"tenant/scope válido","variant":"emphasis","role":"main"},
+    {"id":"scope-rejected","from":"scope","to":"rejected","label":"denegado","variant":"security","role":"error"},
+    {"id":"parse-dispatch","from":"parse","to":"dispatch","label":"sin sesión o load_skill","variant":"dashed","role":"branch"},
+    {"id":"dispatch-rejected","from":"dispatch","to":"rejected","label":"tool retirada","variant":"security","role":"error"},
+    {"id":"dispatch-handler","from":"dispatch","to":"handler","label":"activa","role":"main"},
+    {"id":"handler-persist","from":"handler","to":"persist","label":"resultado","role":"main"},
+    {"id":"persist-followup","from":"persist","to":"followup","label":"mensaje tool","variant":"emphasis","role":"main"},
+    {"id":"rejected-followup","from":"rejected","to":"followup","label":"error estructurado","variant":"dashed","role":"return"}
+  ]
+}
