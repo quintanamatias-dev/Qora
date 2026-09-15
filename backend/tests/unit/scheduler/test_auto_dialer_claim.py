@@ -45,14 +45,14 @@ async def claim_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Claim Test Lead",
-            phone="+5411000077",
+            phone="+5491155550101",
             lead_id="claim-lead-001",
         )
         await create_lead(
             sess,
             client_id="quintana-seguros",
             name="Claim Test Lead Two",
-            phone="+5411000078",
+            phone="+5493415550101",
             lead_id="claim-lead-002",
         )
         await sess.commit()
@@ -222,3 +222,52 @@ async def test_claim_due_scheduled_calls_respects_limit(claim_db):
         await sess.commit()
 
     assert len(claimed) == 1, f"Expected exactly 1 claimed row, got {len(claimed)}"
+
+
+async def test_claimed_invalid_phone_uses_real_shared_guard_without_session(claim_db):
+    """A scheduled legacy number fails before any CallSession or provider creation."""
+    from unittest.mock import MagicMock
+
+    from sqlalchemy import select
+
+    from app.calls.models import CallSession
+    from app.leads.models import Lead
+    from app.scheduler.models import ScheduledCall
+    from app.scheduler.service import _dial_claimed_scheduled_call, create_scheduled_call
+
+    now = datetime.now(timezone.utc)
+    async with claim_db.async_session_factory() as sess:
+        lead = await sess.get(Lead, "claim-lead-001")
+        lead.phone = "011 5555-0101"
+        scheduled = await create_scheduled_call(
+            sess,
+            client_id="quintana-seguros",
+            lead_id=lead.id,
+            scheduled_at=now,
+            trigger_reason="manual",
+            source_session_id=None,
+            attempt_number=1,
+            max_attempts=3,
+            notes=None,
+        )
+        scheduled.status = "in_progress"
+        await sess.commit()
+        scheduled_id = scheduled.id
+
+    settings = MagicMock(enable_outbound_calls=True)
+    with (
+        patch("app.scheduler.service.calculate_scheduled_at", return_value=now),
+        patch("app.outbound.service.ElevenLabsService") as provider,
+    ):
+        async with claim_db.async_session_factory() as sess:
+            scheduled = await sess.get(ScheduledCall, scheduled_id)
+            await _dial_claimed_scheduled_call(sess, scheduled, settings, now_utc=now)
+
+    async with claim_db.async_session_factory() as sess:
+        scheduled = await sess.get(ScheduledCall, scheduled_id)
+        sessions = (await sess.execute(select(CallSession))).scalars().all()
+
+    assert scheduled.status == "failed"
+    assert scheduled.outcome_session_id is None
+    assert sessions == []
+    provider.assert_not_called()

@@ -44,7 +44,7 @@ async def corr_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Carlos Lopez",
-            phone="+5411000050",
+            phone="+5491155550101",
             lead_id="corr-lead-001",
         )
         await sess.commit()
@@ -417,7 +417,7 @@ async def test_no_corrections_leaves_lead_unchanged(corr_db):
         lead = lead_result.scalar_one()
         # Name and phone should be unchanged
         assert lead.name == "Carlos Lopez"
-        assert lead.phone == "+5411000050"
+        assert lead.phone == "+5491155550101"
         assert lead.email is None, "No correction → email stays None"
         assert lead.age is None, "No correction → age stays None"
 
@@ -613,3 +613,46 @@ async def test_pipeline_not_called_when_no_lead_id(corr_db):
     assert (
         pipeline_called is False
     ), "run_data_corrections_pipeline must NOT be called when session has no lead_id"
+
+
+def test_applied_phone_correction_is_revalidated_before_write() -> None:
+    """An upstream applied=True flag cannot bypass phone validation or fact filtering."""
+    from app.analysis.universal.data_corrections import DataCorrection
+    from app.summarizer import _apply_structured_corrections
+
+    lead = MagicMock(phone="+5491155550101")
+    correction = DataCorrection(
+        field="phone",
+        current_value=lead.phone,
+        corrected_value="011 5555-0101",
+        confidence=0.9,
+        evidence="Synthetic correction",
+        applied=True,
+    )
+
+    result = _apply_structured_corrections(lead, [correction])
+
+    assert lead.phone == "+5491155550101"
+    assert result[0].applied is False
+    assert result[0].rejection_reason == "ambiguous_or_incomplete"
+
+
+def test_applied_phone_correction_is_canonicalized_before_write() -> None:
+    """A valid noncanonical correction is written and audited as canonical E.164."""
+    from app.analysis.universal.data_corrections import DataCorrection
+    from app.summarizer import _apply_structured_corrections
+
+    lead = MagicMock(phone="+5491155550101")
+    correction = DataCorrection(
+        field="phone",
+        current_value=lead.phone,
+        corrected_value="0341 15 555-0101",
+        confidence=0.9,
+        evidence="Synthetic correction",
+        applied=True,
+    )
+
+    result = _apply_structured_corrections(lead, [correction])
+
+    assert lead.phone == "+5493415550101"
+    assert result[0].corrected_value == "+5493415550101"

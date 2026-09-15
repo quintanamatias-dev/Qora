@@ -39,7 +39,7 @@ def _make_settings(enable_outbound: bool = True):
 
 
 def _make_lead(
-    phone: str = "+14155552671",
+    phone: str = "+5491155550101",
     client_id: str = "client-a",
     lead_id: str = "lead-001",
 ):

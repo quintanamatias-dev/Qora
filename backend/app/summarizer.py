@@ -38,6 +38,7 @@ from app.analysis.universal.data_corrections import (
     DataCorrectionsAxis,
     run_data_corrections_pipeline,
 )
+from app.phones.normalization import PhoneNormalizationError, normalize_phone
 from app.analysis.universal.interest import run_interest_pipeline
 from app.analysis.universal.misc_notes import (
     MiscNotesAxis,
@@ -1343,20 +1344,49 @@ def _apply_structured_corrections(
         if field not in CORRECTABLE_FIELDS:
             continue  # Safety: unknown field should have been dropped by pipeline
         entry = CORRECTABLE_FIELDS[field]
+        if field == "phone":
+            try:
+                correction = correction.model_copy(
+                    update={
+                        "corrected_value": normalize_phone(
+                            correction.corrected_value, region="AR"
+                        )
+                    }
+                )
+            except PhoneNormalizationError as exc:
+                all_corrections.append(
+                    correction.model_copy(
+                        update={"applied": False, "rejection_reason": exc.reason}
+                    )
+                )
+                logger.warning(
+                    "data_correction_phone_validation_failed",
+                    field=field,
+                    reason=exc.reason,
+                )
+                continue
         try:
             coerced = coerce_value(correction.corrected_value, entry.type)
             # Always write to Lead ORM column (dual-write for backward compat during transition)
             if hasattr(lead, entry.lead_attr):
                 setattr(lead, entry.lead_attr, coerced)
             all_corrections.append(correction)
-            logger.info(
-                "data_correction_applied",
-                field=field,
-                lead_attr=entry.lead_attr,
-                storage=entry.storage,
-                corrected_value=correction.corrected_value,
-                confidence=correction.confidence,
-            )
+            if field == "phone":
+                logger.info(
+                    "data_correction_phone_applied",
+                    field=field,
+                    lead_attr=entry.lead_attr,
+                    storage=entry.storage,
+                )
+            else:
+                logger.info(
+                    "data_correction_applied",
+                    field=field,
+                    lead_attr=entry.lead_attr,
+                    storage=entry.storage,
+                    corrected_value=correction.corrected_value,
+                    confidence=correction.confidence,
+                )
         except (ValueError, TypeError) as exc:
             logger.warning(
                 "data_correction_coerce_failed",

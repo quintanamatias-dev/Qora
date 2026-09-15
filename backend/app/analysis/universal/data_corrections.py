@@ -29,6 +29,8 @@ import logging
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
+from app.phones.normalization import PhoneNormalizationError, normalize_phone
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -75,11 +77,12 @@ class DataCorrectionsAxis(BaseModel):
 
 
 def _validate_phone(value: str) -> tuple[bool, str | None]:
-    """Phone: E.164 or normalized 10-digit format."""
-    digits = re.sub(r"\D", "", value)
-    if len(digits) >= 10:
-        return True, None
-    return False, f"Phone '{value}' has fewer than 10 digits (got {len(digits)})"
+    """Validate a correction against the explicit Argentina phone policy."""
+    try:
+        normalize_phone(value, region="AR")
+    except PhoneNormalizationError as exc:
+        return False, exc.reason
+    return True, None
 
 
 def _extract_int(value: str) -> int | None:
@@ -427,20 +430,39 @@ def _process_corrections(
             continue
 
         entry = CORRECTABLE_FIELDS[field]
+        corrected_value = correction.corrected_value
+        if field == "phone":
+            try:
+                corrected_value = normalize_phone(corrected_value, region="AR")
+            except PhoneNormalizationError as exc:
+                processed.append(
+                    correction.model_copy(
+                        update={"applied": False, "rejection_reason": exc.reason}
+                    )
+                )
+                logger.info(
+                    "data_corrections_phone_validation_failed field=%s reason=%s",
+                    field,
+                    exc.reason,
+                )
+                continue
 
         # 2. Idempotency gate — drop if corrected == current (case-insensitive for strings)
         lead_attr = entry.lead_attr
         current_value = current_lead_data.get(lead_attr, current_lead_data.get(field))
 
-        if current_value is not None and correction.corrected_value is not None:
+        if current_value is not None and corrected_value is not None:
             current_str = str(current_value).strip().lower()
-            corrected_str = correction.corrected_value.strip().lower()
+            corrected_str = corrected_value.strip().lower()
             if current_str == corrected_str:
-                logger.debug(
-                    "data_corrections_idempotency_skip field=%s value=%s",
-                    field,
-                    current_value,
-                )
+                if field == "phone":
+                    logger.debug("data_corrections_phone_idempotency_skip field=%s", field)
+                else:
+                    logger.debug(
+                        "data_corrections_idempotency_skip field=%s value=%s",
+                        field,
+                        current_value,
+                    )
                 continue  # Same value — drop entirely
 
         # 3. Per-field validation
@@ -448,22 +470,26 @@ def _process_corrections(
         applied = True
         rejection_reason: str | None = None
         if validator is not None:
-            ok, error_msg = validator(correction.corrected_value)
+            ok, error_msg = validator(corrected_value)
             if not ok:
                 applied = False
                 rejection_reason = error_msg
-                logger.info(
-                    "data_corrections_validation_failed field=%s corrected_value=%s error=%s",
-                    field,
-                    correction.corrected_value,
-                    error_msg,
-                )
+                if field == "phone":
+                    logger.info(
+                        "data_corrections_phone_validation_failed field=%s reason=%s",
+                        field,
+                        error_msg,
+                    )
+                else:
+                    logger.info(
+                        "data_corrections_validation_failed field=%s corrected_value=%s error=%s",
+                        field,
+                        correction.corrected_value,
+                        error_msg,
+                    )
         else:
             # Fields without validators: non-empty string value required
-            if (
-                not correction.corrected_value
-                or not str(correction.corrected_value).strip()
-            ):
+            if not corrected_value or not str(corrected_value).strip():
                 applied = False
                 rejection_reason = "corrected_value is empty or whitespace-only"
 
@@ -476,7 +502,7 @@ def _process_corrections(
             DataCorrection(
                 field=field,
                 current_value=correction.current_value,
-                corrected_value=correction.corrected_value,
+                corrected_value=corrected_value,
                 confidence=correction.confidence,
                 evidence=correction.evidence,
                 applied=applied,

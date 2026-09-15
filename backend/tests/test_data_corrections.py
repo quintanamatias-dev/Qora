@@ -15,6 +15,7 @@ Tasks covered:
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -80,7 +81,7 @@ async def lead_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="DC Test Lead",
-            phone="+5411000099",
+            phone="+5491155550101",
             lead_id="dc-lead-001",
         )
         await sess.commit()
@@ -346,20 +347,25 @@ def test_correctable_fields_car_year_type() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_validate_phone_valid_e164() -> None:
-    """Valid E.164 phone passes validation."""
+def test_validate_phone_normalizes_supported_argentine_mobile() -> None:
+    """A complete domestic mobile correction becomes canonical E.164."""
     from app.analysis.universal.data_corrections import _validate_phone
 
-    ok, _ = _validate_phone("+5411234567890")
+    ok, reason = _validate_phone("011 15 5555-0101")
+
     assert ok is True
+    assert reason is None
 
 
-def test_validate_phone_valid_10digit() -> None:
-    """Valid 10-digit phone passes validation."""
+def test_validate_phone_rejects_ambiguous_geographic_number_without_digits_in_reason() -> None:
+    """A bare geographic correction is rejected without echoing its value."""
     from app.analysis.universal.data_corrections import _validate_phone
 
-    ok, _ = _validate_phone("1234567890")
-    assert ok is True
+    ok, reason = _validate_phone("011 5555-0101")
+
+    assert ok is False
+    assert reason == "ambiguous_or_incomplete"
+    assert not any(char.isdigit() for char in reason)
 
 
 def test_validate_phone_invalid_too_short() -> None:
@@ -698,6 +704,66 @@ async def test_pipeline_returns_multiple_corrections() -> None:
     assert all(c.applied is True for c in result.corrections)
 
 
+@pytest.mark.parametrize(
+    ("log_level", "phone_value", "expected_fields"),
+    [
+        (logging.INFO, "011 5555-0101", ["name", "phone"]),
+        (logging.DEBUG, "011 5555-0101", ["name", "phone"]),
+        (logging.INFO, "011 15 5555-0101", ["name"]),
+        (logging.DEBUG, "011 15 5555-0101", ["name"]),
+    ],
+)
+async def test_pipeline_preserves_name_correction_when_phone_diagnostic_is_enabled(
+    caplog,
+    log_level: int,
+    phone_value: str,
+    expected_fields: list[str],
+) -> None:
+    """Phone diagnostics never discard a valid unrelated correction."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.analysis.universal import data_corrections
+
+    name_correction = data_corrections.DataCorrection(
+        field="name",
+        current_value="Before",
+        corrected_value="Updated Name",
+        confidence=0.9,
+        evidence="Synthetic name correction",
+    )
+    phone_correction = data_corrections.DataCorrection(
+        field="phone",
+        current_value="+5491155550101",
+        corrected_value=phone_value,
+        confidence=0.9,
+        evidence="Synthetic phone correction",
+    )
+    client = AsyncMock()
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.parsed = data_corrections.DataCorrectionsAxis(
+        corrections=[name_correction, phone_correction]
+    )
+    client.beta.chat.completions.parse.return_value = response
+
+    caplog.set_level(log_level, logger=data_corrections.logger.name)
+    result = await data_corrections.run_data_corrections_pipeline(
+        "Synthetic transcript",
+        client,
+        current_lead_data={"name": "Before", "phone": "+5491155550101"},
+    )
+
+    assert [correction.field for correction in result.corrections] == expected_fields
+    assert result.corrections[0].applied is True
+    assert result.corrections[0].corrected_value == "Updated Name"
+    if phone_value == "011 5555-0101":
+        rejected_phone = result.corrections[1]
+        assert rejected_phone.applied is False
+        assert rejected_phone.rejection_reason == "ambiguous_or_incomplete"
+    assert phone_value not in caplog.text
+    assert "+5491155550101" not in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # 3.3  Idempotency, confidence gate (disabled), audit
 # ---------------------------------------------------------------------------
@@ -937,6 +1003,27 @@ def test_process_corrections_sets_rejection_reason_on_invalid_age() -> None:
     assert result[0].applied is False
     assert result[0].rejection_reason is not None
     assert len(result[0].rejection_reason) > 0
+
+
+def test_process_phone_correction_writes_only_canonical_value() -> None:
+    """Accepted phone corrections retain only the canonical stored representation."""
+    from app.analysis.universal.data_corrections import _process_corrections, DataCorrection
+
+    result = _process_corrections(
+        [
+            DataCorrection(
+                field="phone",
+                current_value="+5491155550101",
+                corrected_value="0341 15 555-0101",
+                confidence=0.9,
+                evidence="Synthetic correction",
+            )
+        ],
+        {"phone": "+5491155550101"},
+    )
+
+    assert result[0].applied is True
+    assert result[0].corrected_value == "+5493415550101"
 
 
 def test_process_corrections_no_rejection_reason_when_valid() -> None:
