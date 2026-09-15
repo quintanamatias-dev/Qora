@@ -84,7 +84,7 @@ async def test_sync_lead_success_calls_upsert_with_mapped_payload(
         db_session,
         client_id="test-client-001",
         name="Ana García",
-        phone="+541155504",
+        phone="+5491155550101",
     )
     await db_session.flush()
 
@@ -126,7 +126,7 @@ async def test_sync_lead_success_calls_upsert_with_mapped_payload(
     assert "Nombre" in payload
     assert payload["Nombre"] == "Ana García"
     assert "Teléfono" in payload
-    assert payload["Teléfono"] == "+541155504"
+    assert payload["Teléfono"] == "+5491155550101"
 
 
 @pytest.mark.asyncio
@@ -142,7 +142,7 @@ async def test_sync_lead_success_uses_config_match_field(
         db_session,
         client_id="test-client-002",
         name="Roberto Silva",
-        phone="+541155505",
+        phone="+5491155550101",
     )
     await db_session.flush()
 
@@ -195,7 +195,7 @@ async def test_sync_lead_no_crm_yaml_is_silent_noop(
         db_session,
         client_id="test-client-noop",
         name="Test Lead",
-        phone="+541155599",
+        phone="+5491155550101",
     )
     await db_session.flush()
 
@@ -285,7 +285,7 @@ async def test_sync_lead_credential_error_is_swallowed(
         db_session,
         client_id="test-client-cred",
         name="Test Lead",
-        phone="+541155506",
+        phone="+5491155550101",
     )
     await db_session.flush()
 
@@ -334,7 +334,7 @@ async def test_sync_lead_adapter_error_is_swallowed(
         db_session,
         client_id="test-client-err",
         name="Error Lead",
-        phone="+541155507",
+        phone="+5491155550101",
     )
     await db_session.flush()
 
@@ -396,7 +396,7 @@ async def test_sync_lead_cross_client_mismatch_does_not_upsert(
         db_session,
         client_id="tenant-a",
         name="Owned By A",
-        phone="+541155600",
+        phone="+5491155550101",
     )
     await db_session.flush()
 
@@ -445,7 +445,7 @@ async def test_sync_lead_matching_client_does_upsert(
         db_session,
         client_id="tenant-match",
         name="Owned Correctly",
-        phone="+541155601",
+        phone="+5491155550101",
     )
     await db_session.flush()
 
@@ -497,7 +497,7 @@ async def test_sync_lead_factory_error_is_swallowed(
         db_session,
         client_id="test-client-factory",
         name="Factory Lead",
-        phone="+541155602",
+        phone="+5491155550101",
     )
     await db_session.flush()
 
@@ -544,7 +544,7 @@ async def test_sync_lead_does_not_call_airtable_read_methods(
         db_session,
         client_id="test-client-ro",
         name="Carlos Méndez",
-        phone="+541155501",
+        phone="+5491155550101",
     )
     await db_session.flush()
 
@@ -607,7 +607,7 @@ async def test_sync_lead_null_external_lead_id_skips_gracefully(
         db_session,
         client_id="test-client-fallback",
         name="Lead Sin ID",
-        phone="+541155509",
+        phone="+5491155550101",
     )
     # external_lead_id is None by default (not set at creation)
     assert lead.external_lead_id is None
@@ -684,7 +684,7 @@ async def test_sync_lead_null_external_lead_id_falls_back_to_external_crm_id(
         db_session,
         client_id="test-client-crm-fallback",
         name="Lead Con CRM ID",
-        phone="+541155510",
+        phone="+5491155550101",
     )
     # Set external_crm_id but NOT external_lead_id
     lead.external_crm_id = "recABC123"
@@ -763,7 +763,7 @@ async def test_sync_lead_null_external_lead_id_and_crm_id_falls_back_to_email(
         db_session,
         client_id="test-client-email-fallback",
         name="Lead Con Email",
-        phone="+541155511",
+        phone="+5491155550101",
     )
     lead.external_crm_id = None
     lead.external_lead_id = None
@@ -842,7 +842,7 @@ async def test_sync_lead_all_fallbacks_null_skips_with_warning(
         db_session,
         client_id="test-client-no-ids",
         name="Lead Sin IDs",
-        phone="+541155512",
+        phone="+5491155550101",
     )
     lead.external_crm_id = None
     lead.external_lead_id = None
@@ -922,7 +922,7 @@ async def test_sync_lead_duplicate_external_lead_id_logs_warning_but_still_pushe
         db_session,
         client_id="test-client-dup",
         name="Lead A Duplicate",
-        phone="+541155520",
+        phone="+5491155550101",
     )
     lead_a.external_lead_id = 99999
 
@@ -930,7 +930,7 @@ async def test_sync_lead_duplicate_external_lead_id_logs_warning_but_still_pushe
         db_session,
         client_id="test-client-dup",
         name="Lead B Duplicate",
-        phone="+541155521",
+        phone="+5491155550101",
     )
     lead_b.external_lead_id = 99999  # same as lead_a — duplicate!
     await db_session.flush()

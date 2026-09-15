@@ -304,7 +304,7 @@ field_mappings:
                 "id": "recABC",
                 "fields": {
                     "Nombre Completo": "New User",
-                    "Teléfono": "+5491199998888",
+                    "Teléfono": "+5491155558888",
                 },
             }
         ]
@@ -366,7 +366,7 @@ field_mappings:
                 "id": "recNEW",
                 "fields": {
                     "Nombre Completo": "Brand New Lead",
-                    "Teléfono": "+5491199997777",
+                    "Teléfono": "+5491155557777",
                 },
             }
         ]
@@ -424,7 +424,7 @@ field_mappings:
             id="existing-123",
             client_id="test-client",
             name="Old Name",
-            phone="+5491199996666",
+            phone="+5491155556666",
             status=LeadStatus.NEW.value,
         )
 
@@ -433,7 +433,7 @@ field_mappings:
                 "id": "recEXIST",
                 "fields": {
                     "Nombre Completo": "Updated Name",
-                    "Teléfono": "+5491199996666",
+                    "Teléfono": "+5491155556666",
                 },
             }
         ]
@@ -930,3 +930,67 @@ class TestCRMImportEndpoint:
         data = response.json()
         assert data["created"] == 0
         assert data["errors"] == []
+
+
+class TestPhoneNormalizationDuringCRMImport:
+    """CRM pull normalizes before tenant-scoped comparison with no live provider."""
+
+    @pytest.mark.asyncio
+    async def test_import_normalizes_before_lookup_and_skips_invalid_or_missing_rows(self):
+        from app.integrations import crm_import_service
+        from app.integrations.crm_config import CRMConfig, CRMFieldDef
+
+        config = MagicMock(spec=CRMConfig)
+        config.base_id = "appTEST"
+        config.table_id = "tblTEST"
+        config.field_mappings = [
+            CRMFieldDef(source="phone", target="Teléfono", type="phone"),
+        ]
+        config.import_status_mapping = None
+        config.custom_fields = []
+        config.resolve_api_key.return_value = "test-key"
+        records = [
+            {"id": "rec-valid", "fields": {"Teléfono": "011 15 5555-0101"}},
+            {"id": "rec-invalid", "fields": {"Teléfono": "011 5555-0101"}},
+            {"id": "rec-missing", "fields": {}},
+        ]
+        db = AsyncMock()
+        db.add = MagicMock()
+        db.flush = AsyncMock()
+
+        with patch(
+            "app.integrations.crm_import_service.CRMConfigLoader.load", return_value=config
+        ), patch("app.integrations.crm_import_service.AirtableAdapter") as adapter, patch(
+            "app.integrations.crm_import_service._find_lead_by_phone", new=AsyncMock(return_value=None)
+        ) as find:
+            adapter.return_value.fetch_records = AsyncMock(return_value=records)
+            result = await crm_import_service.import_leads_from_crm("tenant-a", db)
+
+        assert result.created == 1
+        assert result.skipped == 2
+        find.assert_awaited_once_with(db, "tenant-a", "+5491155550101")
+        assert result.errors == [
+            "Invalid phone for record rec-invalid: ambiguous_or_incomplete",
+            "Invalid phone for record rec-missing: invalid_syntax",
+        ]
+        db.add.assert_called_once()
+        assert db.add.call_args.args[0].phone == "+5491155550101"
+
+
+@pytest.mark.asyncio
+async def test_import_uses_canonical_phone_for_equivalent_rows_without_rewriting_match():
+    """Equivalent input forms use one tenant-scoped canonical lookup key."""
+    from app.integrations import crm_import_service
+    from app.leads.models import Lead
+
+    existing = Lead(
+        id="legacy-lead",
+        client_id="tenant-a",
+        name="Existing",
+        phone="011 15 5555-0101",
+        status="new",
+    )
+    assert crm_import_service._update_lead_from_qora_data(
+        existing, {"phone": "+5491155550101"}, "rec-new"
+    ) == {}
+    assert existing.phone == "011 15 5555-0101"

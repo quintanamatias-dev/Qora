@@ -45,6 +45,7 @@ from app.integrations.crm_config import (
 )
 from app.integrations.field_mapping import FieldMapper
 from app.leads import lead_custom_fields_service
+from app.phones.normalization import PhoneNormalizationError, normalize_phone
 from app.leads.models import Lead, LeadStatus
 
 
@@ -236,22 +237,25 @@ async def import_leads_from_crm(
             result.errors.append(f"Mapping error for record {airtable_id}")
             continue
 
-        phone = qora_data.get("phone")
-        if not phone:
+        try:
+            qora_data["phone"] = normalize_phone(qora_data.get("phone"), region="AR")
+        except PhoneNormalizationError as exc:
             logger.debug(
-                "crm_import_record_skipped: missing phone",
-                extra={"airtable_id": airtable_id},
+                "crm_import_record_skipped: invalid phone",
+                extra={"airtable_id": airtable_id, "reason": exc.reason},
             )
             result.skipped += 1
+            result.errors.append(f"Invalid phone for record {airtable_id}: {exc.reason}")
             continue
 
-        # 4c. Look up lead by (client_id, phone)
+        # 4c. Look up lead by (client_id, canonical phone)
+        phone = qora_data["phone"]
         try:
             existing = await _find_lead_by_phone(db_session, client_id, phone)
         except Exception as exc:
             logger.error(
                 "crm_import_db_lookup_failed",
-                extra={"airtable_id": airtable_id, "phone": phone, "error": str(exc)},
+                extra={"airtable_id": airtable_id, "error_category": type(exc).__name__},
             )
             result.errors.append(f"DB lookup error for record {airtable_id}")
             result.skipped += 1

@@ -14,11 +14,11 @@ Design decisions:
 
 from __future__ import annotations
 
-import re
 from datetime import date, datetime
 from typing import Any
 
 from app.integrations.crm_config import CRMFieldDef
+from app.phones.normalization import PhoneNormalizationError, normalize_phone
 
 
 # ---------------------------------------------------------------------------
@@ -36,29 +36,12 @@ class MappingError(Exception):
 # Phone normalization (pure)
 # ---------------------------------------------------------------------------
 
-_PHONE_STRIP_RE = re.compile(r"[\s\-\(\)\.]")
-_E164_RE = re.compile(r"^\+[1-9]\d{1,14}$")
-
-
 def normalize_phone_e164(raw: str) -> str:
-    """Normalize a phone string to E.164 format (+<country><number>).
-
-    Strategy:
-    - Strip spaces, dashes, parentheses, dots.
-    - Accept only valid E.164 after stripping.
-    - Reject local/national numbers instead of guessing a country code.
-
-    Qora stores phones with a '+' prefix by convention, so the E.164 path is the
-    happy path. Local Argentina normalization is intentionally out of scope for
-    this foundation slice; failing loudly avoids broken CRM de-duplication.
-    """
-    stripped = _PHONE_STRIP_RE.sub("", raw)
-    if not _E164_RE.fullmatch(stripped):
-        raise MappingError(
-            f"Cannot coerce phone value {raw!r} to E.164. "
-            "Expected '+<country_code><number>' with 2-15 digits total."
-        )
-    return stripped
+    """Normalize an approved Argentine phone to canonical E.164."""
+    try:
+        return normalize_phone(raw, region="AR")
+    except PhoneNormalizationError as exc:
+        raise MappingError(f"Cannot coerce phone: {exc.reason}") from None
 
 
 # ---------------------------------------------------------------------------
@@ -136,8 +119,6 @@ def _coerce_date(source: str, value: Any) -> str:
 
 
 def _coerce_phone(source: str, value: Any) -> str:
-    if not isinstance(value, str):
-        value = str(value)
     return normalize_phone_e164(value)
 
 

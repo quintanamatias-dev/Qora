@@ -38,6 +38,7 @@ from app.leads.service import (
     list_leads_for_client,
     transition_lead_status,
 )
+from app.phones.normalization import PhoneNormalizationError
 from app.scheduler.models import ScheduledCall
 
 logger = structlog.get_logger(__name__)
@@ -364,13 +365,19 @@ async def create_new_lead(
     if not resolved_client_id:
         raise HTTPException(status_code=422, detail={"error": "client_id is required"})
 
-    lead = await create_lead(
-        session,
-        client_id=resolved_client_id,
-        name=body.name,
-        phone=body.phone,
-        notes=body.notes,
-    )
+    try:
+        lead = await create_lead(
+            session,
+            client_id=resolved_client_id,
+            name=body.name,
+            phone=body.phone,
+            notes=body.notes,
+        )
+    except PhoneNormalizationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "invalid_phone", "reason": exc.reason},
+        ) from None
 
     # WU-6: write custom_fields to lead_custom_fields table if provided
     if body.custom_fields:
