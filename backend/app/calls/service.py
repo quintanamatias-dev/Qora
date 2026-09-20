@@ -703,6 +703,18 @@ async def close_session(
     if cs.telephony_status == "completed" and cs.duration_seconds is not None:
         _apply_voicemail_heuristic(cs)
 
+    # Phase C6b Slice 2: Resolve the linked ScheduledCall (if any) from the
+    # FINAL telephony_status. Must run AFTER the voicemail heuristic above —
+    # a completed→voicemail rewrite must be read here, not the pre-heuristic
+    # value (design.md — The Completion Hook). No-op when this session has no
+    # linked ScheduledCall, when telephony_status is non-terminal, or when the
+    # linked row was already resolved (idempotent).
+    if cs.telephony_status is not None:
+        from app.scheduler.service import resolve_scheduled_call_for_session
+        await resolve_scheduled_call_for_session(
+            session, call_session_id=cs.id, telephony_status=cs.telephony_status
+        )
+
     # Merge sibling sessions BEFORE flush so summarizer sees full transcript (Issue #22)
     merged_ids = await _merge_sibling_sessions(session, completed_session=cs)
 

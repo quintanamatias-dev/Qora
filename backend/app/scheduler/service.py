@@ -831,6 +831,105 @@ async def _set_scheduled_call_status(
 
 
 # ---------------------------------------------------------------------------
+# Phase C6b Slice 2: Outcome-driven completion + Decision 8 (tech_retry cancel)
+# ---------------------------------------------------------------------------
+
+#: Maps a CallSession.telephony_status terminal value to the ScheduledCall
+#: status it resolves to. Design: openspec/changes/phase-c6b-auto-dialer/
+#: design.md — The Completion Hook. Non-terminal statuses (queued, dialing,
+#: ringing, connected) are intentionally absent — .get() returns None for
+#: them, which resolve_scheduled_call_for_session treats as a no-op.
+_TELEPHONY_TO_SCHEDULED_STATUS: dict[str, str] = {
+    "completed": "completed",  # real conversation
+    "voicemail": "completed",  # attempt consumed; recontact is auto_schedule's job
+    "no_answer": "failed",
+    "failed": "failed",
+    "recurrent_error": "failed",
+    "stale_in_call": "failed",  # no completion evidence — operator-visible
+}
+
+
+async def get_pending_tech_retry_for_lead(
+    db: AsyncSession, *, client_id: str, lead_id: str
+) -> ScheduledCall | None:
+    """Return the lead's pending tech_retry ScheduledCall, if any (D8).
+
+    Scoped to trigger_reason == 'tech_retry' and status == 'pending' — an
+    in_progress tech_retry (already claimed/dialing) is deliberately outside
+    this filter: it resolves through its own dial outcome or the reaper, same
+    as any other in-flight row.
+    """
+    result = await db.execute(
+        select(ScheduledCall).where(
+            ScheduledCall.client_id == client_id,
+            ScheduledCall.lead_id == lead_id,
+            ScheduledCall.trigger_reason == "tech_retry",
+            ScheduledCall.status == "pending",
+        )
+    )
+    return result.scalars().first()
+
+
+async def resolve_scheduled_call_for_session(
+    db: AsyncSession,
+    *,
+    call_session_id: str,
+    telephony_status: str,
+    source: str = "close_session",
+) -> ScheduledCall | None:
+    """Resolve the in_progress ScheduledCall linked to a finished CallSession.
+
+    No-op (returns None) when no linked row exists, when the row is not
+    in_progress (idempotent — an already-resolved session cannot resolve
+    twice), or when telephony_status is non-terminal. Mutates in-memory only
+    via _set_scheduled_call_status (flush, not commit) — the caller owns the
+    transaction boundary.
+
+    Decision 8: when this resolution reaches new_status == "completed", also
+    cancels a separate pending tech_retry ScheduledCall for the same lead —
+    a real conversation just happened, so the parked technical retry is now
+    meaningless and would otherwise dial someone who just spoke to us.
+
+    Design: openspec/changes/phase-c6b-auto-dialer/design.md — The
+    Completion Hook / Decision 8.
+    """
+    new_status = _TELEPHONY_TO_SCHEDULED_STATUS.get(telephony_status)
+    if new_status is None:
+        return None
+
+    result = await db.execute(
+        select(ScheduledCall).where(ScheduledCall.outcome_session_id == call_session_id)
+    )
+    sc = result.scalars().first()
+    if sc is None or sc.status != "in_progress":
+        return None
+
+    await _set_scheduled_call_status(db, sc, new_status)
+    logger.info(
+        "scheduled_call_resolved_from_session",
+        call_session_id=call_session_id,
+        telephony_status=telephony_status,
+        new_status=new_status,
+        source=source,
+    )
+
+    if new_status == "completed":
+        stale_retry = await get_pending_tech_retry_for_lead(
+            db, client_id=sc.client_id, lead_id=sc.lead_id
+        )
+        if stale_retry is not None:
+            await _set_scheduled_call_status(db, stale_retry, "cancelled")
+            logger.warning(
+                "tech_retry_cancelled_by_successful_call",
+                scheduled_call_id=stale_retry.id,
+                lead_id=sc.lead_id,
+                resolved_from_session_id=call_session_id,
+            )
+
+    return sc
+
+
+# ---------------------------------------------------------------------------
 # Background tick — mark due calls as in_progress
 # ---------------------------------------------------------------------------
 
