@@ -175,6 +175,41 @@ async def dial_outbound_call(
         DialResult with status, call_session_id, and optional error.
     """
     # ------------------------------------------------------------------
+    # Guard 0: Tenant ownership
+    #
+    # The scheduler loads these objects independently. Validate the complete
+    # tuple here, at the provider-adjacent boundary, before creating a call
+    # session or making any provider request. The public error intentionally
+    # does not disclose which object belongs to a different tenant.
+    # ------------------------------------------------------------------
+    client_id = getattr(client, "id", None)
+    if lead is None or client_id is None or getattr(lead, "client_id", None) != client_id:
+        logger.warning(
+            "outbound_dial_blocked_lead_client_mismatch",
+            lead_id=getattr(lead, "id", None),
+            client_id=client_id,
+        )
+        return DialResult(
+            status="failed",
+            call_session_id=None,
+            failure_code="ownership_mismatch",
+            error="Outbound target does not belong to this client.",
+        )
+    if agent is not None and getattr(agent, "client_id", None) != client_id:
+        logger.warning(
+            "outbound_dial_blocked_agent_client_mismatch",
+            lead_id=lead.id,
+            agent_id=getattr(agent, "id", None),
+            client_id=client_id,
+        )
+        return DialResult(
+            status="failed",
+            call_session_id=None,
+            failure_code="ownership_mismatch",
+            error="Outbound target does not belong to this client.",
+        )
+
+    # ------------------------------------------------------------------
     # Guard 1: Feature flag
     # ------------------------------------------------------------------
     if not settings.enable_outbound_calls:

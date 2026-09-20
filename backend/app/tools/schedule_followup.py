@@ -143,6 +143,17 @@ async def schedule_followup(
     if lead is None:
         return {"error": "lead_not_found"}
 
+    # An explicit client is an authorization boundary, not a fallback hint.
+    # Return the same not-found result as an unknown lead to avoid exposing
+    # whether a lead belongs to another tenant.
+    if client_id is not None and lead.client_id != client_id:
+        logger.warning(
+            "schedule_followup_lead_client_mismatch",
+            lead_id=lead_id,
+            client_id=client_id,
+        )
+        return {"error": "lead_not_found"}
+
     # Resolve client_id from lead if not provided
     effective_client_id = client_id or lead.client_id
 
