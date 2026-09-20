@@ -168,7 +168,7 @@ async def import_leads_from_crm(
         if clients_root is not None:
             load_kwargs["clients_root"] = clients_root
 
-        config = CRMConfigLoader.load(client_id, **load_kwargs)
+        config = await CRMConfigLoader.load_async(client_id, **load_kwargs)
     except ConfigValidationError as exc:
         logger.error(
             "crm_import_skipped: invalid crm.yaml",

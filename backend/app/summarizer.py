@@ -1170,7 +1170,7 @@ async def _merge_facts_into_lead(
             from app.integrations.crm_config import CRMConfigLoader as _CRMConfigLoader
 
             _custom_fields_for_status = await _get_custom_fields(db, lead_id, client_id)
-            _crm_cfg = _CRMConfigLoader.load(client_id)
+            _crm_cfg = await _CRMConfigLoader.load_async(client_id)
             if _crm_cfg is not None:
                 _quote_ready_fields_for_status = list(_crm_cfg.quote_ready_fields or [])
         except Exception as _qr_exc:

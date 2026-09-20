@@ -439,7 +439,7 @@ async def update_integration(
 
     # Reload and validate the config
     try:
-        config = CRMConfigLoader.load(client_id, clients_root=CLIENTS_ROOT)
+        config = await CRMConfigLoader.load_async(client_id, clients_root=CLIENTS_ROOT)
     except ConfigValidationError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
@@ -541,7 +541,7 @@ async def save_integration_mappings(
     crm_path.write_text(yaml.dump(raw, allow_unicode=True, default_flow_style=False))
 
     try:
-        config = CRMConfigLoader.load(client_id, clients_root=CLIENTS_ROOT)
+        config = await CRMConfigLoader.load_async(client_id, clients_root=CLIENTS_ROOT)
     except ConfigValidationError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     if config is None:
@@ -622,7 +622,7 @@ async def connect_integration(
     crm_path.write_text(yaml.dump(crm_data, allow_unicode=True, default_flow_style=False))
 
     try:
-        config = CRMConfigLoader.load(client_id, clients_root=CLIENTS_ROOT)
+        config = await CRMConfigLoader.load_async(client_id, clients_root=CLIENTS_ROOT)
     except ConfigValidationError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 

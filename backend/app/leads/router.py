@@ -336,7 +336,7 @@ async def get_lead_by_id(
     crm_config = None
     try:
         from app.integrations.crm_config import CRMConfigLoader
-        crm_config = CRMConfigLoader.load(lead.client_id)
+        crm_config = await CRMConfigLoader.load_async(lead.client_id)
     except Exception:
         logger.warning("lead_detail_crm_config_load_failed", lead_id=lead_id, client_id=lead.client_id)
 

@@ -9,9 +9,10 @@ These tests pin the contract:
 
 1. An async entry point exists and runs the blocking work off the loop thread.
 2. The synchronous entry point is preserved for existing sync callers.
-3. Async call sites in `app/voice/webhook.py` and `app/voice/context.py` use
-   the awaited, non-blocking entry point (never the bare sync one).
-4. Both entry points agree on results and on error behaviour.
+3. Async call sites across the voice, CRM integration, leads and summarizer
+   modules use the awaited, non-blocking entry point (never the bare sync one).
+4. Synchronous call sites are left on the synchronous entry point.
+5. Both entry points agree on results and on error behaviour.
 """
 
 from __future__ import annotations
@@ -64,12 +65,40 @@ def _crm_loader_aliases(tree: ast.Module) -> set[str]:
 
 def _loader_calls(tree: ast.Module, aliases: set[str]) -> list[tuple[str, bool]]:
     """Return ``(attribute_name, is_awaited)`` for every loader call in *tree*."""
+    return [(attr, awaited) for attr, awaited, _ in _loader_calls_with_context(tree, aliases)]
+
+
+def _loader_calls_with_context(
+    tree: ast.Module, aliases: set[str]
+) -> list[tuple[str, bool, bool]]:
+    """Return ``(attribute_name, is_awaited, in_async_def)`` per loader call.
+
+    ``in_async_def`` is True when the nearest enclosing function definition is
+    an ``async def``. That is the property that matters: only calls running on
+    the event loop thread must be awaited. A call inside a plain ``def`` helper
+    must keep using the synchronous entry point.
+    """
     awaited_calls: set[int] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
             awaited_calls.add(id(node.value))
 
-    results: list[tuple[str, bool]] = []
+    parents: dict[int, ast.AST] = {}
+    nodes_by_id: dict[int, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[id(child)] = node
+            nodes_by_id[id(child)] = child
+
+    def _nearest_function_is_async(node: ast.AST) -> bool:
+        current = parents.get(id(node))
+        while current is not None:
+            if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return isinstance(current, ast.AsyncFunctionDef)
+            current = parents.get(id(current))
+        return False
+
+    results: list[tuple[str, bool, bool]] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -78,7 +107,9 @@ def _loader_calls(tree: ast.Module, aliases: set[str]) -> list[tuple[str, bool]]
             continue
         if not isinstance(func.value, ast.Name) or func.value.id not in aliases:
             continue
-        results.append((func.attr, id(node) in awaited_calls))
+        results.append(
+            (func.attr, id(node) in awaited_calls, _nearest_function_is_async(node))
+        )
     return results
 
 
@@ -238,19 +269,27 @@ def test_sync_load_is_callable_without_a_running_event_loop(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "module_name",
-    ["app.voice.webhook", "app.voice.context"],
-)
+_MODULES_WITH_CRM_LOADER_CALLS = [
+    "app.voice.webhook",
+    "app.voice.context",
+    "app.integrations.crm_sync_service",
+    "app.integrations.crm_import_service",
+    "app.integrations.crm_config_router",
+    "app.leads.router",
+    "app.summarizer",
+]
+
+
+@pytest.mark.parametrize("module_name", _MODULES_WITH_CRM_LOADER_CALLS)
 def test_async_modules_never_call_sync_crm_loader(module_name):
-    """No async voice module may call the blocking ``CRMConfigLoader.load``."""
+    """No ``async def`` may call the blocking ``CRMConfigLoader.load``."""
     tree = _module_source_tree(module_name)
     aliases = _crm_loader_aliases(tree)
 
     assert aliases, f"{module_name} does not import CRMConfigLoader — call sites moved?"
 
-    calls = _loader_calls(tree, aliases)
-    blocking = [attr for attr, _ in calls if attr == "load"]
+    calls = _loader_calls_with_context(tree, aliases)
+    blocking = [attr for attr, _, in_async in calls if attr == "load" and in_async]
 
     assert not blocking, (
         f"{module_name} still calls the blocking CRMConfigLoader.load() "
@@ -259,24 +298,57 @@ def test_async_modules_never_call_sync_crm_loader(module_name):
 
 
 @pytest.mark.parametrize(
-    ("module_name", "expected_call_sites"),
-    [("app.voice.webhook", 4), ("app.voice.context", 1)],
+    ("module_name", "expected_async_call_sites"),
+    [
+        ("app.voice.webhook", 4),
+        ("app.voice.context", 1),
+        ("app.integrations.crm_sync_service", 1),
+        ("app.integrations.crm_import_service", 1),
+        ("app.integrations.crm_config_router", 3),
+        ("app.leads.router", 1),
+        ("app.summarizer", 1),
+    ],
 )
 def test_async_modules_await_load_async_at_every_call_site(
-    module_name, expected_call_sites
+    module_name, expected_async_call_sites
 ):
-    """Every CRM config call site in these modules is an awaited ``load_async``."""
+    """Every CRM config call site inside an ``async def`` is an awaited ``load_async``."""
     tree = _module_source_tree(module_name)
     aliases = _crm_loader_aliases(tree)
-    calls = _loader_calls(tree, aliases)
+    async_calls = [
+        (attr, awaited)
+        for attr, awaited, in_async in _loader_calls_with_context(tree, aliases)
+        if in_async
+    ]
 
-    assert len(calls) == expected_call_sites, (
-        f"{module_name}: expected {expected_call_sites} CRMConfigLoader call sites, "
-        f"found {len(calls)}: {calls}"
+    assert len(async_calls) == expected_async_call_sites, (
+        f"{module_name}: expected {expected_async_call_sites} async CRMConfigLoader "
+        f"call sites, found {len(async_calls)}: {async_calls}"
     )
-    for attr, is_awaited in calls:
+    for attr, is_awaited in async_calls:
         assert attr == "load_async", f"{module_name}: non-async call site {attr!r}"
         assert is_awaited, f"{module_name}: {attr} call site is not awaited"
+
+
+def test_sync_helper_in_crm_config_router_keeps_using_sync_load():
+    """``_load_config_or_none`` is a plain ``def`` and must stay on ``load()``.
+
+    It is not on the event loop by virtue of being a coroutine, so converting
+    it would require changing its signature — explicitly out of scope here.
+    This test pins the remaining sync call site so it is not silently churned.
+    """
+    tree = _module_source_tree("app.integrations.crm_config_router")
+    aliases = _crm_loader_aliases(tree)
+    sync_calls = [
+        attr
+        for attr, _, in_async in _loader_calls_with_context(tree, aliases)
+        if not in_async
+    ]
+
+    assert sync_calls == ["load"], (
+        "crm_config_router should have exactly one synchronous CRMConfigLoader "
+        f"call site using load(), found: {sync_calls}"
+    )
 
 
 @pytest.mark.asyncio
@@ -329,5 +401,53 @@ async def test_build_voice_context_loads_crm_config_off_the_loop_thread():
     assert call_threads, "build_voice_context never loaded CRM config"
     assert loop_thread not in call_threads, (
         "build_voice_context loaded CRM config on the event loop thread "
+        f"(loop={loop_thread}, calls={call_threads})"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_lead_by_id_loads_crm_config_off_the_loop_thread():
+    """The `GET /leads/{id}` handler must not load CRM config on the loop thread.
+
+    Behavioural, not static: the handler coroutine is driven directly and the
+    thread identity is recorded inside the blocking `CRMConfigLoader.load`
+    that `load_async` delegates to. Asserting on thread identity (not timing)
+    makes this deterministic.
+    """
+    from app.integrations import crm_config
+    from app.leads import router as leads_router
+
+    call_threads: list[int] = []
+
+    def _recording_load(client_id, **kwargs):
+        call_threads.append(threading.get_ident())
+        return None
+
+    lead = MagicMock()
+    lead.id = "lead-1"
+    lead.client_id = "acme"
+
+    loop_thread = threading.get_ident()
+
+    with patch.object(
+        crm_config.CRMConfigLoader, "load", staticmethod(_recording_load)
+    ), patch.object(
+        leads_router, "get_lead", AsyncMock(return_value=lead)
+    ), patch.object(
+        leads_router, "get_active_profile_facts", AsyncMock(return_value=[])
+    ), patch.object(
+        leads_router, "get_interest_history", AsyncMock(return_value=[])
+    ), patch.object(
+        leads_router.cf_service, "get_all", AsyncMock(return_value={})
+    ), patch.object(
+        leads_router, "_batch_next_scheduled_call_at", AsyncMock(return_value={})
+    ), patch.object(
+        leads_router, "_lead_to_dict", MagicMock(return_value={})
+    ):
+        await leads_router.get_lead_by_id("lead-1", session=AsyncMock())
+
+    assert call_threads, "get_lead_by_id never loaded CRM config"
+    assert loop_thread not in call_threads, (
+        "get_lead_by_id loaded CRM config on the event loop thread "
         f"(loop={loop_thread}, calls={call_threads})"
     )
