@@ -17,6 +17,7 @@ Design decisions:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -207,7 +208,21 @@ _DEFAULT_CLIENTS_ROOT = Path(__file__).parent.parent.parent / "clients"
 
 
 class CRMConfigLoader:
-    """Loads and validates per-client CRM configuration from crm.yaml."""
+    """Loads and validates per-client CRM configuration from crm.yaml.
+
+    Two entry points with identical semantics:
+
+    - ``load()``   — synchronous; for callers that are not on an event loop.
+    - ``load_async()`` — coroutine; for callers running on an event loop.
+
+    ``load()`` does blocking filesystem work (``Path.exists``, ``Path.read_text``)
+    and CPU-bound YAML parsing. Calling it directly from a coroutine runs that
+    work on the event loop thread, which in this single-loop FastAPI process
+    stalls every concurrent request, not just the caller's. Async callers must
+    use ``load_async()``, which offloads the same code to a worker thread with
+    ``asyncio.to_thread`` — the same pattern used by ``app.prompts.loader`` and
+    ``app.prompts.skill_loader``.
+    """
 
     @staticmethod
     def load(
@@ -274,3 +289,30 @@ class CRMConfigLoader:
             raise ConfigValidationError(
                 f"Invalid crm.yaml for client '{client_id}': {exc}"
             ) from exc
+
+    @staticmethod
+    async def load_async(
+        client_id: str,
+        *,
+        clients_root: Path | None = None,
+    ) -> CRMConfig | None:
+        """Async variant of :meth:`load` — never blocks the event loop.
+
+        Delegates to :meth:`load` inside ``asyncio.to_thread`` so the stat,
+        file read, and YAML parse all happen on a worker thread. Return values
+        and exceptions are identical to :meth:`load`; exceptions raised in the
+        worker thread propagate to the awaiting coroutine unchanged.
+
+        Args:
+            client_id: The client slug (matches the directory name under clients/).
+            clients_root: Override the clients root path (used in tests via tmp_path).
+
+        Returns:
+            CRMConfig if crm.yaml exists and is valid, None if file is missing.
+
+        Raises:
+            ConfigValidationError: if the file exists but fails validation.
+        """
+        return await asyncio.to_thread(
+            CRMConfigLoader.load, client_id, clients_root=clients_root
+        )
