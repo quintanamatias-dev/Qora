@@ -74,7 +74,7 @@ async def persistence_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Durability Lead",
-            phone="+54119999001",
+            phone="+5491109999001",
             lead_id="durability-lead-001",
         )
         await sess.commit()
@@ -697,7 +697,7 @@ async def test_dial_outbound_call_recurrent_error_schedules_durable_tech_retry(
     # --- Build a mock lead (real lead row exists in DB; agent_id used for resolution) ---
     mock_lead = MagicMock()
     mock_lead.id = "durability-lead-001"
-    mock_lead.phone = "+54119999001"
+    mock_lead.phone = "+5491109999001"
 
     # --- Build a mock agent (id matches real DB row so schedule_tech_retry can find it) ---
     mock_agent = MagicMock()
