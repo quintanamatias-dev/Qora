@@ -29,6 +29,11 @@ def _reset_structlog():
     level to INFO — both must be undone to avoid affecting subsequent tests that
     use stdlib loggers.
     """
+    from app.core.logging import shutdown_logging
+
+    # setup_logging() starts a queue-listener writer thread; stop it so tests
+    # neither leak threads nor keep writing into a previous test's buffer.
+    shutdown_logging()
     structlog.reset_defaults()
     # Restore root logger to clean state so other tests' stdlib loggers work normally
     root = logging.getLogger()
@@ -158,25 +163,27 @@ def test_setup_logging_installs_stdlib_bridge():
 
 def test_stdlib_logger_captured_via_bridge():
     """Scenario: a stdlib logger's output is captured through the structlog bridge."""
-    from app.core.logging import setup_logging
+    from app.core.logging import setup_logging, shutdown_logging
 
     _reset_structlog()
     root = logging.getLogger()
     root.handlers.clear()
 
     buf = io.StringIO()
-    setup_logging(log_level="DEBUG", log_format="json")
-
-    # Replace the root handler's stream to capture output
-    for handler in root.handlers:
-        if hasattr(handler, "stream"):
-            handler.stream = buf
+    # The root handler is now a QueueHandler; the sink lives on the writer
+    # thread, so the capture buffer is injected at configuration time instead
+    # of by mutating handler.stream after the fact.
+    setup_logging(log_level="DEBUG", log_format="json", stream=buf)
 
     stdlib_logger = logging.getLogger("uvicorn.access")
     stdlib_logger.info("test_bridge_message")
 
+    # Drains the queue and joins the writer thread before we read the buffer.
+    shutdown_logging()
+
     output = buf.getvalue().strip()
     assert output, "stdlib logger output should be captured by structlog bridge"
+    assert "test_bridge_message" in output
 
     _reset_structlog()
 
