@@ -38,7 +38,7 @@ def _make_settings():
 def _make_lead():
     lead = MagicMock()
     lead.id = "lead-no-live-call"
-    lead.phone = "+14155552671"
+    lead.phone = "+5491109999001"
     lead.client_id = "client-a"
     lead.name = "No Live Call Lead"
     return lead
@@ -49,6 +49,7 @@ def _make_agent():
     agent.id = "agent-001"
     agent.elevenlabs_agent_id = "el-agent-abc"
     agent.elevenlabs_phone_number_id = "pn-xyz"
+    agent.client_id = "client-a"
     return agent
 
 

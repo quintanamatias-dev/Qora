@@ -52,7 +52,7 @@ def test_safe_metadata_extracts_only_allowlisted_fields():
         "internal_trace_id": "trace-xyzabc",
         "routing_metadata": {"region": "us-east-1", "carrier": "TELNYX"},
         "from_number": "+15555555555",  # potentially PII
-        "to_number": "+14155552671",    # PII — lead's phone number
+        "to_number": "+5491109999001",    # PII — lead's phone number
         "agent_phone_number_id": "pn-xyz",  # internal configuration — don't store
         "webhook_url": "https://internal.sip.provider/hooks",
     }
@@ -198,7 +198,7 @@ async def test_dial_outbound_call_stores_safe_metadata_not_raw():
 
     lead = MagicMock()
     lead.id = "lead-meta-test"
-    lead.phone = "+14155552671"
+    lead.phone = "+5491109999001"
     lead.client_id = "client-a"
     lead.name = "Metadata Test Lead"
 
@@ -206,6 +206,7 @@ async def test_dial_outbound_call_stores_safe_metadata_not_raw():
     agent.id = "agent-001"
     agent.elevenlabs_agent_id = "el-agent-abc"
     agent.elevenlabs_phone_number_id = "pn-xyz"
+    agent.client_id = "client-a"
 
     client = MagicMock()
     client.id = "client-a"
@@ -234,7 +235,7 @@ async def test_dial_outbound_call_stores_safe_metadata_not_raw():
         "message": "Call accepted",
         # Unsafe fields that MUST be stripped:
         "sip_uri": "sip:+14155552671@telnyx.com",
-        "to_number": "+14155552671",  # PII
+        "to_number": "+5491109999001",  # PII
         "from_number": "+15555555555",
     }
     accepted_result.error_detail = None

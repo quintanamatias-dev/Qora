@@ -41,7 +41,7 @@ def _make_settings():
 def _make_lead():
     lead = MagicMock()
     lead.id = "lead-agent-id-guard-001"
-    lead.phone = "+14155552671"
+    lead.phone = "+5491109999001"
     lead.client_id = "client-a"
     lead.name = "Agent ID Guard Test Lead"
     return lead
@@ -53,6 +53,7 @@ def _make_agent_with_phone_number_id_but_no_agent_id():
     agent.id = "agent-no-el-id"
     agent.elevenlabs_agent_id = None        # ← MISSING — triggers the new blocker
     agent.elevenlabs_phone_number_id = "pn-valid-xyz"  # set — existing guard passes
+    agent.client_id = "client-a"
     agent.name = "Unconfigured Agent"
     return agent
 
@@ -63,6 +64,7 @@ def _make_agent_with_both_ids():
     agent.id = "agent-configured"
     agent.elevenlabs_agent_id = "el-agent-abc"
     agent.elevenlabs_phone_number_id = "pn-xyz"
+    agent.client_id = "client-a"
     agent.name = "Configured Agent"
     return agent
 
@@ -277,6 +279,7 @@ async def test_missing_agent_id_does_not_override_phone_number_id_guard():
     agent.id = "agent-both-missing"
     agent.elevenlabs_agent_id = None
     agent.elevenlabs_phone_number_id = None
+    agent.client_id = "client-a"
     agent.name = "Fully Unconfigured Agent"
 
     mock_db = _make_mock_db_no_active_sessions()

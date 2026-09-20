@@ -36,7 +36,7 @@ def _make_settings():
 def _make_lead(lead_id: str = "lead-sched-guard-001"):
     lead = MagicMock()
     lead.id = lead_id
-    lead.phone = "+14155552671"
+    lead.phone = "+5491109999001"
     lead.client_id = "client-a"
     lead.name = "Scheduled Guard Test Lead"
     return lead
@@ -47,6 +47,7 @@ def _make_agent():
     agent.id = "agent-001"
     agent.elevenlabs_agent_id = "el-agent-abc"
     agent.elevenlabs_phone_number_id = "pn-xyz"
+    agent.client_id = "client-a"
     agent.name = "Test Agent"
     return agent
 
@@ -84,10 +85,18 @@ def _build_mock_db(active_telephony_session=None, active_scheduled_call=None):
     scheduled_call_result.scalars.return_value.first.return_value = active_scheduled_call
 
     # Both results (guard check: CallSession, then ScheduledCall if scheduled_call provided)
-    mock_db.execute.side_effect = [
-        call_session_result,
-        scheduled_call_result,
-    ]
+    # Any further execute() calls belong to the post-result persistence UPDATE, which
+    # is not a SELECT the guards read — return a neutral empty result for those.
+    queued = [call_session_result, scheduled_call_result]
+
+    async def _execute(_stmt, *args, **kwargs):
+        if queued:
+            return queued.pop(0)
+        empty_result = MagicMock()
+        empty_result.scalars.return_value.first.return_value = None
+        return empty_result
+
+    mock_db.execute.side_effect = _execute
 
     mock_db.add = MagicMock()
     mock_db.flush = AsyncMock()

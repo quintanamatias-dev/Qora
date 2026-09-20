@@ -42,7 +42,7 @@ def _make_request():
     return OutboundCallRequest(
         agent_id="el-agent-test",
         agent_phone_number_id="pn-test",
-        to="+14155552671",
+        to="+5491109999001",
     )
 
 
@@ -53,7 +53,7 @@ def _make_service_settings(enable_outbound: bool = True):
     return s
 
 
-def _make_lead(phone: str = "+14155552671"):
+def _make_lead(phone: str = "+5491109999001"):
     lead = MagicMock()
     lead.id = "lead-no-answer-001"
     lead.phone = phone
@@ -67,6 +67,7 @@ def _make_agent():
     agent.id = "agent-no-answer-001"
     agent.elevenlabs_agent_id = "el-agent-na"
     agent.elevenlabs_phone_number_id = "pn-na-xyz"
+    agent.client_id = "client-a"
     agent.name = "No-Answer Test Agent"
     return agent
 

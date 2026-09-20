@@ -596,11 +596,13 @@ class TestServiceHookFiresProbe:
         lead = MagicMock()
         lead.id = "lead-001"
         lead.phone = "+5491140485464"
+        lead.client_id = "client-001"
 
         agent = MagicMock()
         agent.id = "agent-001"
         agent.elevenlabs_agent_id = "el-agent-abc"
         agent.elevenlabs_phone_number_id = "pn-xyz"
+        agent.client_id = "client-001"
 
         client = MagicMock()
         client.id = "client-001"
@@ -683,11 +685,13 @@ class TestServiceHookFiresProbe:
         lead = MagicMock()
         lead.id = "lead-002"
         lead.phone = "+5491140485464"
+        lead.client_id = "client-001"
 
         agent = MagicMock()
         agent.id = "agent-001"
         agent.elevenlabs_agent_id = "el-agent-abc"
         agent.elevenlabs_phone_number_id = "pn-xyz"
+        agent.client_id = "client-001"
 
         client = MagicMock()
         client.id = "client-001"

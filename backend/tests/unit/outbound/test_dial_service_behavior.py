@@ -47,6 +47,7 @@ def _make_lead(phone: str = "+541155551234", lead_id: str = "lead-beh-001"):
 def _make_agent():
     agent = MagicMock()
     agent.id = "agent-beh-001"
+    agent.client_id = "client-a"
     agent.elevenlabs_agent_id = "el-agent-beh"
     agent.elevenlabs_phone_number_id = "pn-beh-xyz"
     agent.name = "Behavior Test Agent"
@@ -895,6 +896,9 @@ async def test_conversation_initiation_client_data_includes_custom_llm_extra_bod
     lead = _make_lead(lead_id="lead-extra-001")
     client = _make_client()
     client.id = "client-test-001"
+    lead.client_id = client.id
+    agent = _make_agent()
+    agent.client_id = client.id
 
     with patch(
         "app.elevenlabs.service.ElevenLabsService.initiate_outbound_call",
@@ -909,7 +913,7 @@ async def test_conversation_initiation_client_data_includes_custom_llm_extra_bod
             await dial_outbound_call(
                 db=mock_db,
                 lead=lead,
-                agent=_make_agent(),
+                agent=agent,
                 client=client,
                 settings=_make_settings(),
             )
@@ -956,6 +960,9 @@ async def test_conversation_initiation_client_data_always_includes_custom_llm_ex
     lead = _make_lead(lead_id="lead-nodv-001")
     client = _make_client()
     client.id = "client-nodv-001"
+    lead.client_id = client.id
+    agent = _make_agent()
+    agent.client_id = client.id
 
     with patch(
         "app.elevenlabs.service.ElevenLabsService.initiate_outbound_call",
@@ -970,7 +977,7 @@ async def test_conversation_initiation_client_data_always_includes_custom_llm_ex
             await dial_outbound_call(
                 db=mock_db,
                 lead=lead,
-                agent=_make_agent(),
+                agent=agent,
                 client=client,
                 settings=_make_settings(),
             )
