@@ -52,7 +52,7 @@ async def seeded_db_bi(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="BI Lead",
-            phone="+5411000099",
+            phone="+5491100000100",
             lead_id="test-lead-bi-001",
         )
         cs = await create_session(

@@ -54,7 +54,7 @@ async def seeded_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Summary Lead",
-            phone="+5411000003",
+            phone="+5491100000015",
             lead_id="test-lead-sum-001",
         )
         await sess.commit()

@@ -189,7 +189,7 @@ async def test_create_lead_returns_201(leads_client: AsyncClient):
         json={
             "client_id": "quintana-seguros",
             "name": "Nuevo Lead",
-            "phone": "+5411199999",
+            "phone": "+5491100199999",
             "custom_fields": {
                 "car_make": "Honda",
                 "car_model": "Civic",
@@ -230,7 +230,7 @@ async def test_create_lead_persisted_in_list(leads_client: AsyncClient):
         json={
             "client_id": "quintana-seguros",
             "name": "Test Persistencia",
-            "phone": "+5411188888",
+            "phone": "+5491100188888",
         },
     )
     assert create_resp.status_code == 201
@@ -355,7 +355,7 @@ async def test_create_lead_response_includes_phase2_fields(leads_client: AsyncCl
         json={
             "client_id": "quintana-seguros",
             "name": "New Phase2 Lead",
-            "phone": "+5411777777",
+            "phone": "+5491100777777",
         },
     )
     assert response.status_code == 201
@@ -383,7 +383,7 @@ async def test_new_lead_phase2_fields_are_null_safe(leads_client: AsyncClient):
         json={
             "client_id": "quintana-seguros",
             "name": "Null Check Lead",
-            "phone": "+5411666666",
+            "phone": "+5491100666666",
         },
     )
     assert response.status_code == 201
@@ -766,7 +766,7 @@ async def enriched_leads_client(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Enriched Lead",
-            phone="+5411055555",
+            phone="+5491100055555",
             lead_id="test-lead-enriched-001",
         )
         # Insert active profile facts

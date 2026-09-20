@@ -44,7 +44,7 @@ async def db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Scheduler Test Lead",
-            phone="+5411000099",
+            phone="+5491100000100",
             lead_id="sched-test-lead-001",
         )
         await sess.commit()

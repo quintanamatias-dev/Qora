@@ -145,7 +145,7 @@ async def sched_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Sched Lead",
-            phone="+5411000099",
+            phone="+5491100000100",
             lead_id="sched-lead-001",
         )
         await sess.commit()
@@ -633,7 +633,7 @@ async def test_auto_schedule_triggers_with_follow_up_on_fresh_client(tmp_path):
             sess,
             client_id="quintana-seguros",
             name="Default Retry Lead",
-            phone="+54110000999",
+            phone="+5491100000999",
             lead_id="default-retry-lead-001",
         )
         await sess.commit()

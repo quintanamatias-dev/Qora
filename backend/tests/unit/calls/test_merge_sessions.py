@@ -46,7 +46,7 @@ async def seeded_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Merge Lead",
-            phone="+5411000010",
+            phone="+5491100000012",
             lead_id="merge-lead-001",
         )
         await sess.commit()
@@ -203,7 +203,7 @@ async def test_merge_excludes_session_from_different_lead(seeded_db):
             sess,
             client_id="quintana-seguros",
             name="Other Lead",
-            phone="+5411000099",
+            phone="+5491100000100",
             lead_id="other-lead-001",
         )
         await sess.flush()

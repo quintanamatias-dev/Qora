@@ -47,7 +47,7 @@ async def tools_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Tools Test Lead",
-            phone="+5411077777",
+            phone="+5491100077777",
             lead_id="test-lead-tools-001",
         )
         await sess.commit()
@@ -163,7 +163,7 @@ async def test_get_lead_profile_empty_facts_returns_result(tools_db):
             sess,
             client_id="quintana-seguros",
             name="Empty Lead",
-            phone="+5411088888",
+            phone="+5491100088888",
             lead_id="test-lead-tools-empty",
         )
         await sess.commit()
@@ -225,7 +225,7 @@ async def test_get_lead_history_empty_history(tools_db):
             sess,
             client_id="quintana-seguros",
             name="No History Lead",
-            phone="+5411099111",
+            phone="+5491100099111",
             lead_id="test-lead-no-history-tools",
         )
         await sess.commit()
@@ -303,7 +303,7 @@ async def test_get_lead_pain_points_empty_returns_result(tools_db):
             sess,
             client_id="quintana-seguros",
             name="No Pain Lead",
-            phone="+5411099222",
+            phone="+5491100099222",
             lead_id="test-lead-no-pain",
         )
         await sess.commit()

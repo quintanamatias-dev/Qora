@@ -133,7 +133,7 @@ async def test_schedule_followup_naive_datetime_uses_client_tz_even_when_client_
         session,
         client_id="quintana-seguros",
         name="TZ Test Lead",
-        phone="+54111222333",
+        phone="+5491101222333",
         lead_id="tz-test-lead-001",
     )
     await session.flush()

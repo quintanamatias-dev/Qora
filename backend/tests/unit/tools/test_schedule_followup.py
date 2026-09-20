@@ -129,6 +129,47 @@ async def test_schedule_followup_missing_lead_returns_error(db):
     assert "error" in result
 
 
+async def test_schedule_followup_rejects_lead_from_another_client_without_side_effects(db):
+    """An explicit client cannot schedule or mutate a foreign lead."""
+    from app.leads.service import get_lead
+    from app.scheduler.models import ScheduledCall
+    from app.tenants.models import Client
+    from app.tools.schedule_followup import schedule_followup
+    from sqlalchemy import select
+
+    async with db.async_session_factory() as sess:
+        sess.add(Client(id="other-client", name="Other Client", voice_id="other-voice"))
+        lead = await get_lead(sess, "lead-quintana-003")
+        original_status = lead.status
+        original_notes = lead.notes
+        await sess.commit()
+
+    async with db.async_session_factory() as sess:
+        lead = await get_lead(sess, "lead-quintana-003")
+        result = await schedule_followup(
+            session=sess,
+            lead_id="lead-quintana-003",
+            followup_date="2026-05-01",
+            client_id="other-client",
+        )
+        await sess.flush()
+        await sess.refresh(lead)
+        scheduled_rows = (await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.lead_id == "lead-quintana-003")
+        )).scalars().all()
+
+        assert result == {"error": "lead_not_found"}
+        assert lead.status == original_status
+        assert lead.notes == original_notes
+        assert scheduled_rows == []
+        await sess.rollback()
+
+    async with db.async_session_factory() as sess:
+        lead = await get_lead(sess, "lead-quintana-003")
+        assert lead.status == original_status
+        assert lead.notes == original_notes
+
+
 # ---------------------------------------------------------------------------
 # Phase 6 — ScheduledCall creation via schedule_followup tool
 # ---------------------------------------------------------------------------

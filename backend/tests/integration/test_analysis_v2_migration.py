@@ -44,14 +44,14 @@ async def migration_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Lead A",
-            phone="+5411000001",
+            phone="+5491100000003",
             lead_id="lead-a",
         )
         await create_lead(
             sess,
             client_id="quintana-seguros",
             name="Lead B",
-            phone="+5411000002",
+            phone="+5491100000004",
             lead_id="lead-b",
         )
 
@@ -125,7 +125,7 @@ async def migration_db_malformed(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Lead A",
-            phone="+5411000001",
+            phone="+5491100000003",
             lead_id="lead-a",
         )
 

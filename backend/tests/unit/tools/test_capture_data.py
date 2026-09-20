@@ -84,7 +84,7 @@ async def db_two_clients(tmp_path: Path):
             sess,
             client_id="other-client",
             name="Other Lead",
-            phone="+54999",
+            phone="+5491100000101",
             lead_id="lead-other-001",
         )
         await sess.commit()
@@ -858,7 +858,7 @@ async def test_capture_data_failed_coercion_writes_zero_custom_fields(db):
             sess,
             client_id="quintana-seguros",
             name="Atomicity Test Lead",
-            phone="+54911000001",
+            phone="+5491100000016",
             lead_id="lead-atomicity-test-001",
         )
         await sess.commit()
@@ -926,7 +926,7 @@ async def test_capture_data_failed_coercion_first_field_writes_zero(db):
             sess,
             client_id="quintana-seguros",
             name="Atomicity Test Lead 2",
-            phone="+54911000002",
+            phone="+5491100000017",
             lead_id="lead-atomicity-test-002",
         )
         await sess.commit()

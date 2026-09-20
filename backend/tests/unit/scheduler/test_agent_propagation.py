@@ -44,7 +44,7 @@ async def sched_agent_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Sched Agent Lead",
-            phone="+5411111999",
+            phone="+5491100111999",
             lead_id="sched-agent-lead-001",
         )
         await sess.commit()

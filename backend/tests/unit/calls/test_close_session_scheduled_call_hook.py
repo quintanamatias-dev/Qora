@@ -42,7 +42,7 @@ async def hook_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Hook Lead",
-            phone="+5411000090",
+            phone="+5491100000090",
             lead_id="hook-lead-001",
         )
         await sess.commit()

@@ -43,7 +43,7 @@ async def seeded_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Agent Test Lead",
-            phone="+5411222333",
+            phone="+5491100222333",
             lead_id="agent-test-lead-001",
         )
         await sess.commit()
@@ -136,7 +136,7 @@ async def test_create_session_no_default_agent_raises(tmp_path: Path):
             sess,
             client_id="no-agent-client",
             name="Ghost Lead",
-            phone="+549000000",
+            phone="+5491100000011",
             lead_id="ghost-lead-001",
         )
 

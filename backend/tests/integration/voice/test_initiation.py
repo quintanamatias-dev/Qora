@@ -259,7 +259,7 @@ async def returning_lead_client(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Maria Gonzalez",
-            phone="+5411155502",
+            phone="+5491100155502",
             car_make="Honda",
             car_model="Civic",
             car_year=2019,

@@ -49,7 +49,7 @@ async def seeded_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Test Lead",
-            phone="+5411000001",
+            phone="+5491100000003",
             lead_id="test-lead-end-001",
         )
         await sess.commit()
@@ -495,7 +495,7 @@ async def test_end_reconciliation_does_not_steal_other_tenant_session(
             sess,
             client_id="other-client",
             name="Other Lead",
-            phone="+54119999999",
+            phone="+5491109999999",
             lead_id="lead-other-001",
         )
         await sess.commit()
