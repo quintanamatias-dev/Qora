@@ -10,7 +10,6 @@ Exports:
 - CorrectableField     — registry entry dataclass
 - CORRECTABLE_FIELDS   — registry dict (8 allowed fields)
 - coerce_value         — type coercion helper (pure function)
-- _validate_phone      — per-field validator
 - _validate_car_year   — per-field validator
 - _validate_name       — per-field validator
 - _validate_email      — per-field validator
@@ -22,16 +21,22 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Mapping
 
 import logging
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
-from app.phones.normalization import PhoneNormalizationError, normalize_phone
-
 logger = logging.getLogger(__name__)
+
+# Type alias for a per-field validator: value -> (ok, rejection_reason).
+FieldValidator = Callable[[str], tuple[bool, str | None]]
+
+# Type alias for a per-field normalizer: value -> canonical value.
+# A normalizer MUST NOT raise; it returns the value untouched when it cannot
+# canonicalize it, leaving the verdict to the field validator.
+FieldNormalizer = Callable[[str], str]
 
 # ---------------------------------------------------------------------------
 # Confidence gate — DISABLED (threshold=0.0 means all corrections auto-apply)
@@ -76,13 +81,20 @@ class DataCorrectionsAxis(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _validate_phone(value: str) -> tuple[bool, str | None]:
-    """Validate a correction against the explicit Argentina phone policy."""
-    try:
-        normalize_phone(value, region="AR")
-    except PhoneNormalizationError as exc:
-        return False, exc.reason
-    return True, None
+# Fail-closed reason used when no phone validator is injected by the caller.
+PHONE_VALIDATOR_REQUIRED_REASON = "phone_validator_not_configured"
+
+
+def _reject_unvalidated_phone(value: str) -> tuple[bool, str | None]:
+    """Reject every phone correction unless the caller injects a real validator.
+
+    Phone validation requires the telephony normalizer (``app.phones``), which
+    this package must not import so it stays copy-pastable into other runtimes.
+    The owning runtime passes a real validator via the ``validators`` argument of
+    :func:`run_data_corrections_pipeline`. Without it we fail CLOSED: a phone
+    correction is rejected rather than applied unvalidated.
+    """
+    return False, PHONE_VALIDATOR_REQUIRED_REASON
 
 
 def _extract_int(value: str) -> int | None:
@@ -228,7 +240,9 @@ CORRECTABLE_FIELDS: dict[str, CorrectableField] = {
         lead_attr="phone",
         type="str",
         crm_field=None,
-        validator=_validate_phone,
+        # Fail-closed placeholder: the owning runtime must inject a real phone
+        # validator (see run_data_corrections_pipeline(validators=...)).
+        validator=_reject_unvalidated_phone,
         storage="lead_attr",
     ),
     "email": CorrectableField(
@@ -402,19 +416,35 @@ def _build_pipeline_prompt(current_lead_data: dict) -> str:
 def _process_corrections(
     raw_corrections: list[DataCorrection],
     current_lead_data: dict,
+    validators: Mapping[str, FieldValidator] | None = None,
+    normalizers: Mapping[str, FieldNormalizer] | None = None,
 ) -> list[DataCorrection]:
     """Apply idempotency, registry lookup, validation, and confidence gate.
 
     Steps per correction:
     1. Registry lookup — drop unknown fields (silently).
+    1b. Optional injected normalization — canonicalize the corrected value so the
+       idempotency gate compares canonical forms.
     2. Idempotency — drop if corrected_value == current_value (case-insensitive for str).
     3. Per-field validation — set applied=False on invalid values.
     4. Confidence gate — DISABLED (threshold=0.0, all corrections auto-apply).
        FUTURE: set applied=False when confidence < 0.8.
 
+    Args:
+        raw_corrections: Corrections extracted by the model.
+        current_lead_data: Snapshot of correctable lead fields for comparison.
+        validators: Per-field validator overrides, merged over the
+            ``CORRECTABLE_FIELDS`` registry entries. Used by the owning runtime
+            to inject validators this package cannot import (e.g. ``phone``).
+        normalizers: Per-field value normalizers applied before the idempotency
+            gate. Must not raise; an unnormalizable value is left untouched and
+            rejected by the field validator.
+
     Returns:
         Filtered and annotated list of DataCorrection items.
     """
+    overrides: Mapping[str, FieldValidator] = validators or {}
+    value_normalizers: Mapping[str, FieldNormalizer] = normalizers or {}
     processed: list[DataCorrection] = []
 
     for correction in raw_corrections:
@@ -431,21 +461,11 @@ def _process_corrections(
 
         entry = CORRECTABLE_FIELDS[field]
         corrected_value = correction.corrected_value
-        if field == "phone":
-            try:
-                corrected_value = normalize_phone(corrected_value, region="AR")
-            except PhoneNormalizationError as exc:
-                processed.append(
-                    correction.model_copy(
-                        update={"applied": False, "rejection_reason": exc.reason}
-                    )
-                )
-                logger.info(
-                    "data_corrections_phone_validation_failed field=%s reason=%s",
-                    field,
-                    exc.reason,
-                )
-                continue
+
+        # 1b. Injected normalization — canonicalize before comparing/validating.
+        normalizer = value_normalizers.get(field)
+        if normalizer is not None and corrected_value is not None:
+            corrected_value = normalizer(corrected_value)
 
         # 2. Idempotency gate — drop if corrected == current (case-insensitive for strings)
         lead_attr = entry.lead_attr
@@ -465,8 +485,8 @@ def _process_corrections(
                     )
                 continue  # Same value — drop entirely
 
-        # 3. Per-field validation
-        validator = entry.validator
+        # 3. Per-field validation — caller overrides win over the registry entry.
+        validator = overrides.get(field, entry.validator)
         applied = True
         rejection_reason: str | None = None
         if validator is not None:
@@ -525,6 +545,8 @@ async def run_data_corrections_pipeline(
     current_lead_data: dict | None = None,
     previous_corrections: list[dict] | None = None,
     client_config: dict | None = None,
+    validators: Mapping[str, FieldValidator] | None = None,
+    normalizers: Mapping[str, FieldNormalizer] | None = None,
 ) -> DataCorrectionsAxis:
     """Standalone async data corrections pipeline.
 
@@ -538,6 +560,11 @@ async def run_data_corrections_pipeline(
             Keys can be field names (e.g. 'name') or lead_attr names (e.g. 'car_make').
         previous_corrections: Prior correction records for context (not used today).
         client_config: Per-client configuration (reserved for future registry override).
+        validators: Per-field validator overrides merged over CORRECTABLE_FIELDS.
+            The owning runtime injects validators this package cannot import —
+            notably ``phone``, which is rejected fail-closed without an override.
+        normalizers: Per-field value normalizers injected by the owning runtime
+            (e.g. canonical E.164 rewriting for ``phone``).
 
     Returns:
         DataCorrectionsAxis with validated, idempotency-filtered corrections.
@@ -561,7 +588,12 @@ async def run_data_corrections_pipeline(
         if raw_axis is None:
             return DataCorrectionsAxis()
 
-        processed = _process_corrections(raw_axis.corrections, lead_data)
+        processed = _process_corrections(
+            raw_axis.corrections,
+            lead_data,
+            validators=validators,
+            normalizers=normalizers,
+        )
         return DataCorrectionsAxis(corrections=processed)
 
     except Exception as exc:

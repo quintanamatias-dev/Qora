@@ -348,10 +348,14 @@ def test_correctable_fields_car_year_type() -> None:
 
 
 def test_validate_phone_normalizes_supported_argentine_mobile() -> None:
-    """A complete domestic mobile correction becomes canonical E.164."""
-    from app.analysis.universal.data_corrections import _validate_phone
+    """A complete domestic mobile correction becomes canonical E.164.
 
-    ok, reason = _validate_phone("011 15 5555-0101")
+    The phone validator lives in app.summarizer: app/analysis must not import
+    app.phones (architecture boundary), so it is injected at the call site.
+    """
+    from app.summarizer import validate_phone_correction
+
+    ok, reason = validate_phone_correction("011 15 5555-0101")
 
     assert ok is True
     assert reason is None
@@ -359,9 +363,9 @@ def test_validate_phone_normalizes_supported_argentine_mobile() -> None:
 
 def test_validate_phone_rejects_ambiguous_geographic_number_without_digits_in_reason() -> None:
     """A bare geographic correction is rejected without echoing its value."""
-    from app.analysis.universal.data_corrections import _validate_phone
+    from app.summarizer import validate_phone_correction
 
-    ok, reason = _validate_phone("011 5555-0101")
+    ok, reason = validate_phone_correction("011 5555-0101")
 
     assert ok is False
     assert reason == "ambiguous_or_incomplete"
@@ -370,9 +374,9 @@ def test_validate_phone_rejects_ambiguous_geographic_number_without_digits_in_re
 
 def test_validate_phone_invalid_too_short() -> None:
     """Phone with fewer than 10 digits fails validation."""
-    from app.analysis.universal.data_corrections import _validate_phone
+    from app.summarizer import validate_phone_correction
 
-    ok, err = _validate_phone("12345")
+    ok, err = validate_phone_correction("12345")
     assert ok is False
     assert err is not None and len(err) > 0
 
@@ -723,6 +727,10 @@ async def test_pipeline_preserves_name_correction_when_phone_diagnostic_is_enabl
     from unittest.mock import AsyncMock, MagicMock
 
     from app.analysis.universal import data_corrections
+    from app.summarizer import (
+        DATA_CORRECTION_NORMALIZERS,
+        DATA_CORRECTION_VALIDATORS,
+    )
 
     name_correction = data_corrections.DataCorrection(
         field="name",
@@ -751,6 +759,8 @@ async def test_pipeline_preserves_name_correction_when_phone_diagnostic_is_enabl
         "Synthetic transcript",
         client,
         current_lead_data={"name": "Before", "phone": "+5491155550101"},
+        validators=DATA_CORRECTION_VALIDATORS,
+        normalizers=DATA_CORRECTION_NORMALIZERS,
     )
 
     assert [correction.field for correction in result.corrections] == expected_fields
@@ -1006,8 +1016,16 @@ def test_process_corrections_sets_rejection_reason_on_invalid_age() -> None:
 
 
 def test_process_phone_correction_writes_only_canonical_value() -> None:
-    """Accepted phone corrections retain only the canonical stored representation."""
+    """Accepted phone corrections retain only the canonical stored representation.
+
+    Canonicalization is injected by the owning runtime (app.summarizer), since
+    app/analysis may not import app.phones.
+    """
     from app.analysis.universal.data_corrections import _process_corrections, DataCorrection
+    from app.summarizer import (
+        DATA_CORRECTION_NORMALIZERS,
+        DATA_CORRECTION_VALIDATORS,
+    )
 
     result = _process_corrections(
         [
@@ -1020,6 +1038,8 @@ def test_process_phone_correction_writes_only_canonical_value() -> None:
             )
         ],
         {"phone": "+5491155550101"},
+        validators=DATA_CORRECTION_VALIDATORS,
+        normalizers=DATA_CORRECTION_NORMALIZERS,
     )
 
     assert result[0].applied is True

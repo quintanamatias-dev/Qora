@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 import structlog
 from openai import AsyncOpenAI
@@ -75,6 +75,53 @@ _TERMINAL_STATUSES: frozenset[str] = frozenset({"quoted", "interested", "not_int
 _NEGATIVE_CLASSIFICATIONS: frozenset[str] = frozenset(
     {"completed_negative", "do_not_contact", "hostile"}
 )
+
+
+# ---------------------------------------------------------------------------
+# Data corrections validators owned by this runtime
+#
+# app/analysis must stay copy-pastable into other runtimes, so it cannot import
+# app.phones. The real phones-backed phone validator therefore lives here and is
+# injected into run_data_corrections_pipeline(validators=...). Without it the
+# pipeline fails CLOSED and rejects every phone correction.
+# ---------------------------------------------------------------------------
+
+
+def validate_phone_correction(value: str) -> tuple[bool, str | None]:
+    """Validate a phone correction against the explicit Argentina phone policy.
+
+    Returns:
+        (True, None) when the value normalizes to a canonical AR number,
+        (False, reason) with the normalizer's machine-readable reason otherwise.
+        The reason never echoes the rejected digits.
+    """
+    try:
+        normalize_phone(value, region="AR")
+    except PhoneNormalizationError as exc:
+        return False, exc.reason
+    return True, None
+
+
+def normalize_phone_correction(value: str) -> str:
+    """Canonicalize a phone correction, or return it untouched when invalid.
+
+    Never raises: an unnormalizable value flows on to validate_phone_correction,
+    which rejects it with the normalizer's reason.
+    """
+    try:
+        return normalize_phone(value, region="AR")
+    except PhoneNormalizationError:
+        return value
+
+
+# Overrides passed into the data corrections pipeline at the call site.
+DATA_CORRECTION_VALIDATORS: dict[str, Callable[[str], tuple[bool, str | None]]] = {
+    "phone": validate_phone_correction,
+}
+
+DATA_CORRECTION_NORMALIZERS: dict[str, Callable[[str], str]] = {
+    "phone": normalize_phone_correction,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -695,6 +742,8 @@ async def _call_gpt_summarize(
                 transcript_text,
                 client,
                 current_lead_data=lead_data,
+                validators=DATA_CORRECTION_VALIDATORS,
+                normalizers=DATA_CORRECTION_NORMALIZERS,
             ),
             return_exceptions=True,
         )
