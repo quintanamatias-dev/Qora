@@ -195,11 +195,40 @@ class Settings(BaseSettings):
     # while stopping the infinite-retry loop in production incidents.
     reconciliation_max_attempts: int = 5
 
+    # ------------------------------------------------------------------
+    # Automatic Outbound Dialer Runner (Phase C6b)
+    # ------------------------------------------------------------------
+    # Feature flag: gates the unattended dialer loop inside scheduler_tick.
+    # Default False — manual dialing (ENABLE_OUTBOUND_CALLS) and unattended
+    # auto-dialing are different risk profiles: one is a deliberate single
+    # action, the other is an always-on loop. AND-composed with
+    # enable_outbound_calls via validate_auto_dialer_requires_outbound below.
+    # When off, the tick does not even query for candidates — existing
+    # behaviour (mark_due_calls_in_progress only) stays byte-for-byte unchanged.
+    # Design: openspec/changes/phase-c6b-auto-dialer/design.md
+    enable_auto_dialer: bool = False
+
+    # Bounds how many due rows are CLAIMED per cycle. F4: dials run
+    # SEQUENTIALLY (shared AsyncSession isn't concurrency-safe) — this is
+    # claim batch size, not dial concurrency. Default 1 = "Call Now" parity.
+    auto_dialer_max_concurrent_dials: int = 1
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
         "extra": "ignore",
     }
+
+    @field_validator("auto_dialer_max_concurrent_dials")
+    @classmethod
+    def validate_auto_dialer_max_concurrent_dials(cls, v: int) -> int:
+        """Reject a non-positive concurrency limit — 0 or negative dials makes no sense."""
+        if v < 1:
+            raise ValueError(
+                f"auto_dialer_max_concurrent_dials must be >= 1, got {v}. "
+                "This bounds simultaneous in-flight dials per scheduler_tick cycle."
+            )
+        return v
 
     @field_validator("log_level")
     @classmethod
@@ -343,5 +372,34 @@ class Settings(BaseSettings):
                 "Set QORA_WEBHOOK_AUTH_ENABLED=true and QORA_WEBHOOK_SECRET=<strong-random-secret> "
                 "before enabling outbound calls. "
                 "Startup is aborted to prevent this insecure configuration from serving requests."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_auto_dialer_requires_outbound(self) -> "Settings":
+        """Fail-closed: the auto-dialer MUST NOT run without manual outbound enabled.
+
+        Phase C6b (proposal decision 6): ENABLE_AUTO_DIALER and ENABLE_OUTBOUND_CALLS
+        are AND-composed, not overloaded into one flag. Manual dialing and unattended
+        auto-dialing are different risk profiles — one is a deliberate single action,
+        the other is an always-on loop. Enabling the dialer while outbound calls are
+        disabled would be a silent no-op: the tick would claim rows and immediately
+        fail every dial via dial_outbound_call()'s own flag_off guard, making the
+        operator believe the dialer is running when nothing is actually happening.
+
+        This mirrors validate_outbound_requires_webhook_auth's shape: raise, do not
+        warn — the app refuses to boot into a false-healthy state.
+
+        Design: openspec/changes/phase-c6b-auto-dialer/design.md — Config.
+        """
+        if self.enable_auto_dialer and not self.enable_outbound_calls:
+            raise ValueError(
+                "ENABLE_AUTO_DIALER=true requires ENABLE_OUTBOUND_CALLS=true. "
+                "Without outbound calls enabled, every claimed row would silently fail "
+                "to dial while the operator believes the auto-dialer is running. "
+                "Set ENABLE_OUTBOUND_CALLS=true (and its own required "
+                "QORA_WEBHOOK_AUTH_ENABLED=true) before enabling the auto-dialer. "
+                "Startup is aborted to prevent this false-healthy configuration from "
+                "serving requests."
             )
         return self

@@ -21,7 +21,9 @@ from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import structlog
+import sqlalchemy as sa
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.scheduler.models import VALID_TRANSITIONS, ScheduledCall
@@ -39,6 +41,17 @@ _TECH_RETRY_MAX_ATTEMPTS: int = 2
 
 #: Fixed delay (minutes) for tech retries — independent of client cooldown.
 _TECH_RETRY_DELAY_MINUTES: int = 5
+
+# ---------------------------------------------------------------------------
+# Phase C6b: Auto-dialer runner constants
+# ---------------------------------------------------------------------------
+
+#: Claim timeout (minutes) — a claimed row with no dial attempt past this
+#: window is considered stranded (class a). Reaped in Slice 3.
+_CLAIM_TIMEOUT_MINUTES: int = 10
+
+#: Age-out cap (hours) for stranded rows — bounds a crash-loop. Reaped in Slice 3.
+_MAX_STRANDED_HOURS: int = 6
 
 
 # ---------------------------------------------------------------------------
@@ -226,15 +239,26 @@ async def get_active_scheduled_call_for_lead(
     client_id: str,
     lead_id: str,
 ) -> ScheduledCall | None:
-    """Return the pending/in_progress ScheduledCall for a lead, if any."""
+    """Return the pending/in_progress ScheduledCall for a lead, if any.
+
+    D7 (C6b): more than one active row per lead is a reachable state (design.md
+    D1 — e.g. a stale in_progress row alongside a freshly-created pending
+    recontact). scalar_one_or_none() would raise MultipleResultsFound in that
+    case; instead, order by scheduled_at and deterministically return the
+    earliest active row rather than crash the caller (auto_schedule's dedup
+    guard).
+    """
     result = await db.execute(
-        select(ScheduledCall).where(
+        select(ScheduledCall)
+        .where(
             ScheduledCall.lead_id == lead_id,
             ScheduledCall.client_id == client_id,
             ScheduledCall.status.in_(["pending", "in_progress"]),
         )
+        .order_by(ScheduledCall.scheduled_at)
+        .limit(1)
     )
-    return result.scalar_one_or_none()
+    return result.scalars().first()
 
 
 async def cancel_scheduled_call(
@@ -561,15 +585,20 @@ async def schedule_tech_retry(
     """Schedule a Qora-owned technical retry for a transient provider failure.
 
     Unlike auto_schedule (client-owned recontact), tech retry:
-    - Uses a hardcoded 5-minute delay (independent of client cooldown/hours).
+    - Uses a hardcoded 5-minute delay, independent of client cooldown — but
+      clamped to the client's allowed-hours window (Decision 7, C6b): a
+      candidate landing outside [scheduler_allowed_hours_start,
+      scheduler_allowed_hours_end) in the client's scheduler_timezone rolls
+      forward to the next allowed window instead of firing immediately.
     - Has a fixed max of 2 retries per lead (independent of client max_attempts).
     - Uses trigger_reason='tech_retry' so counters are isolated from auto_retry.
     - Does NOT increment the lead's recontact attempt counter.
 
     Returns:
         Staged (flushed, not committed) ScheduledCall on success.
-        None if max tech retries reached OR an active (pending/in_progress)
-        tech_retry already exists for this lead (dedup guard).
+        None if max tech retries reached, an active (pending/in_progress)
+        tech_retry already exists for this lead (dedup guard), OR the client
+        cannot be found.
     """
     # Dedup guard: if a pending or in_progress tech retry already exists for this lead,
     # do not create another one. This prevents duplicate pending rows when
@@ -631,8 +660,36 @@ async def schedule_tech_retry(
         if default_agent is not None:
             resolved_agent_id = default_agent.id
 
+    # Decision 7 (C6b): clamp the candidate to the client's allowed-hours
+    # window — reuses calculate_scheduled_at() (the same clamp auto_schedule
+    # already uses) instead of duplicating clamp logic. Inside the window
+    # this is byte-for-byte the original now+5min behaviour.
+    from app.tenants.models import Client
+
+    client = await db.get(Client, client_id)
+    if client is None:
+        logger.warning(
+            "tech_retry_client_not_found", client_id=client_id, lead_id=lead_id
+        )
+        return None  # FK would reject the insert anyway
+
     now_utc = datetime.now(timezone.utc)
-    scheduled_at = now_utc + timedelta(minutes=_TECH_RETRY_DELAY_MINUTES)
+    raw_at = now_utc + timedelta(minutes=_TECH_RETRY_DELAY_MINUTES)
+    scheduled_at = calculate_scheduled_at(
+        now_utc=now_utc,
+        cooldown_minutes=_TECH_RETRY_DELAY_MINUTES,
+        start_hour=client.scheduler_allowed_hours_start,
+        end_hour=client.scheduler_allowed_hours_end,
+        tz_str=client.scheduler_timezone,
+    )
+    if scheduled_at != raw_at:
+        logger.warning(
+            "tech_retry_deferred_to_allowed_hours",
+            lead_id=lead_id,
+            raw_scheduled_at=raw_at.isoformat(),
+            scheduled_at=scheduled_at.isoformat(),
+            deferred_minutes=int((scheduled_at - raw_at).total_seconds() // 60),
+        )
 
     sc = await create_scheduled_call(
         db,
@@ -656,6 +713,121 @@ async def schedule_tech_retry(
         scheduled_at=scheduled_at.isoformat(),
     )
     return sc
+
+
+# ---------------------------------------------------------------------------
+# Phase C6b: Auto-dialer CAS claim
+#
+# Two guards prevent double-dialing a lead across processes:
+#   (a) an atomic conditional UPDATE, dial only when rowcount == 1
+#   (b) uq_scheduled_calls_active_lead — at most one in_progress row per lead
+# _claim_one is the single documented exception to D8 (_set_scheduled_call_status):
+# it is a raw Core UPDATE, not an ORM instance write, because the claim must be
+# a single atomic statement the DB can evaluate without a prior SELECT-then-write
+# race window.
+# ---------------------------------------------------------------------------
+
+
+async def _claim_one(db: AsyncSession, sc_id: str, now: datetime) -> bool:
+    """Atomically claim a pending ScheduledCall. True iff this process won.
+
+    Design: openspec/changes/phase-c6b-auto-dialer/design.md — The Claim
+    Statement (verbatim contract).
+    """
+    stmt = (
+        sa.update(ScheduledCall)
+        .where(ScheduledCall.id == sc_id, ScheduledCall.status == "pending")
+        .values(status="in_progress", updated_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    try:
+        result = await db.execute(stmt)
+        await db.commit()
+    except IntegrityError:
+        # uq_scheduled_calls_active_lead — another row for this lead is
+        # already in_progress (e.g. auto_retry claimed first, this is the
+        # lead's parked tech_retry). Expected under contention.
+        await db.rollback()
+        logger.warning(
+            "auto_dialer_claim_conflict",
+            scheduled_call_id=sc_id,
+            reason="lead_already_in_progress",
+        )
+        return False
+    if result.rowcount != 1:
+        logger.warning(
+            "auto_dialer_claim_conflict",
+            scheduled_call_id=sc_id,
+            reason="lost_race",
+            rowcount=result.rowcount,
+        )
+        return False
+    return True
+
+
+async def claim_due_scheduled_calls(
+    db: AsyncSession, limit: int
+) -> list[ScheduledCall]:
+    """Claim up to `limit` due pending ScheduledCalls via the CAS above.
+
+    The candidate SELECT is advisory (bounded, ordered by scheduled_at); the
+    per-row UPDATE in _claim_one is authoritative. Returns only the rows this
+    process actually won — losers are silently excluded (already logged by
+    _claim_one).
+    """
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(ScheduledCall)
+        .where(
+            ScheduledCall.status == "pending",
+            ScheduledCall.scheduled_at <= now,
+        )
+        .order_by(ScheduledCall.scheduled_at)
+        .limit(limit)
+    )
+    candidates = list(result.scalars().all())
+    if candidates:
+        logger.info(
+            "auto_dialer_cycle_started",
+            candidates=len(candidates),
+            limit=limit,
+        )
+
+    claimed: list[ScheduledCall] = []
+    for sc in candidates:
+        won = await _claim_one(db, sc.id, now)
+        if not won:
+            continue
+        # _claim_one committed via a raw Core UPDATE (synchronize_session=False) —
+        # refresh so this ORM instance reflects the new status/updated_at before
+        # the caller (claim_due_scheduled_calls / dial loop) reads or writes it.
+        await db.refresh(sc)
+        claimed.append(sc)
+        logger.info(
+            "auto_dialer_claimed",
+            scheduled_call_id=sc.id,
+            lead_id=sc.lead_id,
+            trigger_reason=sc.trigger_reason,
+            attempt_number=sc.attempt_number,
+        )
+    return claimed
+
+
+async def _set_scheduled_call_status(
+    db: AsyncSession, sc: ScheduledCall, new_status: str
+) -> None:
+    """Single write seam for ScheduledCall.status transitions (D8).
+
+    VALID_TRANSITIONS enforcement stays deferred (proposal scope decision),
+    but every new status write in this slice routes through this helper so
+    the follow-up enforcement change has exactly one seam to swap instead of
+    a scattered set of hand-rolled if/raise checks. The CAS claim (_claim_one)
+    is the single documented exception — a raw Core UPDATE, not an ORM
+    instance write.
+    """
+    sc.status = new_status
+    sc.updated_at = datetime.now(timezone.utc)
+    await db.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -684,33 +856,186 @@ async def mark_due_calls_in_progress(db: AsyncSession) -> int:
     if not due_calls:
         return 0
 
+    promoted_ids: list[str] = []
     for sc in due_calls:
-        sc.status = "in_progress"
-        sc.updated_at = now
+        # Snapshot before the flush — a SAVEPOINT rollback expires this row.
+        sc_id, sc_lead_id = sc.id, sc.lead_id
+        try:
+            async with db.begin_nested():
+                sc.status = "in_progress"
+                sc.updated_at = now
+                await db.flush()
+        except IntegrityError:
+            logger.warning(
+                "scheduler_tick_promote_conflict", scheduled_call_id=sc_id, lead_id=sc_lead_id
+            )
+            continue
+        promoted_ids.append(sc_id)
 
-    await db.flush()
+    if promoted_ids:
+        logger.info("scheduler_tick_promoted", count=len(promoted_ids), ids=promoted_ids)
+    return len(promoted_ids)
+
+
+# ---------------------------------------------------------------------------
+# Phase C6b: Dial loop — dials rows this process claimed
+# ---------------------------------------------------------------------------
+
+
+async def _dial_claimed_scheduled_call(
+    db: AsyncSession, sc: ScheduledCall, settings, *, now_utc: datetime | None = None
+) -> None:
+    """Dial one claimed ScheduledCall and persist the outcome.
+
+    dial_outbound_call() never raises by contract, but that contract is not a
+    guarantee (design.md — Observability: auto_dialer_dial_exception) — an
+    unexpected exception here still forces the row to failed rather than
+    leaving it stranded in_progress with no outcome_session_id. Also
+    re-validates allowed-hours and do_not_call at DIAL time (F2/F3 below).
+
+    Imports dial_outbound_call locally, matching scheduler_tick's existing
+    local-import style and the patch seam design.md's Testing Strategy pins
+    for unit tests (patch("app.outbound.service.dial_outbound_call")).
+    """
+    from app.leads.service import get_lead
+    from app.tenants.models import Agent
+    from app.tenants.service import get_client, get_default_agent
+    from app.outbound.service import dial_outbound_call
 
     logger.info(
-        "scheduler_tick_promoted",
-        count=len(due_calls),
-        ids=[sc.id for sc in due_calls],
+        "auto_dialer_dial_attempted",
+        scheduled_call_id=sc.id,
+        lead_id=sc.lead_id,
     )
-    return len(due_calls)
+
+    try:
+        now_utc = now_utc or datetime.now(timezone.utc)
+        client = await get_client(db, sc.client_id)
+
+        # F2: don't dial an overdue row outside the client's allowed hours.
+        if client is not None:
+            next_allowed_at = calculate_scheduled_at(
+                now_utc=now_utc,
+                cooldown_minutes=0,
+                start_hour=client.scheduler_allowed_hours_start,
+                end_hour=client.scheduler_allowed_hours_end,
+                tz_str=client.scheduler_timezone,
+            )
+            if next_allowed_at != now_utc:
+                sc.scheduled_at = next_allowed_at
+                await _set_scheduled_call_status(db, sc, "pending")
+                await db.commit()
+                logger.warning(
+                    "auto_dialer_dial_outside_allowed_hours",
+                    scheduled_call_id=sc.id, lead_id=sc.lead_id,
+                    next_allowed_at=next_allowed_at.isoformat(),
+                )
+                return
+
+        lead = await get_lead(db, sc.lead_id)
+
+        # F3: re-check do_not_call — auto_schedule only checked it once.
+        if lead is not None and lead.do_not_call:
+            await _set_scheduled_call_status(db, sc, "cancelled")
+            await db.commit()
+            logger.warning(
+                "auto_dialer_dial_skipped_do_not_call", scheduled_call_id=sc.id, lead_id=sc.lead_id
+            )
+            return
+
+        agent = (
+            await db.get(Agent, sc.agent_id)
+            if sc.agent_id
+            else await get_default_agent(db, sc.client_id)
+        )
+        result = await dial_outbound_call(
+            db,
+            lead=lead,
+            agent=agent,
+            client=client,
+            settings=settings,
+            scheduled_call=sc,
+        )
+    except Exception as exc:
+        logger.error(
+            "auto_dialer_dial_exception",
+            scheduled_call_id=sc.id,
+            lead_id=sc.lead_id,
+            error=str(exc),
+        )
+        await _set_scheduled_call_status(db, sc, "failed")
+        await db.commit()
+        return
+
+    if result.status == "dialing":
+        sc.outcome_session_id = result.call_session_id
+        await db.commit()
+        logger.info(
+            "auto_dialer_dial_accepted",
+            scheduled_call_id=sc.id,
+            call_session_id=result.call_session_id,
+        )
+        return
+
+    # "failed" or "recurrent_error" — dial_outbound_call's own schedule_tech_retry
+    # lane handles rescheduling; this ScheduledCall's own outcome is terminal.
+    logger.error(
+        "auto_dialer_dial_failed",
+        scheduled_call_id=sc.id,
+        lead_id=sc.lead_id,
+        failure_code=result.failure_code,
+        error=result.error,
+    )
+    await _set_scheduled_call_status(db, sc, "failed")
+    await db.commit()
+
+
+async def run_scheduler_cycle(
+    db: AsyncSession, settings, *, now_utc: datetime | None = None
+) -> None:
+    """One scheduler_tick cycle — extracted so tests drive one cycle instead
+    of the infinite while-True loop.
+
+    Design: openspec/changes/phase-c6b-auto-dialer/design.md — Technical Approach.
+
+        if enable_auto_dialer AND enable_outbound_calls
+               -> claim_due_scheduled_calls(db, limit)   # CAS, replaces bulk promote
+               -> dial claimed rows SEQUENTIALLY          # F4: shared AsyncSession
+        else   -> mark_due_calls_in_progress(db)         # unchanged
+
+    With enable_auto_dialer=False the executed path is byte-for-byte today's
+    behaviour — the tick does not even query for dial candidates.
+    """
+    if settings.enable_auto_dialer and settings.enable_outbound_calls:
+        claimed = await claim_due_scheduled_calls(
+            db, settings.auto_dialer_max_concurrent_dials
+        )
+        for sc in claimed:
+            try:
+                await _dial_claimed_scheduled_call(db, sc, settings, now_utc=now_utc)
+            except Exception as exc:
+                logger.error(
+                    "auto_dialer_dial_unhandled_exception", scheduled_call_id=sc.id, error=str(exc)
+                )
+    else:
+        count = await mark_due_calls_in_progress(db)
+        if count > 0:
+            logger.info("scheduler_tick_complete", promoted=count)
 
 
 async def scheduler_tick() -> None:
-    """Async background loop — runs every 60 seconds, marks due calls in_progress.
+    """Async background loop — runs every 60 seconds.
 
     Registered in main.py lifespan. Survives DB errors without crashing.
     """
+    from app.core.config import Settings
     from app.core.database import get_session
 
     while True:
         await asyncio.sleep(_TICK_INTERVAL_SECONDS)
         try:
+            settings = Settings()
             async with get_session() as db:
-                count = await mark_due_calls_in_progress(db)
-                if count > 0:
-                    logger.info("scheduler_tick_complete", promoted=count)
+                await run_scheduler_cycle(db, settings)
         except Exception as exc:
             logger.warning("scheduler_tick_failed", error=str(exc))

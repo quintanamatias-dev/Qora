@@ -120,6 +120,298 @@ async def test_scheduler_tick_does_not_affect_future_calls(tick_db):
         assert sc.status == "pending"
 
 
+# ---------------------------------------------------------------------------
+# Phase C6b Slice 1 — RED: run_scheduler_cycle dial loop + flag-off parity
+#
+# No test places a real call: app.outbound.service.dial_outbound_call is
+# patched directly (runner seam, unit-only per design.md — Testing Strategy).
+# The tick_db fixture provides a real (migrated) DB so claim + status writes
+# are exercised for real; only the provider-adjacent dial call is faked.
+# ---------------------------------------------------------------------------
+
+
+def _auto_dialer_settings(tmp_path_db_url: str, *, enable_auto_dialer: bool):
+    from app.core.config import Settings
+
+    return Settings(
+        openai_api_key=SecretStr("sk-test"),
+        elevenlabs_api_key=SecretStr("el-test"),
+        database_url=tmp_path_db_url,
+        enable_auto_dialer=enable_auto_dialer,
+        enable_outbound_calls=enable_auto_dialer,
+        qora_webhook_auth_enabled=enable_auto_dialer,
+        qora_webhook_secret=SecretStr("test-webhook-secret") if enable_auto_dialer else None,
+        auto_dialer_max_concurrent_dials=1,
+    )
+
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch as _patch
+from zoneinfo import ZoneInfo
+import structlog.testing as _structlog_testing
+from app.scheduler.service import (
+    create_scheduled_call,
+    mark_due_calls_in_progress,
+    _dial_claimed_scheduled_call,
+    calculate_scheduled_at,
+    run_scheduler_cycle,
+)
+from app.leads.service import create_lead
+
+_IN_WINDOW_UTC = datetime(2026, 7, 20, 17, 0, tzinfo=timezone.utc)  # inside default allowed hours (F2)
+
+
+async def _mk_call(sess, lead_id, scheduled_at, **overrides):
+    kwargs = dict(
+        client_id="quintana-seguros", lead_id=lead_id, scheduled_at=scheduled_at,
+        trigger_reason="manual", source_session_id=None, attempt_number=1,
+        max_attempts=3, notes=None,
+    )
+    kwargs.update(overrides)
+    return await create_scheduled_call(sess, **kwargs)
+
+
+# Phase C6b Slice 1 — BOUNDED CORRECTION: F1, F2, F3, F4
+
+
+async def test_mark_due_calls_in_progress_same_lead_conflict_skips_without_wedging(tick_db):
+    """F1: same-lead conflict is skipped (not wedged); other leads still promote same cycle."""
+    now = datetime.now(timezone.utc)
+    async with tick_db.async_session_factory() as sess:
+        a = await _mk_call(sess, "tick-lead-001", now - timedelta(minutes=10))
+        b = await _mk_call(sess, "tick-lead-001", now - timedelta(minutes=5), trigger_reason="tech_retry", max_attempts=2)
+        await create_lead(sess, client_id="quintana-seguros", name="Other", phone="+5411000099", lead_id="tick-lead-002")
+        other = await _mk_call(sess, "tick-lead-002", now - timedelta(minutes=1))
+        await sess.commit()
+
+        count = await mark_due_calls_in_progress(sess)
+        await sess.commit()
+        assert count == 2, f"Expected 2 promotions (1 conflict skipped), got {count}"
+
+        for sc in (a, b, other):
+            await sess.refresh(sc)
+        assert sorted([a.status, b.status]) == ["in_progress", "pending"]
+        assert other.status == "in_progress"
+
+
+async def test_dial_claimed_scheduled_call_outside_allowed_hours_releases_to_pending():
+    """F2: overdue row outside allowed hours is released to pending, not dialed."""
+    tz = ZoneInfo("America/Argentina/Buenos_Aires")
+    now_utc = datetime(2026, 7, 20, 3, 0, tzinfo=tz).astimezone(timezone.utc)  # 03:00 local
+    expected_next = calculate_scheduled_at(now_utc, 0, 9, 20, "America/Argentina/Buenos_Aires")
+    sc = SimpleNamespace(id="sc-1", lead_id="l-1", client_id="c-1", scheduled_at=now_utc - timedelta(days=1))
+    client = SimpleNamespace(scheduler_allowed_hours_start=9, scheduler_allowed_hours_end=20, scheduler_timezone=str(tz))
+    fake_dial = AsyncMock()
+
+    with _patch("app.tenants.service.get_client", AsyncMock(return_value=client)), \
+            _patch("app.outbound.service.dial_outbound_call", fake_dial), \
+            _structlog_testing.capture_logs() as cap:
+        await _dial_claimed_scheduled_call(AsyncMock(), sc, None, now_utc=now_utc)
+
+    fake_dial.assert_not_called()
+    assert "auto_dialer_dial_outside_allowed_hours" in [e.get("event") for e in cap]
+    assert sc.status == "pending"
+    assert sc.scheduled_at == expected_next
+
+
+async def test_dial_claimed_scheduled_call_skips_do_not_call_lead():
+    """F3: do_not_call set after scheduling blocks the dial and cancels the row."""
+    sc = SimpleNamespace(id="sc-1", lead_id="l-1", client_id="c-1")
+    lead = SimpleNamespace(do_not_call=True)
+    fake_dial = AsyncMock()
+
+    with _patch("app.tenants.service.get_client", AsyncMock(return_value=None)), \
+            _patch("app.leads.service.get_lead", AsyncMock(return_value=lead)), \
+            _patch("app.outbound.service.dial_outbound_call", fake_dial), \
+            _structlog_testing.capture_logs() as cap:
+        await _dial_claimed_scheduled_call(AsyncMock(), sc, None)
+
+    fake_dial.assert_not_called()
+    assert "auto_dialer_dial_skipped_do_not_call" in [e.get("event") for e in cap]
+    assert sc.status == "cancelled"
+
+
+async def test_run_scheduler_cycle_dial_failed_marks_scheduled_call_failed(tick_db):
+    """DialResult.status='failed' (or 'recurrent_error') -> claimed row -> failed."""
+    from unittest.mock import AsyncMock, patch
+    from app.scheduler.service import create_scheduled_call, run_scheduler_cycle
+    from app.scheduler.models import ScheduledCall
+    from app.outbound.service import DialResult
+    from sqlalchemy import select
+
+    past = datetime.now(timezone.utc) - timedelta(minutes=10)
+    async with tick_db.async_session_factory() as sess:
+        sc = await create_scheduled_call(
+            sess,
+            client_id="quintana-seguros",
+            lead_id="tick-lead-001",
+            scheduled_at=past,
+            trigger_reason="manual",
+            source_session_id=None,
+            attempt_number=1,
+            max_attempts=3,
+            notes=None,
+        )
+        await sess.commit()
+        sc_id = sc.id
+
+    settings = _auto_dialer_settings("sqlite+aiosqlite:///unused", enable_auto_dialer=True)
+
+    fake_dial = AsyncMock(
+        return_value=DialResult(status="failed", call_session_id=None, error="boom")
+    )
+    async with tick_db.async_session_factory() as sess:
+        with patch("app.outbound.service.dial_outbound_call", fake_dial):
+            await run_scheduler_cycle(sess, settings, now_utc=_IN_WINDOW_UTC)  # F2: stay in-window
+
+    async with tick_db.async_session_factory() as sess:
+        result = await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id == sc_id)
+        )
+        updated = result.scalar_one()
+        assert updated.status == "failed"
+
+
+async def test_run_scheduler_cycle_dial_dialing_stays_in_progress_with_session(
+    tick_db,
+):
+    """DialResult.status='dialing' -> stays in_progress, outcome_session_id set."""
+    from unittest.mock import AsyncMock, patch
+    from app.scheduler.service import create_scheduled_call, run_scheduler_cycle
+    from app.scheduler.models import ScheduledCall
+    from app.outbound.service import DialResult
+    from sqlalchemy import select
+
+    past = datetime.now(timezone.utc) - timedelta(minutes=10)
+    async with tick_db.async_session_factory() as sess:
+        sc = await create_scheduled_call(
+            sess,
+            client_id="quintana-seguros",
+            lead_id="tick-lead-001",
+            scheduled_at=past,
+            trigger_reason="manual",
+            source_session_id=None,
+            attempt_number=1,
+            max_attempts=3,
+            notes=None,
+        )
+        await sess.commit()
+        sc_id = sc.id
+
+    settings = _auto_dialer_settings("sqlite+aiosqlite:///unused", enable_auto_dialer=True)
+
+    fake_dial = AsyncMock(
+        return_value=DialResult(status="dialing", call_session_id="cs-fake-001")
+    )
+    async with tick_db.async_session_factory() as sess:
+        with patch("app.outbound.service.dial_outbound_call", fake_dial):
+            await run_scheduler_cycle(sess, settings, now_utc=_IN_WINDOW_UTC)  # F2: stay in-window
+
+    async with tick_db.async_session_factory() as sess:
+        result = await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id == sc_id)
+        )
+        updated = result.scalar_one()
+        assert updated.status == "in_progress"
+        assert updated.outcome_session_id == "cs-fake-001"
+
+
+async def test_run_scheduler_cycle_flag_off_only_promotes_no_auto_dialer_events(
+    tick_db,
+):
+    """enable_auto_dialer=False -> only mark_due_calls_in_progress runs.
+
+    Proposal decision 6 / design.md byte-for-byte guarantee: when the flag is
+    off, the tick does not even query for dial candidates — no auto_dialer_*
+    events are emitted, only the existing scheduler_tick_promoted event.
+    """
+    import structlog.testing
+    from app.scheduler.service import create_scheduled_call, run_scheduler_cycle
+    from app.scheduler.models import ScheduledCall
+    from sqlalchemy import select
+
+    past = datetime.now(timezone.utc) - timedelta(minutes=10)
+    async with tick_db.async_session_factory() as sess:
+        sc = await create_scheduled_call(
+            sess,
+            client_id="quintana-seguros",
+            lead_id="tick-lead-001",
+            scheduled_at=past,
+            trigger_reason="manual",
+            source_session_id=None,
+            attempt_number=1,
+            max_attempts=3,
+            notes=None,
+        )
+        await sess.commit()
+        sc_id = sc.id
+
+    settings = _auto_dialer_settings("sqlite+aiosqlite:///unused", enable_auto_dialer=False)
+
+    with structlog.testing.capture_logs() as cap:
+        async with tick_db.async_session_factory() as sess:
+            await run_scheduler_cycle(sess, settings)
+            await sess.commit()
+
+    events = [e.get("event") for e in cap]
+    assert "scheduler_tick_promoted" in events
+    assert not any(e.startswith("auto_dialer_") for e in events if e), (
+        f"No auto_dialer_* events must fire when enable_auto_dialer=False, got: {events}"
+    )
+
+    async with tick_db.async_session_factory() as sess:
+        result = await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id == sc_id)
+        )
+        updated = result.scalar_one()
+        assert updated.status == "in_progress"
+
+
+async def test_run_scheduler_cycle_dials_sequentially_survives_one_failure(tick_db):
+    """F4: dials run sequentially on the shared session; one raising doesn't
+    stop siblings from reaching a terminal status."""
+    from app.scheduler import service as svc
+    from app.scheduler.models import ScheduledCall
+    from sqlalchemy import select
+
+    past = datetime.now(timezone.utc) - timedelta(minutes=10)
+    async with tick_db.async_session_factory() as sess:
+        for i in range(3):
+            await create_lead(sess, client_id="quintana-seguros", name=f"F4-{i}", phone=f"+54110002{i}", lead_id=f"f4-lead-{i}")
+        sc_ids = [(await _mk_call(sess, f"f4-lead-{i}", past + timedelta(seconds=i))).id for i in range(3)]
+        await sess.commit()
+
+    settings = _auto_dialer_settings("sqlite+aiosqlite:///unused", enable_auto_dialer=True)
+    settings.auto_dialer_max_concurrent_dials = 3
+    order = []
+
+    async def fake_dial(db, sc, settings, *, now_utc=None):
+        order.append(("enter", sc.id))
+        if sc.id == sc_ids[1]:
+            raise RuntimeError("boom")
+        await svc._set_scheduled_call_status(db, sc, "failed")
+        await db.commit()
+        order.append(("exit", sc.id))
+
+    async with tick_db.async_session_factory() as sess:
+        with _patch.object(svc, "_dial_claimed_scheduled_call", fake_dial):
+            await run_scheduler_cycle(sess, settings, now_utc=_IN_WINDOW_UTC)
+
+    # Sequential: row 2's "enter" never appears before row 1's "exit" — proves
+    # no two dials touched the shared session concurrently.
+    assert order == [
+        ("enter", sc_ids[0]), ("exit", sc_ids[0]),
+        ("enter", sc_ids[1]),
+        ("enter", sc_ids[2]), ("exit", sc_ids[2]),
+    ]
+
+    async with tick_db.async_session_factory() as sess:
+        rows = (await sess.execute(
+            select(ScheduledCall).where(ScheduledCall.id.in_([sc_ids[0], sc_ids[2]]))
+        )).scalars().all()
+    assert all(r.status == "failed" for r in rows), rows
+
+
 async def test_scheduler_tick_loop_survives_exception():
     """scheduler_tick catches exceptions and continues the loop (no crash)."""
     from unittest.mock import AsyncMock

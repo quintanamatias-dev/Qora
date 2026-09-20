@@ -199,9 +199,19 @@ async def test_schedule_tech_retry_creates_scheduled_call(tech_retry_db):
 
 
 async def test_schedule_tech_retry_uses_5_minute_delay(tech_retry_db):
-    """schedule_tech_retry scheduled_at is approximately now + 5 minutes."""
+    """schedule_tech_retry scheduled_at is exactly now + 5 minutes, inside window.
+
+    C6b Decision 7 clamps scheduled_at to the client's allowed-hours window
+    (quintana-seguros defaults: 9-20 America/Argentina/Buenos_Aires). This
+    test previously used the real wall clock, which made it flaky depending
+    on what time of day the suite ran (a candidate landing outside [9, 20)
+    would get clamped forward, breaking the "+/- 30s of now+5min" assertion).
+    Freezing time to a fixed within-window instant keeps this deterministic
+    while still proving the 5-minute delay is applied.
+    """
     from app.scheduler.service import schedule_tech_retry
     from app.calls.models import CallSession
+    from unittest.mock import patch
     import uuid
 
     async with tech_retry_db.async_session_factory() as sess:
@@ -219,25 +229,29 @@ async def test_schedule_tech_retry_uses_5_minute_delay(tech_retry_db):
         await sess.commit()
         session_id = cs.id
 
-    before = datetime.now(timezone.utc)
+    # UTC 2026-05-01T16:55:00 -> Buenos Aires (UTC-3) local 13:55:00.
+    # +5min candidate -> local 14:00:00 -> inside [9, 20) -> unchanged.
+    fixed_now = datetime(2026, 5, 1, 16, 55, 0, tzinfo=timezone.utc)
 
-    async with tech_retry_db.async_session_factory() as sess:
-        result = await schedule_tech_retry(
-            sess,
-            session_id=session_id,
-            lead_id="tech-retry-lead-001",
-            client_id="quintana-seguros",
-        )
-        await sess.commit()
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now if tz is not None else fixed_now.replace(tzinfo=None)
 
-    after = datetime.now(timezone.utc)
+    with patch("app.scheduler.service.datetime", FrozenDateTime):
+        async with tech_retry_db.async_session_factory() as sess:
+            result = await schedule_tech_retry(
+                sess,
+                session_id=session_id,
+                lead_id="tech-retry-lead-001",
+                client_id="quintana-seguros",
+            )
+            await sess.commit()
 
     assert result is not None
-    # scheduled_at should be between (now + 4.5min) and (now + 5.5min)
-    expected_min = before + timedelta(minutes=4, seconds=30)
-    expected_max = after + timedelta(minutes=5, seconds=30)
-    assert expected_min <= result.scheduled_at <= expected_max, (
-        f"scheduled_at={result.scheduled_at} not in expected 5-minute window"
+    assert result.scheduled_at == fixed_now + timedelta(minutes=5), (
+        f"Expected exactly now+5min={fixed_now + timedelta(minutes=5)}, "
+        f"got {result.scheduled_at}"
     )
 
 
