@@ -2,6 +2,8 @@
 
 > **Canonical project truth:** this file is the source of truth for Qora's runtime architecture, configuration ownership, and major implementation decisions. If another README or test comment disagrees with this document, update that file or update this document deliberately in the same change.
 
+> **New to the call flow?** [`docs/anatomy-of-a-call.md`](anatomy-of-a-call.md) is a one-page orientation map of the four stages a call passes through. It defers to this document on every point of fact.
+
 ## Table of Contents
 
 1. [Overview](#overview)
