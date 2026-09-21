@@ -219,9 +219,14 @@ if new_status == "completed":
 
 ## Reaper
 
-Runs whenever `enable_outbound_calls` is true, independent of
-`enable_auto_dialer`, and **before** the claim step so released rows are
-re-claimable in the same cycle and resolved rows free the lead's index slot.
+Runs only when **both** `enable_auto_dialer` and `enable_outbound_calls` are
+true — the same gate as the claim step, and **before** it so released rows
+are re-claimable in the same cycle and resolved rows free the lead's index
+slot. (R3-1: gating on `enable_outbound_calls` alone let the reaper
+misclassify legacy rows bulk-promoted by `mark_due_calls_in_progress`, since
+that path and the CAS-claim path were not otherwise distinguishable. With
+the flags AND'd, the two paths are mutually exclusive by construction — no
+row the reaper inspects can ever have come from the legacy promoter.)
 
 | Class | Predicate | Resolution |
 |---|---|---|
@@ -388,7 +393,41 @@ process, command, or file-classification boundary is introduced.
    `auto_dialer_max_concurrent_dials=1`. Watch for `auto_dialer_claimed` →
    `auto_dialer_dial_accepted` → `scheduled_call_resolved_from_session`.
 4. Rollback: set `ENABLE_AUTO_DIALER=false`; effective on the next 60 s cycle.
-   In-flight rows are resolved by the reaper, which keeps running.
+   The reaper stops with it (both share the same gate), so rows still
+   `in_progress` from the flag-on window are **not** auto-recovered. Either
+   settle them via `PATCH .../complete` / `POST .../cancel`, or re-enable the
+   flag briefly to let the reaper drain them before rolling back for good.
+
+### Rollout dry run (Slice 3 gate)
+
+Slice 3 unblocks the flip above — it does not perform it.
+`ENABLE_AUTO_DIALER` stays `false` in `.env.example` and every deployed
+environment after this PR merges (task 3.6.1). Before step 3 above is
+exercised anywhere, run this dry run with the flag still `false`:
+
+1. Deploy with `ENABLE_AUTO_DIALER=false`, `ENABLE_OUTBOUND_CALLS=true`
+   (matches the Reaper section's gate above — with `enable_auto_dialer`
+   still `false`, the reaper does not run this deploy).
+2. For one full 60 s tick cycle, confirm:
+   - `scheduler_tick_promoted` fires for any due row (unchanged bulk-promote
+     path — `enable_auto_dialer=false` means the dial/claim branch never
+     runs).
+   - No `auto_dialer_*` event fires (same byte-for-byte guarantee as
+     before this slice).
+   - No `scheduled_call_reaped_stale`, `scheduled_call_reap_exhausted`, or
+     `scheduled_call_reap_session_missing` event fires at all (R3-1: the
+     reaper is gated on `enable_auto_dialer AND enable_outbound_calls`, so
+     with the flag still `false` it never runs this cycle — not because
+     nothing is claiming/dialing, but because the gate itself blocks it).
+3. Only after that dry run is clean: flip `ENABLE_AUTO_DIALER=true` on one
+   client with `auto_dialer_max_concurrent_dials=1` (step 3 above) and watch
+   for the same reaper events staying silent under normal operation — their
+   presence during steady-state dialing is the loud failure signal the
+   reaper exists to produce.
+   **Caveat:** any row already sitting `in_progress` from the legacy
+   `mark_due_calls_in_progress` path at the moment of the flip becomes
+   visible to the reaper starting on that first flag-on cycle. Verify no
+   stale legacy `in_progress` rows remain before flipping the flag.
 
 ## Open Questions
 

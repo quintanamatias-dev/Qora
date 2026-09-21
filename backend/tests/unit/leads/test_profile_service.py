@@ -46,7 +46,7 @@ async def profile_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Profile Service Lead",
-            phone="+5411099999",
+            phone="+5491100099999",
             lead_id="test-lead-profile-svc-001",
         )
         await sess.commit()
@@ -177,7 +177,7 @@ async def test_get_active_profile_facts_empty_lead_returns_empty_list(profile_db
             sess,
             client_id="quintana-seguros",
             name="Empty Facts Lead",
-            phone="+5411011111",
+            phone="+5491100011111",
             lead_id="test-lead-empty-facts",
         )
         await sess.commit()
@@ -274,7 +274,7 @@ async def test_get_interest_history_empty_returns_empty_list(profile_db):
             sess,
             client_id="quintana-seguros",
             name="No History Lead",
-            phone="+5411022222",
+            phone="+5491100022222",
             lead_id="test-lead-no-history",
         )
         await sess.commit()

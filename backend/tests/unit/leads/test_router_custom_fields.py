@@ -92,7 +92,7 @@ async def lead_with_custom_fields_client(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Custom Fields Lead",
-            phone="+5411099999",
+            phone="+5491100099999",
             lead_id="test-cf-lead-001",
         )
         # Seed custom fields directly
@@ -150,7 +150,7 @@ async def test_get_lead_response_includes_custom_fields_key(
         json={
             "client_id": "quintana-seguros",
             "name": "Test Lead",
-            "phone": "+5411100001",
+            "phone": "+5491100100001",
         },
     )
     assert resp.status_code == 201
@@ -275,7 +275,7 @@ async def test_create_lead_with_custom_fields_stores_them(
         json={
             "client_id": "quintana-seguros",
             "name": "Ana Rodriguez",
-            "phone": "+5411100002",
+            "phone": "+5491100100002",
             "custom_fields": {"car_make": "Ford", "age": "35"},
         },
     )
@@ -317,7 +317,7 @@ async def test_create_lead_without_custom_fields_returns_empty_dict(
         json={
             "client_id": "quintana-seguros",
             "name": "Simple Lead",
-            "phone": "+5411100003",
+            "phone": "+5491100100003",
         },
     )
     assert resp.status_code == 201
@@ -339,7 +339,7 @@ async def test_create_lead_rejects_legacy_business_fields(
         "/api/v1/leads?client_id=quintana-seguros",
         json={
             "name": "Legacy Payload Lead",
-            "phone": "+5411100009",
+            "phone": "+5491100100009",
             "car_make": "Toyota",
         },
     )
@@ -367,7 +367,7 @@ async def test_get_lead_legacy_car_fields_absent_from_top_level(
         json={
             "client_id": "quintana-seguros",
             "name": "Legacy Check Lead",
-            "phone": "+5411100004",
+            "phone": "+5491100100004",
         },
     )
     assert resp.status_code == 201
@@ -404,7 +404,7 @@ async def test_list_leads_legacy_car_fields_absent_from_top_level(
         json={
             "client_id": "quintana-seguros",
             "name": "List Legacy Check",
-            "phone": "+5411100005",
+            "phone": "+5491100100005",
         },
     )
     resp = await custom_fields_client.get("/api/v1/leads?client_id=quintana-seguros")
@@ -441,7 +441,7 @@ async def test_create_response_always_has_custom_fields_key(
         json={
             "client_id": "quintana-seguros",
             "name": "Always Present",
-            "phone": "+5411100006",
+            "phone": "+5491100100006",
         },
     )
     assert resp.status_code == 201

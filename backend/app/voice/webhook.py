@@ -860,7 +860,7 @@ async def _process_custom_llm_request(
         try:
             from app.integrations.crm_config import CRMConfigLoader as _CRMConfigLoaderFP
 
-            _crm_config_resolved = _CRMConfigLoaderFP.load(client_id)
+            _crm_config_resolved = await _CRMConfigLoaderFP.load_async(client_id)
         except Exception:
             _crm_config_resolved = None
 
@@ -927,7 +927,7 @@ async def _process_custom_llm_request(
                         try:
                             from app.integrations.crm_config import CRMConfigLoader as _CRMCfgLazyBuild
 
-                            _crm_config_resolved = _CRMCfgLazyBuild.load(client_id)
+                            _crm_config_resolved = await _CRMCfgLazyBuild.load_async(client_id)
                         except Exception:
                             _crm_config_resolved = None
                     except Exception as exc:
@@ -970,7 +970,7 @@ async def _process_custom_llm_request(
                     try:
                         from app.integrations.crm_config import CRMConfigLoader as _CRMCfgNewSession
 
-                        _crm_config_resolved = _CRMCfgNewSession.load(client_id)
+                        _crm_config_resolved = await _CRMCfgNewSession.load_async(client_id)
                     except Exception:
                         _crm_config_resolved = None
                 except Exception as exc:
@@ -1048,7 +1048,7 @@ async def _process_custom_llm_request(
                         # Load CRM config — provides field_definitions for capture_data (FIX-1, FIX-7)
                         from app.integrations.crm_config import CRMConfigLoader as _CRMConfigLoader
 
-                        _crm_config_per_turn = _CRMConfigLoader.load(client_id)
+                        _crm_config_per_turn = await _CRMConfigLoader.load_async(client_id)
                         _crm_config_resolved = _crm_config_per_turn
                         tools = _build_tool_definitions(
                             enabled_tool_names,

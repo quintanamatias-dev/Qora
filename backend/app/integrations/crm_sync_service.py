@@ -66,7 +66,7 @@ async def sync_lead(
     try:
         # 1. Load config — None means no crm.yaml → silent no-op (FM-4)
         try:
-            config = CRMConfigLoader.load(client_id)
+            config = await CRMConfigLoader.load_async(client_id)
         except ConfigValidationError as exc:
             logger.error(
                 "CRM sync skipped: invalid crm.yaml",

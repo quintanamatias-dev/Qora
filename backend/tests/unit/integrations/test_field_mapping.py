@@ -435,3 +435,30 @@ def test_map_is_pure_same_input_same_output():
     result2 = mapper.map(lead)
 
     assert result1 == result2 == {"Nombre": "Test"}
+
+
+def test_phone_mapper_uses_shared_ar_normalizer_for_domestic_input():
+    """CRM push emits canonical output without changing the stored lead."""
+    from app.integrations.crm_config import CRMFieldDef
+    from app.integrations.field_mapping import FieldMapper
+
+    mapper = FieldMapper([CRMFieldDef(source="phone", target="Teléfono", type="phone")])
+    lead_data = {"phone": "011 15 5555-0101"}
+
+    assert mapper.map(lead_data) == {"Teléfono": "+5491155550101"}
+    assert lead_data["phone"] == "011 15 5555-0101"
+
+
+@pytest.mark.parametrize("value", [5491155550101, True])
+def test_phone_mapper_rejects_non_string_values_without_echoing_them(value):
+    """Phone coercion must not stringify numeric CRM-bound data."""
+    from app.integrations.crm_config import CRMFieldDef
+    from app.integrations.field_mapping import FieldMapper, MappingError
+
+    mapper = FieldMapper([CRMFieldDef(source="phone", target="Teléfono", type="phone")])
+
+    with pytest.raises(MappingError) as error:
+        mapper.map({"phone": value})
+
+    assert "invalid_syntax" in str(error.value)
+    assert str(value) not in str(error.value)

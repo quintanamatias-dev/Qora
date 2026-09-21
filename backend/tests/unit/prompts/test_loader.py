@@ -448,7 +448,7 @@ async def seeded_db_loader(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Loader Lead",
-            phone="+5411000088",
+            phone="+5491100000088",
             lead_id="test-lead-loader-001",
         )
         await sess.commit()

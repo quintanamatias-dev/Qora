@@ -6,15 +6,85 @@ Used by the custom LLM webhook to handle mid-stream tool execution (CAP-4, AD-4)
 
 from __future__ import annotations
 
+import asyncio
+import threading
+import weakref
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Literal
 
+import httpx
 from openai import AsyncOpenAI
 from openai import (
     APIConnectionError,
     APITimeoutError,
     RateLimitError,
 )
+
+
+# ---------------------------------------------------------------------------
+# HTTP budget
+# ---------------------------------------------------------------------------
+#
+# app.voice.webhook wraps each LLM turn in asyncio.timeout(60.0). The HTTP layer
+# must fail *inside* that budget so a stalled upstream surfaces as a logged
+# StreamingError instead of silently consuming the whole turn.
+#
+# Worst case = DEFAULT_TIMEOUT.read * (1 + DEFAULT_MAX_RETRIES) = 15s * 2 = 30s,
+# which leaves ~30s of headroom under the 60s turn budget. The OpenAI SDK
+# defaults (600s, 2 retries -> 1800s) are far outside it and are never used.
+DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0)
+DEFAULT_MAX_RETRIES = 1
+
+
+# ---------------------------------------------------------------------------
+# Shared AsyncOpenAI clients (one httpx connection pool per configuration)
+# ---------------------------------------------------------------------------
+#
+# Building an AsyncOpenAI per request leaks an httpx connection pool (and its
+# file descriptors) on every call. Clients are cached per configuration and per
+# event loop — an httpx pool is bound to the loop that first used it, so a
+# cached client is never handed to a different (or closed) loop.
+
+_client_cache: dict[tuple[Any, ...], tuple[Any, AsyncOpenAI]] = {}
+_client_cache_lock = threading.Lock()
+
+
+def _current_loop() -> asyncio.AbstractEventLoop | None:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+
+def _get_shared_openai_client(
+    api_key: str,
+    model: str,
+    timeout: httpx.Timeout | float,
+    max_retries: int,
+) -> AsyncOpenAI:
+    """Return a process-wide AsyncOpenAI shared by identical configurations."""
+    loop = _current_loop()
+    key = (api_key, model, repr(timeout), max_retries)
+
+    with _client_cache_lock:
+        cached = _client_cache.get(key)
+        if cached is not None:
+            cached_loop_ref, cached_client = cached
+            if loop is None:
+                # Built outside a running loop; only reuse an equally loop-free entry.
+                if cached_loop_ref is None:
+                    return cached_client
+            elif cached_loop_ref is not None and cached_loop_ref() is loop:
+                if not loop.is_closed():
+                    return cached_client
+
+        client = AsyncOpenAI(
+            api_key=api_key,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+        _client_cache[key] = (weakref.ref(loop) if loop is not None else None, client)
+        return client
 
 
 # ---------------------------------------------------------------------------
@@ -81,10 +151,23 @@ class OpenAIStreamingClient:
     - StreamDone on stream end
     """
 
-    def __init__(self, api_key: str, model: str = "gpt-4o"):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gpt-4o",
+        timeout: httpx.Timeout | float = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+    ):
         self._api_key = api_key
         self._model = model
-        self._client = AsyncOpenAI(api_key=api_key)
+        self._timeout = timeout
+        self._max_retries = max_retries
+        self._client = _get_shared_openai_client(
+            api_key=api_key,
+            model=model,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
 
     async def stream_events(
         self,

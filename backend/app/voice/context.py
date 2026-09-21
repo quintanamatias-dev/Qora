@@ -372,7 +372,7 @@ async def build_voice_context(
         # Load CRM config — provides field_definitions for capture_data schema (FIX-1)
         from app.integrations.crm_config import CRMConfigLoader as _CRMConfigLoader
 
-        _crm_config = _CRMConfigLoader.load(client_id)
+        _crm_config = await _CRMConfigLoader.load_async(client_id)
 
         tools = _build_tool_definitions(
             enabled_names,

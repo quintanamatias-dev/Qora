@@ -42,14 +42,14 @@ async def seeded_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Lead One",
-            phone="+54111111111",
+            phone="+5491101111111",
             lead_id="lead-001",
         )
         await create_lead(
             sess,
             client_id="quintana-seguros",
             name="Lead Two",
-            phone="+54222222222",
+            phone="+5491122222222",
             lead_id="lead-002",
         )
         await sess.commit()
@@ -239,7 +239,7 @@ async def test_get_call_metrics_client_isolation(seeded_db, tmp_path):
             sess,
             client_id="other-client",
             name="Other Lead",
-            phone="+54999999999",
+            phone="+5491100000005",
             lead_id="lead-other",
         )
         await sess.commit()
@@ -378,7 +378,7 @@ async def test_metrics_endpoint_all_filters_passed(seeded_db, app_client):
             sess,
             client_id="other-client-metrics",
             name="Other Lead Metrics",
-            phone="+54888888888",
+            phone="+5491188888888",
             lead_id="lead-other-metrics",
         )
         await sess.commit()

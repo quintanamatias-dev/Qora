@@ -547,7 +547,7 @@ async def test_smoke_area4_lead_create_with_custom_fields_via_api(smoke_db):
             "/api/v1/leads?client_id=quintana-seguros",
             json={
                 "name": "Smoke Test Lead CRM",
-                "phone": "+5411009988",
+                "phone": "+5491100009988",
                 "client_id": "quintana-seguros",
                 "custom_fields": {"car_year": "2022", "car_brand": "Ford"},
             },

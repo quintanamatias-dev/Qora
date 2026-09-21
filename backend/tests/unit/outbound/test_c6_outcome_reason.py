@@ -64,9 +64,11 @@ async def test_guard_missing_agent_id_sets_config_error():
     mock_lead = MagicMock()
     mock_lead.id = "lead-001"
     mock_lead.phone = "+5491100000001"
+    mock_lead.client_id = "test-client"
 
     mock_agent = MagicMock()
     mock_agent.id = "agent-001"
+    mock_agent.client_id = "test-client"
     mock_agent.elevenlabs_agent_id = None  # missing → config guard
     mock_agent.elevenlabs_phone_number_id = "pnum_test"
 
@@ -110,9 +112,11 @@ async def test_guard_missing_phone_number_id_sets_config_error():
     mock_lead = MagicMock()
     mock_lead.id = "lead-002"
     mock_lead.phone = "+5491100000002"
+    mock_lead.client_id = "test-client"
 
     mock_agent = MagicMock()
     mock_agent.id = "agent-002"
+    mock_agent.client_id = "test-client"
     mock_agent.elevenlabs_agent_id = "el-agent-configured"  # agent_id IS set
     mock_agent.elevenlabs_phone_number_id = None  # phone_number_id missing → config guard
 
@@ -171,9 +175,11 @@ async def test_permanent_error_sets_provider_permanent_outcome_reason():
     mock_lead = MagicMock()
     mock_lead.id = "lead-perm"
     mock_lead.phone = "+5491100000001"
+    mock_lead.client_id = "test-client"
 
     mock_agent = MagicMock()
     mock_agent.id = "agent-001"
+    mock_agent.client_id = "test-client"
     mock_agent.elevenlabs_agent_id = "el-agent-001"
     mock_agent.elevenlabs_phone_number_id = "pnum_test"
 
@@ -252,9 +258,11 @@ async def test_unknown_error_sets_timeout_ambiguous_outcome_reason():
     mock_lead = MagicMock()
     mock_lead.id = "lead-unknown"
     mock_lead.phone = "+5491100000001"
+    mock_lead.client_id = "test-client"
 
     mock_agent = MagicMock()
     mock_agent.id = "agent-001"
+    mock_agent.client_id = "test-client"
     mock_agent.elevenlabs_agent_id = "el-agent-001"
     mock_agent.elevenlabs_phone_number_id = "pnum_test"
 
@@ -330,9 +338,11 @@ async def test_recurrent_error_sets_provider_transient_outcome_reason():
     mock_lead = MagicMock()
     mock_lead.id = "lead-recurrent"
     mock_lead.phone = "+5491100000001"
+    mock_lead.client_id = "test-client"
 
     mock_agent = MagicMock()
     mock_agent.id = "agent-001"
+    mock_agent.client_id = "test-client"
     mock_agent.elevenlabs_agent_id = "el-agent-001"
     mock_agent.elevenlabs_phone_number_id = "pnum_test"
 

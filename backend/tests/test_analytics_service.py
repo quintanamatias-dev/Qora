@@ -44,7 +44,7 @@ async def analytics_service_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Test Lead",
-            phone="+54111111111",
+            phone="+5491101111111",
             lead_id="lead-svc-001",
         )
         await sess.commit()
@@ -713,7 +713,7 @@ async def test_agent_stats_cross_client_isolation(analytics_service_db):
             sess,
             client_id="other-client",
             name="Other Lead",
-            phone="+54999999999",
+            phone="+5491100000005",
             lead_id="lead-other",
         )
         await sess.commit()
@@ -852,7 +852,7 @@ async def test_interests_agent_filter_scopes_results(analytics_service_db):
             id="lead-other-interests",
             client_id="quintana-seguros",
             name="Other Lead",
-            phone="+54222222222",
+            phone="+5491122222222",
             status="new",
         )
         sess.add(other_lead)
@@ -969,7 +969,7 @@ async def test_service_issues_lpf_agent_filter(analytics_service_db):
             id="lead-si-other",
             client_id="quintana-seguros",
             name="SI Other",
-            phone="+54333333333",
+            phone="+5491133333333",
             status="new",
         )
         sess.add(other_lead)

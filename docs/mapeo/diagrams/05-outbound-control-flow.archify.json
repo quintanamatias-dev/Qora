@@ -1,0 +1,44 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Qora: control de llamada saliente",
+    "quality_profile": "showcase",
+    "viewBox": [1500, 652]
+  },
+  "lanes": [
+    {"id":"trigger","label":"Disparador"},
+    {"id":"guards","label":"Flags y guardas","variant":"exception"},
+    {"id":"dial","label":"Persistencia y proveedor"},
+    {"id":"reconcile","label":"Conciliación"}
+  ],
+  "phases": [
+    {"id":"request","label":"Solicitud", "fromCol":0,"toCol":1},
+    {"id":"protect","label":"Protección", "fromCol":2,"toCol":3,"variant":"security"},
+    {"id":"outbound","label":"Marcado y cierre", "fromCol":4,"toCol":5,"variant":"emphasis"}
+  ],
+  "mainPath": ["manual","entry","flags","guards","predial","provider","reconcile"],
+  "nodes": [
+    {"id":"manual","lane":"trigger","col":0,"type":"external","label":"Manual: sin DNC","width":150},
+    {"id":"entry","lane":"trigger","col":1,"type":"backend","label":"Central","width":100},
+    {"id":"flags","lane":"guards","col":2,"type":"security","label":"Flags","width":100},
+    {"id":"guards","lane":"guards","col":3,"type":"security","label":"Guardas técnicas","width":130},
+    {"id":"blocked","lane":"guards","col":4,"type":"security","label":"Bloqueada","width":100},
+    {"id":"predial","lane":"dial","col":4,"type":"database","label":"Predial","width":105},
+    {"id":"provider","lane":"dial","col":5,"type":"external","label":"ElevenLabs","width":105},
+    {"id":"reconcile","lane":"reconcile","col":5,"type":"backend","label":"Conciliación","width":105},
+    {"id":"scheduled","lane":"reconcile","col":3,"type":"database","label":"Scheduler: DNC","width":130}
+  ],
+  "edges": [
+    {"id":"trigger-entry","from":"manual","to":"entry","role":"main"},
+    {"id":"entry-flags","from":"entry","to":"flags","label":"verifica","variant":"security","role":"main"},
+    {"id":"flags-guards","from":"flags","to":"guards","label":"on","variant":"emphasis","role":"main"},
+    {"id":"flags-blocked","from":"flags","to":"blocked","label":"off","variant":"security","role":"error"},
+    {"id":"guards-blocked","from":"guards","to":"blocked","label":"falla","variant":"security","role":"error"},
+    {"id":"guards-predial","from":"guards","to":"predial","label":"pasa","variant":"emphasis","role":"main"},
+    {"id":"predial-provider","from":"predial","to":"provider","label":"commit","variant":"emphasis","role":"main"},
+    {"id":"provider-reconcile","from":"provider","to":"reconcile","label":"webhook / probe","variant":"emphasis","role":"main"},
+    {"id":"scheduled-entry","from":"scheduled","to":"entry","label":"claim; DNC antes de dial","variant":"dashed","role":"branch"},
+    {"id":"reconcile-scheduled","from":"reconcile","to":"scheduled","label":"resuelve o libera","variant":"dashed","role":"return"}
+  ]
+}

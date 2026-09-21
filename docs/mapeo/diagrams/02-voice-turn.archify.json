@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Qora: turno de voz con contexto y SSE",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [1500, 900]
+  },
+  "participants": [
+    {"id":"elevenlabs","type":"external","label":"ElevenLabs"},
+    {"id":"initiation","type":"backend","label":"Inicio"},
+    {"id":"session","type":"backend","label":"Sesión"},
+    {"id":"voice","type":"backend","label":"Custom LLM"},
+    {"id":"database","type":"database","label":"Base de datos"},
+    {"id":"openai","type":"external","label":"OpenAI"},
+    {"id":"tools","type":"backend","label":"Herramientas"}
+  ],
+  "segments": [
+    {"from":150,"to":310,"label":"Preparación"},
+    {"from":330,"to":650,"label":"Turno"},
+    {"from":670,"to":820,"label":"Herramienta opcional"}
+  ],
+  "messages": [
+    {"from":"elevenlabs","to":"initiation","y":180,"label":"POST initiation con cliente, lead y conversación","variant":"emphasis"},
+    {"from":"initiation","to":"database","y":220,"label":"carga cliente, agente, lead y memoria","variant":"default"},
+    {"from":"initiation","to":"session","y":260,"label":"guarda contexto y autorización si hay conversación","variant":"emphasis"},
+    {"from":"initiation","to":"elevenlabs","y":300,"label":"variables dinámicas","variant":"return"},
+    {"from":"elevenlabs","to":"voice","y":350,"label":"POST Custom LLM con mensajes","variant":"emphasis"},
+    {"from":"voice","to":"session","y":390,"label":"reutiliza contexto; si falta, busca o crea","variant":"default"},
+    {"from":"voice","to":"database","y":430,"label":"fallback: cliente, agente, lead y sesión","variant":"dashed"},
+    {"from":"voice","to":"openai","y":480,"label":"stream con prompt, mensajes y tools","variant":"emphasis"},
+    {"from":"openai","to":"voice","y":520,"label":"deltas SSE o tool call","variant":"return"},
+    {"from":"voice","to":"elevenlabs","y":560,"label":"deltas de respuesta SSE","variant":"return"},
+    {"from":"voice","to":"tools","y":640,"label":"si hay function call","variant":"emphasis"},
+    {"from":"tools","to":"database","y":680,"label":"lectura o captura según alcance","variant":"default"},
+    {"from":"tools","to":"voice","y":720,"label":"resultado de herramienta","variant":"return"},
+    {"from":"voice","to":"openai","y":760,"label":"segundo stream sin tools","variant":"emphasis"},
+    {"from":"voice","to":"database","y":800,"label":"persiste turnos de transcripción","variant":"dashed"}
+  ],
+  "activations": [
+    {"participant":"initiation","from":174,"to":306,"type":"backend"},
+    {"participant":"session","from":252,"to":414,"type":"backend"},
+    {"participant":"voice","from":344,"to":808,"type":"backend"},
+    {"participant":"openai","from":474,"to":770,"type":"external"},
+    {"participant":"tools","from":634,"to":726,"type":"backend"},
+    {"participant":"database","from":214,"to":804,"type":"database"}
+  ]
+}

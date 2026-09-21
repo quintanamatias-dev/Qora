@@ -304,7 +304,7 @@ field_mappings:
                 "id": "recABC",
                 "fields": {
                     "Nombre Completo": "New User",
-                    "Teléfono": "+5491199998888",
+                    "Teléfono": "+5491155558888",
                 },
             }
         ]
@@ -366,7 +366,7 @@ field_mappings:
                 "id": "recNEW",
                 "fields": {
                     "Nombre Completo": "Brand New Lead",
-                    "Teléfono": "+5491199997777",
+                    "Teléfono": "+5491155557777",
                 },
             }
         ]
@@ -424,7 +424,7 @@ field_mappings:
             id="existing-123",
             client_id="test-client",
             name="Old Name",
-            phone="+5491199996666",
+            phone="+5491155556666",
             status=LeadStatus.NEW.value,
         )
 
@@ -433,7 +433,7 @@ field_mappings:
                 "id": "recEXIST",
                 "fields": {
                     "Nombre Completo": "Updated Name",
-                    "Teléfono": "+5491199996666",
+                    "Teléfono": "+5491155556666",
                 },
             }
         ]
@@ -930,3 +930,175 @@ class TestCRMImportEndpoint:
         data = response.json()
         assert data["created"] == 0
         assert data["errors"] == []
+
+
+class TestPhoneNormalizationDuringCRMImport:
+    """CRM pull normalizes before tenant-scoped comparison with no live provider."""
+
+    @pytest.mark.asyncio
+    async def test_import_normalizes_before_lookup_and_skips_invalid_or_missing_rows(self):
+        from app.integrations import crm_import_service
+        from app.integrations.crm_config import CRMConfig, CRMFieldDef
+
+        config = MagicMock(spec=CRMConfig)
+        config.base_id = "appTEST"
+        config.table_id = "tblTEST"
+        config.field_mappings = [
+            CRMFieldDef(source="phone", target="Teléfono", type="phone"),
+        ]
+        config.import_status_mapping = None
+        config.custom_fields = []
+        config.resolve_api_key.return_value = "test-key"
+        records = [
+            {"id": "rec-valid", "fields": {"Teléfono": "011 15 5555-0101"}},
+            {"id": "rec-invalid", "fields": {"Teléfono": "011 5555-0101"}},
+            {"id": "rec-missing", "fields": {}},
+        ]
+        db = AsyncMock()
+        db.add = MagicMock()
+        db.flush = AsyncMock()
+
+        with patch(
+            "app.integrations.crm_import_service.CRMConfigLoader.load", return_value=config
+        ), patch("app.integrations.crm_import_service.AirtableAdapter") as adapter, patch(
+            "app.integrations.crm_import_service._find_lead_by_phone", new=AsyncMock(return_value=None)
+        ) as find:
+            adapter.return_value.fetch_records = AsyncMock(return_value=records)
+            result = await crm_import_service.import_leads_from_crm("tenant-a", db)
+
+        assert result.created == 1
+        assert result.skipped == 2
+        find.assert_awaited_once_with(db, "tenant-a", "+5491155550101")
+        assert result.errors == [
+            "Invalid phone for record rec-invalid: ambiguous_or_incomplete",
+            "Invalid phone for record rec-missing: invalid_syntax",
+        ]
+        db.add.assert_called_once()
+        assert db.add.call_args.args[0].phone == "+5491155550101"
+
+
+    @pytest.mark.asyncio
+    async def test_import_deduplicates_equivalent_phones_after_flushed_create(
+        self, db_session
+    ):
+        """The second equivalent row updates the first row created in the same batch."""
+        from sqlalchemy import select
+
+        from app.integrations import crm_import_service
+        from app.integrations.crm_config import CRMConfig, CRMFieldDef
+        from app.leads.models import Lead, LeadStatus
+        from app.tenants.models import Client
+
+        tenant_a = Client(
+            id="tenant-a",
+            name="Tenant A",
+            agent_name="Agent A",
+            voice_id="voice-tenant-a",
+        )
+        tenant_b = Client(
+            id="tenant-b",
+            name="Tenant B",
+            agent_name="Agent B",
+            voice_id="voice-tenant-b",
+        )
+        other_tenant_lead = Lead(
+            id="tenant-b-same-phone",
+            client_id="tenant-b",
+            name="Other Tenant Lead",
+            phone="+5491155550101",
+            email="other-tenant@example.test",
+            status=LeadStatus.QUOTED.value,
+            external_crm_id="rec-other-tenant",
+        )
+        db_session.add_all([tenant_a, tenant_b, other_tenant_lead])
+        await db_session.flush()
+
+        config = MagicMock(spec=CRMConfig)
+        config.base_id = "appTEST"
+        config.table_id = "tblTEST"
+        config.field_mappings = [
+            CRMFieldDef(source="name", target="Nombre Completo", type="string"),
+            CRMFieldDef(source="phone", target="Teléfono", type="phone"),
+            CRMFieldDef(source="email", target="Correo electrónico", type="string"),
+        ]
+        config.import_status_mapping = None
+        config.custom_fields = []
+        config.resolve_api_key.return_value = "test-key"
+        records = [
+            {
+                "id": "rec-equivalent-first",
+                "fields": {
+                    "Nombre Completo": "First Equivalent Row",
+                    "Teléfono": "011 15 5555-0101",
+                    "Correo electrónico": "first@example.test",
+                },
+            },
+            {
+                "id": "rec-equivalent-second",
+                "fields": {
+                    "Nombre Completo": "Second Equivalent Row",
+                    "Teléfono": "+5491155550101",
+                    "Correo electrónico": "second@example.test",
+                },
+            },
+        ]
+
+        with patch(
+            "app.integrations.crm_import_service.CRMConfigLoader.load",
+            return_value=config,
+        ), patch(
+            "app.integrations.crm_import_service.AirtableAdapter.fetch_records",
+            new=AsyncMock(return_value=records),
+        ):
+            result = await crm_import_service.import_leads_from_crm("tenant-a", db_session)
+
+        assert (result.created, result.updated, result.skipped) == (1, 1, 0)
+        assert result.errors == []
+
+        tenant_a_leads = list(
+            (
+                await db_session.execute(
+                    select(Lead).where(Lead.client_id == "tenant-a")
+                )
+            ).scalars()
+        )
+        assert len(tenant_a_leads) == 1
+        imported_lead = tenant_a_leads[0]
+        assert imported_lead.phone == "+5491155550101"
+        assert imported_lead.name == "Second Equivalent Row"
+        assert imported_lead.email == "second@example.test"
+        assert imported_lead.external_crm_id == "rec-equivalent-second"
+
+        await db_session.refresh(other_tenant_lead)
+        assert (
+            other_tenant_lead.name,
+            other_tenant_lead.phone,
+            other_tenant_lead.email,
+            other_tenant_lead.status,
+            other_tenant_lead.external_crm_id,
+        ) == (
+            "Other Tenant Lead",
+            "+5491155550101",
+            "other-tenant@example.test",
+            LeadStatus.QUOTED.value,
+            "rec-other-tenant",
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_helper_preserves_legacy_phone_value():
+    """The update helper preserves a legacy stored phone value."""
+    from app.integrations import crm_import_service
+    from app.leads.models import Lead
+
+    existing = Lead(
+        id="legacy-lead",
+        client_id="tenant-a",
+        name="Existing",
+        phone="011 15 5555-0101",
+        status="new",
+    )
+    assert crm_import_service._update_lead_from_qora_data(
+        existing, {"phone": "+5491155550101"}, "rec-new"
+    ) == {}
+    assert existing.phone == "011 15 5555-0101"

@@ -420,6 +420,7 @@ def _make_lead(lead_id: str = "lead-persist-001"):
     lead = MagicMock()
     lead.id = lead_id
     lead.phone = "+5491100000099"
+    lead.client_id = "client-persist"
     return lead
 
 
@@ -428,6 +429,7 @@ def _make_agent():
     agent.id = "agent-persist-001"
     agent.elevenlabs_agent_id = "el-agent-persist"
     agent.elevenlabs_phone_number_id = "pnum-persist"
+    agent.client_id = "client-persist"
     return agent
 
 
@@ -698,12 +700,14 @@ async def test_dial_outbound_call_recurrent_error_schedules_durable_tech_retry(
     mock_lead = MagicMock()
     mock_lead.id = "durability-lead-001"
     mock_lead.phone = "+5491109999001"
+    mock_lead.client_id = "quintana-seguros"
 
     # --- Build a mock agent (id matches real DB row so schedule_tech_retry can find it) ---
     mock_agent = MagicMock()
     mock_agent.id = agent_id
     mock_agent.elevenlabs_agent_id = "el-test-agent"
     mock_agent.elevenlabs_phone_number_id = "pnum-test-001"
+    mock_agent.client_id = "quintana-seguros"
 
     # --- Build a mock client ---
     mock_client = MagicMock()

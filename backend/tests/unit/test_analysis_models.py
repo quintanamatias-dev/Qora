@@ -51,7 +51,7 @@ async def db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Test Lead",
-            phone="+5411000001",
+            phone="+5491100000003",
             lead_id="lead-1",
         )
         await create_session(

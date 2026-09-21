@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Qora: datos después del cierre de llamada",
+    "quality_profile": "showcase",
+    "viewBox": [1500, 760]
+  },
+  "stages": [
+    {"label":"Cierre"},
+    {"label":"Modo"},
+    {"label":"Procesamiento"},
+    {"label":"Acción"},
+    {"label":"Externo"}
+  ],
+  "nodes": [
+    {"id":"close","type":"backend","label":"close_session","stage":0,"row":1,"width":135},
+    {"id":"jobs","type":"database","label":"BackgroundJob","stage":1,"row":0,"width":135},
+    {"id":"legacy","type":"backend","label":"Ruta legacy","stage":1,"row":4,"width":135},
+    {"id":"summary","type":"backend","label":"Summarizer","stage":2,"row":0,"width":135},
+    {"id":"crm","type":"backend","label":"CRM sync","stage":3,"row":2,"width":135},
+    {"id":"openai","type":"external","label":"OpenAI","stage":3,"row":0,"width":125},
+    {"id":"scheduler","type":"backend","label":"Scheduler","stage":3,"row":4,"width":135},
+    {"id":"airtable","type":"external","label":"Airtable / CRM","stage":4,"row":2,"width":145}
+  ],
+  "flows": [
+    {"id":"close-jobs","from":"close","to":"jobs","label":"executor on","classification":"durable","variant":"emphasis","route":"top-channel"},
+    {"id":"close-legacy","from":"close","to":"legacy","label":"executor off","classification":"best effort","variant":"dashed","route":"bottom-channel"},
+    {"id":"jobs-summary","from":"jobs","to":"summary","label":"summarize","classification":"retry/dead-letter","variant":"emphasis","route":"straight","labelAt":[540,200]},
+    {"id":"legacy-summary","from":"legacy","to":"summary","label":"async task","classification":"best effort","variant":"dashed","route":"vertical-channel","labelDx":-100},
+    {"id":"summary-crm","from":"summary","to":"crm","label":"crm_sync","classification":"job o create_task","variant":"default","route":"vertical-channel","labelDx":75},
+    {"id":"summary-openai","from":"summary","to":"openai","label":"análisis","classification":"externo","variant":"emphasis","route":"straight","labelDy":-30},
+    {"id":"summary-scheduler","from":"summary","to":"scheduler","label":"next action","classification":"reglas","variant":"default","route":"vertical-channel","labelAt":[712,428]},
+    {"id":"crm-airtable","from":"crm","to":"airtable","label":"sync","classification":"configurable","variant":"dashed","route":"straight","labelDy":30}
+  ]
+}

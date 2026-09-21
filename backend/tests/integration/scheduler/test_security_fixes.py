@@ -67,14 +67,14 @@ async def two_tenant_app(tmp_path: Path):
             sess,
             client_id="alpha-client",
             name="Alpha Lead",
-            phone="+5411000001",
+            phone="+5491100000003",
             lead_id="alpha-lead-001",
         )
         await create_lead(
             sess,
             client_id="beta-client",
             name="Beta Lead",
-            phone="+5411000002",
+            phone="+5491100000004",
             lead_id="beta-lead-001",
         )
         await sess.commit()
@@ -131,7 +131,7 @@ async def hours_app(tmp_path: Path):
             sess,
             client_id="hours-client",
             name="Hours Lead",
-            phone="+5411000099",
+            phone="+5491100000100",
             lead_id="hours-lead-001",
         )
         await sess.commit()
@@ -189,7 +189,7 @@ async def followup_app(tmp_path: Path):
             sess,
             client_id="fu-client",
             name="FU Lead",
-            phone="+5411000055",
+            phone="+5491100000055",
             lead_id="fu-lead-001",
         )
         await sess.flush()

@@ -47,7 +47,7 @@ async def seeded_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Phase2 Lead",
-            phone="+5411000004",
+            phone="+5491100000013",
             lead_id="test-lead-phase2-001",
         )
         await sess.commit()
@@ -377,7 +377,7 @@ async def test_new_lead_has_do_not_call_false(seeded_db):
             sess,
             client_id="quintana-seguros",
             name="Lead Default DNC",
-            phone="+5411000099",
+            phone="+5491100000100",
             lead_id="test-lead-dnc-default-001",
         )
         await sess.commit()

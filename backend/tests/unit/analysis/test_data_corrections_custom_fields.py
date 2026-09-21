@@ -50,7 +50,7 @@ async def cf_corr_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Maria Garcia",
-            phone="+5411000099",
+            phone="+5491100000100",
             lead_id="cf-corr-lead-001",
         )
         # Pre-seed some custom fields for the lead
@@ -245,7 +245,7 @@ async def test_snapshot_includes_base_fields_when_no_custom_fields(cf_corr_db):
             sess,
             client_id="quintana-seguros",
             name="Pedro Sanchez",
-            phone="+5411000088",
+            phone="+5491100000088",
             lead_id="cf-corr-lead-no-cf",
         )
         await sess.commit()

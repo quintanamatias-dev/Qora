@@ -45,7 +45,7 @@ async def seeded_session(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Sweep Lead",
-            phone="+5411000002",
+            phone="+5491100000004",
             lead_id="test-lead-sweep-001",
         )
         await sess.commit()

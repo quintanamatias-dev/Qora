@@ -48,7 +48,7 @@ async def sched_db_na(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="NA Sched Lead",
-            phone="+54110000888",
+            phone="+5491100000888",
             lead_id="na-sched-lead-001",
         )
         await sess.commit()
@@ -267,7 +267,7 @@ class TestSummarizerNextActionWiring:
                 sess,
                 client_id="quintana-seguros",
                 name="Phase4 Lead",
-                phone="+54110000777",
+                phone="+5491100000777",
                 lead_id="phase4-lead-001",
             )
             await sess.commit()

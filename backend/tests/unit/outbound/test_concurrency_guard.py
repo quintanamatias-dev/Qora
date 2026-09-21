@@ -36,7 +36,7 @@ def _make_settings():
 def _make_lead(lead_id: str = "lead-concurrent-lock-001"):
     lead = MagicMock()
     lead.id = lead_id
-    lead.phone = "+14155552671"
+    lead.phone = "+5491109999001"
     lead.client_id = "client-a"
     lead.name = "Concurrent Lock Test Lead"
     return lead
@@ -47,6 +47,7 @@ def _make_agent():
     agent.id = "agent-001"
     agent.elevenlabs_agent_id = "el-agent-abc"
     agent.elevenlabs_phone_number_id = "pn-xyz"
+    agent.client_id = "client-a"
     agent.name = "Test Agent"
     return agent
 

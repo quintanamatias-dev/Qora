@@ -48,7 +48,7 @@ async def sched_app(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Router Test Lead",
-            phone="+5411000077",
+            phone="+5491100000077",
             lead_id="router-lead-001",
         )
         await sess.commit()

@@ -46,7 +46,7 @@ def _make_settings():
 def _make_lead(lead_id: str = "lead-rereview-001"):
     lead = MagicMock()
     lead.id = lead_id
-    lead.phone = "+14155552671"
+    lead.phone = "+5491109999001"
     lead.client_id = "client-a"
     lead.name = "Re-review Test Lead"
     return lead
@@ -57,6 +57,7 @@ def _make_agent(phone_number_id: str | None = "pn-xyz"):
     agent.id = "agent-001"
     agent.elevenlabs_agent_id = "el-agent-abc"
     agent.elevenlabs_phone_number_id = phone_number_id
+    agent.client_id = "client-a"
     agent.name = "Test Agent"
     return agent
 
@@ -355,7 +356,7 @@ def test_billed_duration_seconds_preserved_in_allowlist():
         "message": "Call completed",
         # Unsafe fields — must still be dropped:
         "sip_uri": "sip:+1555@telnyx.com",
-        "to_number": "+14155552671",
+        "to_number": "+5491109999001",
     }
 
     safe = _extract_safe_provider_metadata(raw)

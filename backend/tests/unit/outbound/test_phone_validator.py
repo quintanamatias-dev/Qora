@@ -23,15 +23,14 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def test_valid_e164_international_us():
-    """GIVEN a valid US E.164 number
-    WHEN validate_e164 is called
-    THEN it returns the number unchanged.
-    """
+def test_rejects_foreign_e164_without_echoing_the_phone():
+    """Only canonical Argentine destinations are eligible for outbound dialing."""
     from app.outbound.phone import validate_e164
 
-    result = validate_e164("+14155552671")
-    assert result == "+14155552671"
+    with pytest.raises(ValueError, match="E.164") as exc_info:
+        validate_e164("+14155552671")
+
+    assert "+14155552671" not in str(exc_info.value)
 
 
 def test_valid_e164_argentina():
@@ -41,8 +40,8 @@ def test_valid_e164_argentina():
     """
     from app.outbound.phone import validate_e164
 
-    result = validate_e164("+5491123456789")
-    assert result == "+5491123456789"
+    result = validate_e164("+5491155550101")
+    assert result == "+5491155550101"
 
 
 def test_invalid_e164_no_plus_prefix():
@@ -87,6 +86,17 @@ def test_invalid_e164_empty_string():
 
     with pytest.raises(ValueError, match="E.164"):
         validate_e164("")
+
+
+def test_rejects_noncanonical_domestic_value_without_repairing_it():
+    """Dial-time validation rejects domestic storage instead of normalizing it."""
+    from app.outbound.phone import validate_e164
+
+    raw_phone = "011 15 5555-0101"
+    with pytest.raises(ValueError, match="E.164") as exc_info:
+        validate_e164(raw_phone)
+
+    assert raw_phone not in str(exc_info.value)
 
 
 def test_invalid_e164_local_format():

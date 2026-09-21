@@ -1089,6 +1089,205 @@ async def _dial_claimed_scheduled_call(
     await db.commit()
 
 
+# ---------------------------------------------------------------------------
+# Phase C6b Slice 3: Stranded-row reaper
+#
+# The reaper does NOT own the rows it selects — a genuinely slow-but-
+# succeeding dial, a concurrent close_session, or a second reaper pass in
+# another process can still be writing to the same row between this
+# candidate SELECT and this function's write. Every transition below is a
+# conditional UPDATE (rowcount-checked via _cas_release_scheduled_call), the
+# same pattern _claim_one uses for claiming — never a blind ORM instance
+# write. Losing the race means someone else already resolved the row
+# correctly; the reaper silently backs off instead of clobbering that
+# outcome. This is the guard against the exact double-dial window this
+# whole phase exists to close: releasing a row to `pending` frees the lead's
+# uq_scheduled_calls_active_lead slot, so that release must never happen
+# while a real dial for that same row might still land.
+#
+# Design: openspec/changes/phase-c6b-auto-dialer/design.md — Reaper.
+# ---------------------------------------------------------------------------
+
+
+async def _cas_release_scheduled_call(
+    db: AsyncSession,
+    sc: ScheduledCall,
+    *,
+    values: dict,
+    expect_outcome_null: bool,
+) -> bool:
+    """Conditional UPDATE moving `sc` OUT of in_progress.
+
+    Returns True iff this call's write won (rowcount == 1) — the row still
+    matched the exact predicate (status='in_progress' AND the expected
+    outcome_session_id state) at write time. False means another writer
+    already changed status or outcome_session_id since the candidate SELECT;
+    the caller must treat that as "already handled" and not log a resolution.
+    """
+    conditions = [
+        ScheduledCall.id == sc.id,
+        ScheduledCall.status == "in_progress",
+    ]
+    if expect_outcome_null:
+        conditions.append(ScheduledCall.outcome_session_id.is_(None))
+    else:
+        conditions.append(ScheduledCall.outcome_session_id == sc.outcome_session_id)
+    stmt = (
+        sa.update(ScheduledCall)
+        .where(*conditions)
+        .values(**values)
+        .execution_options(synchronize_session=False)
+    )
+    result = await db.execute(stmt)
+    won = result.rowcount == 1
+    if won:
+        await db.commit()
+    else:
+        await db.rollback()
+    return won
+
+
+async def _reap_class_a(db: AsyncSession, sc: ScheduledCall, now: datetime) -> None:
+    """Resolve one class (a) candidate — in_progress, never dialed.
+
+    Age-out is checked before attempts-remaining (3.3): a row past
+    `_MAX_STRANDED_HOURS` is failed even if attempts remain — it bounds a
+    crash-loop instead of releasing the same doomed row indefinitely.
+    """
+    from app.tenants.service import get_client
+
+    # SQLite returns naive datetimes for DateTime(timezone=True) columns even
+    # though the value was stored UTC-aware (see calls/service.py's identical
+    # pattern for started_at) — normalize before arithmetic.
+    sc_scheduled_at = sc.scheduled_at
+    if sc_scheduled_at.tzinfo is None:
+        sc_scheduled_at = sc_scheduled_at.replace(tzinfo=timezone.utc)
+
+    aged_out = (now - sc_scheduled_at) > timedelta(hours=_MAX_STRANDED_HOURS)
+    attempts_remain = sc.attempt_number < sc.max_attempts
+
+    if aged_out or not attempts_remain:
+        won = await _cas_release_scheduled_call(
+            db, sc, values={"status": "failed", "updated_at": now},
+            expect_outcome_null=True,
+        )
+        if won:
+            logger.error(
+                "scheduled_call_reap_exhausted",
+                scheduled_call_id=sc.id,
+                lead_id=sc.lead_id,
+                aged_out=aged_out,
+                attempt_number=sc.attempt_number,
+                max_attempts=sc.max_attempts,
+            )
+        return
+
+    values: dict = {"status": "pending", "updated_at": now}
+    # Release clamp (3.2): rewrite scheduled_at ONLY when the clamp moves it
+    # forward. A row released inside the allowed-hours window keeps its
+    # original scheduled_at — this is what makes the 6h age-out cap a bound
+    # on the crash-loop instead of resetting it every reaper pass.
+    client = await get_client(db, sc.client_id)
+    if client is not None:
+        new_at = calculate_scheduled_at(
+            now_utc=now,
+            cooldown_minutes=0,
+            start_hour=client.scheduler_allowed_hours_start,
+            end_hour=client.scheduler_allowed_hours_end,
+            tz_str=client.scheduler_timezone,
+        )
+        if new_at > now:
+            values["scheduled_at"] = new_at
+
+    won = await _cas_release_scheduled_call(
+        db, sc, values=values, expect_outcome_null=True
+    )
+    if won:
+        logger.warning(
+            "scheduled_call_reaped_stale",
+            scheduled_call_id=sc.id,
+            lead_id=sc.lead_id,
+            requeued=True,
+        )
+
+
+async def _reap_class_b(db: AsyncSession, sc: ScheduledCall, now: datetime) -> None:
+    """Resolve one class (b) candidate — in_progress, dialed, no completion signal.
+
+    A missing linked CallSession is a genuine recovery failure (the row can
+    never be resolved from provider evidence again) — failed via the same
+    CAS-guarded path as class (a), never conditioned on attempts remaining.
+    A terminal telephony_status reuses resolve_scheduled_call_for_session —
+    the same shared mapping table and Decision 8 tech_retry cancellation
+    close_session already uses for this exact resolution.
+    """
+    from app.calls.models import CallSession
+
+    cs = await db.get(CallSession, sc.outcome_session_id)
+    if cs is None:
+        won = await _cas_release_scheduled_call(
+            db, sc, values={"status": "failed", "updated_at": now},
+            expect_outcome_null=False,
+        )
+        if won:
+            logger.error(
+                "scheduled_call_reap_session_missing",
+                scheduled_call_id=sc.id,
+                lead_id=sc.lead_id,
+                outcome_session_id=sc.outcome_session_id,
+            )
+        return
+
+    if cs.telephony_status not in _TELEPHONY_TO_SCHEDULED_STATUS:
+        # Non-terminal — left for stale_outbound_telephony_sweeper (30 min).
+        return
+
+    await resolve_scheduled_call_for_session(
+        db, call_session_id=cs.id, telephony_status=cs.telephony_status, source="reaper",
+    )
+    await db.commit()
+
+
+async def reap_stranded_scheduled_calls(
+    db: AsyncSession, *, now: datetime | None = None
+) -> None:
+    """Recover ScheduledCall rows stranded in_progress.
+
+    Covers both stranding classes (proposal.md — The Two Stranded States):
+      (a) never dialed — crash between claim and dial
+      (b) dialed, completion signal never arrived — lost/failed webhook
+
+    Called from run_scheduler_cycle only when BOTH enable_auto_dialer and
+    enable_outbound_calls are true (R3-1) — the same gate as the claim
+    branch, so the only in_progress rows this ever inspects are CAS-claimed
+    by the auto-dialer itself, never legacy rows bulk-promoted by
+    mark_due_calls_in_progress. Runs BEFORE the claim step so
+    released/resolved rows are re-claimable and index-free in the same
+    cycle.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=_CLAIM_TIMEOUT_MINUTES)
+
+    class_a = await db.execute(
+        select(ScheduledCall).where(
+            ScheduledCall.status == "in_progress",
+            ScheduledCall.outcome_session_id.is_(None),
+            ScheduledCall.updated_at < cutoff,
+        )
+    )
+    for sc in class_a.scalars().all():
+        await _reap_class_a(db, sc, now)
+
+    class_b = await db.execute(
+        select(ScheduledCall).where(
+            ScheduledCall.status == "in_progress",
+            ScheduledCall.outcome_session_id.is_not(None),
+        )
+    )
+    for sc in class_b.scalars().all():
+        await _reap_class_b(db, sc, now)
+
+
 async def run_scheduler_cycle(
     db: AsyncSession, settings, *, now_utc: datetime | None = None
 ) -> None:
@@ -1098,14 +1297,22 @@ async def run_scheduler_cycle(
     Design: openspec/changes/phase-c6b-auto-dialer/design.md — Technical Approach.
 
         if enable_auto_dialer AND enable_outbound_calls
+               -> reap_stranded_scheduled_calls(db)       # slice 3 (R3-1: same
+                                                            # gate as the claim
+                                                            # branch below — see
+                                                            # "Rollout dry run"
+                                                            # in design.md)
                -> claim_due_scheduled_calls(db, limit)   # CAS, replaces bulk promote
                -> dial claimed rows SEQUENTIALLY          # F4: shared AsyncSession
         else   -> mark_due_calls_in_progress(db)         # unchanged
 
-    With enable_auto_dialer=False the executed path is byte-for-byte today's
-    behaviour — the tick does not even query for dial candidates.
+    With enable_auto_dialer=False AND enable_outbound_calls=False the
+    executed path is byte-for-byte today's behaviour — the tick does not
+    even query for dial candidates.
     """
     if settings.enable_auto_dialer and settings.enable_outbound_calls:
+        await reap_stranded_scheduled_calls(db, now=now_utc)
+
         claimed = await claim_due_scheduled_calls(
             db, settings.auto_dialer_max_concurrent_dials
         )

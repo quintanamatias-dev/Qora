@@ -109,6 +109,173 @@ class TestConversationModels:
         assert sm.reason_phrase == "OK"
         assert not hasattr(sm, "raw_body"), "SipMessage must not expose raw_body"
 
+    def test_sip_message_normalizes_upstream_raw_message_without_retaining_it(self):
+        """Provider raw SIP is reduced to safe structured fields before storage."""
+        from app.elevenlabs.models import SipMessage
+
+        sensitive_address = "sip:+14155550100@203.0.113.10"
+        sensitive_header = "Authorization: Digest username=secret"
+        sm = SipMessage(
+            call_id="otb_call_abc",
+            raw_message=(
+                "SIP/2.0 487 Request Terminated\r\n"
+                "CSeq: 42 INVITE\r\n"
+                f"To: <{sensitive_address}>\r\n"
+                f"{sensitive_header}\r\n"
+            ),
+            error_message="provider diagnostic with sensitive address",
+            direction="outbound",
+            created_at_unix_micro=1720000000123456,
+        )
+
+        assert sm.status_code == 487
+        assert sm.reason_phrase == "Request Terminated"
+        assert sm.method == "INVITE"
+        assert sm.cseq == 42
+        assert sm.timestamp == "2024-07-03T09:46:40.123456+00:00"
+        serialized = repr(sm.model_dump()) + repr(sm)
+        assert sensitive_address not in serialized
+        assert sensitive_header not in serialized
+        assert not hasattr(sm, "raw_message")
+        assert not hasattr(sm, "error_message")
+
+    def test_sip_message_treats_malformed_raw_message_as_unknown(self):
+        """Malformed raw provider text exposes no derived SIP fields."""
+        from app.elevenlabs.models import SipMessage
+
+        sm = SipMessage(raw_message="not a SIP start line\nCSeq: invalid")
+
+        assert sm.status_code is None
+        assert sm.reason_phrase is None
+        assert sm.method is None
+        assert sm.cseq is None
+
+    @pytest.mark.parametrize(
+        ("provider_direction", "expected_direction"),
+        [
+            ("in", "inbound"),
+            ("out", "outbound"),
+            ("inbound", "inbound"),
+            ("outbound", "outbound"),
+        ],
+    )
+    def test_sip_message_normalizes_provider_direction_aliases(
+        self, provider_direction, expected_direction
+    ):
+        """Provider in/out aliases use the same stored vocabulary as full directions."""
+        from app.elevenlabs.models import SipMessage
+
+        sm = SipMessage(direction=provider_direction)
+
+        assert sm.direction == expected_direction
+
+    def test_sip_message_uses_cseq_from_headers_not_body(self):
+        """A body line resembling CSeq cannot fabricate request evidence."""
+        from app.elevenlabs.models import SipMessage
+
+        sensitive_body = "CSeq: 73 INVITE\r\nAuthorization: Digest username=secret"
+        sm = SipMessage(
+            raw_message=(
+                "SIP/2.0 200 OK\r\n"
+                "Via: SIP/2.0/TCP example.invalid\r\n"
+                f"\r\n{sensitive_body}"
+            ),
+            created_at_unix_micro=1720000000123456,
+        )
+
+        assert sm.status_code is None
+        assert sm.reason_phrase is None
+        assert sm.method is None
+        assert sm.cseq is None
+        assert sm.timestamp is None
+        assert sensitive_body not in repr(sm.model_dump()) + repr(sm)
+
+    @pytest.mark.parametrize(
+        "raw_message",
+        [
+            "INVITE sip:callee@example.invalid SIP/2.0\r\nCSeq: 42 ACK\r\n\r\n",
+            "INVITE sip:callee@example.invalid SIP/2.0\r\nCSeq: malformed\r\n\r\n",
+        ],
+    )
+    def test_sip_message_rejects_conflicting_or_malformed_request_cseq(
+        self, raw_message
+    ):
+        """A request line and CSeq must agree before SIP evidence is retained."""
+        from app.elevenlabs.models import SipMessage
+
+        sm = SipMessage(
+            raw_message=raw_message, created_at_unix_micro=1720000000123456
+        )
+
+        assert sm.status_code is None
+        assert sm.reason_phrase is None
+        assert sm.method is None
+        assert sm.cseq is None
+        assert sm.timestamp is None
+
+    @pytest.mark.parametrize("malformed_direction", [{"value": "out"}, ["out"]])
+    def test_sip_message_drops_unhashable_direction_without_leaking_raw_input(
+        self, malformed_direction
+    ):
+        """Malformed provider direction is unknown rather than a validation failure."""
+        from app.elevenlabs.models import SipMessage
+
+        sensitive_raw = "SIP/2.0 200 OK\r\nCSeq: 1 INVITE\r\n\r\nsecret-body"
+        sm = SipMessage(direction=malformed_direction, raw_message=sensitive_raw)
+
+        assert sm.direction is None
+        assert sensitive_raw not in repr(sm.model_dump()) + repr(sm)
+
+    def test_sip_message_rejects_oversized_raw_message_without_partial_evidence(self):
+        """Oversized provider bytes are unknown, never truncated into valid evidence."""
+        from app.elevenlabs.models import SipMessage
+
+        sensitive_tail = "Authorization: Digest username=secret"
+        sm = SipMessage(
+            raw_message=(
+                "SIP/2.0 200 OK\r\nCSeq: 1 INVITE\r\n\r\n"
+                + "x" * 4096
+                + sensitive_tail
+            ),
+            created_at_unix_micro=1720000000123456,
+        )
+
+        assert sm.status_code is None
+        assert sm.reason_phrase is None
+        assert sm.method is None
+        assert sm.cseq is None
+        assert sm.timestamp is None
+        assert sensitive_tail not in repr(sm.model_dump()) + repr(sm)
+
+    @pytest.mark.parametrize("status_code", [99, 700])
+    def test_sip_message_drops_out_of_range_response_codes(self, status_code):
+        """Only SIP response codes in the protocol range are retained."""
+        from app.elevenlabs.models import SipMessage
+
+        sm = SipMessage(status_code=status_code)
+
+        assert sm.status_code is None
+
+    @pytest.mark.parametrize("status_code", [100, 699])
+    def test_sip_message_keeps_boundary_response_codes(self, status_code):
+        """The inclusive SIP response-code boundaries remain valid."""
+        from app.elevenlabs.models import SipMessage
+
+        sm = SipMessage(status_code=status_code)
+
+        assert sm.status_code == status_code
+
+    def test_sip_messages_response_preserves_cursor_completeness_fields(self):
+        """Cursor metadata remains available so callers can reject partial results."""
+        from app.elevenlabs.models import SipMessagesResponse
+
+        response = SipMessagesResponse(
+            sip_messages=[], has_more=True, next_cursor="cursor-next-page"
+        )
+
+        assert response.has_more is True
+        assert response.next_cursor == "cursor-next-page"
+
     def test_sip_messages_response_defaults_to_empty(self):
         """SipMessagesResponse defaults to empty list.
 
@@ -305,7 +472,7 @@ class TestGetSipMessages:
         from app.elevenlabs.models import SipMessagesResponse
 
         conv_id = "conv-sip-001"
-        sip_url = f"{_EL_BASE}/convai/conversations/{conv_id}/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/{conv_id}/sip-messages"
 
         respx.get(sip_url).mock(
             return_value=httpx.Response(
@@ -349,7 +516,7 @@ class TestGetSipMessages:
         from app.elevenlabs.service import ElevenLabsService
 
         conv_id = "conv-empty"
-        sip_url = f"{_EL_BASE}/convai/conversations/{conv_id}/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/{conv_id}/sip-messages"
 
         respx.get(sip_url).mock(
             return_value=httpx.Response(200, json={"sip_messages": []})
@@ -372,7 +539,7 @@ class TestGetSipMessages:
         from app.elevenlabs.service import ElevenLabsService
 
         conv_id = "conv-not-found"
-        sip_url = f"{_EL_BASE}/convai/conversations/{conv_id}/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/{conv_id}/sip-messages"
 
         respx.get(sip_url).mock(
             return_value=httpx.Response(404, json={"detail": "not found"})
@@ -392,7 +559,7 @@ class TestGetSipMessages:
         from app.elevenlabs.service import ElevenLabsService
 
         conv_id = "conv-rate-limited"
-        sip_url = f"{_EL_BASE}/convai/conversations/{conv_id}/sip_messages"
+        sip_url = f"{_EL_BASE}/convai/conversations/{conv_id}/sip-messages"
 
         call_count = {"n": 0}
 
@@ -479,7 +646,7 @@ class TestGetSipMessagesByPhone:
         from app.elevenlabs.models import SipMessagesResponse
 
         phone_id = "pn-xyz-001"
-        phone_sip_url = f"{_EL_BASE}/convai/phone_numbers/{phone_id}/sip_messages"
+        phone_sip_url = f"{_EL_BASE}/convai/phone-numbers/{phone_id}/sip-messages"
 
         respx.get(phone_sip_url).mock(
             return_value=httpx.Response(
@@ -515,7 +682,7 @@ class TestGetSipMessagesByPhone:
         from app.elevenlabs.service import ElevenLabsService
 
         phone_id = "pn-forbidden"
-        phone_sip_url = f"{_EL_BASE}/convai/phone_numbers/{phone_id}/sip_messages"
+        phone_sip_url = f"{_EL_BASE}/convai/phone-numbers/{phone_id}/sip-messages"
 
         respx.get(phone_sip_url).mock(
             return_value=httpx.Response(403, json={"error": "forbidden"})
@@ -543,7 +710,7 @@ class TestSipFieldExtractionSafety:
         """SipMessage fields are exactly the allowed set — no extras."""
         from app.elevenlabs.models import SipMessage
 
-        allowed = {"call_id", "method", "status_code", "reason_phrase", "direction", "timestamp"}
+        allowed = {"call_id", "method", "status_code", "reason_phrase", "direction", "timestamp", "cseq"}
         actual = set(SipMessage.model_fields.keys())
         unexpected = actual - allowed
         assert not unexpected, (

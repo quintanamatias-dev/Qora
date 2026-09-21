@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 import structlog
 from openai import AsyncOpenAI
@@ -38,6 +38,7 @@ from app.analysis.universal.data_corrections import (
     DataCorrectionsAxis,
     run_data_corrections_pipeline,
 )
+from app.phones.normalization import PhoneNormalizationError, normalize_phone
 from app.analysis.universal.interest import run_interest_pipeline
 from app.analysis.universal.misc_notes import (
     MiscNotesAxis,
@@ -74,6 +75,53 @@ _TERMINAL_STATUSES: frozenset[str] = frozenset({"quoted", "interested", "not_int
 _NEGATIVE_CLASSIFICATIONS: frozenset[str] = frozenset(
     {"completed_negative", "do_not_contact", "hostile"}
 )
+
+
+# ---------------------------------------------------------------------------
+# Data corrections validators owned by this runtime
+#
+# app/analysis must stay copy-pastable into other runtimes, so it cannot import
+# app.phones. The real phones-backed phone validator therefore lives here and is
+# injected into run_data_corrections_pipeline(validators=...). Without it the
+# pipeline fails CLOSED and rejects every phone correction.
+# ---------------------------------------------------------------------------
+
+
+def validate_phone_correction(value: str) -> tuple[bool, str | None]:
+    """Validate a phone correction against the explicit Argentina phone policy.
+
+    Returns:
+        (True, None) when the value normalizes to a canonical AR number,
+        (False, reason) with the normalizer's machine-readable reason otherwise.
+        The reason never echoes the rejected digits.
+    """
+    try:
+        normalize_phone(value, region="AR")
+    except PhoneNormalizationError as exc:
+        return False, exc.reason
+    return True, None
+
+
+def normalize_phone_correction(value: str) -> str:
+    """Canonicalize a phone correction, or return it untouched when invalid.
+
+    Never raises: an unnormalizable value flows on to validate_phone_correction,
+    which rejects it with the normalizer's reason.
+    """
+    try:
+        return normalize_phone(value, region="AR")
+    except PhoneNormalizationError:
+        return value
+
+
+# Overrides passed into the data corrections pipeline at the call site.
+DATA_CORRECTION_VALIDATORS: dict[str, Callable[[str], tuple[bool, str | None]]] = {
+    "phone": validate_phone_correction,
+}
+
+DATA_CORRECTION_NORMALIZERS: dict[str, Callable[[str], str]] = {
+    "phone": normalize_phone_correction,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -694,6 +742,8 @@ async def _call_gpt_summarize(
                 transcript_text,
                 client,
                 current_lead_data=lead_data,
+                validators=DATA_CORRECTION_VALIDATORS,
+                normalizers=DATA_CORRECTION_NORMALIZERS,
             ),
             return_exceptions=True,
         )
@@ -1120,7 +1170,7 @@ async def _merge_facts_into_lead(
             from app.integrations.crm_config import CRMConfigLoader as _CRMConfigLoader
 
             _custom_fields_for_status = await _get_custom_fields(db, lead_id, client_id)
-            _crm_cfg = _CRMConfigLoader.load(client_id)
+            _crm_cfg = await _CRMConfigLoader.load_async(client_id)
             if _crm_cfg is not None:
                 _quote_ready_fields_for_status = list(_crm_cfg.quote_ready_fields or [])
         except Exception as _qr_exc:
@@ -1343,20 +1393,49 @@ def _apply_structured_corrections(
         if field not in CORRECTABLE_FIELDS:
             continue  # Safety: unknown field should have been dropped by pipeline
         entry = CORRECTABLE_FIELDS[field]
+        if field == "phone":
+            try:
+                correction = correction.model_copy(
+                    update={
+                        "corrected_value": normalize_phone(
+                            correction.corrected_value, region="AR"
+                        )
+                    }
+                )
+            except PhoneNormalizationError as exc:
+                all_corrections.append(
+                    correction.model_copy(
+                        update={"applied": False, "rejection_reason": exc.reason}
+                    )
+                )
+                logger.warning(
+                    "data_correction_phone_validation_failed",
+                    field=field,
+                    reason=exc.reason,
+                )
+                continue
         try:
             coerced = coerce_value(correction.corrected_value, entry.type)
             # Always write to Lead ORM column (dual-write for backward compat during transition)
             if hasattr(lead, entry.lead_attr):
                 setattr(lead, entry.lead_attr, coerced)
             all_corrections.append(correction)
-            logger.info(
-                "data_correction_applied",
-                field=field,
-                lead_attr=entry.lead_attr,
-                storage=entry.storage,
-                corrected_value=correction.corrected_value,
-                confidence=correction.confidence,
-            )
+            if field == "phone":
+                logger.info(
+                    "data_correction_phone_applied",
+                    field=field,
+                    lead_attr=entry.lead_attr,
+                    storage=entry.storage,
+                )
+            else:
+                logger.info(
+                    "data_correction_applied",
+                    field=field,
+                    lead_attr=entry.lead_attr,
+                    storage=entry.storage,
+                    corrected_value=correction.corrected_value,
+                    confidence=correction.confidence,
+                )
         except (ValueError, TypeError) as exc:
             logger.warning(
                 "data_correction_coerce_failed",

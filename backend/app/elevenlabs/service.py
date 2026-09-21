@@ -463,7 +463,7 @@ class ElevenLabsService:
     ) -> SipMessagesResponse:
         """Get SIP message sequence for an ElevenLabs conversation.
 
-        GET /convai/conversations/{conversation_id}/sip_messages
+        GET /convai/conversations/{conversation_id}/sip-messages
 
         Spec: call-sip-observability — SIP field extraction, allowlist only.
         The SipMessagesResponse Pydantic model enforces the allowlist —
@@ -476,7 +476,7 @@ class ElevenLabsService:
         headers = {"xi-api-key": api_key}
         url = (
             f"{_ELEVENLABS_BASE_URL}/convai/conversations"
-            f"/{conversation_id}/sip_messages"
+            f"/{conversation_id}/sip-messages"
         )
 
         response = await _get_with_429_backoff(url=url, headers=headers)
@@ -488,7 +488,7 @@ class ElevenLabsService:
     ) -> SipMessagesResponse:
         """Get SIP messages by ElevenLabs phone number resource ID.
 
-        GET /convai/phone_numbers/{phone_number_id}/sip_messages
+        GET /convai/phone-numbers/{phone_number_id}/sip-messages
 
         Fallback SIP lookup when conversation_id is not available.
 
@@ -497,7 +497,7 @@ class ElevenLabsService:
         """
         api_key = self._settings.elevenlabs_api_key.get_secret_value()
         headers = {"xi-api-key": api_key}
-        url = f"{_ELEVENLABS_BASE_URL}/convai/phone_numbers/{phone_number_id}/sip_messages"
+        url = f"{_ELEVENLABS_BASE_URL}/convai/phone-numbers/{phone_number_id}/sip-messages"
 
         response = await _get_with_429_backoff(url=url, headers=headers)
         return SipMessagesResponse(**response.json())

@@ -152,7 +152,7 @@ async def tech_retry_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Tech Retry Lead",
-            phone="+5411000099",
+            phone="+5491100000100",
             lead_id="tech-retry-lead-001",
         )
         await sess.commit()

@@ -193,9 +193,9 @@ async def sweep_stale_outbound_sessions(db: AsyncSession) -> int:
 # C3 — SIP Observability reconciliation pass
 # ---------------------------------------------------------------------------
 
-# Sessions eligible for reconciliation by telephony_status.
-# We reconcile sessions that are in a terminal-ish state but have not yet
-# captured SIP evidence. 'failed' includes ambiguous_timeout sessions.
+# Sessions eligible for time-matched reconciliation by telephony_status.
+# 'failed' includes ambiguous_timeout sessions. Completed sessions are eligible
+# only when their stored ElevenLabs conversation ID provides an exact lookup key.
 _RECONCILIATION_CANDIDATE_STATUSES = frozenset({"failed", "stale_in_call"})
 
 # How close (in seconds) a conversation's start time must be to the session's
@@ -216,20 +216,22 @@ async def reconcile_unreconciled_sessions(
     Spec: call-sip-observability — Requirement: Background Reconciliation Sweep.
 
     Candidate sessions:
-      - telephony_status IN ('failed', 'stale_in_call')
+      - telephony_status IN ('failed', 'stale_in_call'), or 'completed' with a
+        stored elevenlabs_conversation_id
       - reconciled_at IS NULL
       - reconciliation_attempts < settings.reconciliation_max_attempts
       - Ordered oldest-first (started_at ASC)
       - Limited to settings.reconciliation_sweep_cap per cycle
 
     For each candidate:
-      1. Call list_recent_conversations(agent_id, window).
-      2. Check for unambiguous match (exactly one conversation within _SWEEP_MATCH_WINDOW_SECONDS).
-         - Ambiguous (multiple close matches): log WARNING, skip, leave reconciled_at NULL.
-         - No match: log INFO, skip.
-         - Unambiguous: proceed to get_sip_messages.
-      3. Write sip_call_id, sip_status_code, sip_reason, reconciled_at='sweep'.
-      4. NEVER change telephony_status — reconciliation is read-only for call state.
+      1. Use its stored elevenlabs_conversation_id for exact SIP lookup when present.
+         Otherwise call list_recent_conversations(agent_id, window).
+      2. For list fallback, require exactly one match within
+         _SWEEP_MATCH_WINDOW_SECONDS; ambiguous/no matches stay unreconciled.
+      3. Require a complete SIP page before writing sip_call_id, sip_status_code,
+         sip_reason, reconciled_at='sweep'.
+      4. Backfill diagnostics only: NEVER change terminal status, session-end
+         evidence, or outcome fields.
 
     Retry cap (resilience fix):
       On each failed attempt (API error or exception), reconciliation_attempts is
@@ -255,12 +257,20 @@ async def reconcile_unreconciled_sessions(
     cap = getattr(settings, "reconciliation_sweep_cap", 10)
     max_attempts = getattr(settings, "reconciliation_max_attempts", 5)
 
-    # Query eligible sessions: failed or stale_in_call with reconciled_at IS NULL
-    # AND attempts below the cap. Oldest-first so longest-waiting sessions resolve first.
+    from sqlalchemy import and_, or_
+
+    # Query candidates bounded by cap: failed/stale sessions may use ambiguity-safe
+    # agent/time fallback; completed sessions require a stored exact conversation ID.
     stmt = (
         select(CallSession)
         .where(
-            CallSession.telephony_status.in_(_RECONCILIATION_CANDIDATE_STATUSES),
+            or_(
+                CallSession.telephony_status.in_(_RECONCILIATION_CANDIDATE_STATUSES),
+                and_(
+                    CallSession.telephony_status == "completed",
+                    CallSession.elevenlabs_conversation_id.is_not(None),
+                ),
+            ),
             CallSession.reconciled_at.is_(None),
             CallSession.reconciliation_attempts < max_attempts,
         )
@@ -342,71 +352,84 @@ async def _reconcile_one_session(
     Returns True if SIP evidence was successfully written, False otherwise.
     May raise exceptions — caller (reconcile_unreconciled_sessions) handles them.
     """
-    agent_id = cs.agent_id
-    if not agent_id:
-        logger.info(
-            "reconciliation_skip_no_agent_id",
-            session_id=cs.id,
-        )
-        return False
+    conversation_id = cs.elevenlabs_conversation_id
+    if conversation_id is None:
+        agent_id = cs.agent_id
+        if not agent_id:
+            logger.info(
+                "reconciliation_skip_no_agent_id",
+                session_id=cs.id,
+            )
+            return False
 
-    session_ts = cs.started_at.timestamp() if cs.started_at else 0.0
+        session_ts = cs.started_at.timestamp() if cs.started_at else 0.0
 
-    # Step 1: List recent conversations for this agent
-    conv_list = await el_service.list_recent_conversations(
-        agent_id=agent_id,
-        time_window_seconds=_SWEEP_CONVERSATION_WINDOW_SECONDS,
-    )
-
-    if not conv_list.conversations:
-        logger.info(
-            "reconciliation_no_conversations",
-            session_id=cs.id,
+        # Fallback only when no exact conversation ID was stored.
+        conv_list = await el_service.list_recent_conversations(
             agent_id=agent_id,
+            time_window_seconds=_SWEEP_CONVERSATION_WINDOW_SECONDS,
         )
-        return False
 
-    # Step 2: Check for unambiguous match within the time window
-    matches = [
-        conv for conv in conv_list.conversations
-        if conv.start_time_unix_secs is not None
-        and abs(conv.start_time_unix_secs - session_ts) <= _SWEEP_MATCH_WINDOW_SECONDS
-    ]
+        if not conv_list.conversations:
+            logger.info(
+                "reconciliation_no_conversations",
+                session_id=cs.id,
+                agent_id=agent_id,
+            )
+            return False
 
-    if len(matches) == 0:
+        matches = [
+            conv for conv in conv_list.conversations
+            if conv.start_time_unix_secs is not None
+            and abs(conv.start_time_unix_secs - session_ts) <= _SWEEP_MATCH_WINDOW_SECONDS
+        ]
+
+        if len(matches) == 0:
+            logger.info(
+                "reconciliation_no_match",
+                session_id=cs.id,
+                agent_id=agent_id,
+                conversation_count=len(conv_list.conversations),
+            )
+            return False
+
+        if len(matches) > 1:
+            # Ambiguous fallback matches are never guessed.
+            logger.warning(
+                "reconciliation_ambiguous_match",
+                session_id=cs.id,
+                agent_id=agent_id,
+                candidate_count=len(matches),
+                candidate_ids=[m.conversation_id for m in matches],
+            )
+            return False
+
+        conversation_id = matches[0].conversation_id
+    else:
         logger.info(
-            "reconciliation_no_match",
+            "reconciliation_exact_conversation_id",
             session_id=cs.id,
-            agent_id=agent_id,
-            conversation_count=len(conv_list.conversations),
+            conversation_id=conversation_id,
         )
-        return False
 
-    if len(matches) > 1:
-        # Ambiguous: multiple conversations within the match window
-        # Spec: Ambiguous sweep match — safe skip.
+    # Fetch complete SIP evidence for the exact or unambiguous conversation.
+    sip_response = await el_service.get_sip_messages(conversation_id=conversation_id)
+
+    if sip_response.has_more or sip_response.next_cursor:
         logger.warning(
-            "reconciliation_ambiguous_match",
+            "reconciliation_incomplete_sip_messages",
             session_id=cs.id,
-            agent_id=agent_id,
-            candidate_count=len(matches),
-            candidate_ids=[m.conversation_id for m in matches],
+            conversation_id=conversation_id,
+            has_more=sip_response.has_more,
+            has_next_cursor=sip_response.next_cursor is not None,
         )
         return False
-
-    # Exactly one match — proceed
-    best_conv = matches[0]
-
-    # Step 3: Fetch SIP messages
-    sip_response = await el_service.get_sip_messages(
-        conversation_id=best_conv.conversation_id
-    )
 
     if not sip_response.sip_messages:
         logger.info(
             "reconciliation_no_sip_messages",
             session_id=cs.id,
-            conversation_id=best_conv.conversation_id,
+            conversation_id=conversation_id,
         )
         return False
 
@@ -428,7 +451,7 @@ async def _reconcile_one_session(
     logger.info(
         "reconciliation_evidence_written",
         session_id=cs.id,
-        conversation_id=best_conv.conversation_id,
+        conversation_id=conversation_id,
         sip_call_id=sip_call_id,
         sip_status_code=sip_status_code,
         sip_reason=sip_reason,

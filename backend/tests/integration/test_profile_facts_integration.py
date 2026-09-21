@@ -52,7 +52,7 @@ async def profile_integration_db(tmp_path: Path):
             sess,
             client_id="quintana-seguros",
             name="Profile Integration Lead",
-            phone="+5411099888",
+            phone="+5491100099888",
             lead_id="lead-profile-integration-001",
         )
         await sess.commit()

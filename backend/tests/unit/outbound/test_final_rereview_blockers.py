@@ -59,7 +59,7 @@ def _make_settings():
 def _make_lead(lead_id: str = "lead-final-001"):
     lead = MagicMock()
     lead.id = lead_id
-    lead.phone = "+14155552671"
+    lead.phone = "+5491109999001"
     lead.client_id = "client-a"
     lead.name = "Final Re-review Lead"
     return lead
@@ -70,6 +70,7 @@ def _make_agent(phone_number_id: str = "pn-xyz"):
     agent.id = "agent-001"
     agent.elevenlabs_agent_id = "el-agent-abc"
     agent.elevenlabs_phone_number_id = phone_number_id
+    agent.client_id = "client-a"
     agent.name = "Test Agent"
     return agent
 
@@ -79,6 +80,38 @@ def _make_client():
     client.id = "client-a"
     client.name = "Test Client"
     return client
+
+
+async def _seed_dial_records(db_engine, suffix: str):
+    """Create the persisted tenant, agent, and lead required for a real dial."""
+    from app.leads.models import Lead
+    from app.tenants.models import Agent, Client
+
+    client = Client(
+        id=f"client-final-{suffix}",
+        name=f"Final re-review client {suffix}",
+        voice_id="voice-final-rereview",
+    )
+    agent = Agent(
+        id=f"agent-final-{suffix}",
+        client_id=client.id,
+        slug=f"final-{suffix}",
+        name="Final Re-review Agent",
+        voice_id="voice-final-rereview",
+        elevenlabs_agent_id="el-agent-abc",
+        elevenlabs_phone_number_id="pn-xyz",
+    )
+    lead = Lead(
+        id=f"lead-final-{suffix}",
+        client_id=client.id,
+        name="Final Re-review Lead",
+        phone="+5491109999001",
+        status="new",
+    )
+    async with db_engine.async_session_factory() as db:
+        db.add_all([client, agent, lead])
+        await db.commit()
+    return client, agent, lead
 
 
 def _make_in_progress_scheduled_call(call_id: str = "sc-in-progress-final-001"):
@@ -324,7 +357,7 @@ class TestRouterScheduledCallOverlap409:
             lead = MagicMock()
             lead.id = "lead-final-001"
             lead.client_id = "client-a"
-            lead.phone = "+14155552671"
+            lead.phone = "+5491109999001"
             mock_lead.return_value = lead
             mock_agent.return_value = _make_agent()
 
@@ -390,7 +423,7 @@ class TestRouterScheduledCallOverlap409:
             lead = MagicMock()
             lead.id = "lead-final-001"
             lead.client_id = "client-a"
-            lead.phone = "+14155552671"
+            lead.phone = "+5491109999001"
             mock_lead.return_value = lead
             mock_agent.return_value = _make_agent()
 
@@ -457,7 +490,7 @@ class TestRouterScheduledCallOverlap409:
             lead = MagicMock()
             lead.id = "lead-final-001"
             lead.client_id = "client-a"
-            lead.phone = "+14155552671"
+            lead.phone = "+5491109999001"
             mock_lead.return_value = lead
             mock_agent.return_value = _make_agent()
 
@@ -521,7 +554,7 @@ class TestRouterScheduledCallOverlap409:
             lead = MagicMock()
             lead.id = "lead-final-001"
             lead.client_id = "client-a"
-            lead.phone = "+14155552671"
+            lead.phone = "+5491109999001"
             mock_lead.return_value = lead
             mock_agent.return_value = _make_agent()
 
@@ -678,53 +711,47 @@ async def test_pre_dial_commit_then_refresh_before_provider():
 
 
 @pytest.mark.asyncio
-async def test_accepted_path_still_persists_all_fields_after_two_commit_flow():
+async def test_accepted_path_still_persists_all_fields_after_two_commit_flow(db_engine):
     """GIVEN the pre-dial commit → provider call → post-result commit flow
     WHEN ElevenLabs returns accepted
     THEN CallSession has telephony_status='ringing', provider_call_id, provider_metadata,
          and final state is durably committed.
 
     Regression: the two-commit flow must not break accepted path field persistence.
+
+    The accepted path persists through a conditional UPDATE and then refreshes the
+    ORM object, so the durable row is the only honest observation point. This test
+    therefore runs against a real session instead of a mock db.
     """
+    from app.calls.models import CallSession
     from app.outbound.service import dial_outbound_call
 
-    mock_db = AsyncMock()
-    no_result = MagicMock()
-    no_result.scalars.return_value.first.return_value = None
-    mock_db.execute.return_value = no_result
-
-    session_obj = None
-
-    def _capture_add(obj):
-        nonlocal session_obj
-        session_obj = obj
-
-    mock_db.add = MagicMock(side_effect=_capture_add)
-    mock_db.flush = AsyncMock()
-    mock_db.commit = AsyncMock()
-    mock_db.refresh = AsyncMock()
+    client, agent, lead = await _seed_dial_records(db_engine, "2commit-ok")
 
     accepted = _accepted_result()
     accepted.provider_call_id = "el-call-2commit-ok"
     accepted.provider_metadata = {"cost": 0.15, "billed_duration_seconds": 45}
 
-    with patch(
-        "app.elevenlabs.service.ElevenLabsService.initiate_outbound_call",
-        new_callable=AsyncMock,
-        return_value=accepted,
-    ) as mock_api:
+    async with db_engine.async_session_factory() as db:
+        commit_spy = AsyncMock(wraps=db.commit)
+        db.commit = commit_spy
         with patch(
-            "app.outbound.dynamic_vars.build_dynamic_variables",
+            "app.elevenlabs.service.ElevenLabsService.initiate_outbound_call",
             new_callable=AsyncMock,
-            return_value={},
-        ):
-            result = await dial_outbound_call(
-                db=mock_db,
-                lead=_make_lead(),
-                agent=_make_agent(),
-                client=_make_client(),
-                settings=_make_settings(),
-            )
+            return_value=accepted,
+        ) as mock_api:
+            with patch(
+                "app.outbound.dynamic_vars.build_dynamic_variables",
+                new_callable=AsyncMock,
+                return_value={},
+            ):
+                result = await dial_outbound_call(
+                    db=db,
+                    lead=lead,
+                    agent=agent,
+                    client=client,
+                    settings=_make_settings(),
+                )
 
     assert result.status == "dialing"
     assert result.call_session_id is not None
@@ -732,7 +759,10 @@ async def test_accepted_path_still_persists_all_fields_after_two_commit_flow():
     # Provider called exactly once
     assert mock_api.call_count == 1
 
-    # Session fields updated on the object
+    # Session fields updated on the durably committed row
+    async with db_engine.async_session_factory() as verification_db:
+        session_obj = await verification_db.get(CallSession, result.call_session_id)
+
     assert session_obj is not None
     assert session_obj.telephony_status == "ringing", (
         f"After accepted, telephony_status must be 'ringing', got {session_obj.telephony_status!r}"
@@ -740,9 +770,9 @@ async def test_accepted_path_still_persists_all_fields_after_two_commit_flow():
     assert session_obj.provider_call_id == "el-call-2commit-ok"
 
     # At least 2 commits: pre-dial + post-result
-    assert mock_db.commit.call_count >= 2, (
+    assert commit_spy.call_count >= 2, (
         f"Two-commit flow requires at least 2 db.commit() calls "
-        f"(pre-dial + post-result). Got {mock_db.commit.call_count}."
+        f"(pre-dial + post-result). Got {commit_spy.call_count}."
     )
 
 

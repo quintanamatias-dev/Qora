@@ -204,7 +204,7 @@ class TestOutboundCallEndpointConcurrentSession:
             lead = MagicMock()
             lead.id = "lead-001"
             lead.client_id = "client-a"
-            lead.phone = "+14155552671"
+            lead.phone = "+5491155550101"
             lead.name = "Test Lead"
             mock_lead.return_value = lead
             mock_agent.return_value = MagicMock(
@@ -252,7 +252,7 @@ class TestOutboundCallEndpointSuccess:
             lead = MagicMock()
             lead.id = "lead-001"
             lead.client_id = "client-a"
-            lead.phone = "+14155552671"
+            lead.phone = "+5491155550101"
             lead.name = "Test Lead"
             mock_lead.return_value = lead
             mock_agent.return_value = MagicMock(
@@ -275,17 +275,17 @@ class TestOutboundCallEndpointSuccess:
 
         This proves the automated test never places a real call.
         """
-        import httpx
-
-        real_calls_made: list[str] = []
-
         app, _, _ = _build_app(enable_outbound=True)
         client_http = TestClient(app, raise_server_exceptions=False)
 
         with patch("app.outbound.router.get_client", new_callable=AsyncMock) as mock_client, \
              patch("app.outbound.router.get_lead", new_callable=AsyncMock) as mock_lead, \
              patch("app.outbound.router.get_default_agent", new_callable=AsyncMock) as mock_agent, \
-             patch("app.outbound.router.dial_outbound_call", new_callable=AsyncMock) as mock_dial:
+             patch("app.outbound.router.dial_outbound_call", new_callable=AsyncMock) as mock_dial, \
+             patch(
+                  "app.outbound.service.ElevenLabsService",
+                  side_effect=AssertionError("Provider construction is forbidden in this test"),
+              ) as mock_provider:
 
             from app.outbound.service import DialResult
             mock_dial.return_value = DialResult(status="dialing", call_session_id="x")
@@ -294,7 +294,7 @@ class TestOutboundCallEndpointSuccess:
             lead = MagicMock()
             lead.id = "lead-001"
             lead.client_id = "client-a"
-            lead.phone = "+14155552671"
+            lead.phone = "+5491155550101"
             mock_lead.return_value = lead
             mock_agent.return_value = MagicMock(id="agent-001")
 
@@ -302,5 +302,5 @@ class TestOutboundCallEndpointSuccess:
 
         # dial_outbound_call was called once and returned immediately (mocked)
         mock_dial.assert_called_once()
-        # No real network calls were made — real_calls_made remains empty
-        assert len(real_calls_made) == 0
+        # The provider boundary raises on construction, so this proves no dial attempt escaped the mock.
+        mock_provider.assert_not_called()

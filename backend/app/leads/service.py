@@ -16,6 +16,7 @@ from app.leads.models import (
     is_valid_transition,
 )
 from app.leads import lead_custom_fields_service
+from app.phones.normalization import normalize_phone
 
 
 # ---------------------------------------------------------------------------
@@ -71,11 +72,12 @@ async def create_lead(
     lead_id: str | None = None,
 ) -> Lead:
     """Create and persist a new Lead record."""
+    canonical_phone = normalize_phone(phone, region="AR")
     lead = Lead(
         id=lead_id or str(uuid.uuid4()),
         client_id=client_id,
         name=name,
-        phone=phone,
+        phone=canonical_phone,
         car_make=car_make,
         car_model=car_model,
         car_year=car_year,
