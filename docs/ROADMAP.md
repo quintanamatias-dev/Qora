@@ -1,7 +1,7 @@
 # Qora Production Roadmap
 
 > Living document. Update as items are completed or scope changes.
-> Last updated: 2026-07-07
+> Last updated: 2026-09-21
 
 ## Current State
 
@@ -13,7 +13,7 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 - Dynamic per-client tools (capture_data, get_lead_details, etc.)
 - Airtable CRM integration with 2-phase field mapping UI
 - Post-call analysis, data corrections, CRM sync
-- Scheduler queue (creates scheduled calls, does not dial)
+- Scheduler queue that also dials: the tick claims due scheduled calls, dials them unattended, and the completion hook closes the row (C6b slices 1–3, verified on a live call 2026-09-21)
 - Admin panel with agent config, integration setup, tools management
 - Lead list/detail with custom fields, call history, transcripts
 - Call state machine with formal telephony states (CallStatus StrEnum, polling endpoint, voicemail heuristic)
@@ -80,7 +80,8 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 | C3 | Call state machine + polling | - [x] | PR #133. `CallStatus` StrEnum with 10 states, explicit transition table, `GET /calls/{id}/status` polling endpoint (1 req/s rate limit), voicemail heuristic, SIP failure surfacing, frontend `useCallPolling` hook + real-time state badges. 73 backend + 8 frontend tests. |
 | C4 | Phone number management | - [x] | Single number sufficient for pilot. `Agent.elevenlabs_phone_number_id` supports per-agent phone numbers. Deferred: multi-number pool, shared-pool rotation. |
 | C5 | Voicemail detection policy | - [x] | 3-layer protection (PRs #132, #138): ElevenLabs `voicemail_detection` built-in tool via API, system prompt `<voicemail_detection>` instruction, `max_call_duration_seconds=120` via API. All managed programmatically by `sync_agent_config()`. |
-| C6 | Failed/busy/no-answer handling | - [ ] | States exist (`no_answer`, `failed`, `recurrent_error`). Current: no retry on ambiguous timeout (safe default). One retry on transient error. Deferred: backoff schedule, max-attempts counter, automatic redialing. |
+| C6 | Failed/busy/no-answer handling | - [x] | States exist (`no_answer`, `failed`, `recurrent_error`). No retry on ambiguous timeout (safe default); one retry on transient error. C6b added the auto-dialer: `scheduler_tick` claims due rows and dials unattended, `max_attempts` + `scheduler_backoff_multiplier` bound recontact, completion hook closes the row, stranded-row reaper recovers `in_progress` leftovers. Slices 1–2 verified live 2026-09-21 (53s call, 6 turns, row closed same second). The reaper is unit-tested but not yet exercised live. |
+| C9 | Close the loop from a conversation | - [ ] | **Blocker for unattended operation.** The dialer works, but nothing feeds it from a call. Post-call analysis classifies correctly (`classification=callback_requested`, reason names the callback request) yet returns `next_action_suggested='wait'`, and `auto_schedule` only schedules for actions in `client.scheduler_retry_on_outcomes` (`call_again`, `follow_up`). No `ScheduledCall` is created, so the loop only closes when a row is inserted by hand. Note `schedule_followup` is deprecated and stripped by `strip_deprecated_tools()`, so the agent has no tool path either — the analysis decision is the only route. |
 | C7 | Store telephony metadata | - [x] | SIP observability fields captured: `provider_call_id`, `sip_call_id`, `sip_status_code`, `sip_reason`, `reconciled_at`, `reconciliation_source`. Post-dial probe + background sweep. Deferred: cost/quality metrics (E-phase). |
 | C8 | End-to-end outbound test | - [x] | Tested during development with real calls (PRs #130, #132, #133). Live test confirmed: call connected, user spoke with agent, post-call analysis completed. Formal 20-call measurement deferred. |
 
@@ -150,12 +151,12 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 ```
 Phase A (lead view)     ████████████████████  ✅ COMPLETE
 Phase B (deploy)        ████████████████░░░░  8/10 done (B2 deploy, B3 Postgres pending)
-Phase C (outbound)      ██████████████░░░░░░  7/8 done (C6 retry policy deferred)
+Phase C (outbound)      ████████████████░░░░  8/9 done (C9 loop closure blocked)
 Phase D (inbound)       ░░░░░░░░░░░░░░░░████  ← after C stable + deployed
 Phase E (operations)    ░░░░░░░░████████████  ← continuous from B onward
 ```
 
 Phase A is complete.
 Phase B enables everything else — 2 items remaining: public deploy (B2) and PostgreSQL (B3).
-Phase C outbound telephony is functionally complete — tested with real calls.
+Phase C dialing is functionally complete and live-tested. C9 is the remaining blocker: the loop does not close from a conversation without a hand-inserted row.
 Permanent telephony reference: `docs/telephony-integration.md`.
