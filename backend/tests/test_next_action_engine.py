@@ -1038,14 +1038,15 @@ class TestRulesPriorityOrder:
         else:
             pytest.fail("No rule fired for do_not_contact context")
 
-    def test_rules_list_has_six_entries(self):
-        """_RULES contains exactly 6 rule functions (P1-P3.5-P5).
+    def test_rules_list_has_seven_entries(self):
+        """_RULES contains exactly 7 rule functions (P1-P3.4-P3.5-P5).
 
         C6 added _rule_voicemail_recontact as P3.5 between P3 and P4.
+        qora-c9 added _rule_callback_requested as P3.4 between P3 and P3.5.
         """
         from app.analysis.universal.next_action import _RULES
 
-        assert len(_RULES) == 6
+        assert len(_RULES) == 7
 
     def test_evaluate_rules_returns_first_match(self):
         """_evaluate_rules() returns first non-None result."""
@@ -1318,3 +1319,208 @@ class TestSchemaNextActionResult:
         analysis = PostCallAnalysis()
         assert hasattr(analysis, "next_action_result")
         assert analysis.next_action_result is None
+
+
+# ===========================================================================
+# Regression — logger must be structlog-compatible (kwargs calls must not raise)
+# ===========================================================================
+
+
+class TestLoggerIsStructlogCompatible:
+    """Regression: next_action must use structlog, not stdlib logging.
+
+    The module calls logger.info/warning/error with structlog-style kwargs
+    (e.g. logger.info("next_action_rules_decision", action=..., decided_by=...)).
+    With stdlib logging.getLogger, those kwargs are forwarded to
+    Logger._log() and raise TypeError once the logger is enabled for the
+    given level (e.g. INFO, the runtime default) — which pytest's default
+    logging configuration masks (effective level above INFO short-circuits
+    before kwargs are ever validated). This must not raise at INFO level.
+    """
+
+    def _make_no_answer_ctx(self):
+        from app.analysis.universal.next_action import (
+            NextActionContext,
+            LeadSnapshot,
+            ClientRules,
+        )
+        from app.analysis.universal.outcome import CallOutcome
+        from app.analysis.universal.commitments import CommitmentsAxis
+        from app.analysis.universal.objections import ObjectionsAxis
+        from app.analysis.universal.problem import ProblemAxis
+
+        return NextActionContext(
+            outcome=CallOutcome(
+                classification="no_answer", reason="no answer", confidence="high"
+            ),
+            interest_level=30,
+            commitments=CommitmentsAxis(),
+            objections=ObjectionsAxis(),
+            problem=ProblemAxis(pain_points=[]),
+            lead=LeadSnapshot(call_count=1, do_not_call=False, last_called_at=None),
+            client=ClientRules(
+                max_attempts=5,
+                min_interest_for_followup=40,
+                close_on_hard_rejection=True,
+                scheduler_cooldown_minutes=60,
+                scheduler_allowed_hours_start=9,
+                scheduler_allowed_hours_end=20,
+                scheduler_timezone="America/Argentina/Buenos_Aires",
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_rules_decision_does_not_raise_with_stdlib_info_level(self, caplog):
+        """run_next_action_pipeline on a no_answer (rules path) context must not
+        raise TypeError when stdlib logging is configured at INFO level."""
+        import logging
+        from unittest.mock import AsyncMock, MagicMock
+        from app.analysis.universal.next_action import run_next_action_pipeline
+
+        caplog.set_level(logging.INFO)
+
+        ctx = self._make_no_answer_ctx()
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = (
+            '{"agrees": true, "action": "retry_call", '
+            '"reason": "GPT agrees with rules", "confidence": "high"}'
+        )
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        result = await run_next_action_pipeline(ctx, mock_client)
+
+        assert result.action == "retry_call"
+        assert result.decided_by == "rules"
+
+
+# ===========================================================================
+# Fix 3 — deterministic callback_requested rule (schedule_call)
+# ===========================================================================
+
+
+class TestRuleCallbackRequested:
+    """New deterministic rule: outcome.classification == callback_requested
+    with no earlier rule match → schedule_call, decided_by=rules, confidence=high.
+    """
+
+    def _make_ctx(self, **overrides):
+        from app.analysis.universal.next_action import (
+            NextActionContext,
+            LeadSnapshot,
+            ClientRules,
+        )
+        from app.analysis.universal.outcome import CallOutcome
+        from app.analysis.universal.commitments import CommitmentsAxis
+        from app.analysis.universal.objections import ObjectionsAxis
+        from app.analysis.universal.problem import ProblemAxis
+
+        defaults = dict(
+            outcome=CallOutcome(
+                classification="callback_requested",
+                reason="Lead asked to be called back",
+                confidence="high",
+            ),
+            interest_level=50,
+            commitments=CommitmentsAxis(),
+            objections=ObjectionsAxis(),
+            problem=ProblemAxis(pain_points=[]),
+            lead=LeadSnapshot(call_count=1, do_not_call=False, last_called_at=None),
+            client=ClientRules(
+                max_attempts=5,
+                min_interest_for_followup=40,
+                close_on_hard_rejection=True,
+                scheduler_cooldown_minutes=60,
+                scheduler_allowed_hours_start=9,
+                scheduler_allowed_hours_end=20,
+                scheduler_timezone="America/Argentina/Buenos_Aires",
+            ),
+        )
+        defaults.update(overrides)
+        return NextActionContext(**defaults)
+
+    def test_callback_requested_with_agent_owned_commitment_returns_schedule_call(
+        self,
+    ):
+        """Agent-owned callback commitment (owner='agent') does NOT satisfy P3's
+        owner filter (lead/both only), so P3 returns None — the new rule must
+        catch the callback_requested outcome and schedule the call."""
+        from app.analysis.universal.next_action import _evaluate_rules
+        from app.analysis.universal.commitments import CommitmentsAxis, Commitment
+
+        ctx = self._make_ctx(
+            commitments=CommitmentsAxis(
+                commitments=[
+                    Commitment(
+                        type="callback",
+                        owner="agent",
+                        description="Agent will call the lead back",
+                        due="unknown",
+                        strength="strong",
+                        evidence="Call me back whenever you can",
+                        confidence="high",
+                    )
+                ]
+            )
+        )
+        result = _evaluate_rules(ctx)
+        assert result is not None
+        assert result.action == "schedule_call"
+        assert result.decided_by == "rules"
+        assert result.confidence == "high"
+
+    def test_callback_requested_hard_stop_still_wins(self):
+        """P1 hard stop still takes precedence over the new callback_requested rule."""
+        from app.analysis.universal.next_action import _evaluate_rules
+        from app.analysis.universal.outcome import CallOutcome
+        from app.analysis.universal.commitments import CommitmentsAxis, Commitment
+
+        ctx = self._make_ctx(
+            outcome=CallOutcome(
+                classification="do_not_contact",
+                reason="Lead asked never to be called again",
+                confidence="high",
+            ),
+            commitments=CommitmentsAxis(
+                commitments=[
+                    Commitment(
+                        type="callback",
+                        owner="agent",
+                        description="Agent said they'd call back",
+                        due="unknown",
+                        strength="strong",
+                        evidence="fine, call me back",
+                        confidence="high",
+                    )
+                ]
+            ),
+        )
+        result = _evaluate_rules(ctx)
+        assert result is not None
+        assert result.action == "close_lead"
+
+    def test_callback_requested_max_attempts_still_wins(self):
+        """P2 max attempts still takes precedence over the new callback_requested rule."""
+        from app.analysis.universal.next_action import _evaluate_rules, LeadSnapshot
+        from app.analysis.universal.commitments import CommitmentsAxis, Commitment
+
+        ctx = self._make_ctx(
+            lead=LeadSnapshot(call_count=5, do_not_call=False, last_called_at=None),
+            commitments=CommitmentsAxis(
+                commitments=[
+                    Commitment(
+                        type="callback",
+                        owner="agent",
+                        description="Agent will call back",
+                        due="unknown",
+                        strength="strong",
+                        evidence="call me back",
+                        confidence="high",
+                    )
+                ]
+            ),
+        )
+        result = _evaluate_rules(ctx)
+        assert result is not None
+        assert result.action == "close_lead"
