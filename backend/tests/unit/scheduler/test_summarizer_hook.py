@@ -65,8 +65,14 @@ async def seeded_db(tmp_path: Path):
     await db_module.close_db()
 
 
-def _make_analysis_with_action(next_action: str):
-    """Build a PostCallAnalysis with a specific next_action_suggested."""
+def _make_analysis_with_action(
+    next_action: str, classification: str = "callback_requested"
+):
+    """Build a PostCallAnalysis with a specific next_action_suggested.
+
+    The next_action engine overwrites next_action_suggested from the call
+    outcome, so ``classification`` is what actually drives scheduling.
+    """
     from app.analysis_schema import (
         PostCallAnalysis,
         CallOutcome,
@@ -83,7 +89,7 @@ def _make_analysis_with_action(next_action: str):
         next_action_suggested=next_action,
         # qora-misc-notes: misc_notes managed by standalone pipeline
         call_outcome=CallOutcome(
-            classification="callback_requested",
+            classification=classification,
             reason="Lead asked to be called again.",
             confidence="medium",
         ),
@@ -256,14 +262,17 @@ async def test_auto_schedule_fires_after_eligible_call(seeded_db):
 
 
 async def test_auto_schedule_skips_ineligible_outcome_in_summarizer(seeded_db):
-    """When next_action='send_quote', auto_schedule does NOT create ScheduledCall."""
+    """When the engine decides close_lead, auto_schedule does NOT create ScheduledCall."""
     from app.summarizer import generate_summary_and_facts
     from app.scheduler.models import ScheduledCall
     from sqlalchemy import select
 
     session_id = await _create_session_with_turns(seeded_db, "hook-lead-001")
 
-    mock_client = _make_dispatching_client(_make_analysis_with_action("send_quote"))
+    # wrong_number is a P1 hard stop -> close_lead, which is not a recontact action.
+    mock_client = _make_dispatching_client(
+        _make_analysis_with_action("send_quote", classification="wrong_number")
+    )
 
     with patch(
         "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
