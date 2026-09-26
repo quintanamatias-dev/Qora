@@ -11,6 +11,10 @@ Decision flow (strict priority order, first match wins):
     P2 — Max attempts (close_lead): call_count >= client.next_action_max_attempts
     P3 — Commitment-based (schedule_call / follow_up): callback → schedule_call,
          receive_quote → follow_up, consult_third_party → follow_up
+    P3.4 — Callback requested outcome (schedule_call): outcome.classification ==
+         callback_requested with no earlier rule match (covers callback commitments
+         that P3 skips, e.g. owner=agent)
+    P3.5 — Voicemail recontact (retry_call): telephony_status == voicemail
     P4 — No useful conversation (retry_call): no_answer / busy / technical_issue,
          abrupt + external_interruption
     P5 — Interest + outcome signal (follow_up / close_lead): threshold rules
@@ -323,6 +327,53 @@ def _rule_commitment_based(ctx: NextActionContext) -> NextActionResult | None:
     return None
 
 
+def _rule_callback_requested(ctx: NextActionContext) -> NextActionResult | None:
+    """P3.4 — Callback requested outcome (schedule_call).
+
+    Fires when outcome.classification == 'callback_requested' and no earlier
+    rule (P1-P3) matched. P3's commitment-based rule only schedules a callback
+    commitment owned by lead/both, so an agent-owned callback commitment (or a
+    callback_requested outcome with no matching commitment at all) falls
+    through to here.
+
+    next_action_at is derived from the first 'callback' commitment's due date
+    (via _due_to_utc), falling back to the client's cooldown/hours policy when
+    no commitment exists or its due date doesn't resolve to a datetime.
+    """
+    if ctx.outcome.classification != "callback_requested":
+        return None
+
+    now_utc = datetime.now(timezone.utc)
+
+    next_at: datetime | None = None
+    for commitment in ctx.commitments.commitments or []:
+        if commitment.type == "callback":
+            next_at = _due_to_utc(
+                commitment.due,
+                ctx.client.scheduler_timezone,
+                ctx.client.scheduler_allowed_hours_start,
+                now_utc,
+            )
+            break
+
+    if next_at is None:
+        next_at = _calculate_retry_scheduled_at(
+            now_utc=now_utc,
+            cooldown_minutes=ctx.client.scheduler_cooldown_minutes,
+            start_hour=ctx.client.scheduler_allowed_hours_start,
+            end_hour=ctx.client.scheduler_allowed_hours_end,
+            tz_str=ctx.client.scheduler_timezone,
+        )
+
+    return NextActionResult(
+        action="schedule_call",
+        reason="Outcome classification is 'callback_requested'",
+        confidence="high",
+        decided_by="rules",
+        next_action_at=next_at,
+    )
+
+
 def _rule_no_useful_conversation(ctx: NextActionContext) -> NextActionResult | None:
     """P4 — No useful conversation occurred (retry_call).
 
@@ -438,6 +489,7 @@ _RULES: list[Callable[[NextActionContext], NextActionResult | None]] = [
     _rule_hard_stops,  # P1
     _rule_max_attempts,  # P2
     _rule_commitment_based,  # P3
+    _rule_callback_requested,  # P3.4 — qora-c9: callback_requested outcome
     _rule_voicemail_recontact,  # P3.5 — C6: voicemail recontact
     _rule_no_useful_conversation,  # P4
     _rule_interest_outcome,  # P5
@@ -573,7 +625,7 @@ async def _gpt_fallback(
     try:
         parsed = json.loads(raw_content)
     except json.JSONDecodeError:
-        logger.error("next_action_gpt_fallback_json_error", raw=raw_content[:200])
+        logger.error("next_action_gpt_fallback_json_error raw=%s", raw_content[:200])
         return NextActionResult(
             action="human_review",
             reason="GPT response could not be parsed as JSON",
@@ -594,13 +646,14 @@ async def _gpt_fallback(
         "human_review",
     }
     if action not in valid_actions:
+        invalid_action = action
         logger.warning(
-            "next_action_gpt_invalid_action",
-            invalid_action=action,
-            valid_actions=list(valid_actions),
+            "next_action_gpt_invalid_action invalid_action=%s valid_actions=%s",
+            invalid_action,
+            list(valid_actions),
         )
         action = "human_review"
-        reason = f"GPT returned invalid action '{action}'; escalated to human_review"
+        reason = f"GPT returned invalid action '{invalid_action}'; escalated to human_review"
         confidence = "low"
 
     # Validate confidence vocabulary
@@ -766,10 +819,10 @@ async def run_next_action_pipeline(
 
     if result is not None:
         logger.info(
-            "next_action_rules_decision",
-            action=result.action,
-            decided_by=result.decided_by,
-            confidence=result.confidence,
+            "next_action_rules_decision action=%s decided_by=%s confidence=%s",
+            result.action,
+            result.decided_by,
+            result.confidence,
         )
         # Always validate rules decisions with GPT
         return await _gpt_validate_rules_decision(ctx, result, openai_client)
