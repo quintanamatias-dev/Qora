@@ -1,42 +1,52 @@
 /**
- * OverviewSection — Presentational component for analytics overview metrics
+ * OverviewSection — "Resultados de llamada" card
  *
- * Shows: total_calls, conversion_rate, outcome distribution breakdown
- * Design: container-presentational pattern, receives data as props.
- * Issue #50: removed engagement_distribution (field dropped from schema).
+ * Horizontal-bar breakdown of call outcomes, sorted by count desc.
+ * Design: qora-presentacion/project/dashboard/screens-overview.jsx Analytics
  */
 
 import type { AnalyticsOverviewResponse } from '@/api/types'
+import { outcomeLabel } from './outcome-labels'
 
 interface OverviewSectionProps {
   data: AnalyticsOverviewResponse
 }
 
-function StatCard({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="bg-paper border border-line rounded-lg p-4 space-y-1">
-      <p className="text-sm text-ink-3">{label}</p>
-      <p className="text-2xl font-medium text-ink">{value}</p>
-    </div>
-  )
-}
-
 export function OverviewSection({ data }: OverviewSectionProps) {
-  const convRate =
-    data.conversion_rate !== null
-      ? `${(data.conversion_rate * 100).toFixed(1)}%`
-      : 'N/A'
+  const entries = Object.entries(data.outcome_distribution).sort((a, b) => b[1] - a[1])
 
   return (
-    <div className="space-y-3">
-      <h2 className="text-lg font-semibold text-ink">Overview</h2>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard label="Total Calls" value={data.total_calls} />
-        <StatCard label="Conversion Rate" value={convRate} />
-        {Object.entries(data.outcome_distribution).map(([key, count]) => (
-          <StatCard key={key} label={`Outcome: ${key}`} value={count} />
+    <section className="card">
+      <div className="card-h">
+        <div>
+          <h3>Resultados de llamada</h3>
+          <p>Cómo terminó cada conversación</p>
+        </div>
+      </div>
+      <div className="card-b" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {entries.length === 0 && <div className="empty">Sin llamadas en este período.</div>}
+        {entries.map(([key, count]) => (
+          <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5 }}>
+              <span>{outcomeLabel(key)}</span>
+              <span className="num" style={{ whiteSpace: 'nowrap' }}>
+                <b style={{ fontWeight: 500 }}>{count}</b>{' '}
+                <span className="muted">
+                  · {data.total_calls ? Math.round((count / data.total_calls) * 100) : 0}%
+                </span>
+              </span>
+            </div>
+            <div className="hbar">
+              <i
+                style={{
+                  width: `${data.total_calls ? (count / data.total_calls) * 100 : 0}%`,
+                  background: key === 'callback_requested' ? 'var(--qd-teal)' : 'var(--qd-ink-3)',
+                }}
+              />
+            </div>
+          </div>
         ))}
       </div>
-    </div>
+    </section>
   )
 }

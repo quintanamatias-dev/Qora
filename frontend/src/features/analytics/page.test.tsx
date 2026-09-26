@@ -127,10 +127,10 @@ beforeEach(() => {
 // ──────────────────────────────────────────────────────────────────────────────
 
 describe('AnalyticsDashboardPage — renders heading', () => {
-  it('renders the "Analytics" heading', async () => {
+  it('renders the "Analítica" heading', async () => {
     renderAnalyticsPage()
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: /analytics/i })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /analítica/i })).toBeInTheDocument()
     )
   })
 })
@@ -143,10 +143,10 @@ describe('AnalyticsDashboardPage — PeriodSelector', () => {
   it('renders a period selector with period options', async () => {
     renderAnalyticsPage()
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: /analytics/i })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /analítica/i })).toBeInTheDocument()
     )
-    // PeriodSelector has buttons for day/week/month/custom
-    const monthButton = screen.getByRole('button', { name: /month/i })
+    // PeriodSelector has buttons for día/semana/mes/personalizado
+    const monthButton = screen.getByRole('button', { name: /mes/i })
     expect(monthButton).toBeInTheDocument()
   })
 })
@@ -165,10 +165,12 @@ describe('AnalyticsDashboardPage — section headings', () => {
 
   it('renders ServiceIssuesList with ranked issues', async () => {
     renderAnalyticsPage()
+    // 'billing_error' has no Spanish label registered, so it renders as-is (fallback).
+    // 'coverage_gap' resolves to its registered Spanish label.
     await waitFor(() =>
       expect(screen.getByText('billing_error')).toBeInTheDocument()
     )
-    expect(screen.getByText('coverage_gap')).toBeInTheDocument()
+    expect(screen.getByText('Brecha de cobertura')).toBeInTheDocument()
   })
 
   it('renders InterestsList with trend indicators', async () => {
@@ -176,8 +178,8 @@ describe('AnalyticsDashboardPage — section headings', () => {
     await waitFor(() =>
       expect(screen.getByText('solar_panels')).toBeInTheDocument()
     )
-    // Trend indicator for "up"
-    expect(screen.getByText(/↑/)).toBeInTheDocument()
+    // Trend indicator for "up" — rendered as an icon tag, not a text glyph
+    expect(screen.getByTestId('interest-trend-up')).toBeInTheDocument()
   })
 
   it('renders AgentStatsTable with agent name', async () => {
@@ -273,7 +275,7 @@ describe('AnalyticsDashboardPage — AgentFilter (CRITICAL 7)', () => {
   it('renders an AgentFilter select element', async () => {
     renderAnalyticsPage()
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: /analytics/i })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /analítica/i })).toBeInTheDocument()
     )
     // AgentFilter renders a <select> or combobox for agent selection
     const agentSelect = screen.getByTestId('agent-filter')

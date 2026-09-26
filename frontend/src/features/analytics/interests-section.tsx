@@ -1,55 +1,64 @@
 /**
- * InterestsSection — Top interests with trend indicators
+ * InterestsSection — "Temas e intereses principales" list with trend indicators
  *
- * Shows: interest name, count, trend indicator (↑ / → / ↓)
- * Design: presentational, receives data as props.
+ * Design: qora-presentacion/project/dashboard/screens-overview.jsx Analytics
+ * Trend direction (up/down/stable) comes from the real interests API field.
  */
 
-import type { AnalyticsInterestsResponse } from '@/api/types'
+import type { AnalyticsInterestsResponse, InterestItem } from '@/api/types'
+import { Icon } from '@/design/components'
 
 interface InterestsSectionProps {
   data: AnalyticsInterestsResponse
 }
 
-const TREND_ICON: Record<string, string> = {
-  up: '↑',
-  down: '↓',
-  stable: '→',
+const TREND_TAG_CLASS: Record<InterestItem['trend'], string> = {
+  up: 'tag teal num',
+  down: 'tag coral num',
+  stable: 'tag ghost num',
 }
 
-const TREND_CLASS: Record<string, string> = {
-  up: 'text-green-600',
-  down: 'text-red-500',
-  stable: 'text-yellow-500',
+const TREND_ROTATION: Record<InterestItem['trend'], number> = {
+  up: 0,
+  down: 180,
+  stable: 90,
 }
 
 export function InterestsSection({ data }: InterestsSectionProps) {
   return (
-    <div className="space-y-3">
-      <h2 className="text-lg font-semibold text-ink">Top Interests</h2>
+    <section className="card">
+      <div className="card-h">
+        <div>
+          <h3>Temas e intereses principales</h3>
+          <p>Lo que más se repite en las llamadas</p>
+        </div>
+      </div>
       {data.interests.length === 0 ? (
-        <p className="text-sm text-ink-3">No interests recorded.</p>
+        <div className="empty">Sin temas ni intereses en este período.</div>
       ) : (
-        <ul className="space-y-2">
-          {data.interests.map((item) => (
-            <li
-              key={item.interest}
-              className="flex items-center justify-between bg-paper border border-line rounded-lg px-4 py-3"
-            >
-              <span className="text-sm text-ink font-medium">{item.interest}</span>
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-bold text-teal">{item.count}</span>
-                <span
-                  className={`text-lg font-bold ${TREND_CLASS[item.trend] ?? 'text-ink-3'}`}
-                  title={`Trend: ${item.trend} (prev: ${item.previous_count})`}
-                >
-                  {TREND_ICON[item.trend] ?? '?'}
-                </span>
+        <div className="rows">
+          {data.interests.map((item, i) => (
+            <div key={item.interest} className="row">
+              <span className="mono muted" style={{ fontSize: 11, width: 22 }}>
+                {String(i + 1).padStart(2, '0')}
+              </span>
+              <div className="t">
+                <b style={{ fontWeight: 400, whiteSpace: 'normal' }}>{item.interest}</b>
               </div>
-            </li>
+              <span
+                className={TREND_TAG_CLASS[item.trend]}
+                data-testid={`interest-trend-${item.trend}`}
+                title={`Tendencia: ${item.trend} (anterior: ${item.previous_count})`}
+              >
+                <span style={{ display: 'inline-flex', transform: `rotate(${TREND_ROTATION[item.trend]}deg)` }}>
+                  <Icon name="arrowUp" size={12} strokeWidth={2} />
+                </span>
+                {item.count}
+              </span>
+            </div>
           ))}
-        </ul>
+        </div>
       )}
-    </div>
+    </section>
   )
 }

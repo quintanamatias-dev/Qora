@@ -62,7 +62,7 @@ describe('Analytics route', () => {
   it('/app/demo-client/analytics renders AnalyticsDashboardPage with heading', async () => {
     renderAt('/app/demo-client/analytics')
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: /analytics/i })).toBeInTheDocument(),
+      expect(screen.getByRole('heading', { name: /analítica/i })).toBeInTheDocument(),
       { timeout: 5000 }
     )
   })
