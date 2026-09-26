@@ -43,14 +43,14 @@ describe('REQ-4.1 Production route config — correct rendering', () => {
   it('root `/` redirects to /app/demo-client/dashboard and renders DashboardPage via AppLayout', () => {
     renderAt('/')
     // DashboardPage renders "Dashboard" as an h1
-    expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Resumen' })).toBeInTheDocument()
     // AppLayout renders clientId in multiple places (TopBar, Sidebar, page) — use getAllByText
     expect(screen.getAllByText('demo-client').length).toBeGreaterThanOrEqual(1)
   })
 
   it('/app/:clientId/dashboard renders DashboardPage with correct clientId via AppLayout', () => {
     renderAt('/app/acme-motors/dashboard')
-    expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Resumen' })).toBeInTheDocument()
     // AppLayout passes clientId to TopBar and Sidebar — text appears multiple times in the shell
     expect(screen.getAllByText('acme-motors').length).toBeGreaterThanOrEqual(1)
   })
@@ -75,7 +75,7 @@ describe('REQ-4.1 Production route config — correct rendering', () => {
 
   it('unknown path redirects to /app/demo-client/dashboard via catch-all', () => {
     renderAt('/totally-unknown')
-    expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Resumen' })).toBeInTheDocument()
     // clientId "demo-client" appears after redirect
     expect(screen.getAllByText('demo-client').length).toBeGreaterThanOrEqual(1)
   })
