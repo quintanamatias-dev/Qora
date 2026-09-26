@@ -19,6 +19,12 @@ describe('parseCsv', () => {
     expect(result.rows).toEqual([['Juan', '222', 'Vino de Meta Ads']])
   })
 
+  it('ignores delimiters inside quoted fields when detecting the delimiter', () => {
+    const result = parseCsv('"Apellido, Nombre";Teléfono\n"Perez, Juan";1155550101\n')
+    expect(result.headers).toEqual(['Apellido, Nombre', 'Teléfono'])
+    expect(result.rows).toEqual([['Perez, Juan', '1155550101']])
+  })
+
   it('handles CRLF line endings', () => {
     const result = parseCsv('Nombre,Telefono\r\nAna,333\r\nLuis,444\r\n')
     expect(result.rows).toEqual([

@@ -26,8 +26,14 @@ export function isLikelyValidArgentinePhone(raw: string): boolean {
     return digits.length === 12
   }
 
+  // Domestic mobile numbers only normalize when they carry the "15" cellular
+  // insert: area code + 15 + subscriber (12 digits), or the same prefixed
+  // with the "0" trunk digit (13 digits) — see normalize_phone's national
+  // round-trip check. Shorter forms (e.g. missing the "15") are ambiguous.
   const digits = compact
-  return digits.length >= 10 && digits.length <= 11
+  if (digits.length === 12) return true
+  if (digits.length === 13 && digits.startsWith('0')) return true
+  return false
 }
 
 export type RowInvalidReason = 'missing_name' | 'missing_phone' | 'invalid_phone'

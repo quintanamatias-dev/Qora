@@ -11,8 +11,8 @@ describe('isLikelyValidArgentinePhone', () => {
   })
 
   it('accepts plausible domestic-format numbers', () => {
-    expect(isLikelyValidArgentinePhone('01122223333')).toBe(true)
-    expect(isLikelyValidArgentinePhone('1122223333')).toBe(true)
+    expect(isLikelyValidArgentinePhone('01122223333')).toBe(false)
+    expect(isLikelyValidArgentinePhone('1122223333')).toBe(false)
   })
 
   it('rejects numbers with a non-Argentine country code', () => {
@@ -23,6 +23,27 @@ describe('isLikelyValidArgentinePhone', () => {
     expect(isLikelyValidArgentinePhone('')).toBe(false)
     expect(isLikelyValidArgentinePhone('abc')).toBe(false)
     expect(isLikelyValidArgentinePhone('123')).toBe(false)
+  })
+
+  // B-001: mirror backend/tests/unit/phones/test_normalization.py so the
+  // preview heuristic never accepts what normalize_phone rejects, and never
+  // rejects what it accepts.
+  it('accepts domestic formats normalize_phone accepts', () => {
+    expect(isLikelyValidArgentinePhone('011 15 5555-0101')).toBe(true)
+    expect(isLikelyValidArgentinePhone('0341 15 555-0101')).toBe(true)
+    expect(isLikelyValidArgentinePhone('02966 15 550101')).toBe(true)
+    expect(isLikelyValidArgentinePhone('341155550101')).toBe(true)
+    expect(isLikelyValidArgentinePhone('296615550101')).toBe(true)
+  })
+
+  it('rejects domestic formats normalize_phone rejects as ambiguous_or_incomplete', () => {
+    expect(isLikelyValidArgentinePhone('011 5555-0101')).toBe(false)
+    expect(isLikelyValidArgentinePhone('1155550101')).toBe(false)
+    expect(isLikelyValidArgentinePhone('5555-0101')).toBe(false)
+    expect(isLikelyValidArgentinePhone('15 5555-0101')).toBe(false)
+    expect(isLikelyValidArgentinePhone('011 5515-0101')).toBe(false)
+    expect(isLikelyValidArgentinePhone('0054 9 11 5555 0101')).toBe(false)
+    expect(isLikelyValidArgentinePhone('5491155550101')).toBe(false)
   })
 })
 

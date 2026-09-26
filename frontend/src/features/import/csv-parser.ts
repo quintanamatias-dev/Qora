@@ -17,8 +17,23 @@ function stripBom(text: string): string {
 
 function detectDelimiter(text: string): string {
   const firstLine = text.split(/\r\n|\r|\n/)[0] ?? ''
-  const commas = (firstLine.match(/,/g) ?? []).length
-  const semicolons = (firstLine.match(/;/g) ?? []).length
+  let commas = 0
+  let semicolons = 0
+  let inQuotes = false
+  for (let i = 0; i < firstLine.length; i++) {
+    const char = firstLine[i]
+    if (char === '"') {
+      if (inQuotes && firstLine[i + 1] === '"') {
+        i += 1
+        continue
+      }
+      inQuotes = !inQuotes
+      continue
+    }
+    if (inQuotes) continue
+    if (char === ',') commas += 1
+    else if (char === ';') semicolons += 1
+  }
   return semicolons > commas ? ';' : ','
 }
 
