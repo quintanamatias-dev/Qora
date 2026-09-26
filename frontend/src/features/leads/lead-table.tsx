@@ -1,36 +1,21 @@
 /**
- * LeadTable — Presentational component
+ * LeadTable — Leads list table (design: screens-leads.jsx `Leads` table)
  *
- * Spec: sdd/qora-basic-crm/spec — Requirement: Lead Table Renders Correctly
- * Spec: sdd/qora-crm-next-action/spec — Requirement: Column Replacement in CRM Table
- * Spec: phase-c2-outbound-call-trigger — Requirement: Frontend Call Trigger UX
- * Design: Pure presentational — receives leads array + onSelectLead callback.
- *   Columns: Name, Phone, Status (Badge), Call Count, Last Called, Fields,
- *            Next Action (Badge), Call Now (button — C2)
- *   null last_called_at → "Never"
- *   Row click → onSelectLead(lead.id)
- *
- * C2 additions:
- *   - clientId prop required to scope POST /api/v1/clients/{clientId}/leads/{leadId}/call
- *   - "Call Now" column after Next Action; green teal button, pill shape
- *   - Confirmation dialog warns of real cost (~$0.21/min) before dispatch
- *   - Optimistic "Calling…" badge per-row after successful dispatch
- *   - Error alert per-row for 403/409/422/429 failures
- *   - Row click is stopped from propagating when Call Now button is clicked
+ * Columns: Lead (avatar + name + phone) · Estado · Llamadas · Última llamada ·
+ * Datos para cotizar (real quote_fields progress + n/N) · Próxima acción ·
+ * Llamar (real call trigger — CallNowCell, guards untouched).
  */
 
-import type { Lead, LeadStatus } from '@/api/types'
-import { Badge } from '@/design/components/badge'
+import type { Lead, LeadStatus, QuoteField } from '@/api/types'
 import { deriveNextAction } from './next-action'
-import { parseUTC } from '@/lib/parse-utc'
 import { CallNowCell } from './call-now-cell'
+import { parseUTC } from '@/lib/parse-utc'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Props
 // ──────────────────────────────────────────────────────────────────────────────
 
 interface LeadTableProps {
-  /** Client ID — required to scope the outbound call endpoint (C2). */
   clientId: string
   leads: Lead[]
   onSelectLead: (leadId: string) => void
@@ -40,38 +25,68 @@ interface LeadTableProps {
 // Pure helpers
 // ──────────────────────────────────────────────────────────────────────────────
 
+export function initials(name: string): string {
+  return name.split(' ').filter(Boolean).slice(0, 2).map((p) => p[0]).join('').toUpperCase()
+}
+
+const LAST_CALLED_FMT = new Intl.DateTimeFormat('es-AR', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
+
 export function formatLastCalled(isoOrNull: string | null): string {
-  if (!isoOrNull) return 'Never'
+  if (!isoOrNull) return 'Nunca'
   try {
-    return parseUTC(isoOrNull).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    })
+    return LAST_CALLED_FMT.format(parseUTC(isoOrNull))
   } catch {
-    return 'Never'
+    return 'Nunca'
   }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// NextActionCell — pure presentational cell for the Next Action column
-// ──────────────────────────────────────────────────────────────────────────────
+const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
+  new: 'Nuevo',
+  called: 'Llamado',
+  quoted: 'Cotizado',
+  interested: 'Interesado',
+  not_interested: 'No interesado',
+  follow_up: 'Seguimiento',
+}
+
+const LEAD_STATUS_CLASS: Record<LeadStatus, string> = {
+  new: 'tag',
+  called: 'tag',
+  quoted: 'tag teal',
+  interested: 'tag teal',
+  not_interested: 'tag ghost',
+  follow_up: 'tag teal',
+}
+
+export function LeadStatusTag({ status }: { status: LeadStatus }) {
+  return <span className={LEAD_STATUS_CLASS[status] ?? 'tag'}>{LEAD_STATUS_LABELS[status] ?? status}</span>
+}
+
+function quoteReadyFields(fields: QuoteField[] | undefined): QuoteField[] {
+  return (fields ?? []).filter((f) => f.in_quote_ready_fields)
+}
+
+function QuoteProg({ fields }: { fields: QuoteField[] }) {
+  return (
+    <div className="prog">
+      {fields.map((f) => (
+        <i key={f.field_key} className={f.filled ? 'on' : ''} />
+      ))}
+    </div>
+  )
+}
 
 function NextActionCell({ lead }: { lead: Lead }) {
   const { label, badge } = deriveNextAction(lead)
-  return <Badge status={badge}>{label}</Badge>
-}
-
-function formatCustomFieldsSummary(customFields: Lead['custom_fields']): string {
-  const entries = Object.entries(customFields ?? {}).filter(([, value]) => value)
-  if (entries.length === 0) return '—'
-
-  const preview = entries
-    .slice(0, 2)
-    .map(([key, value]) => `${key.replace(/[_-]+/g, ' ')}: ${value}`)
-    .join(', ')
-
-  return entries.length > 2 ? `${preview} +${entries.length - 2}` : preview
+  const flagged = badge === 'error' || badge === 'warning'
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap' }}>
+        {flagged && <i className="dot coral" />}
+        {label}
+      </span>
+    </div>
+  )
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -80,56 +95,76 @@ function formatCustomFieldsSummary(customFields: Lead['custom_fields']): string 
 
 export function LeadTable({ clientId, leads, onSelectLead }: LeadTableProps) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+    <div className="tbl-wrap">
+      <table className="tbl">
         <thead>
-          <tr className="border-b border-line text-ink-3 text-xs uppercase tracking-wider">
-            <th className="py-3 px-4 text-left font-medium">Name</th>
-            <th className="py-3 px-4 text-left font-medium">Phone</th>
-            <th className="py-3 px-4 text-left font-medium">Status</th>
-            <th className="py-3 px-4 text-right font-medium">Calls</th>
-            <th className="py-3 px-4 text-left font-medium">Last Called</th>
-            <th className="py-3 px-4 text-left font-medium">Fields</th>
-            <th className="py-3 px-4 text-left font-medium">Next Action</th>
-            <th className="py-3 px-4 text-left font-medium">Call Now</th>
+          <tr>
+            <th>Lead</th>
+            <th>Estado</th>
+            <th className="r">Llamadas</th>
+            <th>Última llamada</th>
+            <th>Datos para cotizar</th>
+            <th>Próxima acción</th>
+            <th>Llamar</th>
           </tr>
         </thead>
         <tbody>
-          {leads.map((lead) => (
-            <tr
-              key={lead.id}
-              role="row"
-              onClick={() => onSelectLead(lead.id)}
-              className="border-b border-line/50 hover:bg-pearl/50 cursor-pointer transition-colors"
-            >
-              <td className="py-3 px-4 font-medium text-ink">
-                {lead.name}
-              </td>
-              <td className="py-3 px-4 text-ink-3">
-                {lead.phone}
-              </td>
-              <td className="py-3 px-4">
-                <Badge status={lead.status as LeadStatus}>
-                  {lead.status.replace('_', ' ')}
-                </Badge>
-              </td>
-              <td className="py-3 px-4 text-right text-ink-3">
-                {lead.call_count}
-              </td>
-              <td className="py-3 px-4 text-ink-3">
-                {formatLastCalled(lead.last_called_at)}
-              </td>
-              <td className="py-3 px-4 text-ink-3 max-w-[220px] truncate">
-                {formatCustomFieldsSummary(lead.custom_fields)}
-              </td>
-              <td className="py-3 px-4">
-                <NextActionCell lead={lead} />
-              </td>
-              <td className="py-3 px-4">
-                <CallNowCell clientId={clientId} lead={lead} />
+          {leads.map((lead) => {
+            const readyFields = quoteReadyFields(lead.quote_fields)
+            const filledCount = readyFields.filter((f) => f.filled).length
+            const values = readyFields.filter((f) => f.filled && f.current_value).map((f) => f.current_value as string)
+
+            return (
+              <tr key={lead.id} className="click" role="row" onClick={() => onSelectLead(lead.id)}>
+                <td>
+                  <div className="lead-cell">
+                    <span className="avatar">{initials(lead.name)}</span>
+                    <div className="t">
+                      <b>{lead.name}</b>
+                      <span>{lead.phone}</span>
+                    </div>
+                  </div>
+                </td>
+                <td><LeadStatusTag status={lead.status} /></td>
+                <td className="r num">{lead.call_count}</td>
+                <td className="num" style={{ whiteSpace: 'nowrap' }}>{formatLastCalled(lead.last_called_at)}</td>
+                <td>
+                  {readyFields.length > 0 ? (
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <QuoteProg fields={readyFields} />
+                        <span
+                          className="mono num"
+                          style={{ fontSize: 11.5, color: filledCount === readyFields.length ? 'var(--qd-teal)' : 'var(--qd-ink-3)' }}
+                        >
+                          {filledCount}/{readyFields.length}
+                        </span>
+                      </div>
+                      <div
+                        className="muted"
+                        style={{ fontSize: 12, marginTop: 4, maxWidth: 220, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                      >
+                        {values.length ? values.join(' · ') : 'Sin datos todavía'}
+                      </div>
+                    </>
+                  ) : (
+                    <span className="muted">Sin datos configurados</span>
+                  )}
+                </td>
+                <td><NextActionCell lead={lead} /></td>
+                <td className="r" onClick={(e) => e.stopPropagation()}>
+                  <CallNowCell clientId={clientId} lead={lead} />
+                </td>
+              </tr>
+            )
+          })}
+          {leads.length === 0 && (
+            <tr>
+              <td colSpan={7}>
+                <div className="empty">No hay leads que coincidan con la búsqueda.</div>
               </td>
             </tr>
-          ))}
+          )}
         </tbody>
       </table>
     </div>
