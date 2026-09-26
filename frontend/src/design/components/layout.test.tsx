@@ -10,6 +10,8 @@
  * MSW handlers (tests/mocks/handlers.ts) back 'demo-client' and 'acme-motors'.
  */
 
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -165,5 +167,14 @@ describe('REQ-4.2 Sidebar active navigation state', () => {
     renderWithProviders(<Sidebar clientId="demo-client" />, ['/app/demo-client/dashboard'])
     const dashboardLink = screen.getByRole('link', { name: 'Resumen' })
     expect(dashboardLink).toHaveAttribute('aria-current', 'page')
+  })
+
+  // C3: sidebar.tsx renders NavLink anchors, so dashboard.css's nav styling
+  // rules must target `.nav a`, not `.nav button` (which nothing renders).
+  it('dashboard.css targets `.nav a`, matching the anchors sidebar.tsx renders', () => {
+    const css = readFileSync(path.resolve(__dirname, '../dashboard.css'), 'utf-8')
+    expect(css).toMatch(/\.nav a\{/)
+    expect(css).toMatch(/\.nav a\.on\{/)
+    expect(css).not.toMatch(/\.nav button/)
   })
 })
