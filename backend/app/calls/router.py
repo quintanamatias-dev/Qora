@@ -13,7 +13,7 @@ Covers: T3.5 admin/debug router + Phase 2a session lifecycle.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
@@ -21,6 +21,13 @@ from fastapi import APIRouter, Depends, HTTPException
 
 import time
 
+from app.calls.live import get_active_calls, get_recent_facts, get_today_summary
+from app.calls.live_schemas import (
+    LiveCallResponse,
+    LiveCallsResponse,
+    LiveRecentFactResponse,
+    LiveTodayResponse,
+)
 from app.calls.schemas import (
     CallAnalysisResponse,
     CallMetricsResponse,
@@ -122,6 +129,46 @@ async def get_call_metrics_endpoint(
     return CallMetricsResponse(
         **metrics,
         period=MetricsPeriod(date_from=date_from, date_to=date_to),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Live calls endpoint ("en vivo") — READ-ONLY, MUST be registered BEFORE
+# /{session_id} routes ("active" would otherwise be parsed as a session_id).
+#
+# ABSOLUTE SAFETY RULE: this endpoint performs SELECT-only queries via
+# app.calls.live. It never writes, never touches ConversationState, never
+# schedules jobs, and never imports app.voice / app.outbound / app.calls.states
+# transition logic. See app/calls/live.py module docstring.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/active", response_model=LiveCallsResponse, dependencies=[Depends(require_api_key)])
+async def get_active_calls_endpoint(client_id: str) -> LiveCallsResponse:
+    """Return in-flight call sessions for the live dashboard view.
+
+    Query parameters:
+    - **client_id** (required): Tenant client id to scope results.
+
+    Mirrors the auth + tenant scoping of GET /calls (list): require_api_key +
+    client_id query filter. Excludes non-terminal sessions started more than
+    2 hours ago (stale protection — does not modify them).
+
+    recent_facts / memory_total are included only when LeadProfileFact rows
+    exist for this client's leads; otherwise both are omitted (never faked).
+    """
+    async with db_session() as db:
+        client_id = client_id.lower()
+        calls = await get_active_calls(db, client_id)
+        today = await get_today_summary(db, client_id)
+        recent_facts, memory_total = await get_recent_facts(db, client_id)
+
+    return LiveCallsResponse(
+        server_time=datetime.now(timezone.utc),
+        calls=[LiveCallResponse(**c) for c in calls],
+        today=LiveTodayResponse(**today),
+        recent_facts=[LiveRecentFactResponse(**f) for f in recent_facts],
+        memory_total=memory_total,
     )
 
 
