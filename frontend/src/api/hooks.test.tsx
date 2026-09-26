@@ -454,3 +454,88 @@ describe('useTranscript', () => {
     expect(callsApi.fetchTranscript).toHaveBeenCalledWith('session-1')
   })
 })
+
+// ────────────────────────────────────────────────────────────────────────────────────
+// useMetrics / useCallSessions — optional refetchInterval wiring (realtime polling)
+// ────────────────────────────────────────────────────────────────────────────────────
+describe('useMetrics — refetchInterval option', () => {
+  it('leaves refetchInterval undefined when no options are passed', async () => {
+    vi.mocked(callsApi.fetchMetrics).mockResolvedValue(mockMetrics)
+    const qc = createTestClient()
+
+    function Comp() {
+      useMetrics('demo-client')
+      return null
+    }
+
+    render(<QueryClientProvider client={qc}><Comp /></QueryClientProvider>)
+    await waitFor(() => {
+      const query = qc.getQueryCache().find({ queryKey: ['metrics', 'demo-client', undefined] })
+      expect((query?.options as { refetchInterval?: number } | undefined)?.refetchInterval).toBeUndefined()
+    })
+  })
+
+  it('wires options.refetchInterval into the query config for polling', async () => {
+    vi.mocked(callsApi.fetchMetrics).mockResolvedValue(mockMetrics)
+    const qc = createTestClient()
+
+    function Comp() {
+      useMetrics('demo-client', undefined, { refetchInterval: 15_000 })
+      return null
+    }
+
+    render(<QueryClientProvider client={qc}><Comp /></QueryClientProvider>)
+    await waitFor(() => {
+      const query = qc.getQueryCache().find({ queryKey: ['metrics', 'demo-client', undefined] })
+      expect((query?.options as { refetchInterval?: number } | undefined)?.refetchInterval).toBe(15_000)
+    })
+  })
+
+  it('still calls fetchMetrics with only (clientId, params) — options are query-config only', async () => {
+    vi.mocked(callsApi.fetchMetrics).mockResolvedValue(mockMetrics)
+    const qc = createTestClient()
+
+    function Comp() {
+      const { data } = useMetrics('demo-client', undefined, { refetchInterval: 15_000 })
+      return <span data-testid="total">{data?.total_calls}</span>
+    }
+
+    render(<QueryClientProvider client={qc}><Comp /></QueryClientProvider>)
+    await waitFor(() => expect(screen.getByTestId('total')).toHaveTextContent('42'))
+    expect(callsApi.fetchMetrics).toHaveBeenCalledWith('demo-client', undefined)
+  })
+})
+
+describe('useCallSessions — refetchInterval option', () => {
+  it('leaves refetchInterval undefined when no options are passed', async () => {
+    vi.mocked(callsApi.fetchCallSessions).mockResolvedValue([mockSession])
+    const qc = createTestClient()
+
+    function Comp() {
+      useCallSessions('demo-client')
+      return null
+    }
+
+    render(<QueryClientProvider client={qc}><Comp /></QueryClientProvider>)
+    await waitFor(() => {
+      const query = qc.getQueryCache().find({ queryKey: ['call-sessions', 'demo-client', undefined] })
+      expect((query?.options as { refetchInterval?: number } | undefined)?.refetchInterval).toBeUndefined()
+    })
+  })
+
+  it('wires options.refetchInterval into the query config for polling', async () => {
+    vi.mocked(callsApi.fetchCallSessions).mockResolvedValue([mockSession])
+    const qc = createTestClient()
+
+    function Comp() {
+      useCallSessions('demo-client', undefined, { refetchInterval: 15_000 })
+      return null
+    }
+
+    render(<QueryClientProvider client={qc}><Comp /></QueryClientProvider>)
+    await waitFor(() => {
+      const query = qc.getQueryCache().find({ queryKey: ['call-sessions', 'demo-client', undefined] })
+      expect((query?.options as { refetchInterval?: number } | undefined)?.refetchInterval).toBe(15_000)
+    })
+  })
+})

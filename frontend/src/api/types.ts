@@ -390,6 +390,8 @@ export interface Client {
   is_active: boolean
   created_at: string
   agent_count?: number  // returned by list endpoint
+  // IANA timezone used for scheduling and for dashboard date bucketing
+  scheduler_timezone?: string
 }
 
 export interface CreateClientPayload {
