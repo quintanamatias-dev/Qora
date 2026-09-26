@@ -27,6 +27,8 @@ export interface UseLiveCallsResult {
   isLoading: boolean
   agents: LiveAgent[]
   calls: CanvasCall[]
+  /** True in-flight count; `calls` is capped server-side. */
+  activeTotal: number
   /** Facts that were not present on the previous poll — drives the memory-particle animation. */
   newFacts: LiveRecentFact[]
   recentFacts: LiveRecentFact[]
@@ -49,6 +51,18 @@ export function useLiveCalls(clientId: string): UseLiveCallsResult {
   const [newFacts, setNewFacts] = useState<LiveRecentFact[]>([])
   const seenFactSignatures = useRef<Set<string>>(new Set())
   const seenFirstPoll = useRef(false)
+
+  // Switching client must not leak the previous client's calls/facts while
+  // the new client's first poll is still in flight. Reset during render (not
+  // in an effect) so no frame ever renders the previous client's state.
+  const [stateClientId, setStateClientId] = useState(clientId)
+  if (stateClientId !== clientId) {
+    setStateClientId(clientId)
+    setCalls([])
+    setNewFacts([])
+    seenFactSignatures.current = new Set()
+    seenFirstPoll.current = false
+  }
 
   useEffect(() => {
     if (!activeQuery.data) return
@@ -83,6 +97,7 @@ export function useLiveCalls(clientId: string): UseLiveCallsResult {
     agents,
     calls,
     newFacts,
+    activeTotal: activeQuery.data?.active_total ?? 0,
     recentFacts: activeQuery.data?.recent_facts ?? [],
     memoryTotal: activeQuery.data?.memory_total ?? 0,
     today: activeQuery.data?.today ?? null,

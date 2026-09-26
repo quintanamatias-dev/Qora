@@ -22,6 +22,7 @@ const mockResponse: LiveCallsResponse = {
   today: { calls_total: 5, completed: 3 },
   recent_facts: [{ text: 'Prefiere WhatsApp', lead_first_name: 'Lucia', duration_seconds: 160 }],
   memory_total: 42,
+  active_total: 1,
 }
 
 function spyFetch(body: unknown, status = 200) {

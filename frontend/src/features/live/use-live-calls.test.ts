@@ -61,6 +61,7 @@ const mockResponse: LiveCallsResponse = {
   today: { calls_total: 5, completed: 3 },
   recent_facts: [{ text: 'Prefiere WhatsApp', lead_first_name: 'Lucia', duration_seconds: 160 }],
   memory_total: 42,
+  active_total: 1,
 }
 
 afterEach(() => {
@@ -109,5 +110,35 @@ describe('useLiveCalls', () => {
 
     await waitFor(() => expect(result.current.today).not.toBeNull())
     expect(result.current.newFacts).toHaveLength(0)
+  })
+
+  it('clears the previous client\'s calls and facts as soon as clientId changes', async () => {
+    vi.mocked(apiHooks.useAgents).mockReturnValue({ data: [makeAgent()], isLoading: false } as ReturnType<
+      typeof apiHooks.useAgents
+    >)
+
+    let resolveSecondClient!: (value: LiveCallsResponse) => void
+    vi.mocked(liveApi.fetchActiveCalls).mockImplementation((clientId: string) => {
+      if (clientId === 'client-a') return Promise.resolve(mockResponse)
+      return new Promise((resolve) => {
+        resolveSecondClient = resolve
+      })
+    })
+
+    const { result, rerender } = renderHook(({ clientId }) => useLiveCalls(clientId), {
+      wrapper: createWrapper(),
+      initialProps: { clientId: 'client-a' },
+    })
+
+    await waitFor(() => expect(result.current.calls).toHaveLength(1))
+    expect(result.current.recentFacts).toHaveLength(1)
+
+    rerender({ clientId: 'client-b' })
+
+    expect(result.current.calls).toHaveLength(0)
+    expect(result.current.recentFacts).toHaveLength(0)
+    expect(result.current.newFacts).toHaveLength(0)
+
+    resolveSecondClient({ ...mockResponse, calls: [], recent_facts: [], memory_total: 0 })
   })
 })

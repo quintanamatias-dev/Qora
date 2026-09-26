@@ -31,6 +31,8 @@ export interface LiveToday {
 export interface LiveCallsResponse {
   server_time: string
   calls: LiveCall[]
+  /** True number of in-flight sessions; `calls` is capped server-side. */
+  active_total: number
   today: LiveToday
   recent_facts: LiveRecentFact[]
   memory_total: number

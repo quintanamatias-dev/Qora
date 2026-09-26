@@ -185,6 +185,7 @@ async def test_active_calls_empty_result(app_client):
     assert response.status_code == 200
     data = response.json()
     assert data["calls"] == []
+    assert data["active_total"] == 0
     assert data["today"]["calls_total"] == 0
     assert data["today"]["completed"] == 0
     assert data["recent_facts"] == []
@@ -252,6 +253,69 @@ async def test_active_calls_includes_recent_facts_from_lead_profile_facts(app_cl
     assert data["recent_facts"][0]["lead_first_name"] == "Lucia"
     assert data["recent_facts"][0]["duration_seconds"] == 160
     assert data["memory_total"] == 1
+
+
+# ---------------------------------------------------------------------------
+# C2: bounded active-calls / recent-facts queries
+# ---------------------------------------------------------------------------
+
+
+async def test_active_calls_are_capped_at_max_active_calls(app_client):
+    """More than MAX_ACTIVE_CALLS live sessions must not all come back — the
+    newest ones are kept."""
+    client, seeded_db = app_client
+    from app.calls.live import MAX_ACTIVE_CALLS
+
+    now = datetime.now(timezone.utc)
+    newest_id = None
+    for i in range(MAX_ACTIVE_CALLS + 5):
+        session_id = await _seed_session(
+            seeded_db,
+            telephony_status="connected",
+            started_at=now - timedelta(seconds=i),
+        )
+        if i == 0:
+            newest_id = session_id
+
+    response = await client.get(
+        "/api/v1/calls/active", params={"client_id": "quintana-seguros"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["calls"]) == MAX_ACTIVE_CALLS
+    ids = [c["session_id"] for c in data["calls"]]
+    assert newest_id in ids
+    # The counter stays truthful even though the list is capped.
+    assert data["active_total"] == MAX_ACTIVE_CALLS + 5
+
+
+async def test_recent_facts_are_capped_at_recent_facts_limit(app_client):
+    """recent_facts never exceeds _RECENT_FACTS_LIMIT even when more exist today."""
+    client, seeded_db = app_client
+    from app.leads.models import LeadProfileFact
+    from app.calls.live import _RECENT_FACTS_LIMIT
+
+    assert seeded_db.async_session_factory is not None
+    async with seeded_db.async_session_factory() as sess:
+        for i in range(_RECENT_FACTS_LIMIT + 5):
+            sess.add(
+                LeadProfileFact(
+                    id=str(uuid.uuid4()),
+                    lead_id="lead-alpha",
+                    fact_key=f"fact_{i}",
+                    fact_value=f"Hecho {i}",
+                    recorded_at=datetime.now(timezone.utc),
+                )
+            )
+        await sess.commit()
+
+    response = await client.get(
+        "/api/v1/calls/active", params={"client_id": "quintana-seguros"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["recent_facts"]) == _RECENT_FACTS_LIMIT
+    assert data["memory_total"] == _RECENT_FACTS_LIMIT + 5
 
 
 # ---------------------------------------------------------------------------

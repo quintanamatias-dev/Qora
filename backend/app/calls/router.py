@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 import time
 
-from app.calls.live import get_active_calls, get_recent_facts, get_today_summary
+from app.calls.live import count_active_calls, get_active_calls, get_recent_facts, get_today_summary
 from app.calls.live_schemas import (
     LiveCallResponse,
     LiveCallsResponse,
@@ -160,12 +160,14 @@ async def get_active_calls_endpoint(client_id: str) -> LiveCallsResponse:
     async with db_session() as db:
         client_id = client_id.lower()
         calls = await get_active_calls(db, client_id)
+        active_total = await count_active_calls(db, client_id)
         today = await get_today_summary(db, client_id)
         recent_facts, memory_total = await get_recent_facts(db, client_id)
 
     return LiveCallsResponse(
         server_time=datetime.now(timezone.utc),
         calls=[LiveCallResponse(**c) for c in calls],
+        active_total=active_total,
         today=LiveTodayResponse(**today),
         recent_facts=[LiveRecentFactResponse(**f) for f in recent_facts],
         memory_total=memory_total,

@@ -41,6 +41,9 @@ _STALE_BOUND = timedelta(hours=2)
 #: Max entries in the "recent memories" feed.
 _RECENT_FACTS_LIMIT = 6
 
+#: Max in-flight sessions returned by the live canvas — newest kept first.
+MAX_ACTIVE_CALLS = 50
+
 
 def _first_name(full_name: str | None) -> str | None:
     if not full_name:
@@ -92,6 +95,7 @@ async def get_active_calls(session: AsyncSession, client_id: str) -> list[dict]:
         .where(CallSession.telephony_status.in_(_LIVE_STATUSES))
         .where(CallSession.started_at >= stale_cutoff)
         .order_by(CallSession.started_at.desc())
+        .limit(MAX_ACTIVE_CALLS)
     )
     result = await session.execute(stmt)
 
@@ -112,6 +116,23 @@ async def get_active_calls(session: AsyncSession, client_id: str) -> list[dict]:
             }
         )
     return calls
+
+
+async def count_active_calls(session: AsyncSession, client_id: str) -> int:
+    """Count every in-flight session for *client_id*, ignoring MAX_ACTIVE_CALLS.
+
+    get_active_calls caps the rows it returns; this keeps the "en curso"
+    counter truthful when more sessions are live than the canvas shows.
+    """
+    stale_cutoff = datetime.now(timezone.utc) - _STALE_BOUND
+    stmt = (
+        select(func.count(CallSession.id))
+        .where(CallSession.client_id == client_id)
+        .where(CallSession.telephony_status.in_(_LIVE_STATUSES))
+        .where(CallSession.started_at >= stale_cutoff)
+    )
+    result = await session.execute(stmt)
+    return int(result.scalar_one())
 
 
 async def get_today_summary(session: AsyncSession, client_id: str) -> dict:

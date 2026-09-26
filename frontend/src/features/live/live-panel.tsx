@@ -63,10 +63,9 @@ export interface LivePanelProps {
 export function LivePanel({ clientId, embedded }: LivePanelProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const { agents, calls, newFacts, recentFacts, memoryTotal, today } = useLiveCalls(clientId)
+  const { agents, calls, activeTotal, newFacts, recentFacts, memoryTotal, today } = useLiveCalls(clientId)
   const { data: client } = useClient(clientId)
   const [clock, setClock] = useState(() => new Date())
-  const [feed, setFeed] = useState<LiveRecentFact[]>([])
 
   const timeZone = resolveTimezone(client?.scheduler_timezone)
   const tzAbbrevFormatter = useRef(
@@ -77,9 +76,9 @@ export function LivePanel({ clientId, embedded }: LivePanelProps) {
   }, [timeZone])
 
   // Feed shows the most recent 6 facts; newly-arrived ones lead the list.
-  useEffect(() => {
-    if (recentFacts.length > 0) setFeed(recentFacts.slice(0, 6))
-  }, [recentFacts])
+  // Derived (not state) so it always belongs to the current client's latest
+  // poll: it empties while a new client loads and when the API returns none.
+  const feed = recentFacts.slice(0, 6)
 
   const talkingCount = calls.filter((c) => c.state === 'talk').length
 
@@ -320,7 +319,7 @@ export function LivePanel({ clientId, embedded }: LivePanelProps) {
           <em>{talkingCount}</em> {talkingCount === 1 ? 'llamada' : 'llamadas'} en curso
         </h1>
         <p className="mono num">
-          {calls.length} en curso · {totalToday} llamadas hoy
+          {activeTotal} en curso · {totalToday} llamadas hoy
         </p>
       </div>
       <div className="w-top-r">

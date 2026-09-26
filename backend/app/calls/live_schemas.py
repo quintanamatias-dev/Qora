@@ -43,6 +43,8 @@ class LiveCallsResponse(BaseModel):
 
     server_time: datetime
     calls: list[LiveCallResponse]
+    # True number of in-flight sessions; `calls` is capped at MAX_ACTIVE_CALLS.
+    active_total: int
     today: LiveTodayResponse
     # Sourced from LeadProfileFact (real table — see app/calls/live.py). Never
     # faked: empty list / zero count when the client genuinely has no facts yet.
