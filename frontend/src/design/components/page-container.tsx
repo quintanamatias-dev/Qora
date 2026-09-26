@@ -1,11 +1,9 @@
 /**
- * PageContainer — Qora Design System layout primitive
+ * PageContainer — wraps route content inside the `.main` shell panel.
  *
- * Wraps page content. Sits inside the outlet area (right of Sidebar, below TopBar).
- * bg-pearl base. Provides correct padding and overflow behavior.
- *
- * sidebarCollapsed: when true, uses ml-16 (64px); when false, uses ml-56 (224px).
- * Transition mirrors the sidebar collapse animation.
+ * Renders the single <main role="main"> landmark for the app (the `.main`
+ * CSS class from dashboard.css lives on the plain wrapper div in app-layout.tsx,
+ * which holds TopBar + PageContainer — see app-layout.tsx for the split).
  */
 
 import type { ReactNode } from 'react'
@@ -13,24 +11,13 @@ import type { ReactNode } from 'react'
 interface PageContainerProps {
   children: ReactNode
   className?: string
-  sidebarCollapsed?: boolean
 }
 
-export function PageContainer({ children, className = '', sidebarCollapsed = false }: PageContainerProps) {
+export function PageContainer({ children, className = '' }: PageContainerProps) {
   return (
-    <main
-      className={[
-        sidebarCollapsed ? 'ml-16' : 'ml-56',
-        'pt-14', // TopBar height
-        'min-h-full',
-        'bg-pearl',
-        'p-6',
-        'transition-[margin-left] duration-200 ease-[cubic-bezier(.4,0,.2,1)]',
-        className,
-      ]
-        .filter(Boolean)
-        .join(' ')}
-    >
+    // Each screen renders its own `.page` wrapper (the live panel sits outside it,
+    // full-bleed), so this landmark only fills the remaining height of `.main`.
+    <main role="main" className={['main-body', className].filter(Boolean).join(' ')}>
       {children}
     </main>
   )
