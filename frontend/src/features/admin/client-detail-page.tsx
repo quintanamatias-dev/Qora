@@ -4,7 +4,7 @@
  * Reads :clientId from route params.
  * Layout:
  *  - Header: client name, ID (mono), status badge, back link
- *  - Stacked collapsible sections: Agents, Integrations
+ *  - Stacked collapsible sections: Plan, Agents, Integrations
  *
  * Uses the Disclosure pattern for each section (expand/collapse).
  * Sections start expanded by default.
@@ -16,6 +16,7 @@ import { Badge } from '@/design/components'
 import { useClient } from '@/api/hooks'
 import { AgentsSection } from './agents-section'
 import { IntegrationsSection } from './integrations-section'
+import { PlanSection } from './plan-section'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Disclosure — collapsible section wrapper
@@ -106,6 +107,10 @@ export function ClientDetailPage() {
       </div>
 
       {/* Stacked sections */}
+      <Disclosure title="Plan">
+        <PlanSection clientId={clientId} />
+      </Disclosure>
+
       <Disclosure title="Agents">
         <AgentsSection clientId={clientId} />
       </Disclosure>
