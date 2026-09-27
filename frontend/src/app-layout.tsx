@@ -1,31 +1,28 @@
 /**
- * AppLayout — Root layout
- * Contains: Sidebar (fixed left, collapsible) + TopBar (sticky top) + <Outlet/> (page content)
- * Base: bg-pearl (Qora Design System light canvas)
+ * AppLayout — Root shell layout
  *
- * Manages sidebar collapsed state so PageContainer can mirror the correct margin.
+ * `.app` / `.app.collapsed` grid (244px / 68px sidebar, see dashboard.css)
+ * containing Sidebar + a `.main` rounded panel (TopBar + PageContainer/<Outlet/>).
+ * Collapsed state is persisted in localStorage via useSidebarCollapsed.
  */
 
-import { useState } from 'react'
 import { Outlet, useParams } from 'react-router'
-import { Sidebar, TopBar, PageContainer } from './design/components'
+import { Sidebar, TopBar, PageContainer, useSidebarCollapsed } from './design/components'
 
 export function AppLayout() {
   const { clientId } = useParams<{ clientId: string }>()
   const id = (clientId ?? 'demo-client').toLowerCase()
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [collapsed, toggleCollapsed] = useSidebarCollapsed()
 
   return (
-    <div className="min-h-screen bg-pearl">
-      <TopBar clientId={id} />
-      <Sidebar
-        clientId={id}
-        collapsed={sidebarCollapsed}
-        onCollapseToggle={() => setSidebarCollapsed((v) => !v)}
-      />
-      <PageContainer sidebarCollapsed={sidebarCollapsed}>
-        <Outlet />
-      </PageContainer>
+    <div className={collapsed ? 'app collapsed' : 'app'}>
+      <Sidebar clientId={id} collapsed={collapsed} onCollapseToggle={toggleCollapsed} />
+      <div className="main">
+        <TopBar clientId={id} />
+        <PageContainer>
+          <Outlet />
+        </PageContainer>
+      </div>
     </div>
   )
 }

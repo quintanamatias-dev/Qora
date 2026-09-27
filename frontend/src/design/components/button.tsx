@@ -2,7 +2,7 @@
  * Button — Qora Design System primitive
  *
  * Variants:
- *  - primary:   solid teal bg, white text, pill (r-full). Hover: teal-deep.
+ *  - primary:   solid teal bg, on-teal text (white in light, dark ink in dark), pill (r-full). Hover: teal-deep.
  *  - secondary: ghost — border-line-2, text-ink-2, pill. Hover: border-line-3 text-ink.
  *  - tertiary:  no background, text-ink-2. Hover: text-ink.
  *
@@ -23,7 +23,7 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 const variantStyles: Record<ButtonVariant, string> = {
   primary: [
     'bg-teal',
-    'text-white',
+    'text-on-teal',
     'font-medium',
     'border-none',
     'shadow-sm',

@@ -63,16 +63,22 @@ interface MetricsParams {
   date_to?: string
 }
 
+/** Additive query options — refetchInterval enables realtime polling (TanStack default refetchIntervalInBackground=false). */
+interface QueryPollOptions {
+  refetchInterval?: number
+}
+
 /**
  * useMetrics — fetches call metrics for a client
  * queryKey: ['metrics', clientId]
  */
-export function useMetrics(clientId: string, params?: MetricsParams) {
+export function useMetrics(clientId: string, params?: MetricsParams, options?: QueryPollOptions) {
   return useQuery<CallMetricsResponse>({
     queryKey: ['metrics', clientId, params],
     queryFn: () => fetchMetrics(clientId, params),
     enabled: Boolean(clientId),
     staleTime: 60_000,
+    refetchInterval: options?.refetchInterval,
   })
 }
 
@@ -80,11 +86,12 @@ export function useMetrics(clientId: string, params?: MetricsParams) {
  * useLeads — fetches all leads for a client
  * queryKey: ['leads', clientId]
  */
-export function useLeads(clientId: string) {
+export function useLeads(clientId: string, options?: QueryPollOptions) {
   return useQuery<Lead[]>({
     queryKey: ['leads', clientId],
     queryFn: () => fetchLeads(clientId),
     enabled: Boolean(clientId),
+    refetchInterval: options?.refetchInterval,
   })
 }
 
@@ -92,11 +99,12 @@ export function useLeads(clientId: string) {
  * useLead — fetches a single lead by ID
  * queryKey: ['lead', clientId, leadId]
  */
-export function useLead(clientId: string, leadId: string) {
+export function useLead(clientId: string, leadId: string, options?: QueryPollOptions) {
   return useQuery<Lead>({
     queryKey: ['lead', clientId, leadId],
     queryFn: () => fetchLead(clientId, leadId),
     enabled: Boolean(clientId) && Boolean(leadId),
+    refetchInterval: options?.refetchInterval,
   })
 }
 
@@ -122,12 +130,13 @@ export function useLeadContextPreview(clientId: string, leadId: string, enabled 
  * service issues (issue, #, strength), objections, and pain points.
  * All sourced from call_analyses — not CallSession.extracted_facts.
  */
-export function useLeadDimensionRollups(clientId: string, leadId: string) {
+export function useLeadDimensionRollups(clientId: string, leadId: string, options?: QueryPollOptions) {
   return useQuery<DimensionRollups>({
     queryKey: ['lead-dimension-rollups', clientId, leadId],
     queryFn: () => fetchLeadDimensionRollups(clientId, leadId),
     enabled: Boolean(clientId) && Boolean(leadId),
     staleTime: 30_000,
+    refetchInterval: options?.refetchInterval,
   })
 }
 
@@ -137,11 +146,12 @@ export function useLeadDimensionRollups(clientId: string, leadId: string) {
  *
  * REQ-5.3: hook accepts optional leadId parameter to filter sessions by lead.
  */
-export function useCallSessions(clientId: string, leadId?: string) {
+export function useCallSessions(clientId: string, leadId?: string, options?: QueryPollOptions) {
   return useQuery<CallSession[]>({
     queryKey: ['call-sessions', clientId, leadId],
     queryFn: () => fetchCallSessions(clientId, leadId),
     enabled: Boolean(clientId),
+    refetchInterval: options?.refetchInterval,
   })
 }
 
@@ -220,11 +230,12 @@ export function useClients() {
  * useAgents — fetches all agents for a client
  * queryKey: ['agents', clientId]
  */
-export function useAgents(clientId: string) {
+export function useAgents(clientId: string, options?: QueryPollOptions) {
   return useQuery<Agent[]>({
     queryKey: ['agents', clientId],
     queryFn: () => fetchAgents(clientId),
     enabled: Boolean(clientId),
+    refetchInterval: options?.refetchInterval,
   })
 }
 
@@ -336,12 +347,13 @@ export function useMakeAgentDefault(clientId: string) {
  * queryKey: ['analytics-overview', clientId, params]
  * Disabled when clientId is empty/undefined.
  */
-export function useAnalyticsOverview(clientId: string, params: AnalyticsParams) {
+export function useAnalyticsOverview(clientId: string, params: AnalyticsParams, options?: QueryPollOptions) {
   return useQuery<AnalyticsOverviewResponse>({
     queryKey: ['analytics-overview', clientId, params],
     queryFn: () => fetchAnalyticsOverview(clientId, params),
     enabled: Boolean(clientId),
     staleTime: 60_000,
+    refetchInterval: options?.refetchInterval,
   })
 }
 
@@ -350,12 +362,13 @@ export function useAnalyticsOverview(clientId: string, params: AnalyticsParams) 
  * queryKey: ['analytics-service-issues', clientId, params]
  * Disabled when clientId is empty/undefined.
  */
-export function useAnalyticsServiceIssues(clientId: string, params: AnalyticsParams) {
+export function useAnalyticsServiceIssues(clientId: string, params: AnalyticsParams, options?: QueryPollOptions) {
   return useQuery<AnalyticsServiceIssuesResponse>({
     queryKey: ['analytics-service-issues', clientId, params],
     queryFn: () => fetchAnalyticsServiceIssues(clientId, params),
     enabled: Boolean(clientId),
     staleTime: 60_000,
+    refetchInterval: options?.refetchInterval,
   })
 }
 
@@ -364,12 +377,13 @@ export function useAnalyticsServiceIssues(clientId: string, params: AnalyticsPar
  * queryKey: ['analytics-interests', clientId, params]
  * Disabled when clientId is empty/undefined.
  */
-export function useAnalyticsInterests(clientId: string, params: AnalyticsParams) {
+export function useAnalyticsInterests(clientId: string, params: AnalyticsParams, options?: QueryPollOptions) {
   return useQuery<AnalyticsInterestsResponse>({
     queryKey: ['analytics-interests', clientId, params],
     queryFn: () => fetchAnalyticsInterests(clientId, params),
     enabled: Boolean(clientId),
     staleTime: 60_000,
+    refetchInterval: options?.refetchInterval,
   })
 }
 
@@ -378,12 +392,13 @@ export function useAnalyticsInterests(clientId: string, params: AnalyticsParams)
  * queryKey: ['analytics-agent-stats', clientId, params]
  * Disabled when clientId is empty/undefined.
  */
-export function useAnalyticsAgentStats(clientId: string, params: AnalyticsParams) {
+export function useAnalyticsAgentStats(clientId: string, params: AnalyticsParams, options?: QueryPollOptions) {
   return useQuery<AnalyticsAgentStatsResponse>({
     queryKey: ['analytics-agent-stats', clientId, params],
     queryFn: () => fetchAnalyticsAgentStats(clientId, params),
     enabled: Boolean(clientId),
     staleTime: 60_000,
+    refetchInterval: options?.refetchInterval,
   })
 }
 

@@ -24,6 +24,7 @@
   --color-teal-navy: #031A17;
   --color-teal-faint: rgba(26,139,122,0.08);
   --color-teal-line: rgba(26,139,122,0.28);
+  --color-on-teal: #FFFFFF;
 
   /* ============================================================
    * Accent — Coral (eyedropper rule: max 1 per piece)
@@ -83,4 +84,46 @@
    * ============================================================ */
   --ease-out: cubic-bezier(.2,.8,.2,1);
   --ease-inout: cubic-bezier(.4,0,.2,1);
+}
+
+/* ============================================================
+ * Dark theme — overrides for the Tailwind @theme tokens above.
+ * Mirrors the --qd-* dark palette in ./dashboard.css so components
+ * built on Tailwind utilities (admin, call detail, design/components)
+ * follow <html data-theme="dark"> like the dashboard screens do.
+ * ============================================================ */
+[data-theme="dark"] {
+  --color-pearl: #0A0B0E;
+  --color-paper: #14171D;
+  --color-mist: #1A1E26;
+  --color-smoke: #232830;
+
+  --color-ink: #E8ECEB;
+  --color-ink-2: #AEB2B7;
+  --color-ink-3: #868A91;
+  --color-ink-4: #4A4E55;
+
+  --color-teal: #2EC9B0;
+  --color-teal-deep: #1A8B7A;
+  --color-teal-bright: #5FE0C9;
+  --color-teal-faint: rgba(46,201,176,0.09);
+  --color-teal-line: rgba(46,201,176,0.28);
+  --color-on-teal: #031A17;
+
+  --color-coral: #EE9170;
+  --color-coral-soft: rgba(224,118,79,0.18);
+  --color-coral-faint: rgba(224,118,79,0.10);
+  --color-coral-line: rgba(224,118,79,0.30);
+
+  --color-line: rgba(255,255,255,0.06);
+  --color-line-2: rgba(255,255,255,0.10);
+  --color-line-3: rgba(255,255,255,0.16);
+
+  --color-success: #2EC9B0;
+  --color-error: #EE9170;
+
+  --shadow-sm: 0 1px 0 rgba(0,0,0,0.3);
+  --shadow-md: 0 12px 28px rgba(0,0,0,0.3);
+  --shadow-lg: 0 24px 60px -45px rgba(0,0,0,0.6);
+  --shadow-xl: 0 30px 70px -20px rgba(0,0,0,0.7);
 }
