@@ -41,6 +41,7 @@ from app.calls.service import (
     create_session,
     schedule_user_turn_persist,
 )
+from app.core.access import require_superadmin
 from app.core.database import get_session as db_session
 from app.leads.service import get_lead
 from app.prompts.loader import PromptLoader
@@ -73,11 +74,13 @@ router = APIRouter(prefix="/voice", tags=["voice"])
 # ---------------------------------------------------------------------------
 
 
-@router.get("/signed-url")
+@router.get("/signed-url", dependencies=[Depends(require_superadmin)])
 async def get_signed_url(request: Request):
     """Generate a signed URL for ElevenLabs WebSocket connection.
 
     Using signed URL forces WebSocket (not WebRTC) regardless of agent settings.
+    Superadmin-only: each signed URL opens a billable ElevenLabs session on the
+    platform account. The public demo uses /api/v1/demo/context instead.
     """
     try:
         settings = request.app.state.settings

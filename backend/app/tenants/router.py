@@ -5,9 +5,14 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.access import require_client_access
 from app.tenants.service import get_client
 
-router = APIRouter(prefix="/tenants", tags=["tenants"])
+router = APIRouter(
+    prefix="/tenants",
+    tags=["tenants"],
+    dependencies=[Depends(require_client_access)],
+)
 
 
 async def get_db_session():

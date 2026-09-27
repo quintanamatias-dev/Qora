@@ -27,7 +27,7 @@ from app.analytics.schemas import (
     ServiceIssueItem,
     VALID_PERIODS,
 )
-from app.core.auth import require_api_key
+from app.core.access import require_client_access
 from app.analytics.service import (
     get_agent_stats,
     get_interests,
@@ -41,7 +41,7 @@ from app.tenants.models import Client
 router = APIRouter(
     prefix="/analytics",
     tags=["analytics"],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_client_access)],
 )
 
 

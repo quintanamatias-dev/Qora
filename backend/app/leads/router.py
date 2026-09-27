@@ -26,7 +26,8 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import require_api_key
+from app.core.access import ensure_resource_access, require_client_access
+from app.core.auth import CallerIdentity, require_api_key
 from app.leads import lead_custom_fields_service as cf_service
 from app.leads.models import LeadStatus
 from app.leads.service import (
@@ -270,10 +271,21 @@ def _lead_to_dict(
 # ---------------------------------------------------------------------------
 
 
+async def _get_accessible_lead(session: AsyncSession, lead_id: str, caller: CallerIdentity):
+    """Load a lead the caller may access, or raise the same 404 as a missing lead."""
+    lead = await get_lead(session, lead_id)
+    not_found = {"error": "lead not found"}
+    if lead is None:
+        raise HTTPException(status_code=404, detail=not_found)
+    ensure_resource_access(caller, lead.client_id, detail=not_found)
+    return lead
+
+
 @router.get("")
 async def list_leads(
     client_id: str = Query(..., description="Tenant client ID to scope results"),
     session: AsyncSession = Depends(get_db_session),
+    _caller: CallerIdentity = Depends(require_client_access),
 ):
     """List all leads for a given client.
 
@@ -308,6 +320,7 @@ async def list_leads(
 async def get_lead_by_id(
     lead_id: str,
     session: AsyncSession = Depends(get_db_session),
+    caller: CallerIdentity = Depends(require_api_key),
 ):
     """Get a single lead by its UUID.
 
@@ -316,11 +329,9 @@ async def get_lead_by_id(
         email, external CRM IDs, and annotated quote_fields (Phase A).
 
     Raises:
-        404: If lead_id does not exist.
+        404: If lead_id does not exist or belongs to another tenant.
     """
-    lead = await get_lead(session, lead_id)
-    if lead is None:
-        raise HTTPException(status_code=404, detail={"error": "lead not found"})
+    lead = await _get_accessible_lead(session, lead_id, caller)
 
     # Issue #36: Fetch accumulated profile data from relational tables
     profile_facts = await get_active_profile_facts(session, lead_id)
@@ -355,6 +366,7 @@ async def create_new_lead(
     body: CreateLeadRequest,
     client_id: str | None = Query(None, description="Tenant client ID to scope creation"),
     session: AsyncSession = Depends(get_db_session),
+    caller: CallerIdentity = Depends(require_api_key),
 ):
     """Create a new lead record.
 
@@ -364,6 +376,9 @@ async def create_new_lead(
     resolved_client_id = (client_id or body.client_id or "").lower()
     if not resolved_client_id:
         raise HTTPException(status_code=422, detail={"error": "client_id is required"})
+    # client_id may arrive in the query or the body, so the path/query-based
+    # require_client_access dependency cannot cover this route.
+    require_client_access(resolved_client_id, caller)
 
     try:
         lead = await create_lead(
@@ -400,6 +415,7 @@ async def patch_lead_status(
     lead_id: str,
     body: PatchStatusRequest,
     session: AsyncSession = Depends(get_db_session),
+    caller: CallerIdentity = Depends(require_api_key),
 ):
     """Transition a lead's status via the state machine.
 
@@ -411,6 +427,7 @@ async def patch_lead_status(
         409: If the transition is not allowed by the state machine.
         422: If status field is missing from request body.
     """
+    await _get_accessible_lead(session, lead_id, caller)
     try:
         lead = await transition_lead_status(session, lead_id, body.status)
     except ValueError:
@@ -435,6 +452,7 @@ async def patch_lead_status(
 async def get_lead_history(
     lead_id: str,
     session: AsyncSession = Depends(get_db_session),
+    caller: CallerIdentity = Depends(require_api_key),
 ):
     """Get call session history for a lead.
 
@@ -447,10 +465,7 @@ async def get_lead_history(
     from sqlalchemy import select
     from app.calls.models import CallSession
 
-    # Verify lead exists
-    lead = await get_lead(session, lead_id)
-    if lead is None:
-        raise HTTPException(status_code=404, detail={"error": "lead not found"})
+    await _get_accessible_lead(session, lead_id, caller)
 
     # Fetch all call sessions for this lead
     result = await session.execute(
@@ -659,6 +674,7 @@ async def get_dimension_rollups(
     lead_id: str,
     client_id: str = Query(..., description="Tenant client ID — required for tenant scoping"),
     session: AsyncSession = Depends(get_db_session),
+    _caller: CallerIdentity = Depends(require_client_access),
 ):
     """Return lead-level dimension rollup counts from call_analyses.
 
@@ -738,6 +754,7 @@ def _tool_names_from_definitions(tools: "list[dict] | None") -> list[str] | None
 async def get_lead_context_preview(
     lead_id: str,
     session: AsyncSession = Depends(get_db_session),
+    caller: CallerIdentity = Depends(require_api_key),
 ):
     """Return structured next-call context preview for a lead (Phase A).
 
@@ -769,11 +786,9 @@ async def get_lead_context_preview(
           - error: str | None (set when agent/context assembly failed gracefully)
 
     Raises:
-        404: If lead_id does not exist.
+        404: If lead_id does not exist or belongs to another tenant.
     """
-    lead = await get_lead(session, lead_id)
-    if lead is None:
-        raise HTTPException(status_code=404, detail={"error": "lead not found"})
+    lead = await _get_accessible_lead(session, lead_id, caller)
 
     # Memory layer — call_history, is_returning_caller, call_number. This is the
     # same builder the runtime uses at initiation, so these values match the agent.

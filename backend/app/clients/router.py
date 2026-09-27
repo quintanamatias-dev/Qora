@@ -2,7 +2,7 @@
 
 Endpoints:
     POST   /api/v1/clients              — Create client (201 / 409 / 422)
-    GET    /api/v1/clients              — List active clients (200)
+    GET    /api/v1/clients              — List active clients the caller can access (200)
     GET    /api/v1/clients/{client_id}  — Get single client (200 / 404)
     PATCH  /api/v1/clients/{client_id}  — Partial update (200 / 404)
     DELETE /api/v1/clients/{client_id}  — Soft delete (200 / 404)
@@ -20,7 +20,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.schemas import ClientCreate, ClientResponse, ClientUpdate
-from app.core.auth import require_api_key
+from app.core.access import require_client_access, require_superadmin
+from app.core.auth import CallerIdentity, require_api_key
 from app.tenants.models import Agent, Client
 import app.tenants.service as tenant_service
 
@@ -92,7 +93,7 @@ def _client_to_response(client: Client, agent_count: int = 0) -> ClientResponse:
 # ---------------------------------------------------------------------------
 
 
-@router.post("", status_code=201, response_model=ClientResponse)
+@router.post("", status_code=201, response_model=ClientResponse, dependencies=[Depends(require_superadmin)])
 async def create_client(
     payload: ClientCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -176,14 +177,18 @@ async def create_client(
 @router.get("", response_model=list[ClientResponse])
 async def list_clients(
     session: AsyncSession = Depends(get_db_session),
+    caller: CallerIdentity = Depends(require_api_key),
 ):
-    """Return all active clients.
+    """Return the active clients the caller can access.
+
+    Superadmins see every client; tenant users see only their own, which lets
+    the panel resolve "my client" through the same endpoint.
 
     Returns:
         200: List of active ClientResponse objects.
     """
     result = await session.execute(select(Client).where(Client.is_active == True))  # noqa: E712
-    clients = result.scalars().all()
+    clients = [c for c in result.scalars().all() if caller.can_access(c.id)]
 
     # Query active agent counts for all active clients in one round trip
     client_ids = [c.id for c in clients]
@@ -205,7 +210,7 @@ async def list_clients(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/{client_id}", response_model=ClientResponse)
+@router.get("/{client_id}", response_model=ClientResponse, dependencies=[Depends(require_client_access)])
 async def get_client(
     client_id: str,
     session: AsyncSession = Depends(get_db_session),
@@ -237,7 +242,7 @@ async def get_client(
 # ---------------------------------------------------------------------------
 
 
-@router.patch("/{client_id}", response_model=ClientResponse)
+@router.patch("/{client_id}", response_model=ClientResponse, dependencies=[Depends(require_superadmin)])
 async def update_client(
     client_id: str,
     payload: ClientUpdate,
@@ -308,7 +313,7 @@ async def update_client(
 # ---------------------------------------------------------------------------
 
 
-@router.delete("/{client_id}", response_model=ClientResponse)
+@router.delete("/{client_id}", response_model=ClientResponse, dependencies=[Depends(require_superadmin)])
 async def delete_client(
     client_id: str,
     session: AsyncSession = Depends(get_db_session),

@@ -41,7 +41,7 @@ import yaml
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app.core.auth import require_api_key
+from app.core.access import require_client_access, require_superadmin
 from app.integrations.crm_config import CRMConfig, CRMConfigLoader, ConfigValidationError
 
 # ---------------------------------------------------------------------------
@@ -54,7 +54,7 @@ CLIENTS_ROOT: Path = Path(__file__).resolve().parent.parent.parent / "clients"
 router = APIRouter(
     prefix="/clients",
     tags=["integrations"],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_client_access)],
 )
 
 
@@ -402,6 +402,7 @@ async def get_available_integrations(client_id: str) -> list[AvailableIntegratio
 
 @router.put(
     "/{client_id}/integrations/{provider}",
+    dependencies=[Depends(require_superadmin)],
     response_model=IntegrationConfigResponse,
     summary="Update integration config for a client",
     description=(
@@ -451,6 +452,7 @@ async def update_integration(
 
 @router.post(
     "/{client_id}/integrations/{provider}/test",
+    dependencies=[Depends(require_superadmin)],
     response_model=IntegrationTestResult,
     summary="Test integration connection for a client",
     description=(
@@ -499,6 +501,7 @@ async def get_integration_fields(client_id: str, provider: str) -> AirtableField
 
 @router.put(
     "/{client_id}/integrations/{provider}/mappings",
+    dependencies=[Depends(require_superadmin)],
     response_model=IntegrationConfigResponse,
     summary="Save Airtable field mappings for a client",
 )
@@ -551,6 +554,7 @@ async def save_integration_mappings(
 
 @router.post(
     "/{client_id}/integrations/{provider}/connect",
+    dependencies=[Depends(require_superadmin)],
     response_model=IntegrationConfigResponse,
     status_code=201,
     summary="Connect a new integration for a client",
@@ -634,6 +638,7 @@ async def connect_integration(
 
 @router.delete(
     "/{client_id}/integrations/{provider}/disconnect",
+    dependencies=[Depends(require_superadmin)],
     summary="Disconnect an integration for a client",
     description=(
         "Deletes the crm.yaml for the client, removing the integration configuration. "
