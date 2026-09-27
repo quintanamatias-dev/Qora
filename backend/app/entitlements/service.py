@@ -18,7 +18,7 @@ import structlog
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.entitlements.catalog import DEFAULT_PLAN, FALLBACK_PLAN, FEATURES, LIMITS, PLANS
+from app.entitlements.catalog import FALLBACK_PLAN, FEATURES, LIMITS, PLANS
 
 logger = structlog.get_logger(__name__)
 
@@ -103,9 +103,15 @@ def resolve_entitlements(client: Any) -> Entitlements:
     """Merge the client's plan defaults with its overrides."""
     plan_name = getattr(client, "plan", None)
     if not isinstance(plan_name, str) or not plan_name:
-        # No stored plan (column is NOT NULL in the DB, so only in-memory
-        # stand-ins reach this) — same as a freshly created client.
-        plan_name = DEFAULT_PLAN
+        # Missing or corrupt plan value (column is NOT NULL in the DB, so
+        # only in-memory stand-ins reach this) — fail closed like an unknown plan.
+        logger.warning(
+            "entitlements_invalid_plan_value",
+            client_id=getattr(client, "id", None),
+            plan=plan_name,
+            fallback=FALLBACK_PLAN,
+        )
+        plan_name = FALLBACK_PLAN
     plan = PLANS.get(plan_name)
     if plan is None:
         logger.warning(

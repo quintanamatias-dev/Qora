@@ -74,6 +74,7 @@ async def test_guard_missing_agent_id_sets_config_error():
 
     mock_client = MagicMock()
     mock_client.id = "test-client"
+    mock_client.plan = "pilot"
 
     mock_settings = MagicMock()
     mock_settings.enable_outbound_calls = True
@@ -122,6 +123,7 @@ async def test_guard_missing_phone_number_id_sets_config_error():
 
     mock_client = MagicMock()
     mock_client.id = "test-client"
+    mock_client.plan = "pilot"
 
     mock_settings = MagicMock()
     mock_settings.enable_outbound_calls = True
@@ -185,6 +187,7 @@ async def test_permanent_error_sets_provider_permanent_outcome_reason():
 
     mock_client = MagicMock()
     mock_client.id = "test-client"
+    mock_client.plan = "pilot"
 
     mock_settings = MagicMock()
     mock_settings.enable_outbound_calls = True
@@ -268,6 +271,7 @@ async def test_unknown_error_sets_timeout_ambiguous_outcome_reason():
 
     mock_client = MagicMock()
     mock_client.id = "test-client"
+    mock_client.plan = "pilot"
 
     mock_settings = MagicMock()
     mock_settings.enable_outbound_calls = True
@@ -348,6 +352,7 @@ async def test_recurrent_error_sets_provider_transient_outcome_reason():
 
     mock_client = MagicMock()
     mock_client.id = "test-client"
+    mock_client.plan = "pilot"
 
     mock_settings = MagicMock()
     mock_settings.enable_outbound_calls = True

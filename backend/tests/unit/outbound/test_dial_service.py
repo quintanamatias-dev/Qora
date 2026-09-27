@@ -69,6 +69,7 @@ def _make_client(client_id: str = "client-a", name: str = "Test Client"):
     client = MagicMock()
     client.id = client_id
     client.name = name
+    client.plan = "pilot"
     return client
 
 

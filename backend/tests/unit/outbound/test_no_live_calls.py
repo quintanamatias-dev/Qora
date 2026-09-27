@@ -56,6 +56,7 @@ def _make_agent():
 def _make_client():
     client = MagicMock()
     client.id = "client-a"
+    client.plan = "pilot"
     return client
 
 

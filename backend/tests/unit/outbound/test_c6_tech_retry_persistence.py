@@ -436,6 +436,7 @@ def _make_agent():
 def _make_client(client_id: str = "client-persist"):
     client = MagicMock()
     client.id = client_id
+    client.plan = "pilot"
     return client
 
 
@@ -712,6 +713,7 @@ async def test_dial_outbound_call_recurrent_error_schedules_durable_tech_retry(
     # --- Build a mock client ---
     mock_client = MagicMock()
     mock_client.id = "quintana-seguros"
+    mock_client.plan = "pilot"
 
     # --- Build a mock settings ---
     mock_settings = MagicMock()

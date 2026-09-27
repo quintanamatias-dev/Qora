@@ -606,6 +606,7 @@ class TestServiceHookFiresProbe:
 
         client = MagicMock()
         client.id = "client-001"
+        client.plan = "pilot"
 
         settings = MagicMock()
         settings.enable_outbound_calls = True
@@ -695,6 +696,7 @@ class TestServiceHookFiresProbe:
 
         client = MagicMock()
         client.id = "client-001"
+        client.plan = "pilot"
 
         settings = MagicMock()
         settings.enable_outbound_calls = True

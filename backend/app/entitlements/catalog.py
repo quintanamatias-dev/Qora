@@ -20,7 +20,7 @@ from typing import Mapping
 FEATURES: tuple[str, ...] = (
     "outbound_calls",  # manual "Call now"
     "auto_dialer",  # unattended dialing of scheduled calls
-    "crm_integration",  # CRM connection + CRM lead import
+    "crm_integration",  # CRM import/runtime capability implemented here
     "analytics",  # analytics dashboard
     "live_monitor",  # live calls panel
 )

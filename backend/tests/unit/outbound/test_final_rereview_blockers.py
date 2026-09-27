@@ -79,6 +79,7 @@ def _make_client():
     client = MagicMock()
     client.id = "client-a"
     client.name = "Test Client"
+    client.plan = "pilot"
     return client
 
 
@@ -344,7 +345,9 @@ class TestRouterScheduledCallOverlap409:
 
         app.dependency_overrides[get_settings] = _fake_settings
         app.dependency_overrides[get_db_session] = _fake_db
-        app.dependency_overrides[require_api_key] = lambda: CallerIdentity(api_key_hash="test")
+        app.dependency_overrides[require_api_key] = lambda: CallerIdentity(
+            api_key_hash="test"
+        )
 
         test_client = TestClient(app, raise_server_exceptions=False)
 
@@ -410,7 +413,9 @@ class TestRouterScheduledCallOverlap409:
 
         app.dependency_overrides[get_settings] = _fake_settings
         app.dependency_overrides[get_db_session] = _fake_db
-        app.dependency_overrides[require_api_key] = lambda: CallerIdentity(api_key_hash="test")
+        app.dependency_overrides[require_api_key] = lambda: CallerIdentity(
+            api_key_hash="test"
+        )
 
         test_client = TestClient(app, raise_server_exceptions=False)
 
@@ -477,7 +482,9 @@ class TestRouterScheduledCallOverlap409:
 
         app.dependency_overrides[get_settings] = _fake_settings
         app.dependency_overrides[get_db_session] = _fake_db
-        app.dependency_overrides[require_api_key] = lambda: CallerIdentity(api_key_hash="test")
+        app.dependency_overrides[require_api_key] = lambda: CallerIdentity(
+            api_key_hash="test"
+        )
 
         test_client = TestClient(app, raise_server_exceptions=False)
 
@@ -541,7 +548,9 @@ class TestRouterScheduledCallOverlap409:
 
         app.dependency_overrides[get_settings] = _fake_settings
         app.dependency_overrides[get_db_session] = _fake_db
-        app.dependency_overrides[require_api_key] = lambda: CallerIdentity(api_key_hash="test")
+        app.dependency_overrides[require_api_key] = lambda: CallerIdentity(
+            api_key_hash="test"
+        )
 
         test_client = TestClient(app, raise_server_exceptions=False)
 
