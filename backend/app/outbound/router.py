@@ -137,10 +137,11 @@ class CallTriggerResponse(BaseModel):
     summary="Trigger an outbound call to a lead",
     responses={
         200: {"description": "Call accepted or failed after attempt(s)"},
-        403: {"description": "Feature flag off or unauthorized"},
+        403: {"description": "Feature flag off, unauthorized, or feature not in the client's plan"},
         404: {"description": "Client or lead not found"},
         409: {"description": "Concurrent active call in progress"},
         422: {"description": "Invalid E.164 phone number"},
+        429: {"description": "Cooldown active or plan usage limit reached"},
     },
 )
 async def trigger_outbound_call(
@@ -313,6 +314,19 @@ async def trigger_outbound_call(
                 or f"Concurrent call conflict for lead '{lead_id}'. "
                    "A call is already active or an in_progress ScheduledCall exists."
             ),
+        )
+
+    # Plan gate (multi-tenant-readiness): a plan refusal is a client-facing
+    # business rule, not a telephony outcome — surface it as an HTTP error.
+    if dial_result.failure_code == "plan_feature_disabled":
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "feature_not_in_plan", "message": dial_result.error},
+        )
+    if dial_result.failure_code == "plan_limit_reached":
+        raise HTTPException(
+            status_code=429,
+            detail={"error": "plan_limit_reached", "message": dial_result.error},
         )
 
     # Propagate the failure reason to the client for non-dialing outcomes so the
