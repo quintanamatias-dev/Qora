@@ -33,6 +33,7 @@ import { OverviewSection } from './overview-section'
 import { ServiceIssuesSection } from './service-issues-section'
 import { InterestsSection } from './interests-section'
 import { AgentStatsSection } from './agent-stats-section'
+import { FeatureGate } from '@/features/entitlements/feature-gate'
 
 const REALTIME_INTERVAL_MS = 30_000
 
@@ -46,6 +47,16 @@ function defaultCustomRange(): { startDate: string; endDate: string } {
 // ──────────────────────────────────────────────────────────────────────────────
 // AnalyticsDashboardPage (container)
 // ──────────────────────────────────────────────────────────────────────────────
+
+/** Route element: the analytics page, only when the client's plan includes it. */
+export function AnalyticsRoute() {
+  const { clientId } = useParams<{ clientId: string }>()
+  return (
+    <FeatureGate clientId={clientId ?? ''} feature="analytics">
+      <AnalyticsDashboardPage />
+    </FeatureGate>
+  )
+}
 
 export function AnalyticsDashboardPage() {
   const { clientId } = useParams<{ clientId: string }>()

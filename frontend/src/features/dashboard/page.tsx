@@ -8,6 +8,7 @@
  */
 
 import { LivePanel } from '@/features/live'
+import { FeatureGate } from '@/features/entitlements/feature-gate'
 import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { useMetrics, useCallSessions, useAgents, useLeads, useClient, useIntegrations } from '@/api/hooks'
@@ -103,7 +104,9 @@ export function DashboardPage() {
 
   return (
     <>
-      <LivePanel clientId={activeClientId} embedded />
+      <FeatureGate clientId={activeClientId} feature="live_monitor" notice={false}>
+        <LivePanel clientId={activeClientId} embedded />
+      </FeatureGate>
       <div className="page">
         <div className="ph">
           <div>
