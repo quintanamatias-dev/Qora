@@ -1,40 +1,60 @@
 /**
- * ServiceIssuesSection — Ranked list of service issues
+ * ServiceIssuesSection — "Problemas de servicio" ranked list
  *
- * Shows: issue name, count, rank badge
- * Design: presentational, receives data as props.
+ * Design: qora-presentacion/project/dashboard/screens-overview.jsx Analytics
+ * Labels resolved via the dimension-label registry (backend codes stay English).
  */
 
 import type { AnalyticsServiceIssuesResponse } from '@/api/types'
+import { resolveLabel } from '@/config/dimension-labels'
 
 interface ServiceIssuesSectionProps {
   data: AnalyticsServiceIssuesResponse
 }
 
 export function ServiceIssuesSection({ data }: ServiceIssuesSectionProps) {
+  const maxIssue = Math.max(1, ...data.issues.map((s) => s.count))
+
   return (
-    <div className="space-y-3">
-      <h2 className="text-lg font-semibold text-ink">Service Issues</h2>
+    <section className="card">
+      <div className="card-h">
+        <div>
+          <h3>Problemas de servicio</h3>
+          <p>Detectados en las conversaciones</p>
+        </div>
+      </div>
       {data.issues.length === 0 ? (
-        <p className="text-sm text-ink-3">No service issues recorded.</p>
+        <div className="empty">Sin problemas de servicio en este período.</div>
       ) : (
-        <ul className="space-y-2">
-          {data.issues.map((item) => (
-            <li
-              key={item.issue}
-              className="flex items-center justify-between bg-paper border border-line rounded-lg px-4 py-3"
-            >
-              <div className="flex items-center gap-3">
-                <span className="text-xs font-bold text-ink-3 w-5 text-right">
-                  #{item.rank}
-                </span>
-                <span className="text-sm text-ink font-medium">{item.issue}</span>
+        <div className="rows">
+          {data.issues.map((s, i) => {
+            const label = resolveLabel(s.issue, 'es')
+            return (
+            <div key={s.issue} className="row" style={{ padding: '16px 20px' }}>
+              <span className="mono muted" style={{ fontSize: 11, width: 22 }}>
+                {String(i + 1).padStart(2, '0')}
+              </span>
+              <div className="t" style={{ gap: 8 }}>
+                <b>
+                  {label}
+                  {label !== s.issue && (
+                    <span className="mono muted" style={{ fontSize: 11, fontWeight: 400, marginLeft: 4 }}>
+                      {s.issue}
+                    </span>
+                  )}
+                </b>
+                <div className="hbar">
+                  <i style={{ width: `${(s.count / maxIssue) * 100}%` }} />
+                </div>
               </div>
-              <span className="text-sm font-bold text-teal">{item.count}</span>
-            </li>
-          ))}
-        </ul>
+              <span style={{ font: '500 20px/1 var(--qd-F)', width: 32, textAlign: 'right' }} className="num">
+                {s.count}
+              </span>
+            </div>
+            )
+          })}
+        </div>
       )}
-    </div>
+    </section>
   )
 }

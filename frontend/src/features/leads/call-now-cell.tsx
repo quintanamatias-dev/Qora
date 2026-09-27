@@ -1,30 +1,30 @@
 /**
- * CallNowCell — Stateful table cell managing the per-row outbound call lifecycle.
+ * CallNowCell — Stateful control managing the real outbound call lifecycle.
+ *
+ * Used both in the leads table ("Llamar" button per row) and in the lead
+ * detail header ("Llamar ahora" CTA) — same component, different label/size.
  *
  * Spec: call-now-feedback — Requirement: Polling Lifecycle After Trigger
- *   Replaces the blind 60s timer with real-time polling via useCallPolling.
  *   After POST /call returns call_session_id, polls GET /calls/{id}/status every 3s.
- *
  * Spec: call-now-feedback — Requirement: Real State Badges
- *   Badge text and color map to real telephony_status from the polling endpoint.
- *   No timer-based "Calling…" badge — the badge reflects actual state.
- *
+ *   Badge text/color map to real telephony_status from the polling endpoint.
  * Spec: call-now-feedback — Requirement: Honest Timeout
- *   After 180s with no terminal state, shows "Timed out — check call history".
- *
+ *   After 180s with no terminal state, shows a timeout message.
  * Spec: call-now-feedback — Requirement: Graceful 409 Display
  *   409 shows active_session_id when available. No polling started on 409.
+ *
+ * do_not_call guard: when the lead is flagged do_not_call, the trigger is
+ * replaced by a static "No llamar" tag — this is an additive client-side
+ * guard on top of the existing backend guards (403/409/422/429), never a
+ * replacement for them.
  */
 
 import { useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
-import type { Lead, CallTriggerResponse } from '@/api/types'
-import { Badge } from '@/design/components/badge'
-import { Button } from '@/design/components/button'
+import type { Lead, CallTriggerResponse, TelephonyStatus } from '@/api/types'
 import { triggerCall } from '@/api/leads'
 import { ApiError } from '@/api/client'
 import { useCallPolling } from './use-call-polling'
-import type { TelephonyStatus } from '@/api/types'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Per-row call state
@@ -38,50 +38,38 @@ type CallRowState =
   | { phase: 'error'; message: string }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Badge configuration — maps telephony_status to user-visible label and color
-//
-// Spec: call-now-feedback — Requirement: Real State Badges
-// Badge map: dialing→"Dialing…" (gray) | ringing→"Ringing…" (blue) |
-//   connected→"Connected" (green) | voicemail→"Voicemail" (amber) |
-//   completed→"Completed" (green-muted) | no_answer→"No Answer" (gray) |
-//   failed/recurrent_error→"Call Failed" (red)
+// Badge configuration — maps telephony_status to a Spanish label + tag class
 // ──────────────────────────────────────────────────────────────────────────────
 
 interface BadgeConfig {
   label: string
-  variant: 'active' | 'success' | 'warning' | 'error' | 'muted' | 'neutral'
+  className: string
 }
 
 const TELEPHONY_BADGE_MAP: Record<TelephonyStatus, BadgeConfig> = {
-  queued:          { label: 'Queued',      variant: 'neutral' },
-  dialing:         { label: 'Dialing…',    variant: 'neutral' },
-  ringing:         { label: 'Ringing…',    variant: 'active' },
-  connected:       { label: 'Connected',   variant: 'success' },
-  voicemail:       { label: 'Voicemail',   variant: 'warning' },
-  completed:       { label: 'Completed',   variant: 'muted' },
-  no_answer:       { label: 'No Answer',   variant: 'neutral' },
-  failed:          { label: 'Call Failed', variant: 'error' },
-  recurrent_error: { label: 'Call Failed', variant: 'error' },
-  stale_in_call:   { label: 'Call Failed', variant: 'error' },
+  queued:          { label: 'En cola',        className: 'tag ghost' },
+  dialing:         { label: 'Marcando…',      className: 'tag ghost' },
+  ringing:         { label: 'Sonando…',       className: 'tag' },
+  connected:       { label: 'Conectada',      className: 'tag teal' },
+  voicemail:       { label: 'Buzón de voz',   className: 'tag' },
+  completed:       { label: 'Completada',     className: 'tag teal' },
+  no_answer:       { label: 'No atendió',     className: 'tag ghost' },
+  failed:          { label: 'Llamada fallida', className: 'tag coral' },
+  recurrent_error: { label: 'Llamada fallida', className: 'tag coral' },
+  stale_in_call:   { label: 'Llamada fallida', className: 'tag coral' },
 }
 
 function TelephonyBadge({ status }: { status: TelephonyStatus }) {
-  const config = TELEPHONY_BADGE_MAP[status] ?? { label: status, variant: 'neutral' as const }
-  return (
-    <Badge status={config.variant} className="whitespace-nowrap">
-      {config.label}
-    </Badge>
-  )
+  const config = TELEPHONY_BADGE_MAP[status] ?? { label: status, className: 'tag' }
+  return <span className={config.className}>{config.label}</span>
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Error message mapping (spec-compliant user-readable messages)
+// Error message mapping (Spanish, spec-compliant)
 // ──────────────────────────────────────────────────────────────────────────────
 
 function resolveErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
-    // Spec: call-now-feedback — Requirement: Graceful 409 Display
-    // 409 must display actionable message with active_session_id if available.
     if (err.status === 409) {
       const body = err.body as Record<string, unknown> | undefined
       const activeSessionId =
@@ -89,12 +77,11 @@ function resolveErrorMessage(err: unknown): string {
           ? (body as { active_session_id?: string }).active_session_id
           : undefined
       if (activeSessionId) {
-        return `(409) A call is already active for this lead (session: ${activeSessionId}).`
+        return `(409) Ya hay una llamada activa para este lead (sesión: ${activeSessionId}).`
       }
-      return '(409) A call is already active or in progress for this lead.'
+      return '(409) Ya hay una llamada activa o en curso para este lead.'
     }
 
-    // Prefer the server's detail message when it's a string
     if (err.body && typeof err.body === 'object' && 'detail' in err.body) {
       const detail = (err.body as { detail: unknown }).detail
       if (typeof detail === 'string' && detail.length > 0) {
@@ -104,43 +91,33 @@ function resolveErrorMessage(err: unknown): string {
 
     switch (err.status) {
       case 403:
-        return '(403) Outbound calls are not enabled. Set ENABLE_OUTBOUND_CALLS=true to activate.'
+        return '(403) Las llamadas salientes no están habilitadas. Activá ENABLE_OUTBOUND_CALLS=true.'
       case 422:
-        return '(422) Lead phone number is not valid E.164. Update the phone and retry.'
+        return '(422) El teléfono del lead no es un E.164 válido. Actualizalo y reintentá.'
       case 429:
-        return '(429) Too soon after last attempt. Wait a few seconds and retry.'
+        return '(429) Muy pronto después del último intento. Esperá unos segundos y reintentá.'
       default:
         return `Error ${err.status}: ${err.message}`
     }
   }
   if (err instanceof Error) return err.message
-  return 'An unexpected error occurred.'
+  return 'Ocurrió un error inesperado.'
 }
 
-/**
- * Build a user-readable message for a 200 response that reports a non-dialing
- * status (failed / recurrent_error). The backend HTTP call succeeded but the
- * dial did not — so we surface the backend `error` when present, with a
- * status-specific fallback.
- */
 function resolveTriggerFailureMessage(result: CallTriggerResponse): string {
   if (result.error && result.error.length > 0) {
     return result.error
   }
   switch (result.status) {
     case 'recurrent_error':
-      return 'The call could not be placed after a retry. Please try again shortly.'
+      return 'No se pudo realizar la llamada después de un reintento. Probá de nuevo en un momento.'
     case 'failed':
     default:
-      return 'The call could not be placed. Please try again.'
+      return 'No se pudo realizar la llamada. Intentá de nuevo.'
   }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Constants
-// ──────────────────────────────────────────────────────────────────────────────
-
-const TIMEOUT_MESSAGE = 'Timed out — check call history.'
+const TIMEOUT_MESSAGE = 'Se agotó el tiempo de espera — revisá el historial de llamadas.'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // ConfirmCallDialog — Radix Dialog wrapping the confirmation step
@@ -154,79 +131,64 @@ interface ConfirmCallDialogProps {
   onCancel: () => void
 }
 
-function ConfirmCallDialog({
-  open,
-  leadName,
-  isLoading,
-  onConfirm,
-  onCancel,
-}: ConfirmCallDialogProps) {
+function ConfirmCallDialog({ open, leadName, isLoading, onConfirm, onCancel }: ConfirmCallDialogProps) {
   const stop = (e: React.SyntheticEvent) => e.stopPropagation()
 
   return (
     <Dialog.Root open={open} onOpenChange={(o) => { if (!o) onCancel() }}>
       <Dialog.Portal>
-        <Dialog.Overlay
-          className="fixed inset-0 bg-ink/20 backdrop-blur-[2px] z-40"
-          onClick={stop}
-        />
+        <Dialog.Overlay className="scrim" onClick={stop} />
         <Dialog.Content
           onClick={stop}
-          className={[
-            'fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50',
-            'bg-paper rounded-xl shadow-xl border border-line',
-            'w-[min(440px,90vw)] p-6',
-            'focus:outline-none',
-          ].join(' ')}
+          className="card"
+          style={{
+            position: 'fixed',
+            left: '50%',
+            top: '50%',
+            transform: 'translate(-50%, -50%)',
+            zIndex: 50,
+            width: 'min(440px, 90vw)',
+            padding: 20,
+          }}
         >
-          <Dialog.Title className="font-display text-lg font-semibold text-ink mb-1">
-            Confirm real call
+          <Dialog.Title style={{ font: '500 18px/1.3 var(--qd-F)', marginBottom: 4 }}>
+            Confirmar llamada real
           </Dialog.Title>
 
           <Dialog.Description asChild>
-            <div className="text-sm text-ink-2 space-y-3 mb-6">
-              <p>
-                You are about to place a <strong className="text-ink">real call</strong> to{' '}
-                <span className="font-medium text-teal">{leadName}</span>.
+            <div className="muted" style={{ fontSize: 13.5, margin: '10px 0 20px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <p style={{ margin: 0 }}>
+                Estás por hacer una <strong style={{ color: 'var(--qd-ink)' }}>llamada real</strong> a{' '}
+                <span style={{ color: 'var(--qd-teal)', fontWeight: 500 }}>{leadName}</span>.
               </p>
-              <p className="flex items-start gap-2 bg-warning/8 border border-warning/20 rounded-lg px-3 py-2">
+              <p className="alert" style={{ margin: 0, alignItems: 'flex-start' }}>
                 <span aria-hidden>⚠️</span>
                 <span>
-                  This will connect via ElevenLabs + Telnyx and incur telephony costs
-                  (~$0.21/min). The call begins immediately after you confirm.
+                  Esto se conecta vía ElevenLabs + Telnyx y genera costos de telefonía reales
+                  (~$0.21/min). La llamada comienza apenas confirmes.
                 </span>
               </p>
             </div>
           </Dialog.Description>
 
-          <div className="flex gap-3 justify-end">
-            <Button
-              variant="secondary"
-              size="sm"
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <button
+              type="button"
+              className="btn"
               onClick={(e) => { e.stopPropagation(); onCancel() }}
               disabled={isLoading}
             >
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className="btn primary"
               onClick={(e) => { e.stopPropagation(); onConfirm() }}
               disabled={isLoading}
-              className="min-w-[90px]"
+              style={{ minWidth: 96 }}
             >
-              {isLoading ? (
-                <span className="flex items-center gap-1.5">
-                  <span
-                    className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"
-                    aria-hidden
-                  />
-                  Calling…
-                </span>
-              ) : (
-                'Confirm'
-              )}
-            </Button>
+              {isLoading ? 'Llamando…' : 'Confirmar'}
+            </button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>
@@ -241,20 +203,17 @@ function ConfirmCallDialog({
 export interface CallNowCellProps {
   clientId: string
   lead: Lead
+  /** Trigger label — "Llamar" in the table, "Llamar ahora" in the detail header. */
+  label?: string
+  /** "sm" for table rows (default), "md" for the detail header CTA. */
+  size?: 'sm' | 'md'
 }
 
-export function CallNowCell({ clientId, lead }: CallNowCellProps) {
+export function CallNowCell({ clientId, lead, label = 'Llamar', size = 'sm' }: CallNowCellProps) {
   const [state, setState] = useState<CallRowState>({ phase: 'idle' })
 
-  // Resolve the active session ID for polling (null when not in 'calling' phase).
   const activeSessionId = state.phase === 'calling' ? state.callSessionId : null
-
-  // useCallPolling starts/stops automatically based on activeSessionId.
-  // Returns null when inactive (no polling).
   const pollingState = useCallPolling(activeSessionId)
-
-  // Derive displayed content from polling state (overrides local 'calling' phase).
-  // Polling is authoritative when active; local state governs all other phases.
 
   function handleButtonClick(e: React.MouseEvent) {
     e.stopPropagation()
@@ -270,8 +229,6 @@ export function CallNowCell({ clientId, lead }: CallNowCellProps) {
     try {
       const result = await triggerCall(clientId, lead.id)
       if (result.status === 'dialing' && result.call_session_id) {
-        // Spec: polling starts within 3s of POST response.
-        // useCallPolling activates when callSessionId is set.
         setState({ phase: 'calling', callSessionId: result.call_session_id })
       } else {
         setState({ phase: 'error', message: resolveTriggerFailureMessage(result) })
@@ -281,112 +238,106 @@ export function CallNowCell({ clientId, lead }: CallNowCellProps) {
     }
   }
 
-  // ── Render: polling phase — real state badges from the polling endpoint ──
+  // ── do_not_call guard — additive, on top of the backend guards ──
+  if (lead.do_not_call && (state.phase === 'idle' || state.phase === 'error')) {
+    return <span className="tag coral" title="Este lead está marcado como No llamar">No llamar</span>
+  }
 
+  // ── polling phase — real state badges from the polling endpoint ──
   if (state.phase === 'calling' && pollingState !== null) {
-    // Spec: Honest Timeout — show message after 180s with no terminal state.
     if (pollingState.status === 'timedOut') {
       return (
-        <div className="flex flex-col gap-1 max-w-[200px]">
-          <span role="alert" className="text-xs text-ink-2 leading-tight">
-            {TIMEOUT_MESSAGE}
-          </span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 200 }}>
+          <span role="alert" className="muted" style={{ fontSize: 12 }}>{TIMEOUT_MESSAGE}</span>
           <button
+            type="button"
             onClick={(e) => { e.stopPropagation(); setState({ phase: 'idle' }) }}
-            className="text-xs text-ink-3 underline text-left hover:text-ink transition-colors"
+            className="btn sm quiet"
+            style={{ alignSelf: 'flex-start' }}
           >
-            Dismiss
+            Descartar
           </button>
         </div>
       )
     }
 
-    // Spec: Real State Badges — badge reflects telephony_status from polling.
     if (pollingState.status === 'polling') {
       return <TelephonyBadge status={pollingState.telephonyStatus} />
     }
 
-    // Terminal state — call ended.
     if (pollingState.status === 'terminal') {
-      const isFailure = ['failed', 'recurrent_error', 'stale_in_call', 'no_answer'].includes(
-        pollingState.telephonyStatus
-      )
+      const isFailure = ['failed', 'recurrent_error', 'stale_in_call', 'no_answer'].includes(pollingState.telephonyStatus)
       return (
-        <div className="flex flex-col gap-1 max-w-[200px]">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 200 }}>
           <TelephonyBadge status={pollingState.telephonyStatus} />
           {isFailure && (
             <button
+              type="button"
               onClick={(e) => { e.stopPropagation(); setState({ phase: 'idle' }) }}
-              className="text-xs text-ink-3 underline text-left hover:text-ink transition-colors"
+              className="btn sm quiet"
+              style={{ alignSelf: 'flex-start' }}
             >
-              Retry
+              Reintentar
             </button>
           )}
         </div>
       )
     }
 
-    // Polling error — surface to operator.
     if (pollingState.status === 'error') {
       return (
-        <div className="flex flex-col gap-1 max-w-[200px]">
-          <span role="alert" className="text-xs text-coral leading-tight">
-            {pollingState.message}
-          </span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 200 }}>
+          <span role="alert" style={{ fontSize: 12, color: 'var(--qd-coral)' }}>{pollingState.message}</span>
           <button
+            type="button"
             onClick={(e) => { e.stopPropagation(); setState({ phase: 'idle' }) }}
-            className="text-xs text-ink-3 underline text-left hover:text-ink transition-colors"
+            className="btn sm quiet"
+            style={{ alignSelf: 'flex-start' }}
           >
-            Dismiss
+            Descartar
           </button>
         </div>
       )
     }
   }
 
-  // ── Render: 'calling' phase but polling hasn't returned yet (first tick) ──
+  // ── 'calling' phase but polling hasn't returned yet (first tick) ──
   if (state.phase === 'calling') {
-    return (
-      <Badge status="active" className="whitespace-nowrap">
-        Dialing…
-      </Badge>
-    )
+    return <span className="tag ghost">Marcando…</span>
   }
 
-  // ── Render: error phase ──
+  // ── error phase ──
   if (state.phase === 'error') {
     return (
-      <div className="flex flex-col gap-1 max-w-[200px]">
-        <span
-          role="alert"
-          className="text-xs text-coral leading-tight"
-          title={state.message}
-        >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 200 }}>
+        <span role="alert" style={{ fontSize: 12, color: 'var(--qd-coral)' }} title={state.message}>
           {state.message}
         </span>
         <button
+          type="button"
           onClick={(e) => { e.stopPropagation(); setState({ phase: 'idle' }) }}
-          className="text-xs text-ink-3 underline text-left hover:text-ink transition-colors"
-          aria-label="Call Now"
+          className="btn sm quiet"
+          style={{ alignSelf: 'flex-start' }}
+          aria-label="Llamar"
         >
-          Call Now
+          Llamar
         </button>
       </div>
     )
   }
 
-  // ── Render: idle / confirming / loading phase ──
+  // ── idle / confirming / loading phase ──
   return (
     <>
-      <Button
-        variant="primary"
-        size="sm"
+      <button
+        type="button"
+        className={size === 'sm' ? 'btn sm primary' : 'btn primary'}
         onClick={handleButtonClick}
         disabled={state.phase === 'loading'}
-        className="whitespace-nowrap"
+        style={{ whiteSpace: 'nowrap' }}
       >
-        Call Now
-      </Button>
+        {label}
+      </button>
 
       <ConfirmCallDialog
         open={state.phase === 'confirming' || state.phase === 'loading'}

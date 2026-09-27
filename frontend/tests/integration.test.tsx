@@ -43,8 +43,8 @@ describe('REQ-6.4 Route rendering', () => {
     )
     render(<QueryClientProvider client={qc}><RouterProvider router={r} /></QueryClientProvider>)
 
-    expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument()
-    expect(screen.getByText('demo-client')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Resumen' })).toBeInTheDocument()
+    expect(screen.getByTestId('dashboard-subtitle')).toHaveTextContent('demo-client')
   })
 
   it('navigating to /app/test-client/dashboard renders DashboardPage with test-client', () => {
@@ -60,8 +60,8 @@ describe('REQ-6.4 Route rendering', () => {
       { initialEntries: ['/app/test-client/dashboard'] }
     )
     render(<QueryClientProvider client={qc}><RouterProvider router={r} /></QueryClientProvider>)
-    expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument()
-    expect(screen.getByText('test-client')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Resumen' })).toBeInTheDocument()
+    expect(screen.getByTestId('dashboard-subtitle')).toHaveTextContent('test-client')
   })
 })
 
@@ -163,18 +163,21 @@ describe('REQ-6.2 MSW API interception', () => {
 // REQ-6.3: App shell smoke tests — sidebar navigation visible
 // ──────────────────────────────────────────────────────────────────────────────
 describe('REQ-6.3 App shell smoke tests', () => {
-  it('Sidebar renders navigation with Dashboard, Leads, and Import links', () => {
+  it('Sidebar renders navigation with Resumen, Leads, and Importar links (Spanish labels)', () => {
+    const qc = createTestClient()
     render(
-      <MemoryRouter initialEntries={['/app/demo-client/dashboard']}>
-        <Sidebar clientId="demo-client" />
-      </MemoryRouter>
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/app/demo-client/dashboard']}>
+          <Sidebar clientId="demo-client" />
+        </MemoryRouter>
+      </QueryClientProvider>
     )
 
     const nav = screen.getByRole('navigation', { name: 'Main navigation' })
     expect(nav).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Dashboard' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Leads' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Import' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Resumen' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Leads/i })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Importar' })).toBeInTheDocument()
   })
 
   it('LeadsPage renders heading without crashing', () => {
@@ -204,6 +207,6 @@ describe('REQ-6.3 App shell smoke tests', () => {
       { initialEntries: ['/app/demo-client/dashboard'] }
     )
     render(<QueryClientProvider client={qc}><RouterProvider router={r} /></QueryClientProvider>)
-    expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Resumen' })).toBeInTheDocument()
   })
 })

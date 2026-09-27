@@ -11,8 +11,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { renderHook, act, waitFor } from '@testing-library/react'
+import { renderHook, act } from '@testing-library/react'
 import { useCallPolling } from './use-call-polling'
+import type { TelephonyStatus } from '@/api/types'
 
 // Mock the API module so no real HTTP calls are made.
 vi.mock('@/api/leads', () => ({
@@ -32,17 +33,12 @@ vi.mock('@/api/client', () => ({
   },
 }))
 
-// Lazy imports to get mock references after vi.mock() hoisting.
-const getCallStatusMock = () => vi.mocked(
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  (require('@/api/leads') as { getCallStatus: ReturnType<typeof vi.fn> }).getCallStatus
-)
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────────
 
-function makeActiveResponse(telephonyStatus = 'ringing') {
+function makeActiveResponse(telephonyStatus: TelephonyStatus = 'ringing') {
   return {
     session_id: 'sess-001',
     telephony_status: telephonyStatus,
@@ -53,7 +49,7 @@ function makeActiveResponse(telephonyStatus = 'ringing') {
   }
 }
 
-function makeTerminalResponse(telephonyStatus = 'completed', outcomeReason: string | null = null) {
+function makeTerminalResponse(telephonyStatus: TelephonyStatus = 'completed', outcomeReason: string | null = null) {
   return {
     session_id: 'sess-001',
     telephony_status: telephonyStatus,

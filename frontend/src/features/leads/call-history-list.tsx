@@ -1,46 +1,28 @@
 /**
- * CallHistoryList — Presentational component for call session history
+ * CallHistoryList — right-rail timeline (design: screens-lead.jsx `.tl`/`.tl-i`)
  *
- * Spec: sdd/qora-basic-crm/spec — Requirement: Call History List
- * Design:
- *   - Pure presentational — receives sessions + expandedSessionId + onToggleSession
- *   - Each item: started_at (formatted), duration (mm:ss), status badge, outcome, summary snippet
- *   - Click item → onToggleSession(sessionId) — toggle expand/collapse
- *   - Empty: "No calls yet"
+ * Presentational — receives real call sessions. Clicking an item opens the
+ * real CallDrawer (transcript + analysis). "Ver detalle" still links to the
+ * full /calls/:sessionId page.
  */
 
 import { useParams, Link } from 'react-router'
-import type { CallSession, CallOutcome } from '@/api/types'
-import { Badge } from '@/design/components/badge'
+import type { CallSession } from '@/api/types'
 import { formatDuration } from '@/lib/format-duration'
 import { parseUTC } from '@/lib/parse-utc'
-import { TranscriptViewer } from './transcript-viewer'
-import { CallOutcomeBadge } from './call-outcome-badge'
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Props
-// ──────────────────────────────────────────────────────────────────────────────
 
 interface CallHistoryListProps {
   sessions: CallSession[]
-  expandedSessionId: string | null
-  onToggleSession: (sessionId: string) => void
+  onOpenSession: (session: CallSession) => void
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Pure helpers
-// ──────────────────────────────────────────────────────────────────────────────
+const DATE_FMT = new Intl.DateTimeFormat('es-AR', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
+const TIME_FMT = new Intl.DateTimeFormat('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })
 
 export function formatCallDate(isoOrNull: string | null): string {
   if (!isoOrNull) return '—'
   try {
-    return parseUTC(isoOrNull).toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
+    return DATE_FMT.format(parseUTC(isoOrNull))
   } catch {
     return isoOrNull
   }
@@ -51,103 +33,53 @@ export function truncateSummary(summary: string | null, maxLength = 100): string
   return summary.length > maxLength ? `${summary.slice(0, maxLength)}…` : summary
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// CallHistoryList
-// ──────────────────────────────────────────────────────────────────────────────
+function statusLabel(status: CallSession['status']): string {
+  switch (status) {
+    case 'completed': return 'Completada'
+    case 'abandoned': return 'Abandonada'
+    case 'failed': return 'Fallida'
+    case 'in_progress': return 'En curso'
+    default: return 'Iniciada'
+  }
+}
 
-export function CallHistoryList({
-  sessions,
-  expandedSessionId,
-  onToggleSession,
-}: CallHistoryListProps) {
+export function CallHistoryList({ sessions, onOpenSession }: CallHistoryListProps) {
   const { clientId } = useParams<{ clientId: string }>()
 
   if (sessions.length === 0) {
-    return (
-      <div className="py-8 text-center">
-        <p className="text-ink-3 text-sm">No calls yet</p>
-      </div>
-    )
+    return <div className="empty">No calls yet</div>
   }
 
   return (
-    <div className="space-y-2">
+    <div className="tl">
       {sessions.map((session) => {
-        const isExpanded = expandedSessionId === session.id
-        const statusBadge = session.status === 'completed' ? 'success' : 'neutral'
-        const summarySnippet = truncateSummary(session.summary)
-
-        const callOutcome = session.extracted_facts?.call_outcome as CallOutcome | null | undefined
+        const started = session.started_at ? parseUTC(session.started_at) : null
+        const isAbandoned = session.status === 'abandoned' || session.status === 'failed'
 
         return (
-          <div key={session.id} className="border border-line rounded-md">
-            {/* Session row — clickable, wraps gracefully on narrow right column */}
-            <div
-              data-testid="call-history-item"
-              onClick={() => onToggleSession(session.id)}
-              className="px-4 py-3 cursor-pointer hover:bg-pearl/50 transition-colors rounded-t-md space-y-1.5"
-            >
-              {/* Top row: date · duration · status · outcome · expand toggle */}
-              <div className="flex items-center gap-2 flex-wrap min-w-0">
-                {/* Date */}
-                <span className="text-sm text-ink shrink-0">
-                  {formatCallDate(session.started_at)}
-                </span>
-
-                {/* Duration */}
-                <span className="text-sm text-ink-3 shrink-0">
-                  {session.duration_seconds != null
-                    ? formatDuration(session.duration_seconds)
-                    : '—'}
-                </span>
-
-                {/* Status badge */}
-                <Badge status={statusBadge}>
-                  {session.status}
-                </Badge>
-
-                {/* Call outcome badge */}
-                {callOutcome ? (
-                  <CallOutcomeBadge outcome={callOutcome} />
-                ) : session.outcome ? (
-                  <span className="text-xs text-ink-3 shrink-0">
-                    {session.outcome}
-                  </span>
-                ) : null}
-
-                {/* Expand indicator — pushed to end */}
-                <span className="text-ink-3 text-xs ml-auto shrink-0">
-                  {isExpanded ? '▲' : '▼'}
+          <div key={session.id} data-testid="call-history-item" className="tl-i" onClick={() => onOpenSession(session)}>
+            <i className={isAbandoned ? 'tl-dot ab' : 'tl-dot'} />
+            <div style={{ minWidth: 0 }}>
+              <div className="tl-h">
+                <b>{formatCallDate(session.started_at)}</b>
+                {started && <span className="muted" style={{ fontSize: 12 }}>{TIME_FMT.format(started)}</span>}
+                <span className="mono muted" style={{ fontSize: 11.5, marginLeft: 'auto' }}>
+                  {session.duration_seconds != null ? formatDuration(session.duration_seconds) : '—'}
                 </span>
               </div>
-
-              {/* Bottom row: optional summary snippet + always-present detail link */}
-              <div className="flex items-center gap-3 min-w-0">
-                {summarySnippet && (
-                  <span className="text-xs text-ink-3 flex-1 truncate min-w-0">
-                    {summarySnippet}
-                  </span>
-                )}
-                <Link
-                  to={`/app/${clientId}/calls/${session.id}`}
-                  data-testid="call-detail-link"
-                  onClick={(e) => e.stopPropagation()}
-                  className="text-xs text-teal hover:underline shrink-0 ml-auto"
-                >
-                  View detail →
-                </Link>
+              <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                <span className={isAbandoned ? 'tag ghost' : 'tag teal'}>{statusLabel(session.status)}</span>
               </div>
-            </div>
-
-            {/* Transcript viewer — inline accordion */}
-            {isExpanded && (
-              <div
-                data-testid="transcript-viewer"
-                className="border-t border-line bg-mist max-h-[500px] overflow-y-auto rounded-b-md"
+              {session.summary && <p className="tl-s">{session.summary}</p>}
+              <Link
+                to={`/app/${clientId}/calls/${session.id}`}
+                data-testid="call-detail-link"
+                onClick={(e) => e.stopPropagation()}
+                style={{ fontSize: 12, color: 'var(--qd-teal)', marginTop: 4, display: 'inline-block' }}
               >
-                <TranscriptViewer sessionId={session.id} />
-              </div>
-            )}
+                Ver detalle →
+              </Link>
+            </div>
           </div>
         )
       })}

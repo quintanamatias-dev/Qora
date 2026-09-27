@@ -1,8 +1,9 @@
 /**
  * AgentFilter — dropdown to filter analytics by agent
  *
- * Renders a <select> element populated with agents for the current client.
+ * Renders a <select> element populated with real agents for the current client.
  * Default value "all" means no agent filter (all agents).
+ * Design: qora-presentacion/project/dashboard/screens-overview.jsx Analytics — .select
  */
 
 import { useAgents } from '@/api/hooks'
@@ -21,10 +22,10 @@ export function AgentFilter({ clientId, value, onChange }: AgentFilterProps) {
       data-testid="agent-filter"
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="rounded-md border border-line-2 bg-paper px-3 py-1.5 text-sm text-ink focus:outline-none focus:border-teal focus:shadow-[0_0_0_3px_var(--color-teal-faint)]"
-      aria-label="Filter by agent"
+      className="select"
+      aria-label="Filtrar por agente"
     >
-      <option value="all">All agents</option>
+      <option value="all">Todos los agentes</option>
       {agents.map((agent) => (
         <option key={agent.agent_id} value={agent.agent_id}>
           {agent.name}

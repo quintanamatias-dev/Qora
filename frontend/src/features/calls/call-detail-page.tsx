@@ -16,6 +16,7 @@ import { AnalysisSectionCards } from './call-analysis-panel'
 import { TranscriptViewer } from '../leads/transcript-viewer'
 import { Badge } from '@/design/components/badge'
 import { Card } from '@/design/components/card'
+import { Icon } from '@/design/components'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // CallDetailPage
@@ -34,23 +35,23 @@ export function CallDetailPage() {
   const resolvedSessionId = sessionId ?? ''
 
   return (
-    <div className="space-y-6">
+    <div className="page">
       {/* Back navigation */}
       <button
         type="button"
         onClick={() => navigate(-1)}
-        className="text-sm text-ink-3 hover:text-ink transition-colors"
+        className="btn sm quiet"
+        style={{ alignSelf: 'flex-start' }}
       >
-        ← Back
+        <Icon name="arrowL" size={14} />
+        Volver
       </button>
 
       {/* Page header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="ph">
         <div>
-          <h1 className="font-display text-xl font-medium text-ink">
-            Call Detail
-          </h1>
-          <p className="text-xs text-ink-3 mt-0.5 font-mono">
+          <h1>Detalle de llamada</h1>
+          <p className="mono muted" style={{ fontSize: 12 }}>
             {resolvedSessionId}
           </p>
         </div>

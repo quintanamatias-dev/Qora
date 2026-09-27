@@ -1,27 +1,32 @@
 /**
- * DashboardPage — Container component for client call metrics
+ * DashboardPage — "Resumen" (Overview)
  *
- * Spec: sdd/qora-dashboard-metrics/spec
- * Design: container-presentational pattern
- *   - Reads clientId from URL params
- *   - Manages period state (default: "all" — show all-time by default)
- *   - Computes UTC date range from period
- *   - Calls useMetrics and routes to loading/error/empty/data UI branches
- *
- * Layout: two-column
- *   Left (~60%): metrics + period selector + status breakdown
- *   Right (~40%): active integrations card + agent status
+ * Design: qora-presentacion/project/dashboard/screens-overview.jsx (Overview + BarChart)
+ * Ported classes come from src/design/dashboard.css (.page/.ph/.kpis/.kpi/.card/...).
+ * PageContainer already renders <main className="page"> around the route Outlet —
+ * this component renders its content directly, without an extra `.page` wrapper.
  */
 
-import { useState, useMemo } from 'react'
-import { useParams } from 'react-router'
-import { useMetrics, useAgents } from '@/api/hooks'
-import { LiveIndicator } from '@/design/components'
-import { PeriodSelector, type Period } from './period-selector'
-import { MetricsGrid } from './metrics-grid'
+import { LivePanel } from '@/features/live'
+import { useMemo, useState } from 'react'
+import { useNavigate, useParams } from 'react-router'
+import { useMetrics, useCallSessions, useAgents, useLeads, useClient, useIntegrations } from '@/api/hooks'
+import { Icon } from '@/design/components'
+import { formatDuration } from '@/lib/format-duration'
+import { bucketCallSessions, type Period, type ChartSeries } from './chart-buckets'
+import type { CallMetricsResponse, CallSession, Agent, IntegrationConfig } from '@/api/types'
+import {
+  DEFAULT_TIMEZONE,
+  resolveTimezone,
+  startOfDayInZone,
+  endOfDayInZone,
+  createZonedFormatter,
+} from '@/lib/timezone'
+
+const REALTIME_INTERVAL_MS = 15_000
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Pure helper — period → UTC date range
+// Pure helper — period → date range, computed in the client's timezone
 // ──────────────────────────────────────────────────────────────────────────────
 
 interface DateRange {
@@ -29,15 +34,11 @@ interface DateRange {
   date_to?: string
 }
 
-export function periodToDateRange(period: Period): DateRange {
-  const now = new Date()
-
+export function periodToDateRange(period: Period, tz: string = DEFAULT_TIMEZONE, now: Date = new Date()): DateRange {
   if (period === 'today') {
-    const startOfToday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
-    const endOfToday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999))
     return {
-      date_from: startOfToday.toISOString(),
-      date_to: endOfToday.toISOString(),
+      date_from: startOfDayInZone(now, tz).toISOString(),
+      date_to: endOfDayInZone(now, tz).toISOString(),
     }
   }
 
@@ -55,6 +56,20 @@ export function periodToDateRange(period: Period): DateRange {
   return {}
 }
 
+const PERIOD_LABELS: Record<Period, string> = {
+  today: 'Hoy',
+  '7d': '7 días',
+  '30d': '30 días',
+  all: 'Todo',
+}
+
+function periodSubLabel(period: Period): string {
+  const label = PERIOD_LABELS[period]
+  if (period === 'all') return 'Desde el inicio'
+  if (period === 'today') return 'Hoy'
+  return `Últimos ${label.toLowerCase()}`
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // DashboardPage
 // ──────────────────────────────────────────────────────────────────────────────
@@ -62,231 +77,607 @@ export function periodToDateRange(period: Period): DateRange {
 export function DashboardPage() {
   const { clientId } = useParams<{ clientId: string }>()
   const activeClientId = clientId ?? ''
+  const navigate = useNavigate()
   const [period, setPeriod] = useState<Period>('all')
 
-  // useMemo prevents new Date() from generating a different queryKey on every render,
-  // which would cause an infinite refetch loop in TanStack Query.
-  // Re-computes only when `period` changes (user clicks a different tab).
-  const dateRange = useMemo(() => periodToDateRange(period), [period])
-  const { data, isLoading, isError, refetch } = useMetrics(activeClientId, dateRange)
+  const { data: client } = useClient(activeClientId)
+  const tz = useMemo(() => resolveTimezone(client?.scheduler_timezone), [client?.scheduler_timezone])
+  const dateRange = useMemo(() => periodToDateRange(period, tz), [period, tz])
+  const metrics = useMetrics(activeClientId, dateRange, {
+    refetchInterval: REALTIME_INTERVAL_MS,
+  })
+  const sessions = useCallSessions(activeClientId, undefined, {
+    refetchInterval: REALTIME_INTERVAL_MS,
+  })
+  const leads = useLeads(activeClientId)
+  const agents = useAgents(activeClientId)
+  const integrations = useIntegrations(activeClientId)
+
+  const leadNames = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const lead of leads.data ?? []) map.set(lead.id, lead.name)
+    return map
+  }, [leads.data])
+
+  const clientName = client?.name ?? activeClientId
 
   return (
-    <div className="space-y-6">
-      {/* Page header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="font-display text-2xl font-medium text-ink">
-            Dashboard
-          </h1>
-          {clientId && (
-            <p className="text-xs text-ink-3 font-mono uppercase tracking-[0.10em] mt-0.5">
-              {clientId}
-            </p>
-          )}
-        </div>
-        {/* Period selector — always interactive (spec: remains interactive during loading) */}
-        <PeriodSelector value={period} onChange={setPeriod} />
-      </div>
-
-      {/* Two-column layout */}
-      <div className="flex gap-8 items-start">
-        {/* Left column — metrics (~60%) */}
-        <div className="flex-[3] min-w-0 space-y-6">
-          <MetricsArea
-            loading={isLoading}
-            error={isError}
-            data={data ?? null}
-            onRetry={refetch}
-          />
+    <>
+      <LivePanel clientId={activeClientId} embedded />
+      <div className="page">
+        <div className="ph">
+          <div>
+            <h1>Resumen</h1>
+            <p data-testid="dashboard-subtitle">Lo que hicieron tus agentes de voz para {clientName}.</p>
+          </div>
+          <div className="ph-r">
+            <Seg
+              value={period}
+              onChange={setPeriod}
+              options={[
+                ['today', 'Hoy'],
+                ['7d', '7 días'],
+                ['30d', '30 días'],
+                ['all', 'Todo'],
+              ]}
+            />
+          </div>
         </div>
 
-        {/* Right column — integrations + agent status (~40%) */}
-        <div className="flex-[2] min-w-0 space-y-4">
-          <ActiveIntegrationsCard />
-          <AgentStatusCard clientId={activeClientId} />
-        </div>
+        <MetricsArea
+          loading={metrics.isLoading}
+          error={metrics.isError}
+          data={metrics.data ?? null}
+          period={period}
+          onRetry={metrics.refetch}
+        >
+          <div className="grid-2">
+            <div className="stack">
+              <VolumeChartCard sessions={sessions.data ?? []} loading={sessions.isLoading} period={period} tz={tz} />
+              <RecentActivityCard
+                sessions={sessions.data ?? []}
+                loading={sessions.isLoading}
+                leadNames={leadNames}
+                clientId={activeClientId}
+                tz={tz}
+                onNavigateLeads={() => navigate(`/app/${activeClientId}/leads`)}
+                onOpenLead={(leadId) => navigate(`/app/${activeClientId}/leads/${leadId}`)}
+              />
+            </div>
+            <div className="stack">
+              <AgentsCard agents={agents.data ?? []} loading={agents.isLoading} />
+              <ConsumptionCard data={metrics.data ?? null} period={period} />
+              <IntegrationsCard
+                integrations={integrations.data ?? []}
+                loading={integrations.isLoading}
+                onManage={() => navigate(`/app/${activeClientId}/import`)}
+              />
+            </div>
+          </div>
+        </MetricsArea>
       </div>
+    </>
+  )
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Seg — period segmented control (design: ui.jsx Seg)
+// ──────────────────────────────────────────────────────────────────────────────
+
+interface SegProps {
+  value: Period
+  onChange: (period: Period) => void
+  options: [Period, string][]
+}
+
+function Seg({ value, onChange, options }: SegProps) {
+  return (
+    <div className="seg" role="radiogroup" aria-label="Seleccionar período">
+      {options.map(([k, l]) => (
+        <button
+          key={k}
+          type="button"
+          role="radio"
+          aria-checked={value === k}
+          className={value === k ? 'on' : ''}
+          onClick={() => onChange(k)}
+        >
+          {l}
+        </button>
+      ))}
     </div>
   )
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// MetricsArea — UI branch routing
+// MetricsArea — KPI strip + loading/error/empty routing for the metrics-derived UI
 // ──────────────────────────────────────────────────────────────────────────────
-
-import type { CallMetricsResponse } from '@/api/types'
 
 interface MetricsAreaProps {
   loading: boolean
   error: boolean
   data: CallMetricsResponse | null
+  period: Period
   onRetry?: () => void
+  children: React.ReactNode
 }
 
-function MetricsArea({ loading, error, data, onRetry }: MetricsAreaProps) {
-  // Loading — show skeleton grid (PeriodSelector remains interactive above)
+function MetricsArea({ loading, error, data, period, onRetry, children }: MetricsAreaProps) {
   if (loading) {
-    const emptyData: CallMetricsResponse = {
-      total_calls: 0, completed_calls: 0, abandoned_calls: 0,
-      total_duration_seconds: 0, average_duration_seconds: 0,
-      total_billable_minutes: 0, period: { date_from: null, date_to: null },
-    }
-    return <MetricsGrid data={emptyData} loading />
+    return (
+      <>
+        <div className="kpis">
+          {Array.from({ length: 4 }, (_, i) => (
+            <div key={i} className="kpi">
+              <span className="eyebrow">&nbsp;</span>
+              <span
+                data-testid="kpi-skeleton"
+                className="v"
+                style={{
+                  display: 'block',
+                  height: 34,
+                  width: 64,
+                  background: 'var(--qd-surface-3)',
+                  borderRadius: 6,
+                }}
+              />
+              <span className="s">&nbsp;</span>
+            </div>
+          ))}
+        </div>
+        {children}
+      </>
+    )
   }
 
-  // Error — human-readable, no raw API leakage, retry affordance
   if (error) {
     return (
-      <div
-        role="alert"
-        className="bg-paper border border-line rounded-lg p-8 text-center space-y-4"
-      >
-        <p className="text-ink font-medium">
-          Unable to load metrics. Please try again.
-        </p>
-        <p className="text-ink-2 text-sm">
-          If the problem persists, contact support.
+      <div role="alert" className="card" style={{ padding: 32, textAlign: 'center' }}>
+        <p style={{ fontWeight: 500 }}>No pudimos cargar las métricas. Intentá de nuevo.</p>
+        <p className="muted" style={{ fontSize: 13 }}>
+          Si el problema persiste, contactá a soporte.
         </p>
         {onRetry && (
-          <button
-            type="button"
-            onClick={onRetry}
-            className="mt-2 px-4 py-2 text-sm font-medium text-teal border border-teal-line rounded-full hover:bg-teal-faint transition-colors"
-          >
-            Retry
+          <button type="button" className="btn" style={{ marginTop: 12 }} onClick={onRetry}>
+            Reintentar
           </button>
         )}
       </div>
     )
   }
 
-  // Empty state — total_calls === 0 (spec: no zero-value cards)
   if (data && data.total_calls === 0) {
     return (
-      <div
-        data-testid="empty-state"
-        className="bg-paper border border-line rounded-lg p-8 text-center"
-      >
-        <p className="text-ink font-medium">
-          No calls for this period
-        </p>
-        <p className="text-ink-2 text-sm mt-2">
-          Try selecting a different time range to see metrics.
+      <div data-testid="empty-state" className="card" style={{ padding: 32, textAlign: 'center' }}>
+        <p style={{ fontWeight: 500 }}>No hay llamadas en este período</p>
+        <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>
+          Probá con un rango de fechas diferente para ver métricas.
         </p>
       </div>
     )
   }
 
-  // Data — render full metrics grid
-  if (data) {
-    return <MetricsGrid data={data} />
-  }
+  if (!data) return null
 
-  return null
+  const pc = (n: number) => (data.total_calls ? Math.round((n / data.total_calls) * 100) : 0)
+
+  return (
+    <>
+      <div className="kpis">
+        <div className="kpi">
+          <span className="eyebrow">Llamadas</span>
+          <span className="v">{data.total_calls}</span>
+          <span className="s">{periodSubLabel(period)}</span>
+        </div>
+        <div className="kpi">
+          <span className="eyebrow">Completadas</span>
+          <span className="v" style={{ color: 'var(--qd-teal)' }}>
+            <span>{data.completed_calls}</span>
+            <small>{pc(data.completed_calls)}%</small>
+          </span>
+          <span className="s">Conversación con el lead</span>
+        </div>
+        <div className="kpi">
+          <span className="eyebrow">Abandonadas</span>
+          <span className="v" style={{ color: 'var(--qd-coral)' }}>
+            <span>{data.abandoned_calls}</span>
+            <small>{pc(data.abandoned_calls)}%</small>
+          </span>
+          <span className="s">Cortaron o no atendieron</span>
+        </div>
+        <div className="kpi">
+          <span className="eyebrow">Duración prom.</span>
+          <span className="v">{formatDuration(data.average_duration_seconds)}</span>
+          <span className="s">Total {formatDuration(data.total_duration_seconds)} min</span>
+        </div>
+      </div>
+      {children}
+    </>
+  )
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// ActiveIntegrationsCard — right column top panel
+// VolumeChartCard — "Volumen de llamadas" stacked bar chart
 // ──────────────────────────────────────────────────────────────────────────────
 
-function ActiveIntegrationsCard() {
+function VolumeChartCard({
+  sessions,
+  loading,
+  period,
+  tz,
+}: {
+  sessions: CallSession[]
+  loading: boolean
+  period: Period
+  tz: string
+}) {
+  const chart: ChartSeries = useMemo(() => bucketCallSessions(sessions, period, new Date(), tz), [sessions, period, tz])
+
   return (
-    <div className="bg-paper border border-line rounded-lg shadow-md p-6">
-      <p className="font-mono text-xs font-medium uppercase tracking-[0.20em] text-ink-3 mb-4">
-        Active Integrations
-      </p>
-      {/* Airtable integration entry — connected indicator */}
-      <div className="flex items-center gap-3">
-        <div className="w-8 h-8 rounded-md overflow-hidden flex-shrink-0">
-          <img
-            src="/images/integrations/airtable-icon.webp"
-            alt="Airtable"
-            width={32}
-            height={32}
-            className="w-full h-full object-cover"
+    <section className="card">
+      <div className="card-h">
+        <div>
+          <h3>Volumen de llamadas</h3>
+          <p>Por {chart.unit}</p>
+        </div>
+        <div className="r legend">
+          <span>
+            <i
+              className="sw"
+              style={{
+                background: 'var(--qd-teal)',
+                display: 'inline-block',
+                width: 8,
+                height: 8,
+                borderRadius: 2,
+              }}
+            />
+            Completadas
+          </span>
+          <span>
+            <i
+              className="sw"
+              style={{
+                background: 'var(--qd-bar-off)',
+                display: 'inline-block',
+                width: 8,
+                height: 8,
+                borderRadius: 2,
+              }}
+            />
+            Abandonadas
+          </span>
+        </div>
+      </div>
+      <div className="card-b">
+        {loading ? (
+          <div
+            style={{
+              height: 160,
+              background: 'var(--qd-surface-3)',
+              borderRadius: 8,
+            }}
           />
-        </div>
-        <div className="flex-1 min-w-0">
-          <span className="text-sm font-medium text-ink">Airtable</span>
-        </div>
-        <span className="inline-flex items-center gap-1 text-[10px] font-mono font-semibold uppercase tracking-[0.15em] text-teal bg-teal-faint border border-teal-line px-2 py-0.5 rounded-full">
-          <span className="w-1.5 h-1.5 rounded-full bg-teal" />
-          Connected
-        </span>
+        ) : (
+          <BarChart chart={chart} />
+        )}
+      </div>
+    </section>
+  )
+}
+
+function BarChart({ chart }: { chart: ChartSeries }) {
+  const [hover, setHover] = useState<number | null>(null)
+  const max = Math.max(1, ...chart.series.map((d) => d.t))
+
+  if (chart.series.length === 0) {
+    return <div className="empty">Sin llamadas para graficar en este período.</div>
+  }
+
+  return (
+    <div>
+      <div className="chart">
+        {chart.series.map((d, i) => (
+          <div key={i} className="col" onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
+            <i
+              style={{
+                height: `${(d.c / max) * 100}%`,
+                background: 'var(--qd-teal)',
+              }}
+            />
+            <i
+              style={{
+                height: `${(d.a / max) * 100}%`,
+                background: 'var(--qd-bar-off)',
+              }}
+            />
+            {d.t === 0 && <i style={{ height: 2, background: 'var(--qd-line-2)' }} />}
+            {hover === i && (
+              <span className="tip">
+                {d.t} llamadas · {d.c} completadas
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="chart-ax">
+        {chart.axis.map((a, i) => (
+          <span key={`${a}-${i}`}>{a}</span>
+        ))}
       </div>
     </div>
   )
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// AgentStatusCard — right column secondary panel
+// RecentActivityCard — last 5 calls
 // ──────────────────────────────────────────────────────────────────────────────
 
-function AgentStatusCard({ clientId }: { clientId: string }) {
-  const { data: agents, isLoading } = useAgents(clientId)
+const OUTCOME_LABELS: Record<string, string> = {
+  no_answer: 'Sin respuesta',
+  callback_requested: 'Pidió que lo llamen',
+  wrong_number: 'Número equivocado',
+  completed_negative: 'Completada · negativa',
+  completed_positive: 'Completada · positiva',
+}
+
+function initials(name: string): string {
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0])
+    .join('')
+    .toUpperCase()
+}
+
+function outcomeLabel(session: CallSession): string {
+  if (session.outcome && OUTCOME_LABELS[session.outcome]) return OUTCOME_LABELS[session.outcome]
+  return session.status === 'abandoned' ? 'Abandonada' : 'Completada'
+}
+
+function formatWhen(startedAt: string | null, tz: string): string {
+  if (!startedAt) return '—'
+  const fmt = createZonedFormatter(tz, {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  return fmt.format(new Date(startedAt)).replace(',', ' ·')
+}
+
+interface RecentActivityCardProps {
+  sessions: CallSession[]
+  loading: boolean
+  leadNames: Map<string, string>
+  clientId: string
+  tz: string
+  onNavigateLeads: () => void
+  onOpenLead: (leadId: string) => void
+}
+
+function RecentActivityCard({
+  sessions,
+  loading,
+  leadNames,
+  tz,
+  onNavigateLeads,
+  onOpenLead,
+}: RecentActivityCardProps) {
+  const recent = useMemo(() => {
+    return [...sessions].sort((a, b) => (b.started_at ?? '').localeCompare(a.started_at ?? '')).slice(0, 5)
+  }, [sessions])
 
   return (
-    <div className="bg-paper border border-line rounded-lg shadow-md p-6">
-      <p className="font-mono text-xs font-medium uppercase tracking-[0.20em] text-ink-3 mb-4">
-        Agent Status
-      </p>
-
-      {isLoading && (
-        <div className="space-y-2">
-          <div className="h-12 bg-mist rounded-md animate-pulse" />
-          <div className="h-12 bg-mist rounded-md animate-pulse" />
+    <section className="card">
+      <div className="card-h">
+        <div>
+          <h3>Actividad reciente</h3>
+          <p>Últimas llamadas de tus agentes</p>
         </div>
-      )}
-
-      {!isLoading && (!agents || agents.length === 0) && (
-        <p className="text-sm text-ink-3">No agents configured.</p>
-      )}
-
-      {!isLoading && agents && agents.length > 0 && (
-        <div className="space-y-2">
-          {agents.map((agent) => (
-            <div
-              key={agent.agent_id}
-              className="flex items-center gap-3 bg-pearl rounded-md px-3 py-2.5 border border-line"
-            >
-              {/* Live indicator */}
-              {agent.is_active && agent.is_conversation_ready ? (
-                <LiveIndicator size="sm" className="flex-shrink-0" />
-              ) : (
+        <div className="r">
+          <button type="button" className="btn sm quiet" onClick={onNavigateLeads}>
+            Ver leads
+            <Icon name="arrowR" size={14} />
+          </button>
+        </div>
+      </div>
+      <div className="rows">
+        {loading && <div className="empty">Cargando actividad reciente…</div>}
+        {!loading && recent.length === 0 && <div className="empty">Todavía no hay llamadas.</div>}
+        {!loading &&
+          recent.map((session) => {
+            const leadName = leadNames.get(session.lead_id) ?? session.lead_id
+            return (
+              <div key={session.id} className="row click" onClick={() => onOpenLead(session.lead_id)}>
+                <span className="avatar">{initials(leadName)}</span>
+                <div className="t">
+                  <b>{leadName}</b>
+                  <span>{outcomeLabel(session)}</span>
+                </div>
+                <span className="muted num" style={{ fontSize: 12.5, width: 110, textAlign: 'right' }}>
+                  {formatWhen(session.started_at, tz)}
+                </span>
+                <span className="mono muted num" style={{ fontSize: 12, width: 40, textAlign: 'right' }}>
+                  {session.duration_seconds != null ? formatDuration(session.duration_seconds) : '—'}
+                </span>
                 <span
-                  className={[
-                    'w-2.5 h-2.5 rounded-full flex-shrink-0',
-                    agent.is_active ? 'bg-amber-400' : 'bg-ink-4',
-                  ].join(' ')}
-                  title={agent.is_active ? 'Active but not ready' : 'Inactive'}
-                />
-              )}
-              {/* Agent info */}
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-ink truncate">{agent.name}</p>
-                <p className="text-[11px] font-mono text-ink-3 truncate">{agent.slug}</p>
+                  style={{
+                    width: 96,
+                    display: 'flex',
+                    justifyContent: 'flex-end',
+                  }}
+                >
+                  <CallStatus status={session.status} />
+                </span>
               </div>
-              {/* Status label */}
-              <span
-                className={[
-                  'text-[9px] font-mono font-semibold uppercase tracking-[0.15em] px-2 py-0.5 rounded-full border',
-                  agent.is_active && agent.is_conversation_ready
-                    ? 'text-teal bg-teal-faint border-teal-line'
-                    : agent.is_active
-                      ? 'text-amber-600 bg-amber-50 border-amber-200'
-                      : 'text-ink-4 bg-mist border-line',
-                ].join(' ')}
-              >
-                {agent.is_active && agent.is_conversation_ready
-                  ? 'Live'
-                  : agent.is_active
-                    ? 'Setup'
-                    : 'Inactive'}
+            )
+          })}
+      </div>
+    </section>
+  )
+}
+
+function CallStatus({ status }: { status: CallSession['status'] }) {
+  return status === 'abandoned' ? (
+    <span className="tag ghost">Abandonada</span>
+  ) : (
+    <span className="tag teal">Completada</span>
+  )
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// AgentsCard — right rail
+// ──────────────────────────────────────────────────────────────────────────────
+
+function AgentsCard({ agents, loading }: { agents: Agent[]; loading: boolean }) {
+  return (
+    <section className="card">
+      <div className="card-h">
+        <div>
+          <h3>Agentes</h3>
+        </div>
+      </div>
+      <div className="rows">
+        {loading && <div className="empty">Cargando agentes…</div>}
+        {!loading && agents.length === 0 && <div className="empty">Sin agentes configurados.</div>}
+        {!loading &&
+          agents.map((agent) => {
+            const isLive = agent.is_active && agent.is_conversation_ready
+            return (
+              <div key={agent.agent_id} className="row">
+                <span
+                  className="avatar"
+                  style={
+                    isLive
+                      ? {
+                          background: 'var(--qd-teal-faint)',
+                          color: 'var(--qd-teal)',
+                        }
+                      : undefined
+                  }
+                >
+                  {agent.name[0]}
+                </span>
+                <div className="t">
+                  <b>
+                    {agent.name}{' '}
+                    <span className="mono muted" style={{ fontSize: 11, fontWeight: 400 }}>
+                      {agent.slug}
+                    </span>
+                  </b>
+                </div>
+                {isLive ? (
+                  <span className="tag teal">
+                    <i className="dot live" style={{ boxShadow: 'none' }} />
+                    En línea
+                  </span>
+                ) : (
+                  <span className="tag ghost">Configurando</span>
+                )}
+              </div>
+            )
+          })}
+      </div>
+    </section>
+  )
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// ConsumptionCard — right rail
+// ──────────────────────────────────────────────────────────────────────────────
+
+function ConsumptionCard({ data, period }: { data: CallMetricsResponse | null; period: Period }) {
+  return (
+    <section className="card">
+      <div className="card-h">
+        <div>
+          <h3>Consumo</h3>
+          <p>{periodSubLabel(period)}</p>
+        </div>
+      </div>
+      <div className="card-b" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            justifyContent: 'space-between',
+          }}
+        >
+          <span className="muted">Minutos facturables</span>
+          <span style={{ font: '500 22px/1 var(--qd-F)' }} className="num">
+            {data?.total_billable_minutes ?? 0} min
+          </span>
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            justifyContent: 'space-between',
+          }}
+        >
+          <span className="muted">Tiempo en conversación</span>
+          <span className="mono num">{formatDuration(data?.total_duration_seconds ?? 0)}</span>
+        </div>
+        <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+          Cada llamada se factura redondeando al minuto siguiente.
+        </p>
+      </div>
+    </section>
+  )
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// IntegrationsCard — right rail
+// ──────────────────────────────────────────────────────────────────────────────
+
+function providerLabel(provider: string): string {
+  return provider.charAt(0).toUpperCase() + provider.slice(1)
+}
+
+function IntegrationsCard({
+  integrations,
+  loading,
+  onManage,
+}: {
+  integrations: IntegrationConfig[]
+  loading: boolean
+  onManage: () => void
+}) {
+  return (
+    <section className="card">
+      <div className="card-h">
+        <div>
+          <h3>Integraciones</h3>
+        </div>
+        <div className="r">
+          <button type="button" className="btn sm quiet" onClick={onManage}>
+            Gestionar
+          </button>
+        </div>
+      </div>
+      {loading && <div className="empty">Cargando integraciones…</div>}
+      {!loading && integrations.length === 0 && <div className="empty">Sin integraciones conectadas.</div>}
+      {!loading &&
+        integrations.map((integration) => (
+          <div className="row" key={integration.provider}>
+            <span className="avatar" style={{ borderRadius: 8, font: '600 11px/1 var(--qd-M)' }}>
+              {integration.provider.slice(0, 2).toUpperCase()}
+            </span>
+            <div className="t">
+              <b>{providerLabel(integration.provider)}</b>
+              <span className="mono" style={{ fontSize: 11.5 }}>
+                {integration.table_id}
               </span>
             </div>
-          ))}
-        </div>
-      )}
-    </div>
+            {integration.connected ? (
+              <span className="tag teal">Conectado</span>
+            ) : (
+              <span className="tag ghost">Desconectado</span>
+            )}
+          </div>
+        ))}
+    </section>
   )
 }

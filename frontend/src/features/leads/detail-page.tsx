@@ -1,42 +1,57 @@
 /**
- * LeadDetailPage — Phase A: Enriched Lead Intelligence View (UI Clarity Update)
+ * LeadDetailPage (design: screens-lead.jsx `Lead`)
  *
- * Operator/debug inspection view showing exactly what Qora stores and what
- * the agent will receive on the next call. Data-faithful, not decorative.
+ * Header (avatar, name, status, phone, can-call, updated) + "Copiar link" +
+ * "Llamar ahora" (real trigger, same CallNowCell as the table) + KPI strip +
+ * tabs (Memoria / Cotización / Registro / CRM / Próxima llamada) + right rail
+ * call timeline that opens the real CallDrawer.
  *
- * Layout: Two-column on md+ screens (responsive, single column on narrow)
- *   Left column (main):  Lead Record · Quote Readiness Fields · Qora Memory · Client CRM/Airtable
- *   Right column (side): Call History · Next-Call Context Preview
- *
- * Sections:
- *   A) Lead record — base stored fields
- *   B) Quote readiness fields — required fields for quoting + separate CRM-provided context
- *   C) Qora memory — profile facts (parsed, structured) + interest history
- *   D) Call history — sessions with per-call analysis (right column)
- *   E) CRM / Airtable mapping — external IDs and field mapping metadata
- *   F) Next-call context preview — literal blocks the agent will receive (right column)
+ * Every capability of the previous 1116-line page is preserved — mapped here:
+ *   Lead record            → Registro tab
+ *   Quote readiness fields  → Cotización tab
+ *   Qora memory / rollups   → Memoria tab
+ *   CRM / Airtable mapping  → CRM tab
+ *   Call history            → right rail timeline + CallDrawer
+ *   Next-call context prev. → Próxima llamada tab
  */
 
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router'
-import { useLead, useCallSessions, useLeadContextPreview, useIntegrations, useLeadDimensionRollups } from '@/api/hooks'
-import { Badge } from '@/design/components/badge'
-import type { LeadStatus, QuoteField, LeadContextPreview, DetectedInterestRollup, ServiceIssueRollup } from '@/api/types'
+import {
+  useLead,
+  useCallSessions,
+  useLeadContextPreview,
+  useIntegrations,
+  useLeadDimensionRollups,
+} from '@/api/hooks'
+import type {
+  LeadStatus,
+  QuoteField,
+  LeadContextPreview,
+  DetectedInterestRollup,
+  ServiceIssueRollup,
+  CallSession,
+} from '@/api/types'
 import { resolveLabel } from '@/config/dimension-labels'
 import { parseUTC } from '@/lib/parse-utc'
+import { Icon } from '@/design/components'
 import { CallHistoryList } from './call-history-list'
+import { CallDrawer } from './call-drawer'
+import { CallNowCell } from './call-now-cell'
+import { LeadStatusTag, initials } from './lead-table'
+
+const REALTIME_INTERVAL_MS = 15_000
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Pure helpers
 // ──────────────────────────────────────────────────────────────────────────────
 
+const DATE_FMT = new Intl.DateTimeFormat('es-AR', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
+
 function formatDate(isoOrNull: string | null | undefined): string {
   if (!isoOrNull) return '—'
   try {
-    return parseUTC(isoOrNull).toLocaleString('en-US', {
-      year: 'numeric', month: 'short', day: 'numeric',
-      hour: '2-digit', minute: '2-digit',
-    })
+    return DATE_FMT.format(parseUTC(isoOrNull))
   } catch {
     return isoOrNull
   }
@@ -46,27 +61,13 @@ function formatCustomFieldKey(key: string): string {
   return key.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
-/**
- * Attempt to parse a profile fact value as a structured JSON object.
- * Backend stores: {"category": "...", "fact": "...", "evidence": "...", "confidence": "..."}
- * Returns null on any parse failure — callers fall back to raw string display.
- */
-function parseProfileFact(raw: string): {
-  category: string
-  fact: string
-  evidence: string
-  confidence: string
-} | null {
+function parseProfileFact(raw: string): { category: string; fact: string; evidence: string; confidence: string } | null {
   if (!raw || typeof raw !== 'string') return null
   const trimmed = raw.trim()
   if (!trimmed.startsWith('{')) return null
   try {
     const parsed = JSON.parse(trimmed)
-    if (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      typeof parsed.fact === 'string'
-    ) {
+    if (typeof parsed === 'object' && parsed !== null && typeof parsed.fact === 'string') {
       return {
         category: String(parsed.category ?? ''),
         fact: String(parsed.fact ?? ''),
@@ -80,14 +81,6 @@ function parseProfileFact(raw: string): {
   }
 }
 
-/**
- * Location-like heuristic: returns true when a profile fact value looks like
- * a specific neighbourhood, city, or barrio reference.
- *
- * Heuristic: matches known Argentine location keywords or short proper-noun
- * phrases that end with common barrio-style suffixes. Deliberately conservative
- * — false negatives are safe; false positives only show a soft warning.
- */
 const LOCATION_LIKE_PATTERNS = [
   /\b(barrio|zona|partido|localidad|municipio|provincia|ciudad|capital|gran buenos aires|caba|gba)\b/i,
   /\b(villa|palermo|belgrano|caballito|flores|almagro|recoleta|san telmo|bernal|quilmes|tigre|san isidro|olivos|vicente l[oó]pez|mart[ií]nez|nu[ñn]ez|colegiales|urquiza|devoto|boedo)\b/i,
@@ -97,280 +90,144 @@ function looksLikeLocation(text: string): boolean {
   return LOCATION_LIKE_PATTERNS.some((re) => re.test(text))
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Section wrapper — collapsible
-// ──────────────────────────────────────────────────────────────────────────────
+const CONF_LEVEL: Record<string, number> = { low: 1, medium: 2, high: 3 }
 
-interface SectionProps extends React.HTMLAttributes<HTMLDivElement> {
-  title: string
-  subtitle?: string
-  defaultOpen?: boolean
-  badge?: React.ReactNode
-  children: React.ReactNode
-}
-
-function Section({ title, subtitle, defaultOpen = true, badge, children, className, ...rest }: SectionProps) {
-  const [open, setOpen] = useState(defaultOpen)
+function Spark({ values }: { values: number[] }) {
+  if (values.length < 2) return null
+  const w = 84
+  const h = 26
+  const max = Math.max(50, ...values)
+  const pts = values.map((v, i) => [(i / (values.length - 1)) * (w - 6) + 3, h - 3 - (v / max) * (h - 6)])
   return (
-    <div
-      className={['bg-paper border border-line rounded-lg overflow-hidden', className].filter(Boolean).join(' ')}
-      {...rest}
-    >
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-pearl/60 transition-colors"
-      >
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="font-medium text-sm text-ink">{title}</span>
-              {badge}
-            </div>
-            {subtitle && (
-              <p className="text-xs text-ink-3 mt-0.5 truncate">{subtitle}</p>
-            )}
-          </div>
-        </div>
-        <span className="text-ink-4 text-xs ml-4 shrink-0">{open ? '▲' : '▼'}</span>
-      </button>
-      {open && (
-        <div className="border-t border-line px-5 py-4">
-          {children}
-        </div>
-      )}
-    </div>
+    <svg width={w} height={h} style={{ overflow: 'visible' }}>
+      <polyline points={pts.map((p) => p.join(',')).join(' ')} fill="none" stroke="var(--qd-ink-4)" strokeWidth={1.5} strokeLinejoin="round" />
+      {pts.map((p, i) => (
+        <circle key={i} cx={p[0]} cy={p[1]} r={2.6} fill={i === pts.length - 1 ? 'var(--qd-ink)' : 'var(--qd-surface)'} stroke="var(--qd-ink-3)" strokeWidth={1.2} />
+      ))}
+    </svg>
   )
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Field grid row — label + value
+// Field grid row (Registro tab)
 // ──────────────────────────────────────────────────────────────────────────────
 
-function FieldRow({ label, value, mono = false }: { label: string; value: React.ReactNode; mono?: boolean }) {
+function FieldRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex items-baseline gap-3 py-1.5 border-b border-line last:border-0">
-      <dt className="text-xs text-ink-3 w-36 shrink-0 uppercase tracking-wide">{label}</dt>
-      <dd className={['text-sm text-ink flex-1 min-w-0', mono ? 'font-mono' : ''].filter(Boolean).join(' ')}>
-        {value ?? <span className="text-ink-4">—</span>}
-      </dd>
-    </div>
+    <>
+      <div className="k">{label}</div>
+      <div>{value ?? <span className="muted">—</span>}</div>
+    </>
   )
 }
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Empty state
-// ──────────────────────────────────────────────────────────────────────────────
 
 function Empty({ message }: { message: string }) {
+  return <p className="muted" style={{ fontSize: 13 }}>{message}</p>
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Registro tab — base lead record
+// ──────────────────────────────────────────────────────────────────────────────
+
+function RegistroTab({ lead }: { lead: NonNullable<ReturnType<typeof useLead>['data']> }) {
   return (
-    <p className="text-sm text-ink-3 py-2 px-1">{message}</p>
+    <section className="card">
+      <div className="card-h"><div><h3>Registro</h3><p>Campos base guardados en Qora</p></div></div>
+      <div className="card-b kv">
+        <FieldRow label="ID" value={<span className="mono" style={{ fontSize: 12.5, wordBreak: 'break-all' }}>{lead.id}</span>} />
+        <FieldRow label="Nombre" value={lead.name} />
+        <FieldRow label="Teléfono" value={<span className="mono">{lead.phone}</span>} />
+        <FieldRow label="Email" value={lead.email ?? undefined} />
+        <FieldRow label="Estado" value={<LeadStatusTag status={lead.status as LeadStatus} />} />
+        <FieldRow label="Llamadas" value={<span className="num">{lead.call_count}</span>} />
+        <FieldRow label="Última llamada" value={lead.last_called_at ? formatDate(lead.last_called_at) : 'Nunca'} />
+        <FieldRow label="Próxima acción" value={lead.next_action ?? undefined} />
+        <FieldRow label="Fecha próx. acción" value={lead.next_action_at ? formatDate(lead.next_action_at) : undefined} />
+        <FieldRow label="No llamar" value={lead.do_not_call ? 'Sí' : 'No'} />
+        <FieldRow label="Notas" value={lead.notes ?? undefined} />
+        <FieldRow label="Nivel de interés" value={lead.interest_level != null ? `${lead.interest_level}%` : undefined} />
+        <FieldRow label="Creado" value={formatDate(lead.created_at)} />
+        <FieldRow label="Actualizado" value={formatDate(lead.updated_at)} />
+      </div>
+    </section>
   )
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Section A: Base lead record
+// Cotización tab — Quote Readiness Fields (real quote_fields, no fake save)
 // ──────────────────────────────────────────────────────────────────────────────
-
-function LeadRecordSection({ lead }: { lead: ReturnType<typeof useLead>['data'] & object }) {
-  return (
-    <Section title="Lead Record" subtitle="Stored base fields">
-      <dl className="divide-y divide-line">
-        <FieldRow label="ID" value={lead.id} mono />
-        <FieldRow label="Name" value={lead.name} />
-        <FieldRow label="Phone" value={lead.phone} mono />
-        <FieldRow label="Email" value={lead.email ?? <span className="text-ink-4">not stored</span>} />
-        <FieldRow label="Status" value={<Badge status={lead.status as LeadStatus}>{lead.status.replace('_', ' ')}</Badge>} />
-        <FieldRow label="Call count" value={lead.call_count} />
-        <FieldRow label="Last called" value={formatDate(lead.last_called_at)} />
-        <FieldRow label="Next action" value={lead.next_action ?? <span className="text-ink-4">none</span>} />
-        <FieldRow label="Next action at" value={formatDate(lead.next_action_at)} />
-        <FieldRow label="Do not call" value={
-          lead.do_not_call
-            ? <span className="text-coral font-medium text-xs uppercase tracking-wide">Yes</span>
-            : <span className="text-ink-4">No</span>
-        } />
-        <FieldRow label="Notes" value={lead.notes ?? <span className="text-ink-4">none</span>} />
-        <FieldRow label="Interest level" value={lead.interest_level != null ? `${lead.interest_level}%` : null} />
-        <FieldRow label="Created" value={formatDate(lead.created_at)} />
-        <FieldRow label="Updated" value={formatDate(lead.updated_at)} />
-      </dl>
-    </Section>
-  )
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Section B: Quote Readiness Fields
-//
-// Design intent:
-//   - "Quote Readiness Fields" = only what the Qora agent can/should complete.
-//     Required fields appear here with fill status.
-//   - "Additional CRM-provided data" = context that arrives FROM the CRM and
-//     is NEVER something the agent should collect or send back (e.g. current_insurance).
-//     These are known context, not targets.
-// ──────────────────────────────────────────────────────────────────────────────
-
-function QuoteReadinessSection({ lead }: { lead: NonNullable<ReturnType<typeof useLead>['data']> }) {
-  const quoteFields = lead.quote_fields ?? []
-  const customFields = lead.custom_fields ?? {}
-
-  // Readiness source of truth = crm.yaml quote_ready_fields, surfaced per-field as
-  // in_quote_ready_fields. These are the only fields that count toward quoting.
-  // Everything else is additional CRM-provided context the agent must NOT collect.
-  const quoteReadyFields = quoteFields.filter(f => f.in_quote_ready_fields)
-  const crmProvidedFields = quoteFields.filter(f => !f.in_quote_ready_fields)
-
-  const hasMetadata = quoteFields.length > 0
-  const filledReady = quoteReadyFields.filter(f => f.filled).length
-  const totalReady = quoteReadyFields.length
-
-  const rawOnly = !hasMetadata && Object.keys(customFields).length > 0
-
-  const statusBadge = hasMetadata && totalReady > 0
-    ? filledReady === totalReady
-      ? <span className="text-[10px] font-mono text-teal bg-teal-faint border border-teal-line px-2 py-0.5 rounded-full">
-          {filledReady}/{totalReady} required
-        </span>
-      : <span className="text-[10px] font-mono text-coral bg-coral-faint border border-coral-line px-2 py-0.5 rounded-full">
-          {filledReady}/{totalReady} required
-        </span>
-    : undefined
-
-  return (
-    <Section
-      title="Quote Readiness Fields"
-      subtitle={
-        hasMetadata
-          ? "Fields the agent can complete for quoting"
-          : rawOnly
-          ? "Custom fields (no CRM metadata available)"
-          : "No custom fields captured yet"
-      }
-      badge={statusBadge}
-      data-testid="quote-readiness-section"
-    >
-      {hasMetadata ? (
-        <div className="space-y-4">
-          {/* Quote-ready fields — the agent's targets (from quote_ready_fields) */}
-          {quoteReadyFields.length > 0 && (
-            <div>
-              <p className="text-[10px] font-mono uppercase tracking-widest text-ink-3 mb-2">
-                Fields for Quoting
-              </p>
-              <div className="space-y-1.5">
-                {quoteReadyFields.map((field: QuoteField) => (
-                  <QuoteFieldRow key={field.field_key} field={field} />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* CRM-provided optional fields — known context, not targets */}
-          {crmProvidedFields.length > 0 && (
-            <div>
-              <div className="flex items-center gap-2 mb-2">
-                <p className="text-[10px] font-mono uppercase tracking-widest text-ink-3">
-                  Additional CRM-provided data
-                </p>
-                <span
-                  data-testid="crm-provided-tooltip"
-                  className="text-[10px] text-ink-4 border border-dashed border-line-2 px-1.5 py-0.5 rounded"
-                  title="This data arrives from the CRM as known context. The Qora agent receives it but should not attempt to collect or send it back."
-                >
-                  context only — agent does not collect these
-                </span>
-              </div>
-              <div className="space-y-1.5">
-                {crmProvidedFields.map((field: QuoteField) => (
-                  <QuoteFieldRow key={field.field_key} field={field} isCrmProvided />
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      ) : rawOnly ? (
-        <dl className="divide-y divide-line">
-          {Object.entries(customFields).map(([key, value]) => (
-            <FieldRow key={key} label={formatCustomFieldKey(key)} value={value || <span className="text-ink-4">empty</span>} mono />
-          ))}
-        </dl>
-      ) : (
-        <Empty message="No custom fields captured yet." />
-      )}
-    </Section>
-  )
-}
 
 function QuoteFieldRow({ field, isCrmProvided = false }: { field: QuoteField; isCrmProvided?: boolean }) {
-  // Inside "Fields for Quoting", readiness (in_quote_ready_fields) drives the
-  // missing-field emphasis — not the legacy write-validation `required` flag.
   const isQuoteReady = field.in_quote_ready_fields
   return (
-    <div
-      className={[
-        'flex items-center gap-3 rounded-md px-3 py-2 border',
-        isCrmProvided
-          ? 'border-line bg-mist'
-          : field.filled
-          ? 'border-line bg-paper'
-          : isQuoteReady
-          ? 'border-coral-line bg-coral-faint'
-          : 'border-line bg-mist',
-      ].join(' ')}
-    >
-      {/* Fill indicator */}
-      <div className={[
-        'w-1.5 h-1.5 rounded-full shrink-0',
-        isCrmProvided ? 'bg-ink-3' : field.filled ? 'bg-teal' : isQuoteReady ? 'bg-coral' : 'bg-ink-4',
-      ].join(' ')} />
-
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-ink">{field.label}</span>
-          {!isCrmProvided && isQuoteReady && (
-            <span className="text-[10px] font-mono text-ink-3 uppercase tracking-wide">required</span>
-          )}
-          {isCrmProvided && (
-            <span className="text-[10px] font-mono text-ink-4 uppercase tracking-wide">crm-provided</span>
-          )}
-          <span className="text-[10px] font-mono text-ink-4">{field.field_type}</span>
-        </div>
-        <div className="text-xs font-mono text-ink-3 mt-0.5">{field.field_key}</div>
+    <div className="field">
+      <div className="n">
+        <i className={'dot' + (field.filled ? ' live' : isCrmProvided ? '' : ' coral')} style={{ boxShadow: 'none' }} />
+        <b>{field.label}</b>
+        <code>{field.field_key} · {field.field_type}</code>
+        {!isCrmProvided && isQuoteReady && <span className="tag mono">Obligatorio</span>}
+        {isCrmProvided && <span className="tag ghost mono">Del CRM</span>}
       </div>
-
-      <div className="text-sm font-mono text-ink min-w-[100px] text-right">
-        {field.current_value !== null && field.current_value !== undefined
-          ? field.current_value
-          : <span className="text-ink-4 text-xs">not set</span>
-        }
+      <div className="mono" style={{ textAlign: 'right', fontSize: 13.5 }}>
+        {field.current_value ?? <span className="muted" style={{ fontSize: 12.5 }}>Sin completar</span>}
       </div>
     </div>
   )
 }
 
+function CotizacionTab({ lead }: { lead: NonNullable<ReturnType<typeof useLead>['data']> }) {
+  const quoteFields = lead.quote_fields ?? []
+  const customFields = lead.custom_fields ?? {}
+  const quoteReadyFields = quoteFields.filter((f) => f.in_quote_ready_fields)
+  const crmProvidedFields = quoteFields.filter((f) => !f.in_quote_ready_fields)
+  const hasMetadata = quoteFields.length > 0
+  const filled = quoteReadyFields.filter((f) => f.filled).length
+  const total = quoteReadyFields.length
+  const rawOnly = !hasMetadata && Object.keys(customFields).length > 0
+
+  return (
+    <section className="card" data-testid="quote-readiness-section">
+      <div className="card-h">
+        <div>
+          <h3>Datos para cotizar</h3>
+          <p>El agente intenta completarlos en cada llamada. Datos de solo lectura — no hay endpoint de edición.</p>
+        </div>
+        {total > 0 && <div className="r mono num" style={{ fontSize: 12 }}>{filled}/{total}</div>}
+      </div>
+      {hasMetadata ? (
+        <div>
+          {quoteReadyFields.map((f) => <QuoteFieldRow key={f.field_key} field={f} />)}
+          {crmProvidedFields.length > 0 && (
+            <div style={{ borderTop: '1px solid var(--qd-line)', padding: '16px 20px 4px' }}>
+              <div className="sec-l" data-testid="crm-provided-tooltip" title="Contexto del CRM — el agente no lo pregunta ni lo envía de vuelta">
+                Del CRM · solo contexto, el agente no lo pregunta
+              </div>
+            </div>
+          )}
+          {crmProvidedFields.map((f) => <QuoteFieldRow key={f.field_key} field={f} isCrmProvided />)}
+        </div>
+      ) : rawOnly ? (
+        <div className="card-b kv">
+          {Object.entries(customFields).map(([key, value]) => (
+            <FieldRow key={key} label={formatCustomFieldKey(key)} value={value || <span className="muted">vacío</span>} />
+          ))}
+        </div>
+      ) : (
+        <div className="card-b"><Empty message="Todavía no hay campos personalizados." /></div>
+      )}
+    </section>
+  )
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
-// Section C: Qora memory — profile facts (structured parsing) + interest history
+// Memoria tab — profile facts + rollups (from useLeadDimensionRollups)
 // ──────────────────────────────────────────────────────────────────────────────
 
-/**
- * Detect mismatch: a lifestyle/profile fact looks like a location but the
- * structured `zona` quote field is not set. This is a soft heuristic — only
- * show when we can be reasonably confident. Don't autocorrect.
- */
-function ZonaMismatchWarning({
-  profileFacts,
-  quoteFields,
-}: {
-  profileFacts: Record<string, string[]>
-  quoteFields: QuoteField[]
-}) {
-  const zonaField = quoteFields.find(f => f.field_key === 'zona')
-  // Only meaningful when this client actually configures a `zona` quote field.
-  // If there's no zona field, there's nothing to be "not set" — no warning.
+function ZonaMismatchWarning({ profileFacts, quoteFields }: { profileFacts: Record<string, string[]>; quoteFields: QuoteField[] }) {
+  const zonaField = quoteFields.find((f) => f.field_key === 'zona')
   if (!zonaField) return null
-  if (zonaField.filled) return null // zona already set — no mismatch
+  if (zonaField.filled) return null
 
-  // Look for location-like facts in profile namespace
   let locationFact: string | null = null
   for (const [namespace, facts] of Object.entries(profileFacts)) {
     if (namespace.toLowerCase().includes('profile') || namespace.toLowerCase().includes('lifestyle')) {
@@ -389,197 +246,89 @@ function ZonaMismatchWarning({
   if (!locationFact) return null
 
   return (
-    <div
-      data-testid="zona-mismatch-warning"
-      className="flex items-start gap-2.5 rounded-md border border-amber-200/70 bg-amber-50/60 px-3 py-2.5 text-xs mt-3"
-    >
-      <span className="text-amber-500 shrink-0 mt-0.5">⚠</span>
-      <div>
-        <p className="text-ink font-medium">Data consistency: location in memory, zona not structured</p>
-        <p className="text-ink-3 mt-0.5">
-          Profile memory contains "{locationFact}" which looks like a location, but the{' '}
-          <span className="font-mono">zona</span> structured field has no value.
-          This is a data-capture gap — the correct fix is to update the lead's structured data
-          via post-call corrections, not an agent behavior issue.
+    <div data-testid="zona-mismatch-warning" className="alert">
+      <Icon name="alert" size={18} />
+      <div style={{ flex: 1 }}>
+        <b>La zona está en la memoria pero no en los datos</b>
+        <p>
+          La memoria dice "{locationFact}", pero el campo estructurado <span className="mono">zona</span> está vacío.
+          Es un hueco de captura de datos — corregilo con correcciones post-llamada, no es un error del agente.
         </p>
       </div>
     </div>
   )
 }
 
-/**
- * Render a single profile fact row — structured if parseable, raw string fallback.
- * Source labeling is at group header level (MemorySection), not per item.
- */
 function ProfileFactItem({ raw }: { raw: string }) {
   const parsed = parseProfileFact(raw)
 
   if (!parsed) {
-    // Raw string fallback
     return (
-      <div
-        data-testid="profile-fact-item"
-        className="rounded-md border border-line bg-pearl px-3 py-2.5 space-y-1.5"
-      >
-        <p className="text-xs text-ink font-mono break-words">{raw}</p>
+      <div data-testid="profile-fact-item" className="row" style={{ alignItems: 'flex-start' }}>
+        <p className="mono" style={{ fontSize: 12.5 }}>{raw}</p>
       </div>
     )
   }
 
-  const confidenceColor =
-    parsed.confidence === 'high' ? 'text-teal' :
-    parsed.confidence === 'medium' ? 'text-ink-2' :
-    'text-ink-4'
-
   return (
-    <div
-      data-testid="profile-fact-item"
-      className="rounded-md border border-line bg-pearl px-3 py-2.5 space-y-1.5"
-    >
-      {/* Row 1: category + confidence (no per-item source badge — source is at group header) */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {parsed.category && (
-          <span
-            data-testid="fact-category"
-            className="text-[10px] font-mono text-ink-2 px-1.5 py-0.5 rounded bg-mist border border-line uppercase tracking-wide"
-          >
-            {parsed.category}
-          </span>
-        )}
+    <div data-testid="profile-fact-item" className="row" style={{ alignItems: 'flex-start', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        {parsed.category && <span data-testid="fact-category" className="tag mono">{parsed.category}</span>}
         {parsed.confidence && (
-          <span
-            data-testid="fact-confidence"
-            className={['text-[10px] font-mono uppercase tracking-wide', confidenceColor].join(' ')}
-          >
-            {parsed.confidence} confidence
+          <span data-testid="fact-confidence" className="conf" title={`Confianza ${parsed.confidence}`}>
+            {[1, 2, 3].map((i) => (
+              <i key={i} className={i <= (CONF_LEVEL[parsed.confidence] ?? 0) ? 'on' : ''} />
+            ))}
           </span>
         )}
       </div>
-
-      {/* Row 2: Fact text */}
-      <p data-testid="fact-text" className="text-sm text-ink">{parsed.fact}</p>
-
-      {/* Row 3: Evidence (quote from transcript) */}
-      {parsed.evidence && (
-        <p
-          data-testid="fact-evidence"
-          className="text-xs text-ink-3 italic border-l-2 border-line-2 pl-2 break-words"
-        >
-          "{parsed.evidence}"
-        </p>
-      )}
+      <div data-testid="fact-text">{parsed.fact}</div>
+      {parsed.evidence && <div className="quote">"{parsed.evidence}"</div>}
     </div>
   )
 }
-
-// ──────────────────────────────────────────────────────────────────────────────
-// DetectedInterestsRanking — table: interest, #, category
-// Spec: cubora-accumulated-dimension-rankings
-// ──────────────────────────────────────────────────────────────────────────────
 
 export function DetectedInterestsRanking({ interests }: { interests: DetectedInterestRollup[] }) {
-  if (interests.length === 0) {
-    return <Empty message="No detected interests across calls yet." />
-  }
-
+  if (interests.length === 0) return <Empty message="No detected interests across calls yet." />
   return (
-    <div>
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="text-ink-3 uppercase tracking-wide border-b border-line">
-            <th className="text-left pb-1.5 font-medium">Interest</th>
-            <th className="text-right pb-1.5 font-medium w-10">#</th>
-            <th className="text-left pb-1.5 font-medium pl-3">Category</th>
+    <table className="tbl">
+      <thead><tr><th>Interest</th><th className="r">#</th><th>Category</th></tr></thead>
+      <tbody>
+        {interests.map((row) => (
+          <tr key={row.interest} data-testid="interest-ranking-row">
+            <td>{resolveLabel(row.interest, 'es')}</td>
+            <td className="r num">{row.count}</td>
+            <td><span className="tag mono">{row.category}</span></td>
           </tr>
-        </thead>
-        <tbody>
-          {interests.map((row) => (
-            <tr
-              key={row.interest}
-              data-testid="interest-ranking-row"
-              className="border-b border-line last:border-0"
-            >
-              <td className="py-1.5 font-mono text-ink-2">{resolveLabel(row.interest, 'es')}</td>
-              <td className="py-1.5 text-right font-mono font-medium text-ink">{row.count}</td>
-              <td className="py-1.5 pl-3">
-                <span className="text-[10px] font-mono uppercase tracking-wide text-ink-3 px-1.5 py-0.5 rounded bg-mist border border-line">
-                  {row.category}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+        ))}
+      </tbody>
+    </table>
   )
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// ServiceIssuesRanking — table: issue, #, strength
-// Spec: cubora-accumulated-dimension-rankings
-// ──────────────────────────────────────────────────────────────────────────────
-
-const STRENGTH_STYLES: Record<string, string> = {
-  high: 'text-coral bg-coral-faint border-coral-line',
-  medium: 'text-amber-600 bg-amber-50 border-amber-200',
-  low: 'text-ink-3 bg-mist border-line',
 }
 
 export function ServiceIssuesRanking({ issues }: { issues: ServiceIssueRollup[] }) {
-  if (issues.length === 0) {
-    return <Empty message="No service issues recorded across calls yet." />
-  }
-
+  if (issues.length === 0) return <Empty message="No service issues recorded across calls yet." />
   return (
-    <div>
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="text-ink-3 uppercase tracking-wide border-b border-line">
-            <th className="text-left pb-1.5 font-medium">Issue</th>
-            <th className="text-right pb-1.5 font-medium w-10">#</th>
-            <th className="text-left pb-1.5 font-medium pl-3">Strength</th>
+    <table className="tbl">
+      <thead><tr><th>Issue</th><th className="r">#</th><th>Strength</th></tr></thead>
+      <tbody>
+        {issues.map((row) => (
+          <tr key={row.issue} data-testid="issue-ranking-row">
+            <td>{resolveLabel(row.issue, 'es')}</td>
+            <td className="r num">{row.count}</td>
+            <td><span className="tag mono">{row.strength}</span></td>
           </tr>
-        </thead>
-        <tbody>
-          {issues.map((row) => (
-            <tr
-              key={row.issue}
-              data-testid="issue-ranking-row"
-              className="border-b border-line last:border-0"
-            >
-              <td className="py-1.5 font-mono text-ink-2">{resolveLabel(row.issue, 'es')}</td>
-              <td className="py-1.5 text-right font-mono font-medium text-ink">{row.count}</td>
-              <td className="py-1.5 pl-3">
-                <span
-                  className={[
-                    'text-[10px] font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border',
-                    STRENGTH_STYLES[row.strength] ?? STRENGTH_STYLES.low,
-                  ].join(' ')}
-                >
-                  {row.strength}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+        ))}
+      </tbody>
+    </table>
   )
 }
 
-function MemorySection({
-  lead,
-  clientId,
-}: {
-  lead: NonNullable<ReturnType<typeof useLead>['data']>
-  clientId: string
-}) {
+function MemoriaTab({ lead, clientId }: { lead: NonNullable<ReturnType<typeof useLead>['data']>; clientId: string }) {
   const profileFacts = lead.profile_facts ?? {}
   const interestHistory = lead.interest_history ?? []
   const quoteFields = lead.quote_fields ?? []
   const hasProfile = Object.keys(profileFacts).length > 0
-  const hasInterest = interestHistory.length > 0
-  const hasSummary = Boolean(lead.summary_last_call)
 
   const {
     data: rollups,
@@ -587,530 +336,366 @@ function MemorySection({
     isSuccess: rollupsSuccess,
     isPending: rollupsPending,
     isFetching: rollupsFetching,
-  } = useLeadDimensionRollups(clientId, lead.id)
-  // While the query has not yet succeeded (initial load OR a retry after a
-  // transient failure where isError is still false), we must NOT render empty
-  // rankings — that would falsely claim "No detected interests…". Show a
-  // lightweight loading state until the query succeeds or errors.
+  } = useLeadDimensionRollups(clientId, lead.id, { refetchInterval: REALTIME_INTERVAL_MS })
   const rollupsLoading = !rollupsSuccess && !rollupsError && (rollupsPending || rollupsFetching)
 
   return (
-    <Section
-      title="Accumulated Facts"
-      subtitle="Profile, interests, service issues, and history from calls"
-      defaultOpen={hasProfile || hasInterest || hasSummary}
-    >
-      {/* Mismatch warning */}
+    <div className="stack">
       <ZonaMismatchWarning profileFacts={profileFacts} quoteFields={quoteFields} />
 
-      {/* Sub-section: Profile — profile facts by namespace (structured rendering)
-          Source is stated once at group header, not repeated per item. */}
-      <div className="mt-3">
-        <div className="flex items-center gap-2 mb-1">
-          <p className="text-xs text-ink-3 uppercase tracking-wide">Profile</p>
-          {/* Single group-level source label — not repeated per item */}
-          <span
-            data-testid="fact-dimension-source"
-            className="text-[10px] text-ink-4 font-mono"
-            title="All facts below come from the post-call analysis pipeline, stored under profile_facts"
-          >
-            source: post-call analysis · profile_facts
-          </span>
-        </div>
-        {hasProfile ? (
-          <div className="space-y-3">
-            {Object.entries(profileFacts).map(([namespace, facts]) => (
-              <div key={namespace}>
-                <p className="text-[10px] font-mono uppercase tracking-widest text-ink-3 mb-1.5">
-                  {namespace}
-                </p>
-                <div className="space-y-1.5">
-                  {(Array.isArray(facts) ? facts : [facts]).map((fact: unknown, i: number) => (
-                    <ProfileFactItem key={i} raw={String(fact)} />
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <Empty message="No profile facts stored yet." />
-        )}
-      </div>
-
-      {/* Rankings load failure — a failed /dimension-rollups request must NOT be
-          rendered as empty rankings. Surface one clear, non-noisy error instead
-          of repeating an empty-state message per ranking. Successful empty
-          arrays still render their normal empty states below. */}
-      {rollupsError ? (
-        <div className="mt-4">
-          <p
-            data-testid="rollups-error"
-            className="text-sm text-coral"
-          >
-            Failed to load accumulated rankings. Interests, service issues, objections, and pain points are unavailable right now.
-          </p>
-        </div>
-      ) : rollupsLoading ? (
-        <div className="mt-4">
-          <p
-            data-testid="rollups-loading"
-            className="text-sm text-ink-3 animate-pulse"
-          >
-            Loading accumulated rankings…
-          </p>
-        </div>
-      ) : (
-        <>
-          {/* Sub-section: Detected Interests Ranking */}
-          <div className="mt-4">
-            <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Detected Interests</p>
-            <DetectedInterestsRanking interests={rollups?.detected_interests ?? []} />
-          </div>
-
-          {/* Sub-section: Service Issues Ranking */}
-          <div className="mt-4">
-            <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Service Issues</p>
-            <ServiceIssuesRanking issues={rollups?.service_issues ?? []} />
-          </div>
-        </>
+      {!lead.summary_last_call && (
+        <section className="card"><div className="empty">Qora todavía no habló con {lead.name.split(' ')[0]}. La memoria se arma después de la primera llamada.</div></section>
       )}
-
-      {/* Sub-section: Objections Rollup (from call_analyses, not extracted_facts) */}
-      {!rollupsError && rollups && rollups.objections.length > 0 && (
-        <div className="mt-4">
-          <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Objections by Category</p>
-          <div className="space-y-1">
-            {rollups.objections.map(({ category, count }) => (
-              <div
-                key={category}
-                data-testid="objection-rollup-row"
-                className="flex items-center gap-3 rounded-md border border-line bg-pearl px-3 py-2"
-              >
-                <span className="text-xs font-mono text-ink-2 flex-1">{resolveLabel(category, 'es')}</span>
-                <span className="text-xs font-mono text-ink font-medium w-8 text-right">{count}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Sub-section: Pain Points Rollup (from call_analyses, not extracted_facts) */}
-      {!rollupsError && rollups && rollups.pain_points.length > 0 && (
-        <div className="mt-4">
-          <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Pain Points by Category</p>
-          <div className="space-y-1">
-            {rollups.pain_points.map(({ category, count }) => (
-              <div
-                key={category}
-                data-testid="pain-rollup-row"
-                className="flex items-center gap-3 rounded-md border border-line bg-pearl px-3 py-2"
-              >
-                <span className="text-xs font-mono text-ink-2 flex-1">{resolveLabel(category, 'es')}</span>
-                <span className="text-xs font-mono text-ink font-medium w-8 text-right">{count}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Sub-section: Interest history */}
-      {hasInterest && (
-        <div className="mt-4">
-          <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">Interest History</p>
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {[...interestHistory].reverse().map((entry: { interest_level: number; recorded_at: string | null }, i: number) => (
-              <div
-                key={i}
-                className="flex flex-col items-center"
-                title={entry.recorded_at ? new Date(entry.recorded_at).toLocaleString() : ''}
-              >
-                <div
-                  className="w-8 h-8 rounded-full border-2 border-line flex items-center justify-center text-[10px] font-mono font-medium"
-                  style={{
-                    background: `hsl(${entry.interest_level * 1.6}, 60%, ${90 - entry.interest_level * 0.3}%)`,
-                    color: entry.interest_level > 50 ? '#0E4E45' : '#767880',
-                    borderColor: entry.interest_level > 70 ? 'rgba(26,139,122,0.28)' : 'rgba(14,18,23,0.08)',
-                  }}
-                >
-                  {entry.interest_level}
-                </div>
-              </div>
-            ))}
-          </div>
-          <p className="text-xs text-ink-4 mt-1.5">Earliest → latest</p>
-        </div>
-      )}
-
-      {/* Last call summary */}
       {lead.summary_last_call && (
-        <div className="mt-4 rounded-md border border-line bg-pearl px-3 py-2.5">
-          <p className="text-[10px] font-mono uppercase tracking-widest text-ink-3 mb-1">Last call summary</p>
-          <p className="text-sm text-ink">{lead.summary_last_call}</p>
-        </div>
+        <section className="card card-b">
+          <span className="eyebrow">Último resumen</span>
+          <p style={{ margin: '12px 0 0', fontSize: 15, lineHeight: 1.6 }}>{lead.summary_last_call}</p>
+        </section>
       )}
-    </Section>
-  )
-}
 
-// DimensionRollupsSection and buildCategoryRollup removed.
-// Rollup data is now sourced from call_analyses via useLeadDimensionRollups hook
-// and embedded inside MemorySection (Accumulated Facts).
-// See: cubora-accumulated-dimension-rankings
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Section D: Call history (right column)
-// ──────────────────────────────────────────────────────────────────────────────
-
-function CallHistorySection({
-  sessions,
-  loading,
-  error,
-  expandedSessionId,
-  onToggle,
-}: {
-  sessions: ReturnType<typeof useCallSessions>['data']
-  loading: boolean
-  error: boolean
-  expandedSessionId: string | null
-  onToggle: (id: string) => void
-}) {
-  const count = sessions?.length ?? 0
-  const badge = count > 0
-    ? <span className="text-[10px] font-mono text-ink-3 bg-mist border border-line px-2 py-0.5 rounded-full">{count}</span>
-    : undefined
-
-  return (
-    <Section title="Call History" subtitle="Sessions with analysis" badge={badge}>
-      {loading ? (
-        <div className="py-4 text-center">
-          <span className="text-ink-3 text-sm animate-pulse">Loading calls…</span>
-        </div>
-      ) : error ? (
-        <p className="text-sm text-coral py-2">Unable to load call history. Please try again.</p>
-      ) : (
-        <CallHistoryList
-          sessions={sessions ?? []}
-          expandedSessionId={expandedSessionId}
-          onToggleSession={onToggle}
-        />
-      )}
-    </Section>
-  )
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Section E: CRM / Airtable mapping (left column)
-// ──────────────────────────────────────────────────────────────────────────────
-
-function CRMSection({
-  lead,
-  clientId,
-}: {
-  lead: NonNullable<ReturnType<typeof useLead>['data']>
-  clientId: string
-}) {
-  const { data: integrations } = useIntegrations(clientId)
-  const integration = integrations?.[0]
-
-  const hasExternalLink = Boolean(lead.external_crm_id || lead.external_lead_id)
-
-  return (
-    <Section
-      title="Client CRM / Airtable"
-      subtitle="External IDs and field mapping"
-      defaultOpen={hasExternalLink}
-    >
-      {/* External IDs */}
-      <div className="mb-4">
-        <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">External Identifiers</p>
-        <dl className="divide-y divide-line rounded-md border border-line overflow-hidden">
-          <FieldRow
-            label="External CRM ID"
-            value={
-              lead.external_crm_id
-                ? <span className="font-mono">{lead.external_crm_id}</span>
-                : <span className="text-ink-4 text-xs">not synced</span>
-            }
-          />
-          <FieldRow
-            label="External Lead ID"
-            value={
-              lead.external_lead_id != null
-                ? <span className="font-mono">{lead.external_lead_id}</span>
-                : <span className="text-ink-4 text-xs">not set</span>
-            }
-          />
-        </dl>
-        {/* Honest sync copy — no fake sync button */}
-        <p className="text-xs text-ink-4 mt-1.5">
-          No last-sync timestamp stored — only external IDs are available.
-        </p>
-      </div>
-
-      {/* Field mappings from integration config */}
-      {integration ? (
-        <div>
-          <p className="text-xs text-ink-3 uppercase tracking-wide mb-2">
-            Field Mappings — {integration.provider} ({integration.table_id})
-          </p>
-          {integration.field_mappings && integration.field_mappings.length > 0 ? (
-            <div className="space-y-1">
-              {integration.field_mappings.map((mapping) => (
-                <div
-                  key={mapping.source}
-                  className="flex items-center gap-2 text-xs rounded-md border border-line bg-pearl px-3 py-2"
-                >
-                  <span className="font-mono text-ink-2 w-32 shrink-0">{mapping.source}</span>
-                  <span className="text-ink-4 shrink-0">→</span>
-                  <span className="font-mono text-ink flex-1">{mapping.target}</span>
-                  <span className="text-ink-4 font-mono shrink-0">{mapping.type}</span>
-                  {mapping.required && (
-                    <span className="text-[10px] text-coral uppercase tracking-wide shrink-0">required</span>
-                  )}
+      <section className="card">
+        <div className="card-h"><div><h3>Perfil</h3><p>Lo que Qora aprendió del lead · análisis post-llamada</p></div></div>
+        <div className="card-b">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <span
+              data-testid="fact-dimension-source"
+              className="muted mono"
+              style={{ fontSize: 11 }}
+              title="Todos los hechos vienen del pipeline de análisis post-llamada, guardados en profile_facts"
+            >
+              source: post-call analysis · profile_facts
+            </span>
+          </div>
+          {hasProfile ? (
+            <div className="stack" style={{ gap: 12 }}>
+              {Object.entries(profileFacts).map(([namespace, facts]) => (
+                <div key={namespace}>
+                  <div className="sec-l">{namespace}</div>
+                  <div className="rows">
+                    {(Array.isArray(facts) ? facts : [facts]).map((fact, i) => <ProfileFactItem key={i} raw={String(fact)} />)}
+                  </div>
                 </div>
               ))}
             </div>
           ) : (
-            <Empty message="No field mappings configured." />
+            <Empty message="No profile facts stored yet." />
           )}
         </div>
+      </section>
+
+      {rollupsError ? (
+        <section className="card card-b"><p data-testid="rollups-error" style={{ color: 'var(--qd-coral)', margin: 0 }}>No pudimos cargar los rankings acumulados.</p></section>
+      ) : rollupsLoading ? (
+        <section className="card card-b"><p data-testid="rollups-loading" className="muted" style={{ margin: 0 }}>Cargando rankings acumulados…</p></section>
       ) : (
-        <p className="text-xs text-ink-4 mt-2">No CRM integration configured for this client.</p>
+        <>
+          <section className="card">
+            <div className="card-h"><div><h3>Intereses detectados</h3></div></div>
+            <div className="card-b">
+              <DetectedInterestsRanking interests={rollups?.detected_interests ?? []} />
+            </div>
+          </section>
+          <section className="card">
+            <div className="card-h"><div><h3>Problemas de servicio</h3></div></div>
+            <div className="card-b">
+              <ServiceIssuesRanking issues={rollups?.service_issues ?? []} />
+            </div>
+          </section>
+        </>
       )}
-    </Section>
-  )
-}
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Section F: Next-call context preview (right column)
-// ──────────────────────────────────────────────────────────────────────────────
+      {!rollupsError && rollups && rollups.objections.length > 0 && (
+        <section className="card">
+          <div className="card-h"><div><h3>Objeciones por categoría</h3></div></div>
+          <div className="card-b chips">
+            {rollups.objections.map(({ category, count }) => (
+              <span key={category} data-testid="objection-rollup-row" className="chip">{resolveLabel(category, 'es')}<b>{count}</b></span>
+            ))}
+          </div>
+        </section>
+      )}
+      {!rollupsError && rollups && rollups.pain_points.length > 0 && (
+        <section className="card">
+          <div className="card-h"><div><h3>Dolores por categoría</h3></div></div>
+          <div className="card-b chips">
+            {rollups.pain_points.map(({ category, count }) => (
+              <span key={category} data-testid="pain-rollup-row" className="chip">{resolveLabel(category, 'es')}<b>{count}</b></span>
+            ))}
+          </div>
+        </section>
+      )}
 
-function ContextBlock({ label, content }: { label: string; content: string }) {
-  return (
-    <div className="rounded-md border border-line overflow-hidden">
-      <div className="px-3 py-1.5 bg-pearl border-b border-line">
-        <span className="text-[10px] font-mono uppercase tracking-widest text-ink-3">{label}</span>
-      </div>
-      <pre className="px-3 py-2.5 text-xs font-mono text-ink whitespace-pre-wrap break-words bg-paper leading-relaxed max-h-48 overflow-y-auto">
-        {content || <span className="text-ink-4">(empty)</span>}
-      </pre>
+      {interestHistory.length > 0 && (
+        <section className="card card-b">
+          <div className="sec-l">Historial de interés</div>
+          <Spark values={interestHistory.map((e) => e.interest_level)} />
+        </section>
+      )}
     </div>
   )
 }
 
-function ContextPreviewSection({
-  clientId,
-  leadId,
-}: {
-  clientId: string
-  leadId: string
-}) {
-  const [loaded, setLoaded] = useState(false)
-  const { data, isLoading, isError } = useLeadContextPreview(clientId, leadId, loaded)
+// ──────────────────────────────────────────────────────────────────────────────
+// CRM tab
+// ──────────────────────────────────────────────────────────────────────────────
 
-  if (!loaded) {
-    return (
-      <Section title="Next-Call Context Preview" subtitle="Literal context blocks the agent will receive" defaultOpen={false}>
-        <button
-          type="button"
-          onClick={() => setLoaded(true)}
-          className="text-sm text-teal hover:underline"
-        >
-          Load context preview →
-        </button>
-      </Section>
-    )
-  }
-
-  const preview = data as LeadContextPreview | undefined
+function CRMTab({ lead, clientId }: { lead: NonNullable<ReturnType<typeof useLead>['data']>; clientId: string }) {
+  const { data: integrations } = useIntegrations(clientId)
+  const integration = integrations?.[0]
 
   return (
-    <Section
-      title="Next-Call Context Preview"
-      subtitle="Literal context blocks the agent will receive"
-      defaultOpen
-    >
-      {isLoading && (
-        <span className="text-sm text-ink-3 animate-pulse">Assembling context…</span>
-      )}
-
-      {isError && (
-        <p className="text-sm text-coral">Failed to load context preview. Check that an agent exists for this client.</p>
-      )}
-
-      {preview && (
-        <div className="space-y-3">
-          {/* System prompt indicator */}
-          <div className="flex items-center gap-3 rounded-md border border-line px-3 py-2.5 bg-pearl">
-            <div className={['w-2 h-2 rounded-full shrink-0', preview.system_prompt_present ? 'bg-teal' : 'bg-ink-4'].join(' ')} />
-            <span className="text-xs font-mono text-ink">
-              System prompt:{' '}
-              <span className={preview.system_prompt_present ? 'text-teal' : 'text-ink-4'}>
-                {preview.system_prompt_present ? 'present, not shown' : 'not configured'}
-              </span>
-            </span>
-          </div>
-
-          {/* Agent / call metadata */}
-          <div className="flex items-center gap-4 text-xs text-ink-3 font-mono">
-            <span>Call #{preview.call_number}</span>
-            <span>·</span>
-            <span>{preview.is_returning_caller ? 'Returning caller' : 'First call'}</span>
-          </div>
-
-          {preview.error && (
-            <div className="rounded-md border border-coral-line bg-coral-faint px-3 py-2 text-xs text-coral font-mono">
-              {preview.error}
-            </div>
-          )}
-
-          {/* Context blocks */}
-          {preview.lead_profile
-            ? <ContextBlock label="Lead Profile" content={preview.lead_profile} />
-            : <div className="rounded-md border border-line px-3 py-2 text-xs text-ink-4 font-mono">Lead profile: empty (name/car data missing)</div>
-          }
-
-          {preview.call_history
-            ? <ContextBlock label="Call History" content={preview.call_history} />
-            : <div className="rounded-md border border-line px-3 py-2 text-xs text-ink-4 font-mono">Call history: none stored</div>
-          }
-
-          {preview.misc_notes
-            ? <ContextBlock label="Misc Notes" content={preview.misc_notes} />
-            : <div className="rounded-md border border-line px-3 py-2 text-xs text-ink-4 font-mono">Misc notes: none</div>
-          }
-
-          {preview.skills_index
-            ? <ContextBlock label="Skills Index" content={preview.skills_index} />
-            : <div className="rounded-md border border-line px-3 py-2 text-xs text-ink-4 font-mono">Skills index: no registry configured</div>
-          }
-
-          {preview.tools && preview.tools.length > 0 && (
-            <div className="rounded-md border border-line px-3 py-2">
-              <p className="text-[10px] font-mono uppercase tracking-widest text-ink-3 mb-2">Enabled Tools</p>
-              <div className="flex flex-wrap gap-1.5">
-                {preview.tools.map(tool => (
-                  <span key={tool} className="text-xs font-mono px-2 py-0.5 rounded-full bg-mist border border-line text-ink-2">
-                    {tool}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
+    <section className="card">
+      <div className="card-h">
+        {integration ? <span className="avatar" style={{ borderRadius: 8, font: '600 11px/1 var(--qd-M)' }}>{integration.provider.slice(0, 2).toUpperCase()}</span> : null}
+        <div><h3>{integration ? integration.provider.charAt(0).toUpperCase() + integration.provider.slice(1) : 'CRM'}</h3><p>IDs externos y mapeo de campos</p></div>
+        <span className="r tag teal">{integration ? 'Conectado' : 'Sin integración'}</span>
+      </div>
+      <div className="card-b" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div className="kv">
+          <FieldRow label="ID externo CRM" value={lead.external_crm_id ? <span className="mono">{lead.external_crm_id}</span> : undefined} />
+          <FieldRow label="ID externo lead" value={lead.external_lead_id != null ? <span className="mono">{lead.external_lead_id}</span> : undefined} />
         </div>
-      )}
-    </Section>
+        <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>No hay fecha de última sincronización guardada; solo están disponibles los IDs externos.</p>
+
+        {integration ? (
+          <div>
+            <div className="sec-l">Mapeo de campos · {integration.table_id}</div>
+            {integration.field_mappings && integration.field_mappings.length > 0 ? (
+              <div className="tbl-wrap">
+                <table className="tbl">
+                  <thead><tr><th>Qora</th><th></th><th>{integration.provider}</th><th>Tipo</th><th></th></tr></thead>
+                  <tbody>
+                    {integration.field_mappings.map((m) => (
+                      <tr key={m.source}>
+                        <td className="mono">{m.source}</td>
+                        <td className="muted"><Icon name="arrowR" size={14} /></td>
+                        <td className="mono">{m.target}</td>
+                        <td className="muted mono">{m.type}</td>
+                        <td className="r">{m.required && <span className="tag mono">Obligatorio</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <Empty message="No hay mapeos de campos configurados." />
+            )}
+          </div>
+        ) : (
+          <p className="muted" style={{ fontSize: 12.5 }}>No hay integración CRM configurada para este cliente.</p>
+        )}
+      </div>
+    </section>
   )
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// LeadDetailPage — two-column layout
+// Próxima llamada tab — context preview
 // ──────────────────────────────────────────────────────────────────────────────
+
+function ContextBlock({ label, content }: { label: string; content: string }) {
+  return (
+    <div className="ctx">
+      <b>{label}</b>
+      {content || <span className="muted">(vacío)</span>}
+    </div>
+  )
+}
+
+function ProximaLlamadaTab({ clientId, leadId }: { clientId: string; leadId: string }) {
+  const [loaded, setLoaded] = useState(false)
+  const { data, isLoading, isError } = useLeadContextPreview(clientId, leadId, loaded)
+  const preview = data as LeadContextPreview | undefined
+
+  return (
+    <section className="card">
+      <div className="card-h"><div><h3>Contexto de la próxima llamada</h3><p>Bloques literales que va a recibir el agente</p></div></div>
+      <div className="card-b" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {!loaded && (
+          <button type="button" className="btn sm" onClick={() => setLoaded(true)}>Cargar vista previa de contexto →</button>
+        )}
+        {loaded && isLoading && <span className="muted">Ensamblando contexto…</span>}
+        {loaded && isError && <p style={{ color: 'var(--qd-coral)' }}>Failed to load context preview. Check that an agent exists for this client.</p>}
+        {loaded && preview && (
+          <>
+            <div className="row">
+              <i className={'dot' + (preview.system_prompt_present ? ' live' : '')} />
+              <span className="mono" style={{ fontSize: 12.5 }}>System prompt: {preview.system_prompt_present ? 'present, not shown' : 'not configured'}</span>
+            </div>
+            <div className="muted mono" style={{ fontSize: 12, display: 'flex', gap: 12 }}>
+              <span>Call #{preview.call_number}</span>
+              <span>{preview.is_returning_caller ? 'Returning caller' : 'First call'}</span>
+            </div>
+            {preview.error && <p style={{ color: 'var(--qd-coral)' }}>{preview.error}</p>}
+            {preview.lead_profile ? <ContextBlock label="Lead Profile" content={preview.lead_profile} /> : <p className="muted mono" style={{ fontSize: 12 }}>Lead profile: empty (name/car data missing)</p>}
+            {preview.call_history ? <ContextBlock label="Call History" content={preview.call_history} /> : <p className="muted mono" style={{ fontSize: 12 }}>Call history: none stored</p>}
+            {preview.misc_notes ? <ContextBlock label="Misc Notes" content={preview.misc_notes} /> : <p className="muted mono" style={{ fontSize: 12 }}>Misc notes: none</p>}
+            {preview.skills_index ? <ContextBlock label="Skills Index" content={preview.skills_index} /> : <p className="muted mono" style={{ fontSize: 12 }}>Skills index: no registry configured</p>}
+            {preview.tools && preview.tools.length > 0 && (
+              <div className="chips">
+                {preview.tools.map((tool) => <span key={tool} className="chip">{tool}</span>)}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  )
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// LeadDetailPage
+// ──────────────────────────────────────────────────────────────────────────────
+
+type TabKey = 'memoria' | 'cotizacion' | 'registro' | 'crm' | 'context'
 
 export function LeadDetailPage() {
   const { clientId, leadId } = useParams<{ clientId: string; leadId: string }>()
+  const activeClientId = clientId ?? ''
+  const activeLeadId = leadId ?? ''
   const navigate = useNavigate()
-  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null)
+  const [tab, setTab] = useState<TabKey>('memoria')
+  const [openSession, setOpenSession] = useState<CallSession | null>(null)
+  const [copyFeedback, setCopyFeedback] = useState(false)
 
-  const {
-    data: lead,
-    isLoading: leadLoading,
-    isError: leadError,
-  } = useLead(clientId ?? '', leadId ?? '')
+  const { data: lead, isLoading: leadLoading, isError: leadError } = useLead(activeClientId, activeLeadId, { refetchInterval: REALTIME_INTERVAL_MS })
+  const { data: sessions, isLoading: sessionsLoading, isError: sessionsError } = useCallSessions(activeClientId, activeLeadId, { refetchInterval: REALTIME_INTERVAL_MS })
 
-  const {
-    data: sessions,
-    isLoading: sessionsLoading,
-    isError: sessionsError,
-  } = useCallSessions(clientId ?? '', leadId)
-
-  function handleToggleSession(sessionId: string) {
-    setExpandedSessionId(prev => (prev === sessionId ? null : sessionId))
+  async function handleCopyLink() {
+    try {
+      await navigator.clipboard.writeText(window.location.href)
+      setCopyFeedback(true)
+      setTimeout(() => setCopyFeedback(false), 2000)
+    } catch {
+      // clipboard may be unavailable in some environments — non-fatal
+    }
   }
 
   if (leadLoading) {
     return (
-      <div data-testid="lead-loading" className="space-y-4">
-        <div className="h-8 bg-mist rounded-md animate-pulse w-1/3" />
-        <div className="h-32 bg-mist rounded-md animate-pulse" />
+      <div className="page" data-testid="lead-loading">
+        <div className="empty">Cargando lead…</div>
       </div>
     )
   }
 
   if (leadError || !lead) {
     return (
-      <div data-testid="lead-error" role="alert" className="p-8 text-center space-y-4">
-        <p className="text-ink font-medium">Lead not found</p>
-        <button
-          type="button"
-          onClick={() => navigate(`/app/${clientId}/leads`)}
-          className="text-teal text-sm hover:underline"
-        >
-          ← Back to leads
-        </button>
+      <div className="page" data-testid="lead-error" role="alert">
+        <div className="empty">
+          No pudimos encontrar el lead.
+          <div style={{ marginTop: 12 }}>
+            <button type="button" className="btn sm" onClick={() => navigate(`/app/${activeClientId}/leads`)}>← Leads</button>
+          </div>
+        </div>
       </div>
     )
   }
 
+  const n = lead.quote_fields ? lead.quote_fields.filter((f) => f.in_quote_ready_fields && f.filled).length : 0
+  const total = lead.quote_fields ? lead.quote_fields.filter((f) => f.in_quote_ready_fields).length : 0
+  const interestHistoryValues = (lead.interest_history ?? []).map((e) => e.interest_level)
+  const nextActionLabel = lead.next_action ?? (lead.call_count > 0 ? 'Sin agenda' : 'Pendiente')
+  const nextActionFlagged = lead.do_not_call || (lead.next_scheduled_call_at != null && new Date(lead.next_scheduled_call_at) < new Date())
+
+  const tabs: [TabKey, string, string | undefined][] = [
+    ['memoria', 'Memoria', undefined],
+    ['cotizacion', 'Cotización', total > 0 ? `${n}/${total}` : undefined],
+    ['registro', 'Registro', undefined],
+    ['crm', 'CRM', undefined],
+    ['context', 'Próxima llamada', undefined],
+  ]
+
   return (
-    <div className="space-y-3">
-      {/* Back navigation */}
-      <button
-        type="button"
-        onClick={() => navigate(`/app/${clientId}/leads`)}
-        className="text-sm text-ink-3 hover:text-ink transition-colors"
-      >
-        ← Leads
-      </button>
-
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4 mb-1">
-        <div>
-          <h1 className="font-display text-2xl font-medium text-ink">{lead.name}</h1>
-          <p className="text-ink-3 text-sm mt-0.5 font-mono">{lead.phone}</p>
+    <div className="page">
+      <div className="ph" style={{ alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, minWidth: 0 }}>
+          <span className="avatar" style={{ width: 52, height: 52, font: '500 18px/1 var(--qd-F)' }}>{initials(lead.name)}</span>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <h1>{lead.name}</h1>
+              <LeadStatusTag status={lead.status as LeadStatus} />
+            </div>
+            <p style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span className="mono">{lead.phone}</span>
+              <span>·</span>
+              <span>{lead.do_not_call ? 'No llamar' : 'Se puede llamar'}</span>
+              <span>·</span>
+              <span>Actualizado {formatDate(lead.updated_at)}</span>
+            </p>
+          </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {lead.do_not_call && <Badge status="error">Do Not Call</Badge>}
-          <Badge status={lead.status as LeadStatus}>{lead.status.replace('_', ' ')}</Badge>
+        <div className="ph-r">
+          <button type="button" className="btn" onClick={handleCopyLink}>
+            <Icon name="link" size={15} />
+            {copyFeedback ? 'Copiado' : 'Copiar link'}
+          </button>
+          <CallNowCell clientId={activeClientId} lead={lead} label="Llamar ahora" size="md" />
+        </div>
+      </div>
+
+      <div className="kpis">
+        <div className="kpi">
+          <span className="eyebrow">Interés</span>
+          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 8 }}>
+            <span className="v">{lead.interest_level != null ? `${lead.interest_level}%` : '—'}</span>
+            <Spark values={interestHistoryValues} />
+          </div>
+          <span className="s">{interestHistoryValues.length > 1 ? `Historial: ${interestHistoryValues.join(' → ')}` : 'Sin historial'}</span>
+        </div>
+        <div className="kpi">
+          <span className="eyebrow">Datos para cotizar</span>
+          <span className="v">{n}<small>/ {total || '—'}</small></span>
+          <span className="s">{total > n ? `Faltan ${total - n}` : total > 0 ? 'Completo' : 'Sin campos configurados'}</span>
+        </div>
+        <div className="kpi">
+          <span className="eyebrow">Llamadas</span>
+          <span className="v">{lead.call_count}</span>
+          <span className="s">{(sessions ?? []).length} sesiones · última {lead.last_called_at ? formatDate(lead.last_called_at) : 'nunca'}</span>
+        </div>
+        <div className="kpi">
+          <span className="eyebrow">Próxima acción</span>
+          <span style={{ font: '500 20px/1.2 var(--qd-F)', letterSpacing: '-.01em', display: 'flex', alignItems: 'center', gap: 9, minHeight: 34 }}>
+            {nextActionFlagged && <i className="dot coral" />}
+            {nextActionLabel}
+          </span>
+          <span className="s">{lead.next_action_at ? formatDate(lead.next_action_at) : '—'}</span>
         </div>
       </div>
 
-      {/* Two-column grid: left=main info, right=call context (sticky on xl+)
-          Right column gets ≥560px at xl so badges have room to breathe. */}
-      <div
-        data-testid="detail-two-column"
-        className="grid grid-cols-1 xl:grid-cols-[1fr_minmax(0,560px)] gap-4 items-start"
-      >
-        {/* ── Left column: Lead record + fields + memory + CRM ── */}
-        <div className="space-y-3 min-w-0">
-          {/* Section A: Lead record */}
-          <LeadRecordSection lead={lead} />
+      <div className="grid-2 wide">
+        <div className="stack" style={{ gap: 20 }}>
+          <div className="tabs">
+            {tabs.map(([key, label, count]) => (
+              <button key={key} type="button" className={tab === key ? 'on' : ''} onClick={() => setTab(key)}>
+                <span>{label}</span>
+                {count && <span className="n">{count}</span>}
+              </button>
+            ))}
+          </div>
 
-          {/* Section B: Quote readiness fields */}
-          <QuoteReadinessSection lead={lead} />
-
-          {/* Section C: Accumulated Facts (profile, rankings, rollups) */}
-          <MemorySection lead={lead} clientId={clientId ?? ''} />
-
-          {/* Section E: CRM / Airtable */}
-          <CRMSection lead={lead} clientId={clientId ?? ''} />
+          {tab === 'memoria' && <MemoriaTab lead={lead} clientId={activeClientId} />}
+          {tab === 'cotizacion' && <CotizacionTab lead={lead} />}
+          {tab === 'registro' && <RegistroTab lead={lead} />}
+          {tab === 'crm' && <CRMTab lead={lead} clientId={activeClientId} />}
+          {tab === 'context' && <ProximaLlamadaTab clientId={activeClientId} leadId={activeLeadId} />}
         </div>
 
-        {/* ── Right column: Call history + context preview (sticky sidebar) ── */}
-        <div className="space-y-3 min-w-0 xl:sticky xl:top-24">
-          {/* Section D: Call history */}
-          <CallHistorySection
-            sessions={sessions}
-            loading={sessionsLoading}
-            error={sessionsError}
-            expandedSessionId={expandedSessionId}
-            onToggle={handleToggleSession}
-          />
-
-          {/* Section F: Next-call context preview */}
-          <ContextPreviewSection clientId={clientId ?? ''} leadId={leadId ?? ''} />
-        </div>
+        <aside className="stack rail">
+          <section className="card">
+            <div className="card-h"><div><h3>Llamadas</h3><p>Sesiones con análisis</p></div><span className="r tag mono">{(sessions ?? []).length}</span></div>
+            <div className="card-b" style={{ padding: sessionsLoading || sessionsError || (sessions ?? []).length === 0 ? undefined : 0 }}>
+              {sessionsLoading && <div className="empty">Cargando llamadas…</div>}
+              {sessionsError && <p style={{ color: 'var(--qd-coral)' }}>Unable to load call history. Please try again.</p>}
+              {!sessionsLoading && !sessionsError && (
+                <CallHistoryList sessions={sessions ?? []} onOpenSession={setOpenSession} />
+              )}
+            </div>
+          </section>
+        </aside>
       </div>
+
+      {openSession && <CallDrawer session={openSession} lead={lead} onClose={() => setOpenSession(null)} />}
     </div>
   )
 }
