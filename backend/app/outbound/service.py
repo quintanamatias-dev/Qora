@@ -144,7 +144,9 @@ async def dial_outbound_call(
     """Sole entry point for outbound dialing.
 
     Guards (checked in order, short-circuit on failure):
+      0. Tenant ownership of lead and agent
       1. Feature flag: enable_outbound_calls must be True
+      1b. Client plan: feature + usage limits (app.entitlements)
       2. E.164 phone validation
       2b-i. Agent elevenlabs_agent_id must be set (pre-commit guard — no dangling session)
       2b-ii. Agent elevenlabs_phone_number_id must be set (pre-commit guard — no dangling session)
@@ -223,6 +225,31 @@ async def dial_outbound_call(
             call_session_id=None,
             failure_code="flag_off",
             error="Outbound calls are disabled. Set ENABLE_OUTBOUND_CALLS=true to enable.",
+        )
+
+    # ------------------------------------------------------------------
+    # Guard 1b: Client plan (multi-tenant-readiness)
+    #
+    # Feature (outbound_calls for manual, auto_dialer for scheduled) and
+    # usage caps (concurrent / monthly calls / monthly minutes). Checked
+    # before any CallSession exists so a blocked dial costs nothing.
+    # ------------------------------------------------------------------
+    from app.entitlements.service import check_dial_allowed
+
+    plan_block = await check_dial_allowed(db, client, scheduled=scheduled_call is not None)
+    if plan_block is not None:
+        logger.warning(
+            "outbound_dial_blocked_by_plan",
+            lead_id=lead.id,
+            client_id=client_id,
+            failure_code=plan_block.failure_code,
+            detail=plan_block.detail,
+        )
+        return DialResult(
+            status="failed",
+            call_session_id=None,
+            failure_code=plan_block.failure_code,
+            error=plan_block.error,
         )
 
     # ------------------------------------------------------------------
