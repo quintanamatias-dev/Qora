@@ -35,6 +35,7 @@ import os
 import secrets
 import time
 from dataclasses import dataclass, field
+from typing import Literal
 
 from fastapi import Body, Depends, HTTPException, Request
 
@@ -56,17 +57,48 @@ _TESTING_BYPASS: bool = False
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class CallerIdentity:
-    """Proof that the caller presented a valid API key.
+PrincipalRole = Literal["superadmin", "client"]
+_PRINCIPAL_ROLES: frozenset[str] = frozenset({"superadmin", "client"})
 
-    Stores only a SHA-256 prefix of the key for audit logging.
+
+@dataclass(frozen=True)
+class CallerIdentity:
+    """Authenticated principal for admin routes.
+
+    Stores only a SHA-256 prefix of the credential for audit logging.
     The raw key is NEVER stored — not in memory, not in logs.
 
-    Phase C extension: add user_id, allowed_client_ids from JWT payload.
+    Roles:
+        superadmin — Qora operator; may access every tenant. The global
+            QORA_API_KEY always resolves to this role.
+        client — tenant user; may access only the tenants in ``client_ids``.
+            Issued by the future user-auth layer (multi-tenant-auth).
+
+    Routers never inspect the role directly: they depend on
+    ``app.core.access.require_client_access`` / ``require_superadmin``.
     """
 
     api_key_hash: str  # first 16 hex chars of SHA-256(raw_key) — for audit only
+    role: PrincipalRole = "superadmin"
+    client_ids: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        if self.role not in _PRINCIPAL_ROLES:
+            raise ValueError(f"Unknown principal role: {self.role!r}")
+        # Normalise tenant ids once so every comparison is case-insensitive.
+        object.__setattr__(self, "client_ids", frozenset(c.lower() for c in self.client_ids))
+
+    @property
+    def is_superadmin(self) -> bool:
+        return self.role == "superadmin"
+
+    def can_access(self, client_id: str | None) -> bool:
+        """Return True when this principal may read or write ``client_id`` data."""
+        if self.is_superadmin:
+            return True
+        if not client_id:
+            return False
+        return client_id.lower() in self.client_ids
 
 
 # ---------------------------------------------------------------------------
