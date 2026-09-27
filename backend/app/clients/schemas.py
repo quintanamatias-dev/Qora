@@ -223,5 +223,7 @@ class ClientResponse(BaseModel):
     scheduler_timezone: str = "America/Argentina/Buenos_Aires"
     # C6: Backoff multiplier for recontact delay escalation.
     scheduler_backoff_multiplier: float = 1.0
+    # Plan name (app/entitlements/catalog.py). Managed via /clients/{id}/entitlements.
+    plan: str = "pilot"
 
     model_config = {"from_attributes": True}

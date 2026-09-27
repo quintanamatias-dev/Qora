@@ -85,6 +85,7 @@ def _client_to_response(client: Client, agent_count: int = 0) -> ClientResponse:
         scheduler_retry_on_outcomes=client.scheduler_retry_on_outcomes,
         scheduler_timezone=client.scheduler_timezone,
         scheduler_backoff_multiplier=client.scheduler_backoff_multiplier,
+        plan=client.plan or "pilot",
     )
 
 
