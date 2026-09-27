@@ -877,6 +877,10 @@ class TestCRMImportEndpoint:
         ), patch(
             "app.core.database.async_session_factory",
             mock_factory,
+        ), patch(
+            # Plan gating is covered in tests/unit/entitlements; keep this test on the import path.
+            "app.entitlements.deps._load_entitlements",
+            new=AsyncMock(return_value=None),
         ):
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url="http://test"
@@ -917,6 +921,10 @@ class TestCRMImportEndpoint:
         ), patch(
             "app.core.database.async_session_factory",
             mock_factory,
+        ), patch(
+            # Plan gating is covered in tests/unit/entitlements; keep this test on the import path.
+            "app.entitlements.deps._load_entitlements",
+            new=AsyncMock(return_value=None),
         ):
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url="http://test"

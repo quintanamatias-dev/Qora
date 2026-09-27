@@ -60,6 +60,7 @@ from app.core.auth import (
 )
 from app.core.access import ensure_resource_access, require_client_access, require_superadmin
 from app.core.database import get_session as db_session
+from app.entitlements.deps import require_feature
 from app.outbound.linkage import link_outbound_session_by_webhook
 
 router = APIRouter(prefix="/calls", tags=["calls"])
@@ -145,7 +146,7 @@ async def get_call_metrics_endpoint(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/active", response_model=LiveCallsResponse, dependencies=[Depends(require_client_access)])
+@router.get("/active", response_model=LiveCallsResponse, dependencies=[Depends(require_feature("live_monitor"))])
 async def get_active_calls_endpoint(client_id: str) -> LiveCallsResponse:
     """Return in-flight call sessions for the live dashboard view.
 
