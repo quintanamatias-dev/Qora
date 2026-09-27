@@ -977,7 +977,9 @@ async def _call_gpt_summarize(
             )
             na_result = await run_next_action_pipeline(na_ctx, client)
             fields["next_action_suggested"] = na_result.action
-            fields["next_action_result"] = na_result.model_dump()
+            # mode="json" turns next_action_at into an ISO string: the dict lands in
+            # JSON columns (extracted_facts), which cannot serialize datetime.
+            fields["next_action_result"] = na_result.model_dump(mode="json")
         except Exception as na_exc:
             logger.error(
                 "next_action_pipeline_exception",

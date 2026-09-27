@@ -781,3 +781,210 @@ async def test_get_active_scheduled_call_for_lead_two_active_rows_no_raise(sched
         f"Expected the earliest-scheduled active row ({sc1_id}), got {result.id}"
     )
     assert result.status == "in_progress"
+
+
+# ---------------------------------------------------------------------------
+# qora-c9 — auto_schedule translates engine actions to legacy scheduler vocabulary
+#
+# NextActionResult.action emits {follow_up, retry_call, schedule_call,
+# close_lead, human_review}, but client.scheduler_retry_on_outcomes is stored
+# using the legacy vocabulary {call_again, send_quote, wait, do_not_call}.
+# auto_schedule must translate retry_call/schedule_call -> call_again before
+# checking eligibility, while still accepting a raw engine action already
+# present in retry_outcomes.
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def sched_db_legacy_outcomes(tmp_path: Path):
+    """Isolated DB with a client stuck on the legacy scheduler_retry_on_outcomes
+    value (["call_again", "follow_up"]) — the value stored for every existing
+    client before the vocabulary migration."""
+    from app.core.config import Settings
+    from app.core import database as db_module
+
+    settings = Settings(
+        openai_api_key=SecretStr("sk-test"),
+        elevenlabs_api_key=SecretStr("el-test"),
+        database_url=f"sqlite+aiosqlite:///{tmp_path}/scheduler_legacy_outcomes_test.db",
+    )
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
+
+    async with db_module.async_session_factory() as sess:
+        from app.tenants.service import seed_quintana
+        from app.leads.service import create_lead
+
+        await seed_quintana(sess)
+        await create_lead(
+            sess,
+            client_id="quintana-seguros",
+            name="Legacy Outcomes Lead",
+            phone="+5491100000222",
+            lead_id="legacy-outcomes-lead-001",
+        )
+        await sess.commit()
+
+    async with db_module.async_session_factory() as sess:
+        from app.tenants.models import Client
+
+        client = await sess.get(Client, "quintana-seguros")
+        client.scheduler_enabled = True
+        client.scheduler_cooldown_minutes = 60
+        client.scheduler_allowed_hours_start = 9
+        client.scheduler_allowed_hours_end = 20
+        client.scheduler_retry_on_outcomes = '["call_again","follow_up"]'
+        await sess.commit()
+
+    yield db_module
+    await db_module.close_db()
+
+
+async def test_auto_schedule_translates_retry_call_to_legacy_call_again(
+    sched_db_legacy_outcomes,
+):
+    """next_action_result.action='retry_call' schedules even though the client's
+    retry_outcomes only lists the legacy 'call_again' value."""
+    from app.scheduler.service import auto_schedule
+
+    async with sched_db_legacy_outcomes.async_session_factory() as sess:
+        result = await auto_schedule(
+            db=sess,
+            session_id="sess-legacy-retry-001",
+            lead_id="legacy-outcomes-lead-001",
+            client_id="quintana-seguros",
+            facts={
+                "next_action_result": {
+                    "action": "retry_call",
+                    "reason": "no answer",
+                    "confidence": "high",
+                    "decided_by": "rules",
+                    "next_action_at": None,
+                    "priority": "normal",
+                }
+            },
+        )
+        await sess.commit()
+
+    assert result is not None
+    assert result.trigger_reason == "auto_retry"
+    assert result.status == "pending"
+
+
+async def test_auto_schedule_translates_schedule_call_to_legacy_call_again(
+    sched_db_legacy_outcomes,
+):
+    """next_action_result.action='schedule_call' schedules even though the client's
+    retry_outcomes only lists the legacy 'call_again' value."""
+    from app.scheduler.service import auto_schedule
+
+    async with sched_db_legacy_outcomes.async_session_factory() as sess:
+        result = await auto_schedule(
+            db=sess,
+            session_id="sess-legacy-sched-001",
+            lead_id="legacy-outcomes-lead-001",
+            client_id="quintana-seguros",
+            facts={
+                "next_action_result": {
+                    "action": "schedule_call",
+                    "reason": "callback commitment",
+                    "confidence": "high",
+                    "decided_by": "rules",
+                    "next_action_at": None,
+                    "priority": "normal",
+                }
+            },
+        )
+        await sess.commit()
+
+    assert result is not None
+    assert result.trigger_reason == "auto_retry"
+    assert result.status == "pending"
+
+
+async def test_auto_schedule_close_lead_still_blocked_with_legacy_outcomes(
+    sched_db_legacy_outcomes,
+):
+    """close_lead has no legacy translation and is not in retry_outcomes → blocked."""
+    from app.scheduler.service import auto_schedule
+
+    async with sched_db_legacy_outcomes.async_session_factory() as sess:
+        result = await auto_schedule(
+            db=sess,
+            session_id="sess-legacy-close-001",
+            lead_id="legacy-outcomes-lead-001",
+            client_id="quintana-seguros",
+            facts={
+                "next_action_result": {
+                    "action": "close_lead",
+                    "reason": "hostile",
+                    "confidence": "high",
+                    "decided_by": "rules",
+                    "next_action_at": None,
+                    "priority": "high",
+                }
+            },
+        )
+        await sess.commit()
+
+    assert result is None
+
+
+async def test_auto_schedule_human_review_still_blocked_with_legacy_outcomes(
+    sched_db_legacy_outcomes,
+):
+    """human_review has no legacy translation and is not in retry_outcomes → blocked."""
+    from app.scheduler.service import auto_schedule
+
+    async with sched_db_legacy_outcomes.async_session_factory() as sess:
+        result = await auto_schedule(
+            db=sess,
+            session_id="sess-legacy-review-001",
+            lead_id="legacy-outcomes-lead-001",
+            client_id="quintana-seguros",
+            facts={
+                "next_action_result": {
+                    "action": "human_review",
+                    "reason": "ambiguous",
+                    "confidence": "low",
+                    "decided_by": "rules",
+                    "next_action_at": None,
+                    "priority": "normal",
+                }
+            },
+        )
+        await sess.commit()
+
+    assert result is None
+
+
+async def test_auto_schedule_honors_explicit_next_action_at_with_legacy_outcomes(
+    sched_db_legacy_outcomes,
+):
+    """An explicit next_action_at from a schedule_call result is still honored
+    even when the eligibility check went through the legacy translation."""
+    from app.scheduler.service import auto_schedule
+
+    override_time = datetime(2026, 6, 10, 15, 30, 0, tzinfo=timezone.utc)
+
+    async with sched_db_legacy_outcomes.async_session_factory() as sess:
+        result = await auto_schedule(
+            db=sess,
+            session_id="sess-legacy-override-001",
+            lead_id="legacy-outcomes-lead-001",
+            client_id="quintana-seguros",
+            facts={
+                "next_action_result": {
+                    "action": "schedule_call",
+                    "reason": "callback commitment tomorrow",
+                    "confidence": "high",
+                    "decided_by": "rules",
+                    "next_action_at": override_time.isoformat(),
+                    "priority": "normal",
+                }
+            },
+        )
+        await sess.commit()
+
+    assert result is not None
+    assert result.scheduled_at == override_time

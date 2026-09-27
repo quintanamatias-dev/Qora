@@ -370,6 +370,17 @@ async def complete_scheduled_call(
 # Rules engine — auto_schedule
 # ---------------------------------------------------------------------------
 
+# qora-c9: NextActionResult.action (retry_call, schedule_call, ...) does not
+# share vocabulary with the legacy client.scheduler_retry_on_outcomes values
+# (call_again, send_quote, wait, do_not_call). Translate the engine's retry
+# actions to their legacy equivalent so existing client configs keep working
+# without a data migration. Actions with no legacy retry equivalent
+# (close_lead, human_review, follow_up) are intentionally left untranslated.
+_ENGINE_ACTION_TO_LEGACY_OUTCOME: dict[str, str] = {
+    "retry_call": "call_again",
+    "schedule_call": "call_again",
+}
+
 
 async def auto_schedule(
     db: AsyncSession,
@@ -385,7 +396,10 @@ async def auto_schedule(
     Evaluates rules in order:
     1. client.scheduler_enabled must be True
     2. next_action_result.action (primary) or next_action_suggested (fallback) must be
-       in client.scheduler_retry_on_outcomes
+       in client.scheduler_retry_on_outcomes, either as-is or via its legacy
+       translation (_ENGINE_ACTION_TO_LEGACY_OUTCOME) — this keeps clients still
+       configured with the legacy vocabulary (e.g. "call_again") eligible for the
+       new engine actions (retry_call, schedule_call) without a data migration
     3. lead.do_not_call must be False
     4. No existing pending/in_progress ScheduledCall for this lead (duplicate guard)
     5. Attempt count must be < max_attempts
@@ -436,12 +450,18 @@ async def auto_schedule(
     except (json.JSONDecodeError, TypeError):
         retry_outcomes = ["busy", "no_answer", "follow_up"]
 
-    if next_action not in retry_outcomes:
+    legacy_next_action = _ENGINE_ACTION_TO_LEGACY_OUTCOME.get(next_action)
+    is_eligible = next_action in retry_outcomes or (
+        legacy_next_action is not None and legacy_next_action in retry_outcomes
+    )
+
+    if not is_eligible:
         logger.info(
             "auto_schedule_skipped_outcome",
             client_id=client_id,
             lead_id=lead_id,
             next_action=next_action,
+            legacy_next_action=legacy_next_action,
         )
         return None
 
