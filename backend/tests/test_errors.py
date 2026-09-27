@@ -294,3 +294,30 @@ async def test_request_id_in_error_envelope_when_correlation_active():
     assert envelope_rid == rid_header, (
         f"Error envelope request_id {envelope_rid!r} != X-Request-ID {rid_header!r}"
     )
+
+
+def test_build_error_response_keeps_human_message_and_reason_code():
+    """A dict with both 'error' (code) and 'message' (text) exposes both.
+
+    multi-tenant-readiness: plan and tenant errors carry a machine code the
+    panel branches on and a message it can show; neither may be lost.
+    """
+    from app.core.errors import build_error_response
+
+    import json
+    resp = build_error_response(
+        status_code=429,
+        detail={"error": "plan_limit_reached", "message": "Plan limit reached: max_monthly_minutes (200/200)."},
+        request_id="req-plan",
+    )
+    body = json.loads(resp.body)
+    assert body["error"]["message"] == "Plan limit reached: max_monthly_minutes (200/200)."
+    assert body["error"]["reason"] == "plan_limit_reached"
+
+
+def test_build_error_response_error_only_dict_has_no_reason():
+    from app.core.errors import build_error_response
+
+    import json
+    body = json.loads(build_error_response(404, {"error": "lead not found"}, "r").body)
+    assert "reason" not in body["error"]
