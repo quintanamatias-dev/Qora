@@ -25,6 +25,7 @@ import type {
   LeadContextPreview,
   DimensionRollups,
 } from '../../src/api/types'
+import { makeEntitlements, planCatalogFixture } from './entitlements'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Fixtures
@@ -491,6 +492,22 @@ export const handlers = [
     const body = await request.json() as Partial<Client>
     return HttpResponse.json({ ...client, ...body })
   }),
+
+  // ── Entitlements (multi-tenant-readiness) ───────────────────────────────────
+  // Default: unrestricted pilot plan. Tests opt into restrictions via server.use().
+  // NOTE: must come BEFORE /api/v1/clients/:clientId
+  http.get('/api/v1/clients/:clientId/entitlements', ({ params }) => {
+    return HttpResponse.json(makeEntitlements({ client_id: String(params.clientId) }))
+  }),
+
+  http.put('/api/v1/clients/:clientId/entitlements', async ({ params, request }) => {
+    const body = (await request.json()) as { plan: string; overrides?: Record<string, unknown> }
+    return HttpResponse.json(
+      makeEntitlements({ client_id: String(params.clientId), plan: body.plan, overrides: body.overrides ?? {} }),
+    )
+  }),
+
+  http.get('/api/v1/entitlements/plans', () => HttpResponse.json(planCatalogFixture)),
 
   // GET /api/v1/clients/:clientId — returns a single client by ID
   http.get('/api/v1/clients/:clientId', ({ params }) => {

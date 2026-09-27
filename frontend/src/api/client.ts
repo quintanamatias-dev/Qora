@@ -58,6 +58,20 @@ export class ApiError extends Error {
     super(errorMessageFromBody(status, body))
     this.name = 'ApiError'
   }
+
+  /**
+   * Machine-readable error code from the canonical envelope
+   * ({error: {reason}}), e.g. "plan_limit_reached" or "tenant_forbidden".
+   * Undefined when the backend sent no code.
+   */
+  get reason(): string | undefined {
+    const envelope = (this.body as { error?: unknown } | null)?.error
+    if (envelope && typeof envelope === 'object' && 'reason' in envelope) {
+      const reason = (envelope as { reason: unknown }).reason
+      if (typeof reason === 'string') return reason
+    }
+    return undefined
+  }
 }
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {

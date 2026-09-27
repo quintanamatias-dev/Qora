@@ -392,6 +392,58 @@ export interface Client {
   agent_count?: number  // returned by list endpoint
   // IANA timezone used for scheduling and for dashboard date bucketing
   scheduler_timezone?: string
+  // Plan name (see /api/v1/entitlements/plans)
+  plan?: string
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Entitlements (multi-tenant-readiness)
+// Mirrors backend/app/entitlements — GET/PUT /api/v1/clients/{id}/entitlements
+// ──────────────────────────────────────────────────────────────────────────────
+
+export type FeatureKey = 'outbound_calls' | 'auto_dialer' | 'crm_integration' | 'analytics' | 'live_monitor'
+
+export type LimitKey = 'max_agents' | 'max_concurrent_calls' | 'max_monthly_calls' | 'max_monthly_minutes'
+
+export interface EntitlementOverrides {
+  features?: Partial<Record<FeatureKey, boolean>>
+  limits?: Partial<Record<LimitKey, number | null>>
+}
+
+export interface EntitlementUsage {
+  period_start: string
+  monthly_calls: number
+  monthly_minutes: number
+  concurrent_calls: number
+  active_agents: number
+}
+
+export interface ClientEntitlements {
+  client_id: string
+  plan: string
+  features: Record<FeatureKey, boolean>
+  /** null = unlimited */
+  limits: Record<LimitKey, number | null>
+  usage: EntitlementUsage
+  overrides: EntitlementOverrides
+}
+
+export interface UpdateEntitlementsPayload {
+  plan: string
+  overrides: EntitlementOverrides
+}
+
+export interface PlanDefinition {
+  name: string
+  label: string
+  features: Record<FeatureKey, boolean>
+  limits: Record<LimitKey, number | null>
+}
+
+export interface PlanCatalog {
+  features: FeatureKey[]
+  limits: LimitKey[]
+  plans: PlanDefinition[]
 }
 
 export interface CreateClientPayload {
