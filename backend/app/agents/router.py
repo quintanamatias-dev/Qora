@@ -233,9 +233,23 @@ async def create_agent(
         201: AgentResponse with the created agent.
         404: If client does not exist.
         409: If slug already exists for this client.
+        403: If the client's plan agent limit is reached.
         422: If tools_enabled or slug validation fails (Pydantic).
     """
     await _require_client(session, client_id)
+
+    from app.entitlements.service import check_agent_limit
+
+    limit_block = await check_agent_limit(session, await tenant_service.get_client(session, client_id))
+    if limit_block is not None:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "plan_limit_reached",
+                "limit": limit_block.detail,
+                "message": limit_block.error,
+            },
+        )
 
     try:
         agent = await tenant_service.create_agent(
