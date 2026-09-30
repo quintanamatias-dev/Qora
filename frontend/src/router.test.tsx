@@ -40,50 +40,50 @@ function renderAt(initialEntry: string) {
 // REQ-4.1: Route structure — all routes from production router.tsx
 // ──────────────────────────────────────────────────────────────────────────────
 describe('REQ-4.1 Production route config — correct rendering', () => {
-  it('root `/` redirects to /admin instead of a hard-coded tenant', () => {
+  it('root `/` redirects to /admin instead of a hard-coded tenant', async () => {
     renderAt('/')
-    expect(screen.getByTestId('admin-header')).toBeInTheDocument()
+    expect(await screen.findByTestId('admin-header')).toBeInTheDocument()
     expect(screen.queryByText('demo-client')).not.toBeInTheDocument()
   })
 
-  it('/app/:clientId/dashboard renders DashboardPage with correct clientId via AppLayout', () => {
+  it('/app/:clientId/dashboard renders DashboardPage with correct clientId via AppLayout', async () => {
     renderAt('/app/acme-motors/dashboard')
-    expect(screen.getByRole('heading', { name: 'Resumen' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Resumen' })).toBeInTheDocument()
     // AppLayout passes clientId to TopBar and Sidebar — text appears multiple times in the shell
     expect(screen.getAllByText('acme-motors').length).toBeGreaterThanOrEqual(1)
   })
 
-  it('/app/:clientId/leads renders LeadsPage via AppLayout', () => {
+  it('/app/:clientId/leads renders LeadsPage via AppLayout', async () => {
     renderAt('/app/acme-motors/leads')
-    expect(screen.getByRole('heading', { name: 'Leads' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Leads' })).toBeInTheDocument()
     // clientId present in shell (TopBar + Sidebar + page content)
     expect(screen.getAllByText('acme-motors').length).toBeGreaterThanOrEqual(1)
   })
 
-  it('/app/:clientId/leads/:leadId renders LeadDetailPage via AppLayout', () => {
+  it('/app/:clientId/leads/:leadId renders LeadDetailPage via AppLayout', async () => {
     renderAt('/app/acme-motors/leads/lead-42')
     // LeadDetailPage now fetches lead data asynchronously.
     // On initial render (before data loads) it shows a loading skeleton.
     // The clientId is still present in the shell (Sidebar/TopBar).
     // We verify the route rendered the correct page by checking the loading state.
-    expect(screen.getByTestId('lead-loading')).toBeInTheDocument()
+    expect(await screen.findByTestId('lead-loading')).toBeInTheDocument()
     // clientId present in shell (TopBar + Sidebar)
     expect(screen.getAllByText('acme-motors').length).toBeGreaterThanOrEqual(1)
   })
 
-  it('unknown path redirects to /admin via catch-all', () => {
+  it('unknown path redirects to /admin via catch-all', async () => {
     renderAt('/totally-unknown')
-    expect(screen.getByTestId('admin-header')).toBeInTheDocument()
+    expect(await screen.findByTestId('admin-header')).toBeInTheDocument()
   })
 
   it('production routes config has the correct number of top-level routes', () => {
-    // Structural: routes must have 4 top-level entries (/, /app/:clientId, /admin, *)
-    expect(routes).toHaveLength(4)
+    // Structural: routes must have 5 top-level entries (/login, /, /app/:clientId, /admin, *)
+    expect(routes).toHaveLength(5)
   })
 
-  it('/admin renders AdminLayout with Qora logo and Admin badge', () => {
+  it('/admin renders AdminLayout with Qora logo and Admin badge', async () => {
     renderAt('/admin')
-    expect(screen.getByTestId('admin-header')).toBeInTheDocument()
+    expect(await screen.findByTestId('admin-header')).toBeInTheDocument()
     // Header shows "Qora" wordmark (Q uppercase + ora lowercase per design system) + "Admin" badge
     expect(screen.getByText('Qora')).toBeInTheDocument()
     expect(screen.getByText('Admin')).toBeInTheDocument()

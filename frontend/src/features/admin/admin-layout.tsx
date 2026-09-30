@@ -8,6 +8,7 @@
  */
 
 import { Outlet } from 'react-router'
+import { UserMenu } from '../auth/user-menu'
 
 export function AdminLayout() {
   return (
@@ -24,6 +25,9 @@ export function AdminLayout() {
           Admin
         </span>
         <span className="sr-only">Internal management panel</span>
+        <div className="ml-auto">
+          <UserMenu />
+        </div>
       </header>
 
       {/* Page content — full-width with comfortable horizontal padding */}

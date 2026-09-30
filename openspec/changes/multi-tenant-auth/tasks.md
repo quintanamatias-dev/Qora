@@ -18,13 +18,13 @@ Contract: `design.md`. Strict TDD (RED → GREEN) for every behavior.
 
 ## Frontend B1 — login
 
-- [ ] `apiFetch` without `VITE_API_KEY`, `X-Qora-Client`, 401 handler (§9)
-- [ ] `src/api/auth.ts` + MSW handlers
-- [ ] `/login` page, `RequireAuth`, role-based routing, user menu + logout
+- [x] `apiFetch` without `VITE_API_KEY`, `X-Qora-Client`, 401 handler (§9)
+- [x] `src/api/auth.ts` + MSW handlers
+- [x] `/login` page, `RequireAuth`, role-based routing, user menu + logout
 
 ## Frontend B2 — access admin
 
-- [ ] Access API hooks + "Acceso" section in the client detail page
+- [x] Access API hooks + "Acceso" section in the client detail page
 
 ## Close-out
 

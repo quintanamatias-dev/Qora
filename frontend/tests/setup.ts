@@ -7,9 +7,15 @@
 
 import '@testing-library/jest-dom'
 import { server } from './mocks/server'
+import { setUnauthorizedHandler } from '../src/api/client'
 
 // Start MSW server before all tests (intercepts fetch/XHR in Node)
 beforeAll(() => server.listen({ onUnhandledRequest: 'warn' }))
+
+// jsdom cannot perform real navigation. apiFetch's default 401 handler calls
+// window.location.assign, so tests get a safe no-op unless they opt into
+// asserting the real redirect (see client.test.ts's dedicated reset test).
+beforeEach(() => setUnauthorizedHandler(() => {}))
 
 // Reset handlers after each test so tests don't bleed into each other
 afterEach(() => server.resetHandlers())

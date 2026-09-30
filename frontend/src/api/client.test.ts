@@ -2,27 +2,32 @@
  * CAP-5: Base fetch function tests
  *
  * REQ-5.1: Base fetch handles 2xx success and non-2xx errors (ApiError)
- * REQ-B5.1: apiFetch injects Authorization: Bearer <VITE_API_KEY> when VITE_API_KEY is set
- * REQ-B5.2: apiFetch omits Authorization header when VITE_API_KEY is absent/empty
+ * multi-tenant-auth §9: apiFetch always sends X-Qora-Client: web and
+ * credentials: 'same-origin', and routes 401s (outside /api/v1/auth/*)
+ * through an injectable unauthorized handler.
  */
 
-import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
-import { apiFetch, ApiError } from './client'
+import { describe, it, expect, afterEach, vi } from 'vitest'
+import { apiFetch, ApiError, setUnauthorizedHandler, resetUnauthorizedHandler } from './client'
+import { stubLocationAssign, restoreLocation } from '../../tests/stub-location'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Setup: mock global fetch
 // ──────────────────────────────────────────────────────────────────────────────
 
 function mockFetch(status: number, body: unknown) {
-  const response = new Response(JSON.stringify(body), {
+  const response = new Response(status === 204 ? null : JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: status === 204 ? undefined : { 'Content-Type': 'application/json' },
   })
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
 }
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  // jsdom cannot perform real navigation — keep the handler a no-op between
+  // tests; the dedicated reset test below verifies the real default in isolation.
+  setUnauthorizedHandler(() => {})
 })
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -40,6 +45,12 @@ describe('apiFetch — success', () => {
     const result = await apiFetch<{ id: string; name: string }>('/api/v1/leads')
     expect(result.id).toBe('lead-123')
     expect(result.name).toBe('John Doe')
+  })
+
+  it('returns undefined on 204 No Content without parsing a body', async () => {
+    mockFetch(204, null)
+    const result = await apiFetch<void>('/api/v1/clients/acme/access/invitations/inv-1', { method: 'DELETE' })
+    expect(result).toBeUndefined()
   })
 })
 
@@ -104,122 +115,88 @@ describe('apiFetch — URL construction', () => {
 })
 
 // ──────────────────────────────────────────────────────────────────────────────
-// REQ-B5.1 / REQ-B5.2: Authorization header contract (Phase B5 admin auth)
-//
-// client.ts captures VITE_API_KEY at module-level load time.
-// We must reset modules + stub the env before each dynamic import so we get
-// a fresh module instance that sees the patched import.meta.env value.
+// multi-tenant-auth §9: X-Qora-Client header + same-origin credentials
 // ──────────────────────────────────────────────────────────────────────────────
-describe('apiFetch — Authorization header (Phase B5)', () => {
-  beforeEach(() => {
-    vi.resetModules()
-  })
-
-  afterEach(() => {
-    vi.unstubAllEnvs()
-    vi.resetModules()
-  })
-
-  it('injects Authorization: Bearer <key> when VITE_API_KEY is set', async () => {
-    // RED contract: apiFetch must forward VITE_API_KEY as a Bearer token.
-    const testKey = 'test-admin-secret-key-xyz'
-    vi.stubEnv('VITE_API_KEY', testKey)
-
-    // Dynamic import after stub so the module sees the patched env
-    const { apiFetch: apiFetchFresh } = await import('./client')
-
-    const fetchSpy = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ok: true }), { status: 200 })
-    )
+describe('apiFetch — auth headers and credentials', () => {
+  it('always sends X-Qora-Client: web', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }))
     vi.stubGlobal('fetch', fetchSpy)
 
-    await apiFetchFresh('/api/v1/clients')
+    await apiFetch('/api/v1/clients')
 
     const calledInit = fetchSpy.mock.calls[0][1] as RequestInit
     const headers = calledInit?.headers as Record<string, string>
-    expect(headers['Authorization']).toBe(`Bearer ${testKey}`)
+    expect(headers['X-Qora-Client']).toBe('web')
   })
 
-  it('omits Authorization header when VITE_API_KEY is empty string', async () => {
-    // REQ-B5.2: empty key means no auth header — dev without auth or public endpoint.
-    vi.stubEnv('VITE_API_KEY', '')
-
-    const { apiFetch: apiFetchFresh } = await import('./client')
-
-    const fetchSpy = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ok: true }), { status: 200 })
-    )
+  it('always sends credentials: same-origin, even if the caller passes a different value', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }))
     vi.stubGlobal('fetch', fetchSpy)
 
-    await apiFetchFresh('/api/v1/health')
+    await apiFetch('/api/v1/clients', { credentials: 'omit' })
 
     const calledInit = fetchSpy.mock.calls[0][1] as RequestInit
-    const headers = calledInit?.headers as Record<string, string>
-    expect(headers['Authorization']).toBeUndefined()
+    expect(calledInit.credentials).toBe('same-origin')
   })
 
-  it('omits Authorization header when VITE_API_KEY is not set', async () => {
-    // REQ-B5.2: absent key — same as empty (defaults to '' in client.ts).
-    vi.stubEnv('VITE_API_KEY', undefined as unknown as string)
-
-    const { apiFetch: apiFetchFresh } = await import('./client')
-
-    const fetchSpy = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ok: true }), { status: 200 })
-    )
+  it('caller-provided headers merge with X-Qora-Client', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }))
     vi.stubGlobal('fetch', fetchSpy)
 
-    await apiFetchFresh('/api/v1/health')
-
-    const calledInit = fetchSpy.mock.calls[0][1] as RequestInit
-    const headers = calledInit?.headers as Record<string, string>
-    expect(headers['Authorization']).toBeUndefined()
-  })
-
-  it('caller-provided headers override defaults but auth header is still injected', async () => {
-    // Triangulation: custom init headers merge with auth — auth survives the spread.
-    const testKey = 'another-test-key-abc'
-    vi.stubEnv('VITE_API_KEY', testKey)
-
-    const { apiFetch: apiFetchFresh } = await import('./client')
-
-    const fetchSpy = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ id: 'x' }), { status: 200 })
-    )
-    vi.stubGlobal('fetch', fetchSpy)
-
-    await apiFetchFresh('/api/v1/leads', {
+    await apiFetch('/api/v1/leads', {
       method: 'POST',
       headers: { 'X-Custom-Header': 'custom-value' },
     })
 
     const calledInit = fetchSpy.mock.calls[0][1] as RequestInit
     const headers = calledInit?.headers as Record<string, string>
-    // Both the auth header and the custom header must be present
-    expect(headers['Authorization']).toBe(`Bearer ${testKey}`)
+    expect(headers['X-Qora-Client']).toBe('web')
     expect(headers['X-Custom-Header']).toBe('custom-value')
   })
+})
 
-  it('caller-provided Authorization header overrides the VITE_API_KEY bearer token', async () => {
-    // When a caller explicitly passes their own Authorization, it wins (header spread order).
-    const testKey = 'base-key-111'
-    vi.stubEnv('VITE_API_KEY', testKey)
+// ──────────────────────────────────────────────────────────────────────────────
+// multi-tenant-auth §9: 401 handling
+// ──────────────────────────────────────────────────────────────────────────────
+describe('apiFetch — 401 unauthorized handler', () => {
+  it('invokes the unauthorized handler on 401 for a non-auth path, and still throws', async () => {
+    mockFetch(401, { error: { message: 'Session expired or invalid' } })
+    const handler = vi.fn()
+    setUnauthorizedHandler(handler)
 
-    const { apiFetch: apiFetchFresh } = await import('./client')
+    await expect(apiFetch('/api/v1/clients')).rejects.toBeInstanceOf(ApiError)
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
 
-    const fetchSpy = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ok: true }), { status: 200 })
-    )
-    vi.stubGlobal('fetch', fetchSpy)
+  it('does not invoke the unauthorized handler on 401 for /api/v1/auth/* paths', async () => {
+    mockFetch(401, { error: { message: 'Authentication required' } })
+    const handler = vi.fn()
+    setUnauthorizedHandler(handler)
 
-    const customAuth = 'Bearer override-token-999'
-    await apiFetchFresh('/api/v1/clients', {
-      headers: { Authorization: customAuth },
-    })
+    await expect(apiFetch('/api/v1/auth/me')).rejects.toBeInstanceOf(ApiError)
+    expect(handler).not.toHaveBeenCalled()
+  })
 
-    const calledInit = fetchSpy.mock.calls[0][1] as RequestInit
-    const headers = calledInit?.headers as Record<string, string>
-    // The caller's explicit Authorization header wins via spread
-    expect(headers['Authorization']).toBe(customAuth)
+  it('does not invoke the unauthorized handler on non-401 errors', async () => {
+    mockFetch(500, { detail: 'boom' })
+    const handler = vi.fn()
+    setUnauthorizedHandler(handler)
+
+    await expect(apiFetch('/api/v1/clients')).rejects.toBeInstanceOf(ApiError)
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('resetUnauthorizedHandler restores the default redirect-to-login behavior', async () => {
+    const originalLocation = window.location
+    const assignMock = stubLocationAssign()
+
+    resetUnauthorizedHandler()
+    mockFetch(401, { error: { message: 'Session expired or invalid' } })
+
+    await expect(apiFetch('/api/v1/clients')).rejects.toBeInstanceOf(ApiError)
+
+    expect(assignMock).toHaveBeenCalledWith(expect.stringContaining('/login?return_to='))
+
+    restoreLocation(originalLocation)
   })
 })
