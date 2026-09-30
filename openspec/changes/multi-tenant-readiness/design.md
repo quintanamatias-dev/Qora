@@ -37,7 +37,7 @@ which lower-cases the path value.
 |---|---|---|
 | `clients` | `GET /clients/{id}` | list, create, patch, delete |
 | `agents` | list, get | create, patch, sync, deactivate, make-default |
-| `crm_config_router` (integrations) | list, available, fields | put, test, mappings, connect, disconnect |
+| `crm_config_router` (integrations) | list, available, fields | put, test, mappings, connect, disconnect (superadmin control-plane; not feature-gated, so an integration can be prepared before a plan upgrade) |
 | `crm_router` | import | — |
 | `leads` | all (list/create scoped by `client_id`; ID routes ownership-checked) | — |
 | `calls` | list, metrics, active (scoped); ID routes ownership-checked | `POST /calls/{conversation_id}/end` (operator tool; no panel uses it) |
@@ -60,7 +60,7 @@ Features (boolean):
 |---|---|
 | `outbound_calls` | Manual "Call now" (`dial_outbound_call` with `scheduled_call=None`) |
 | `auto_dialer` | Auto-dialer (`dial_outbound_call` with a `ScheduledCall`) |
-| `crm_integration` | `crm_config_router`, `crm_router` (CRM import). CSV import is not gated: it uses the same `POST /leads` as manual lead creation. |
+| `crm_integration` | `crm_router` (CRM import) only. CRM connection/configuration (`crm_config_router`) is a superadmin control-plane operation and is not gated by this feature. CSV import is not gated either: it uses the same `POST /leads` as manual lead creation. Background post-call sync enforcement is not implemented in this change (non-goal/follow-up). |
 | `analytics` | `/analytics/*` |
 | `live_monitor` | `GET /calls/active` |
 
@@ -119,6 +119,9 @@ plan defaults ⊕ overrides. Unknown plan in DB (manual edit) falls back to
   `failure_code="plan_feature_disabled"` or `"plan_limit_reached"`. The outbound
   router maps these to 403 and 429. The scheduler already marks non-dialing
   results `failed` and logs the `failure_code` (decision 6).
+- **No superadmin plan bypass**: a superadmin may edit entitlements, but any
+  operation against a client still uses that client's effective plan. The
+  principal role authorizes access; it does not raise the tenant's limits.
 - **Agent gate**: `create_agent` counts active agents → 403 `plan_limit_reached`.
   The default agent provisioned by `create_client` counts toward the limit.
 - **Known gap**: the concurrency cap is checked, not reserved. Two dials that
@@ -135,8 +138,11 @@ plan defaults ⊕ overrides. Unknown plan in DB (manual edit) falls back to
 ## 4. Frontend
 
 - `useEntitlements(clientId)` (TanStack Query).
-- Sidebar hides Analytics / En vivo / Importar when the feature is off. Call-now
-  is disabled with a tooltip when `outbound_calls` is off.
+- Sidebar hides the Analítica nav item when `analytics` is off. The live-monitor
+  panel on the dashboard page is gated on `live_monitor`. Importar stays
+  visible in the sidebar (CSV import is not gated); only its CRM sync section
+  is gated on `crm_integration`. Call-now is disabled with a tooltip when
+  `outbound_calls` is off.
 - Admin client page: "Plan" section with plan select, per-feature toggles, and
   limit inputs; shows current month usage.
 - `/` and `*` redirect to `/admin` (superadmin panel) instead of the

@@ -53,13 +53,21 @@ Edit `.env` (at the repo root) and fill in:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `QORA_API_KEY` | ✅ (all environments) | Admin Bearer token — protects all admin routes. Local dev can use any non-placeholder value (e.g. `dev-key`). Generate a strong key for staging/production: `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` |
-| `QORA_DOCS_ENABLED` | Optional | Toggle `/docs` and `/redoc`. Default: `true`. Set `false` in production. |
+| `QORA_ENV` | Optional | Default: `development`. Set `production` for deployment; startup then refuses insecure webhook auth, wildcard CORS, or enabled API docs. |
+| `QORA_DOCS_ENABLED` | Optional | Toggle `/docs` and `/redoc`. Default: `true`. Must be `false` in production. |
 | `QORA_DEMO_CLIENT_ID` | Required for demo | `client_id` of the demo tenant in your DB (e.g. `qora-demo`). Enables `/api/v1/demo/*` endpoints. |
 | `QORA_DEMO_AGENT_ID` | Required for demo | Agent UUID for the demo tenant. |
 | `QORA_SESSION_TTL_SECONDS` | Optional | In-memory session TTL in seconds. Default: `14400` (4 hours). |
 | `QORA_WEBHOOK_SECRET` | Required if webhook auth enabled | Shared secret for `X-Webhook-Secret` header validation. Must match ElevenLabs agent setting. |
 | `QORA_WEBHOOK_AUTH_ENABLED` | Optional | Enable ElevenLabs webhook authentication. Default: `false`. When `true`, `QORA_WEBHOOK_SECRET` must be set or startup fails. |
-| `QORA_ALLOWED_ORIGINS` | Optional | Comma-separated CORS origin allow-list. Default: `*` (open — dev only). Example: `https://app.example.com,https://admin.example.com` |
+| `QORA_ALLOWED_ORIGINS` | Optional | Comma-separated CORS origin allow-list. Default: `*` (open — dev only). Production requires explicit origins, not `*`. Example: `https://app.example.com,https://admin.example.com` |
+
+For `QORA_ENV=production`, set `QORA_WEBHOOK_AUTH_ENABLED=true`, configure a
+nonempty `QORA_WEBHOOK_SECRET`, set explicit `QORA_ALLOWED_ORIGINS`, and set
+`QORA_DOCS_ENABLED=false`. Startup refuses to run if any condition fails.
+These checks do **not** make the browser-visible global admin key safe for
+multi-tenant login; invitation-based AuthKit integration remains a follow-up.
+
 
 Edit `frontend/.env` (copy from `frontend/.env.example`):
 

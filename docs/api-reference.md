@@ -2,7 +2,7 @@
 
 All endpoints are prefixed with `/api/v1`. The base URL is `http://localhost:8000` in local development.
 
-Interactive documentation is available at `/docs` (Swagger UI) and `/redoc` (ReDoc).
+Interactive documentation is available at `/docs` (Swagger UI) and `/redoc` (ReDoc) in development. Production requires `QORA_DOCS_ENABLED=false`; see [production startup settings](running-locally.md#2-configure-api-keys).
 
 ---
 
@@ -32,7 +32,7 @@ If `QORA_API_KEY` is not set in `.env`, all protected routes deny every request 
 
 Voice endpoints (`/api/v1/voice/*`) are called by ElevenLabs — not by browser users — so they use a separate shared-secret mechanism instead of Bearer auth.
 
-By default, webhook auth is **disabled**. To enable it (optional, recommended for production):
+By default, webhook auth is **disabled** in development. `QORA_ENV=production` refuses startup unless webhook auth is enabled, CORS origins are explicit (not `*`), and API docs are disabled. To enable webhook auth:
 
 1. Set `QORA_WEBHOOK_SECRET=<strong-random-value>` in `.env`.
 2. Add the same value as `X-Webhook-Secret` in the ElevenLabs agent's security settings.
@@ -60,8 +60,8 @@ The `/api/v1/demo/*` routes are intentionally auth-exempt. They are scoped serve
 | Voice webhooks (initiation, custom-LLM, post-call) | Optional | `X-Webhook-Secret` (when `QORA_WEBHOOK_AUTH_ENABLED=true`) |
 | Demo routes (`/api/v1/demo/*`) | None | Public — scoped to demo client server-side |
 | Health check (`/api/v1/health`) | None | Public |
-| Signed URL (`/api/v1/voice/signed-url`) | None | Public — generates ElevenLabs WebSocket URL |
-| Docs (`/docs`, `/redoc`) | None | Public — disable with `QORA_DOCS_ENABLED=false` in production |
+| Signed URL (`/api/v1/voice/signed-url`) | ✅ | Superadmin Bearer key — generates ElevenLabs WebSocket URL |
+| Docs (`/docs`, `/redoc`) | None | Public in development; disabled in production |
 
 ### CORS
 
@@ -99,7 +99,7 @@ In production, always set an explicit allow-list to prevent unauthorized browser
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| GET | `/api/v1/voice/signed-url` | Public | Generate ElevenLabs signed WebSocket URL |
+| GET | `/api/v1/voice/signed-url` | Superadmin Bearer | Generate ElevenLabs signed WebSocket URL |
 | POST | `/api/v1/voice/{client_id}/custom-llm/chat/completions` | Webhook secret (optional) | Multi-tenant Custom LLM webhook (primary) |
 | POST | `/api/v1/voice/custom-llm` | Webhook secret (optional) | Legacy Custom LLM webhook (deprecated) |
 | POST | `/api/v1/voice/initiation` | Webhook secret (optional) | Call initiation webhook — injects lead context |

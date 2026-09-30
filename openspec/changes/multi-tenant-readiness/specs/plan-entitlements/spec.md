@@ -62,6 +62,17 @@ limits. A blocked dial MUST NOT create a call session or contact the provider.
 - WHEN an inbound call initiates
 - THEN the call proceeds normally
 
+### Requirement: Superadmin Does Not Bypass Client Plans
+
+A superadmin MAY edit a client's entitlements, but operations against that
+client MUST still obey its effective feature and usage limits.
+
+#### Scenario: Superadmin creates an agent at the tenant cap
+
+- GIVEN a superadmin and a client with `max_agents = 1` and one active agent
+- WHEN the superadmin creates another agent for that client
+- THEN the request fails with 403 `plan_limit_reached`
+
 ### Requirement: Agent Limit
 
 Creating an agent MUST fail with 403 `plan_limit_reached` when the client
