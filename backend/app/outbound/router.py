@@ -24,7 +24,6 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.calls.states import CallStatus
-from app.core.auth import require_api_key
 from app.core.access import require_client_access
 from app.core.config import Settings
 from app.core.logging import get_logger

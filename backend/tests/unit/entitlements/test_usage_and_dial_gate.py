@@ -11,7 +11,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-import pytest
 from pydantic import SecretStr
 from sqlalchemy import func, select
 

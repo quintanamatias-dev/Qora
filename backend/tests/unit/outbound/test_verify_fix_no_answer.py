@@ -76,6 +76,7 @@ def _make_client():
     client = MagicMock()
     client.id = "client-a"
     client.name = "No-Answer Test Client"
+    client.plan = "pilot"
     return client
 
 

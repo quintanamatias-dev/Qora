@@ -10,7 +10,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.entitlements.catalog import DEFAULT_PLAN, FEATURES, LIMITS, PLANS
+from app.entitlements.catalog import (
+    DEFAULT_PLAN,
+    FALLBACK_PLAN,
+    FEATURES,
+    LIMITS,
+    PLANS,
+)
 from app.entitlements.service import (
     InvalidOverridesError,
     resolve_entitlements,
@@ -67,9 +73,19 @@ class TestResolution:
         assert ent.plan == "starter"
         assert ent.limits == PLANS["starter"].limits
 
-    def test_missing_plan_attribute_uses_default(self):
+    def test_non_string_persisted_plan_fails_closed_to_starter(self):
+        # A corrupt non-string value is not a valid plan; fail closed like an unknown plan.
+        ent = resolve_entitlements(_client(plan=42))
+        assert ent.plan == FALLBACK_PLAN
+        assert ent.features == PLANS[FALLBACK_PLAN].features
+
+    def test_missing_plan_attribute_fails_closed_to_starter(self):
         ent = resolve_entitlements(SimpleNamespace(id="x", plan=None, entitlement_overrides=None))
-        assert ent.plan == DEFAULT_PLAN
+        assert ent.plan == FALLBACK_PLAN
+
+    def test_empty_string_plan_fails_closed_to_starter(self):
+        ent = resolve_entitlements(_client(plan=""))
+        assert ent.plan == FALLBACK_PLAN
 
     def test_corrupt_overrides_are_ignored(self):
         client = _client("pro")

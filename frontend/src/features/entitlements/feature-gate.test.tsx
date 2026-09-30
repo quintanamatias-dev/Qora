@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
@@ -126,7 +126,9 @@ describe('plan gating per route', () => {
     })
     renderRoute('/app/acme-motors/dashboard')
     expect(await screen.findByRole('heading', { name: 'Resumen' })).toBeInTheDocument()
-    await new Promise((r) => setTimeout(r, 50))
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50))
+    })
     server.events.removeAllListeners()
     expect(liveRequests).toEqual([])
   })

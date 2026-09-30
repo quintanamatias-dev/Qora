@@ -210,6 +210,7 @@ async def test_dial_outbound_call_stores_safe_metadata_not_raw():
 
     client = MagicMock()
     client.id = "client-a"
+    client.plan = "pilot"
 
     session_obj = None
 
