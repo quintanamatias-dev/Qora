@@ -1,5 +1,7 @@
 """QORA application configuration using pydantic-settings."""
 
+from typing import Literal
+
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
@@ -110,6 +112,14 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     default_company_name: str = "Quintana Seguros"
     default_agent_name: str = "Jaumpablo"
+
+    # ------------------------------------------------------------------
+    # Deployment environment (multi-tenant-readiness)
+    # ------------------------------------------------------------------
+    # "production" turns on fail-closed startup checks for settings that are
+    # convenient in development but unsafe for a multi-tenant deployment
+    # (see validate_production_hardening).
+    qora_env: Literal["development", "staging", "production"] = "development"
 
     # ------------------------------------------------------------------
     # Authentication (Phase B5 — PR #1: Foundation + Admin Auth)
@@ -372,6 +382,35 @@ class Settings(BaseSettings):
                 "Set QORA_WEBHOOK_AUTH_ENABLED=true and QORA_WEBHOOK_SECRET=<strong-random-secret> "
                 "before enabling outbound calls. "
                 "Startup is aborted to prevent this insecure configuration from serving requests."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_production_hardening(self) -> "Settings":
+        """Fail-closed: QORA_ENV=production refuses development-only settings.
+
+        - QORA_WEBHOOK_AUTH_ENABLED must be true: otherwise /voice/* is open and
+          anyone can spend LLM tokens on behalf of any tenant.
+        - QORA_ALLOWED_ORIGINS must list explicit origins, not "*".
+        - QORA_DOCS_ENABLED must be false: the OpenAPI schema maps every
+          admin route for an attacker.
+
+        Same shape as validate_outbound_requires_webhook_auth: raise, never warn.
+        """
+        if self.qora_env != "production":
+            return self
+        problems: list[str] = []
+        if not self.qora_webhook_auth_enabled:
+            problems.append("QORA_WEBHOOK_AUTH_ENABLED must be true")
+        if self.qora_allowed_origins.strip() in {"", "*"}:
+            problems.append("QORA_ALLOWED_ORIGINS must list explicit origins, not '*'")
+        if self.qora_docs_enabled:
+            problems.append("QORA_DOCS_ENABLED must be false")
+        if problems:
+            raise ValueError(
+                "QORA_ENV=production refuses to start with insecure settings: "
+                + "; ".join(problems)
+                + "."
             )
         return self
 
