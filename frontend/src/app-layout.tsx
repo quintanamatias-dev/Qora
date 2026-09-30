@@ -8,6 +8,7 @@
 
 import { Outlet, useParams } from 'react-router'
 import { Sidebar, TopBar, PageContainer, useSidebarCollapsed } from './design/components'
+import { UserMenu } from './features/auth/user-menu'
 
 export function AppLayout() {
   const { clientId } = useParams<{ clientId: string }>()
@@ -18,7 +19,9 @@ export function AppLayout() {
     <div className={collapsed ? 'app collapsed' : 'app'}>
       <Sidebar clientId={id} collapsed={collapsed} onCollapseToggle={toggleCollapsed} />
       <div className="main">
-        <TopBar clientId={id} />
+        <TopBar clientId={id}>
+          <UserMenu />
+        </TopBar>
         <PageContainer>
           <Outlet />
         </PageContainer>
