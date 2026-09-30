@@ -2,14 +2,15 @@
  * Router — React Router v7 route definitions
  *
  * Route structure:
- *  /                              → redirect to /app/demo-client/dashboard
+ *  /                              → redirect to /admin (multi-tenant-auth will send
+ *                                   tenant users to /app/{their client}/dashboard)
  *  /app/:clientId                 → AppLayout (Sidebar + TopBar + Outlet)
  *    index                        → redirect to dashboard
  *    /app/:clientId/dashboard     → DashboardPage (placeholder)
  *    /app/:clientId/leads         → LeadsPage (placeholder)
  *    /app/:clientId/leads/:leadId → LeadDetailPage (placeholder)
  *    /app/:clientId/import        → ImportPage (placeholder)
- *  *                              → redirect to /app/demo-client/dashboard
+ *  *                              → redirect to /admin
  *
  * Design: export `routes` so that tests can wrap the same config in
  * createMemoryRouter (avoids browser history dependency in test environments).
@@ -26,7 +27,7 @@ import { ImportPage } from './features/import/page'
 import { AdminLayout } from './features/admin/admin-layout'
 import { AdminPage } from './features/admin/page'
 import { ClientDetailPage } from './features/admin/client-detail-page'
-import { AnalyticsDashboardPage } from './features/analytics/page'
+import { AnalyticsRoute } from './features/analytics/page'
 import { CallDetailPage } from './features/calls/call-detail-page'
 
 /**
@@ -35,10 +36,10 @@ import { CallDetailPage } from './features/calls/call-detail-page'
  */
 export const routes: RouteObject[] = [
   {
-    // Root redirect — spec requires /app/demo-client/dashboard
+    // Root redirect — no hard-coded tenant (multi-tenant-readiness)
     index: true,
     path: '/',
-    element: <Navigate to="/app/demo-client/dashboard" replace />,
+    element: <Navigate to="/admin" replace />,
   },
   {
     path: '/app/:clientId',
@@ -66,7 +67,7 @@ export const routes: RouteObject[] = [
       },
       {
         path: 'analytics',
-        element: <AnalyticsDashboardPage />,
+        element: <AnalyticsRoute />,
       },
       {
         path: 'calls/:sessionId',
@@ -89,9 +90,9 @@ export const routes: RouteObject[] = [
     ],
   },
   {
-    // Catch-all → redirect to demo-client dashboard for dev convenience
+    // Catch-all → admin home (no hard-coded tenant)
     path: '*',
-    element: <Navigate to="/app/demo-client/dashboard" replace />,
+    element: <Navigate to="/admin" replace />,
   },
 ]
 

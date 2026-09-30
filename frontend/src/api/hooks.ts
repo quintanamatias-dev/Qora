@@ -29,6 +29,7 @@ import {
   fetchIntegrationFields,
   saveIntegrationMappings,
 } from './integrations'
+import { fetchEntitlements, updateEntitlements, fetchPlanCatalog } from './entitlements'
 import type {
   CallAnalysis,
   CallMetricsResponse,
@@ -56,6 +57,10 @@ import type {
   SaveMappingsPayload,
   LeadContextPreview,
   DimensionRollups,
+  ClientEntitlements,
+  FeatureKey,
+  PlanCatalog,
+  UpdateEntitlementsPayload,
 } from './types'
 
 interface MetricsParams {
@@ -513,6 +518,63 @@ export function useSaveIntegrationMappings(clientId: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['integrations', clientId] })
       queryClient.invalidateQueries({ queryKey: ['integrations-available', clientId] })
+    },
+  })
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Entitlements (multi-tenant-readiness)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * useEntitlements — plan, effective features/limits and current-month usage
+ * queryKey: ['entitlements', clientId]
+ */
+export function useEntitlements(clientId: string) {
+  return useQuery<ClientEntitlements, Error>({
+    queryKey: ['entitlements', clientId],
+    queryFn: () => fetchEntitlements(clientId),
+    enabled: Boolean(clientId),
+    staleTime: 60_000,
+  })
+}
+
+/**
+ * useFeature — whether the client's plan includes `feature`.
+ *
+ * Optimistic while loading or on error: the backend is the enforcement point
+ * (it answers 403 feature_not_in_plan), this only hides UI the plan excludes,
+ * so a slow request must not make navigation flicker.
+ */
+export function useFeature(clientId: string, feature: FeatureKey): boolean {
+  const { data } = useEntitlements(clientId)
+  return data ? data.features[feature] : true
+}
+
+/**
+ * usePlanCatalog — plans with their default features/limits (superadmin)
+ * queryKey: ['plan-catalog']
+ */
+export function usePlanCatalog() {
+  return useQuery<PlanCatalog, Error>({
+    queryKey: ['plan-catalog'],
+    queryFn: fetchPlanCatalog,
+    staleTime: Infinity,
+  })
+}
+
+/**
+ * useUpdateEntitlements — superadmin plan/override editor
+ * Invalidates ['entitlements', clientId] and ['clients'] on success.
+ */
+export function useUpdateEntitlements(clientId: string) {
+  const queryClient = useQueryClient()
+  return useMutation<ClientEntitlements, Error, UpdateEntitlementsPayload>({
+    mutationFn: (payload) => updateEntitlements(clientId, payload),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['entitlements', clientId], data)
+      queryClient.invalidateQueries({ queryKey: ['clients'] })
+      queryClient.invalidateQueries({ queryKey: ['client', clientId] })
     },
   })
 }

@@ -10,11 +10,11 @@
  * with the same `routes` export — same config, different history strategy.)
  *
  * Tests for:
- * - Root `/` redirects to `/app/demo-client/dashboard`
+ * - Root `/` redirects to `/admin` (no hard-coded tenant; user-scoped redirect arrives with auth)
  * - `/app/:clientId/dashboard` renders DashboardPage via AppLayout
  * - `/app/:clientId/leads` renders LeadsPage via AppLayout
  * - `/app/:clientId/leads/:leadId` renders LeadDetailPage via AppLayout
- * - Unknown path catch-all redirects to `/app/demo-client/dashboard`
+ * - Unknown path catch-all redirects to `/admin`
  * - useClientId() returns correct clientId from URL params
  * - useClientId() throws outside :clientId route
  */
@@ -40,12 +40,10 @@ function renderAt(initialEntry: string) {
 // REQ-4.1: Route structure — all routes from production router.tsx
 // ──────────────────────────────────────────────────────────────────────────────
 describe('REQ-4.1 Production route config — correct rendering', () => {
-  it('root `/` redirects to /app/demo-client/dashboard and renders DashboardPage via AppLayout', () => {
+  it('root `/` redirects to /admin instead of a hard-coded tenant', () => {
     renderAt('/')
-    // DashboardPage renders "Dashboard" as an h1
-    expect(screen.getByRole('heading', { name: 'Resumen' })).toBeInTheDocument()
-    // AppLayout renders clientId in multiple places (TopBar, Sidebar, page) — use getAllByText
-    expect(screen.getAllByText('demo-client').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByTestId('admin-header')).toBeInTheDocument()
+    expect(screen.queryByText('demo-client')).not.toBeInTheDocument()
   })
 
   it('/app/:clientId/dashboard renders DashboardPage with correct clientId via AppLayout', () => {
@@ -73,11 +71,9 @@ describe('REQ-4.1 Production route config — correct rendering', () => {
     expect(screen.getAllByText('acme-motors').length).toBeGreaterThanOrEqual(1)
   })
 
-  it('unknown path redirects to /app/demo-client/dashboard via catch-all', () => {
+  it('unknown path redirects to /admin via catch-all', () => {
     renderAt('/totally-unknown')
-    expect(screen.getByRole('heading', { name: 'Resumen' })).toBeInTheDocument()
-    // clientId "demo-client" appears after redirect
-    expect(screen.getAllByText('demo-client').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByTestId('admin-header')).toBeInTheDocument()
   })
 
   it('production routes config has the correct number of top-level routes', () => {
