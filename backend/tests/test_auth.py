@@ -60,18 +60,18 @@ class TestRequireApiKey:
         settings.qora_api_key = SecretStr(api_key)
         return settings
 
-    def test_valid_bearer_token_returns_caller_identity(self):
+    async def test_valid_bearer_token_returns_caller_identity(self):
         """Valid 'Authorization: Bearer <key>' returns a CallerIdentity."""
         from app.core.auth import require_api_key, CallerIdentity
 
         request = self._make_request("Bearer test-secret-key")
         settings = self._make_settings("test-secret-key")
 
-        result = require_api_key(request, settings)
+        result = await require_api_key(request, settings)
 
         assert isinstance(result, CallerIdentity)
 
-    def test_caller_identity_does_not_store_raw_key(self):
+    async def test_caller_identity_does_not_store_raw_key(self):
         """CallerIdentity must NOT store the raw API key — only a hash."""
         from app.core.auth import require_api_key, CallerIdentity
 
@@ -79,14 +79,14 @@ class TestRequireApiKey:
         request = self._make_request(f"Bearer {raw_key}")
         settings = self._make_settings(raw_key)
 
-        result = require_api_key(request, settings)
+        result = await require_api_key(request, settings)
 
         assert isinstance(result, CallerIdentity)
         # Raw key must NOT appear anywhere in the dataclass
         result_str = str(result.__dict__)
         assert raw_key not in result_str
 
-    def test_missing_authorization_header_raises_401(self):
+    async def test_missing_authorization_header_raises_401(self):
         """Missing Authorization header → HTTPException 401."""
         from app.core.auth import require_api_key
         from fastapi import HTTPException
@@ -95,11 +95,11 @@ class TestRequireApiKey:
         settings = self._make_settings("test-secret-key")
 
         with pytest.raises(HTTPException) as exc_info:
-            require_api_key(request, settings)
+            await require_api_key(request, settings)
 
         assert exc_info.value.status_code == 401
 
-    def test_invalid_bearer_token_raises_401(self):
+    async def test_invalid_bearer_token_raises_401(self):
         """Wrong Bearer token → HTTPException 401."""
         from app.core.auth import require_api_key
         from fastapi import HTTPException
@@ -108,11 +108,11 @@ class TestRequireApiKey:
         settings = self._make_settings("correct-key")
 
         with pytest.raises(HTTPException) as exc_info:
-            require_api_key(request, settings)
+            await require_api_key(request, settings)
 
         assert exc_info.value.status_code == 401
 
-    def test_malformed_header_no_bearer_prefix_raises_401(self):
+    async def test_malformed_header_no_bearer_prefix_raises_401(self):
         """Authorization header without 'Bearer ' prefix → HTTPException 401."""
         from app.core.auth import require_api_key
         from fastapi import HTTPException
@@ -121,11 +121,11 @@ class TestRequireApiKey:
         settings = self._make_settings("test-secret-key")
 
         with pytest.raises(HTTPException) as exc_info:
-            require_api_key(request, settings)
+            await require_api_key(request, settings)
 
         assert exc_info.value.status_code == 401
 
-    def test_empty_bearer_token_raises_401(self):
+    async def test_empty_bearer_token_raises_401(self):
         """'Authorization: Bearer ' with empty token → HTTPException 401."""
         from app.core.auth import require_api_key
         from fastapi import HTTPException
@@ -134,11 +134,11 @@ class TestRequireApiKey:
         settings = self._make_settings("test-secret-key")
 
         with pytest.raises(HTTPException) as exc_info:
-            require_api_key(request, settings)
+            await require_api_key(request, settings)
 
         assert exc_info.value.status_code == 401
 
-    def test_different_valid_keys_both_accepted(self):
+    async def test_different_valid_keys_both_accepted(self):
         """Triangulation: any correct key value is accepted, not just a hardcoded one."""
         from app.core.auth import require_api_key, CallerIdentity
 
@@ -147,12 +147,12 @@ class TestRequireApiKey:
 
         request_a = self._make_request(f"Bearer {key_a}")
         settings_a = self._make_settings(key_a)
-        result_a = require_api_key(request_a, settings_a)
+        result_a = await require_api_key(request_a, settings_a)
         assert isinstance(result_a, CallerIdentity)
 
         request_b = self._make_request(f"Bearer {key_b}")
         settings_b = self._make_settings(key_b)
-        result_b = require_api_key(request_b, settings_b)
+        result_b = await require_api_key(request_b, settings_b)
         assert isinstance(result_b, CallerIdentity)
 
     def test_constant_time_comparison_used(self):

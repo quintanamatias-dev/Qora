@@ -235,6 +235,17 @@ class Client(Base):
         Text, nullable=True, default=None
     )
 
+    # ---------------------------------------------------------------------------
+    # WorkOS AuthKit login (multi-tenant-auth)
+    # ---------------------------------------------------------------------------
+
+    # Links this client to exactly one WorkOS organization. Users whose
+    # authenticate response returns this organization_id map to role=client
+    # with client_ids=[this client's id], provided the client is_active.
+    workos_organization_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, unique=True, default=None
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )

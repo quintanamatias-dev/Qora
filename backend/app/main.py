@@ -289,6 +289,8 @@ from app.integrations.crm_config_router import router as crm_config_router  # no
 from app.demo.router import router as demo_router  # noqa: E402
 from app.outbound.router import router as outbound_router  # noqa: E402 — C2 outbound trigger
 from app.entitlements.router import router as entitlements_router  # noqa: E402
+from app.auth.router import router as auth_router  # noqa: E402
+from app.auth.access_router import router as auth_access_router  # noqa: E402
 
 api_v1_router.include_router(clients_router)  # /api/v1/clients — full CRUD
 api_v1_router.include_router(
@@ -306,6 +308,8 @@ api_v1_router.include_router(crm_config_router)  # /api/v1/clients/{client_id}/i
 api_v1_router.include_router(demo_router)  # /api/v1/demo — public demo endpoints (Phase B5 PR #2)
 api_v1_router.include_router(outbound_router)  # /api/v1/clients/{id}/leads/{id}/call — C2 outbound
 api_v1_router.include_router(entitlements_router)  # /api/v1/clients/{id}/entitlements + /entitlements/plans
+api_v1_router.include_router(auth_router)  # /api/v1/auth — WorkOS AuthKit login
+api_v1_router.include_router(auth_access_router)  # /api/v1/clients/{id}/access — superadmin org/invite API
 
 
 # ---------------------------------------------------------------------------

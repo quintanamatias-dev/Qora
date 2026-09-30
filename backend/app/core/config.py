@@ -223,6 +223,21 @@ class Settings(BaseSettings):
     # claim batch size, not dial concurrency. Default 1 = "Call Now" parity.
     auto_dialer_max_concurrent_dials: int = 1
 
+    # ------------------------------------------------------------------
+    # WorkOS AuthKit (multi-tenant-auth)
+    # ------------------------------------------------------------------
+    # Server secret used to call the WorkOS API (sk_...). None disables login.
+    workos_api_key: SecretStr | None = None
+    # Public WorkOS client id (client_...), sent in the authorize URL.
+    workos_client_id: str | None = None
+    # Callback URL registered in the WorkOS dashboard, e.g.
+    # http://localhost:5173/api/v1/auth/callback (dev, through the Vite proxy).
+    qora_auth_redirect_uri: str | None = None
+    # Comma-separated, case-insensitive list of emails mapped to role=superadmin.
+    qora_superadmin_emails: str = ""
+    # Absolute session lifetime in hours. Must be >= 1.
+    qora_auth_session_ttl_hours: int = 12
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
@@ -237,6 +252,17 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"auto_dialer_max_concurrent_dials must be >= 1, got {v}. "
                 "This bounds simultaneous in-flight dials per scheduler_tick cycle."
+            )
+        return v
+
+    @field_validator("qora_auth_session_ttl_hours")
+    @classmethod
+    def validate_qora_auth_session_ttl_hours(cls, v: int) -> int:
+        """Reject a non-positive session TTL — 0 or negative hours makes no sense."""
+        if v < 1:
+            raise ValueError(
+                f"qora_auth_session_ttl_hours must be >= 1, got {v}. "
+                "This bounds the absolute lifetime of a WorkOS-issued session cookie."
             )
         return v
 
@@ -299,6 +325,18 @@ class Settings(BaseSettings):
             )
 
         return self
+
+    @property
+    def login_enabled(self) -> bool:
+        """True when WorkOS login is fully configured (API key, client id, redirect URI)."""
+        return bool(self.workos_api_key and self.workos_client_id and self.qora_auth_redirect_uri)
+
+    @property
+    def auth_cookie_secure(self) -> bool:
+        """True when session/state cookies must carry the Secure attribute."""
+        if self.qora_env == "production":
+            return True
+        return bool(self.qora_auth_redirect_uri and self.qora_auth_redirect_uri.startswith("https://"))
 
     @property
     def outbound_without_webhook_auth_warning(self) -> bool:
@@ -406,6 +444,14 @@ class Settings(BaseSettings):
             problems.append("QORA_ALLOWED_ORIGINS must list explicit origins, not '*'")
         if self.qora_docs_enabled:
             problems.append("QORA_DOCS_ENABLED must be false")
+        if not self.workos_api_key:
+            problems.append("WORKOS_API_KEY must be set")
+        if not self.workos_client_id:
+            problems.append("WORKOS_CLIENT_ID must be set")
+        if not self.qora_auth_redirect_uri:
+            problems.append("QORA_AUTH_REDIRECT_URI must be set")
+        elif not self.qora_auth_redirect_uri.startswith("https://"):
+            problems.append("QORA_AUTH_REDIRECT_URI must start with https://")
         if problems:
             raise ValueError(
                 "QORA_ENV=production refuses to start with insecure settings: "

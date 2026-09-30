@@ -16,6 +16,9 @@ _SECURE_PROD = dict(
     qora_webhook_secret=SecretStr("a-strong-webhook-secret-for-tests"),
     qora_allowed_origins="https://app.qora.example",
     qora_docs_enabled=False,
+    workos_api_key=SecretStr("sk_test_workos_placeholder"),
+    workos_client_id="client_test_placeholder",
+    qora_auth_redirect_uri="https://app.qora.example/api/v1/auth/callback",
 )
 
 

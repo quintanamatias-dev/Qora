@@ -78,6 +78,7 @@ async def init_db(settings) -> None:
     import app.calls.models  # noqa: F401
     import app.scheduler.models  # noqa: F401
     import app.jobs.models  # noqa: F401  — registers BackgroundJob with Base.metadata
+    import app.auth.models  # noqa: F401  — registers AuthSession with Base.metadata
 
     # Enable WAL mode for concurrent read/write support and set busy timeout.
     # Schema must already exist (from pre-start migration) before these pragmas run.
