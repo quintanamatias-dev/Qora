@@ -98,6 +98,39 @@ class TestCallback:
         resp = await c.get("/api/v1/auth/callback?code=abc&state=state-b", follow_redirects=False)
         assert resp.headers["location"] == "/login?error=invalid_state"
 
+    async def test_invalid_state_does_not_clear_pending_cookies(self, client):
+        c, _ = client
+        c.cookies.set("qora_auth_state", "state-a")
+        c.cookies.set("qora_auth_return", "/app/acme/dashboard")
+        resp = await c.get("/api/v1/auth/callback?code=abc&state=state-b", follow_redirects=False)
+        assert resp.headers["location"] == "/login?error=invalid_state"
+        set_cookie_headers = resp.headers.get_list("set-cookie")
+        for header in set_cookie_headers:
+            lowered = header.lower()
+            assert "qora_auth_state=" not in lowered or "max-age=0" not in lowered
+            assert "qora_auth_return=" not in lowered or "max-age=0" not in lowered
+
+    @respx.mock
+    async def test_original_state_still_succeeds_after_mismatched_attempt(self, client):
+        c, _ = client
+        c.cookies.set("qora_auth_state", "state-a")
+        mismatched_resp = await c.get("/api/v1/auth/callback?code=abc&state=state-b", follow_redirects=False)
+        assert mismatched_resp.headers["location"] == "/login?error=invalid_state"
+
+        respx.post("https://api.workos.com/user_management/authenticate").mock(
+            return_value=Response(
+                200,
+                json={
+                    "user": {"id": "user_1", "email": "admin@qora.dev", "email_verified": True},
+                    "organization_id": None,
+                    "access_token": "h.e.s",
+                },
+            )
+        )
+        resp = await c.get("/api/v1/auth/callback?code=abc&state=state-a", follow_redirects=False)
+        assert resp.status_code == 302
+        assert "qora_session" in resp.cookies
+
     async def test_workos_error_param_redirects_login_failed(self, client):
         c, _ = client
         c.cookies.set("qora_auth_state", "state-a")
@@ -161,6 +194,26 @@ class TestCallback:
         assert resp.headers["location"] == "/admin"
         assert "qora_session" in resp.cookies
         assert "qora_auth_state" not in resp.cookies
+
+    @respx.mock
+    @pytest.mark.parametrize("forged_return_to", ["//attacker.example", "/\\evil", "https://evil"])
+    async def test_success_redirect_re_sanitizes_forged_return_cookie(self, client, forged_return_to):
+        c, _ = client
+        c.cookies.set("qora_auth_state", "state-a")
+        c.cookies.set("qora_auth_return", forged_return_to)
+        respx.post("https://api.workos.com/user_management/authenticate").mock(
+            return_value=Response(
+                200,
+                json={
+                    "user": {"id": "user_1", "email": "admin@qora.dev", "email_verified": True},
+                    "organization_id": None,
+                    "access_token": "h.e.s",
+                },
+            )
+        )
+        resp = await c.get("/api/v1/auth/callback?code=abc&state=state-a", follow_redirects=False)
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "/"
 
     @respx.mock
     async def test_success_client_role_maps_to_own_client(self, client, db_engine):

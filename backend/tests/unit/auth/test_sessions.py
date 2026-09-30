@@ -138,6 +138,11 @@ class TestMapIdentity:
 class TestSessionLifecycle:
     @pytest.mark.asyncio
     async def test_create_then_lookup_returns_valid_session(self, db_session):
+        from app.tenants.models import Client
+
+        db_session.add(Client(id="acme", name="Acme", voice_id="v1", is_active=True))
+        await db_session.commit()
+
         user = WorkosUser(id="user_1", email="a@b.com", email_verified=True, first_name="Ann", last_name="Bee")
         identity = MappedIdentity(role="client", client_ids=["acme"])
         raw_token = await create_session(
@@ -196,3 +201,54 @@ class TestSessionLifecycle:
     @pytest.mark.asyncio
     async def test_revoke_unknown_token_is_noop(self, db_session):
         assert await revoke_session(db_session, "unknown") is None
+
+    @pytest.mark.asyncio
+    async def test_lookup_client_session_is_invalid_after_client_deactivated(self, db_session):
+        from app.tenants.models import Client
+
+        client = Client(id="acme", name="Acme", voice_id="v1", is_active=True)
+        db_session.add(client)
+        await db_session.commit()
+
+        user = WorkosUser(id="user_1", email="a@b.com", email_verified=True)
+        identity = MappedIdentity(role="client", client_ids=["acme"])
+        raw_token = await create_session(
+            db_session, _settings(), user=user, identity=identity, workos_session_id=None
+        )
+
+        assert await lookup_session(db_session, raw_token) is not None
+
+        client.is_active = False
+        await db_session.commit()
+
+        assert await lookup_session(db_session, raw_token) is None
+
+    @pytest.mark.asyncio
+    async def test_lookup_client_session_stays_valid_while_client_active(self, db_session):
+        from app.tenants.models import Client
+
+        client = Client(id="acme", name="Acme", voice_id="v1", is_active=True)
+        db_session.add(client)
+        await db_session.commit()
+
+        user = WorkosUser(id="user_1", email="a@b.com", email_verified=True)
+        identity = MappedIdentity(role="client", client_ids=["acme"])
+        raw_token = await create_session(
+            db_session, _settings(), user=user, identity=identity, workos_session_id=None
+        )
+
+        found = await lookup_session(db_session, raw_token)
+        assert found is not None
+        assert found.role == "client"
+
+    @pytest.mark.asyncio
+    async def test_lookup_superadmin_session_unaffected_by_client_state(self, db_session):
+        user = WorkosUser(id="user_1", email="a@b.com", email_verified=True)
+        identity = MappedIdentity(role="superadmin", client_ids=[])
+        raw_token = await create_session(
+            db_session, _settings(), user=user, identity=identity, workos_session_id=None
+        )
+
+        found = await lookup_session(db_session, raw_token)
+        assert found is not None
+        assert found.role == "superadmin"

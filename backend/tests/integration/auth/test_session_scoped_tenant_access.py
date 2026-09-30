@@ -87,3 +87,28 @@ class TestSessionScopedTenantAccess:
         resp = await real_app_client.get("/api/v1/clients/acme/access")
         assert resp.status_code == 403
         assert resp.json()["error"]["reason"] == "superadmin_required"
+
+    async def test_client_session_gets_401_after_client_deactivated(self, real_app_client, db_engine, test_settings):
+        await _seed_two_clients(db_engine)
+        settings = _settings(test_settings.database_url)
+        token = await _client_session_cookie(db_engine, settings, client_ids=["acme"])
+
+        from app.tenants.models import Client
+
+        async with db_engine.async_session_factory() as session:
+            client = await session.get(Client, "acme")
+            client.is_active = False
+            await session.commit()
+
+        real_app_client.cookies.set("qora_session", token)
+        resp = await real_app_client.get("/api/v1/clients/acme")
+        assert resp.status_code == 401
+
+    async def test_client_session_still_works_while_client_active(self, real_app_client, db_engine, test_settings):
+        await _seed_two_clients(db_engine)
+        settings = _settings(test_settings.database_url)
+        token = await _client_session_cookie(db_engine, settings, client_ids=["acme"])
+
+        real_app_client.cookies.set("qora_session", token)
+        resp = await real_app_client.get("/api/v1/clients/acme")
+        assert resp.status_code == 200

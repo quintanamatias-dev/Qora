@@ -115,7 +115,10 @@ async def callback(
 
     cookie_state = request.cookies.get(STATE_COOKIE_NAME)
     if not state or not cookie_state or not secrets.compare_digest(state, cookie_state):
-        return _clear_state_cookies(_login_redirect(request, "invalid_state"))
+        # A mismatched/missing state does not belong to this attempt — it may be
+        # a stale replay or a forged callback. Do not clear the pending cookies:
+        # doing so would let an attacker cancel a user's in-progress login.
+        return _login_redirect(request, "invalid_state")
 
     if not code:
         return _clear_state_cookies(_login_redirect(request, "login_failed"))
@@ -137,7 +140,7 @@ async def callback(
         db, settings, user=result.user, identity=identity, workos_session_id=result.session_id
     )
 
-    return_to = request.cookies.get(RETURN_COOKIE_NAME) or "/"
+    return_to = sanitize_return_to(request.cookies.get(RETURN_COOKIE_NAME))
     response = _clear_state_cookies(RedirectResponse(url=return_to, status_code=302))
     response.set_cookie(
         SESSION_COOKIE_NAME,

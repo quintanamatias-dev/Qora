@@ -36,8 +36,16 @@ def _request(method: str, cookie: str | None, extra_headers: dict[str, str] | No
     return Request(scope)
 
 
+async def _seed_active_client(db_session, client_id: str = "acme") -> None:
+    from app.tenants.models import Client
+
+    db_session.add(Client(id=client_id, name=client_id.title(), voice_id="v1", is_active=True))
+    await db_session.commit()
+
+
 class TestRequireApiKeySessionPath:
     async def test_valid_session_cookie_returns_client_identity(self, db_session):
+        await _seed_active_client(db_session)
         user = WorkosUser(id="u1", email="user@acme.com", email_verified=True)
         identity = MappedIdentity(role="client", client_ids=["acme"])
         raw_token = await create_session(db_session, _settings(), user=user, identity=identity, workos_session_id="s1")
@@ -64,6 +72,7 @@ class TestRequireApiKeySessionPath:
         assert exc.value.status_code == 401
 
     async def test_unsafe_method_without_csrf_header_is_403(self, db_session):
+        await _seed_active_client(db_session)
         user = WorkosUser(id="u1", email="user@acme.com", email_verified=True)
         identity = MappedIdentity(role="client", client_ids=["acme"])
         raw_token = await create_session(db_session, _settings(), user=user, identity=identity, workos_session_id=None)
@@ -75,6 +84,7 @@ class TestRequireApiKeySessionPath:
         assert exc.value.detail["error"] == "csrf_check_failed"
 
     async def test_unsafe_method_with_csrf_header_succeeds(self, db_session):
+        await _seed_active_client(db_session)
         user = WorkosUser(id="u1", email="user@acme.com", email_verified=True)
         identity = MappedIdentity(role="client", client_ids=["acme"])
         raw_token = await create_session(db_session, _settings(), user=user, identity=identity, workos_session_id=None)
@@ -93,6 +103,7 @@ class TestRequireApiKeySessionPath:
         assert result.is_superadmin is True
 
     async def test_bearer_header_takes_priority_over_cookie(self, db_session):
+        await _seed_active_client(db_session)
         user = WorkosUser(id="u1", email="user@acme.com", email_verified=True)
         identity = MappedIdentity(role="client", client_ids=["acme"])
         raw_token = await create_session(db_session, _settings(), user=user, identity=identity, workos_session_id=None)

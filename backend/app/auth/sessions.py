@@ -142,6 +142,14 @@ async def lookup_session(db: AsyncSession, raw_token: str) -> AuthSession | None
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if expires_at <= datetime.now(timezone.utc):
         return None
+    if session_row.role == "client":
+        client_ids: list[str] = json.loads(session_row.client_ids)
+        active_result = await db.execute(
+            select(Client.id).where(Client.id.in_(client_ids), Client.is_active == True)  # noqa: E712
+        )
+        active_ids = {row[0] for row in active_result.all()}
+        if active_ids != set(client_ids):
+            return None
     return session_row
 
 
