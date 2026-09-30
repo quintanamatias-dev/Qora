@@ -8,8 +8,25 @@ from pydantic import SecretStr, ValidationError
 from app.core.config import Settings
 
 
+_AUTH_ENV_VARS = (
+    "WORKOS_API_KEY",
+    "WORKOS_CLIENT_ID",
+    "QORA_AUTH_REDIRECT_URI",
+    "QORA_SUPERADMIN_EMAILS",
+    "QORA_AUTH_SESSION_TTL_HOURS",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_auth_env(monkeypatch):
+    """Keep the developer's real .env (loaded by app.main) out of these tests."""
+    for name in _AUTH_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
 def _base_kwargs(**overrides):
     kwargs = dict(
+        _env_file=None,
         openai_api_key=SecretStr("sk-test"),
         elevenlabs_api_key=SecretStr("el-test"),
         qora_api_key=SecretStr("qora-test-key"),
