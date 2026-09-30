@@ -2,7 +2,7 @@
 
 Review blocker WARNING-8:
   The existing router tests bypass auth via dependency_overrides
-  (app.dependency_overrides[require_api_key] = lambda: None).
+  (app.dependency_overrides[require_api_key] = lambda: CallerIdentity(api_key_hash="test")).
   This means no test exercises the actual auth middleware on this endpoint.
 
   A regression test must prove that:

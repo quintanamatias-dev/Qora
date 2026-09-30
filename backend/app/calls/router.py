@@ -53,10 +53,12 @@ from app.calls.service import (
     list_sessions_for_client,
 )
 from app.core.auth import (
+    CallerIdentity,
     require_api_key,
     require_elevenlabs_webhook_signature,
     require_webhook_secret,
 )
+from app.core.access import ensure_resource_access, require_client_access, require_superadmin
 from app.core.database import get_session as db_session
 from app.outbound.linkage import link_outbound_session_by_webhook
 
@@ -102,7 +104,7 @@ def _record_status_request(session_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/metrics", response_model=CallMetricsResponse, dependencies=[Depends(require_api_key)])
+@router.get("/metrics", response_model=CallMetricsResponse, dependencies=[Depends(require_client_access)])
 async def get_call_metrics_endpoint(
     client_id: str,
     lead_id: str | None = None,
@@ -143,7 +145,7 @@ async def get_call_metrics_endpoint(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/active", response_model=LiveCallsResponse, dependencies=[Depends(require_api_key)])
+@router.get("/active", response_model=LiveCallsResponse, dependencies=[Depends(require_client_access)])
 async def get_active_calls_endpoint(client_id: str) -> LiveCallsResponse:
     """Return in-flight call sessions for the live dashboard view.
 
@@ -222,7 +224,7 @@ def _session_to_dict(cs) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@router.get("", dependencies=[Depends(require_api_key)])
+@router.get("", dependencies=[Depends(require_client_access)])
 async def list_call_sessions(
     client_id: str,
     lead_id: str | None = None,
@@ -410,7 +412,7 @@ async def elevenlabs_postcall_webhook(body: ElevenLabsPostCallPayload):
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{conversation_id}/end", response_model=EndSessionResponse, dependencies=[Depends(require_api_key)])
+@router.post("/{conversation_id}/end", response_model=EndSessionResponse, dependencies=[Depends(require_superadmin)])
 async def end_call_session(conversation_id: str, body: EndSessionRequest):
     """Close a call session (CAP-2a).
 
@@ -547,8 +549,10 @@ async def end_call_session(conversation_id: str, body: EndSessionRequest):
 # ---------------------------------------------------------------------------
 
 
-@router.get("/{session_id}/status", response_model=CallStatusResponse, dependencies=[Depends(require_api_key)])
-async def get_call_status(session_id: str) -> CallStatusResponse:
+@router.get("/{session_id}/status", response_model=CallStatusResponse)
+async def get_call_status(
+    session_id: str, caller: CallerIdentity = Depends(require_api_key)
+) -> CallStatusResponse:
     """Get the current telephony status of a call session for frontend polling.
 
     Spec: call-status-polling — Requirement: Status Polling Endpoint
@@ -576,6 +580,7 @@ async def get_call_status(session_id: str) -> CallStatusResponse:
         cs = await get_session(db, session_id)
         if cs is None:
             raise HTTPException(status_code=404, detail="Call session not found")
+        ensure_resource_access(caller, cs.client_id, detail="Call session not found")
 
         _record_status_request(session_id)
 
@@ -591,26 +596,28 @@ async def get_call_status(session_id: str) -> CallStatusResponse:
         )
 
 
-@router.get("/{session_id}", dependencies=[Depends(require_api_key)])
-async def get_call_session(session_id: str):
+@router.get("/{session_id}")
+async def get_call_session(session_id: str, caller: CallerIdentity = Depends(require_api_key)):
     """Get a call session by ID — for admin/debug use."""
     async with db_session() as session:
         cs = await get_session(session, session_id)
         if cs is None:
             raise HTTPException(status_code=404, detail="Call session not found")
+        ensure_resource_access(caller, cs.client_id, detail="Call session not found")
 
         result = _session_to_dict(cs)
         result["elevenlabs_conversation_id"] = cs.elevenlabs_conversation_id
         return result
 
 
-@router.get("/{session_id}/transcript", response_model=SessionTranscriptResponse, dependencies=[Depends(require_api_key)])
-async def get_call_transcript(session_id: str):
+@router.get("/{session_id}/transcript", response_model=SessionTranscriptResponse)
+async def get_call_transcript(session_id: str, caller: CallerIdentity = Depends(require_api_key)):
     """Get all transcript turns for a call session — for admin/debug use."""
     async with db_session() as session:
         cs = await get_session(session, session_id)
         if cs is None:
             raise HTTPException(status_code=404, detail="Call session not found")
+        ensure_resource_access(caller, cs.client_id, detail="Call session not found")
 
         turns = await get_transcript(session, session_id)
         return SessionTranscriptResponse(
@@ -648,8 +655,8 @@ def _parse_json_col(value: str | None, default: Any = None) -> Any:
         return default
 
 
-@router.get("/{session_id}/analysis", response_model=CallAnalysisResponse, dependencies=[Depends(require_api_key)])
-async def get_call_analysis_endpoint(session_id: str):
+@router.get("/{session_id}/analysis", response_model=CallAnalysisResponse)
+async def get_call_analysis_endpoint(session_id: str, caller: CallerIdentity = Depends(require_api_key)):
     """Get the full analysis for a call session (all 12 dimensions).
 
     Returns 404 if:
@@ -663,6 +670,7 @@ async def get_call_analysis_endpoint(session_id: str):
         cs = await get_session(session, session_id)
         if cs is None:
             raise HTTPException(status_code=404, detail="Call session not found")
+        ensure_resource_access(caller, cs.client_id, detail="Call session not found")
 
         analysis = await get_call_analysis(session, session_id)
         if analysis is None:

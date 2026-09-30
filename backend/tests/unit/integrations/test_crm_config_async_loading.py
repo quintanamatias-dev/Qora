@@ -17,6 +17,8 @@ These tests pin the contract:
 
 from __future__ import annotations
 
+from app.core.auth import CallerIdentity
+
 import ast
 import threading
 from pathlib import Path
@@ -444,7 +446,7 @@ async def test_get_lead_by_id_loads_crm_config_off_the_loop_thread():
     ), patch.object(
         leads_router, "_lead_to_dict", MagicMock(return_value={})
     ):
-        await leads_router.get_lead_by_id("lead-1", session=AsyncMock())
+        await leads_router.get_lead_by_id("lead-1", session=AsyncMock(), caller=CallerIdentity(api_key_hash="test"))
 
     assert call_threads, "get_lead_by_id never loaded CRM config"
     assert loop_thread not in call_threads, (

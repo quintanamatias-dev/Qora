@@ -318,7 +318,7 @@ class TestRouterScheduledCallOverlap409:
         map this to HTTP 409.
         """
         from app.outbound.router import router as outbound_router, get_db_session, get_settings
-        from app.core.auth import require_api_key
+        from app.core.auth import CallerIdentity, require_api_key
         from app.outbound.service import DialResult
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
@@ -344,7 +344,7 @@ class TestRouterScheduledCallOverlap409:
 
         app.dependency_overrides[get_settings] = _fake_settings
         app.dependency_overrides[get_db_session] = _fake_db
-        app.dependency_overrides[require_api_key] = lambda: None
+        app.dependency_overrides[require_api_key] = lambda: CallerIdentity(api_key_hash="test")
 
         test_client = TestClient(app, raise_server_exceptions=False)
 
@@ -385,7 +385,7 @@ class TestRouterScheduledCallOverlap409:
         THEN the response body mentions the conflict reason (scheduled call or concurrent).
         """
         from app.outbound.router import router as outbound_router, get_db_session, get_settings
-        from app.core.auth import require_api_key
+        from app.core.auth import CallerIdentity, require_api_key
         from app.outbound.service import DialResult
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
@@ -410,7 +410,7 @@ class TestRouterScheduledCallOverlap409:
 
         app.dependency_overrides[get_settings] = _fake_settings
         app.dependency_overrides[get_db_session] = _fake_db
-        app.dependency_overrides[require_api_key] = lambda: None
+        app.dependency_overrides[require_api_key] = lambda: CallerIdentity(api_key_hash="test")
 
         test_client = TestClient(app, raise_server_exceptions=False)
 
@@ -451,7 +451,7 @@ class TestRouterScheduledCallOverlap409:
         Triangulation: both failure codes produce 409.
         """
         from app.outbound.router import router as outbound_router, get_db_session, get_settings
-        from app.core.auth import require_api_key
+        from app.core.auth import CallerIdentity, require_api_key
         from app.outbound.service import DialResult
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
@@ -477,7 +477,7 @@ class TestRouterScheduledCallOverlap409:
 
         app.dependency_overrides[get_settings] = _fake_settings
         app.dependency_overrides[get_db_session] = _fake_db
-        app.dependency_overrides[require_api_key] = lambda: None
+        app.dependency_overrides[require_api_key] = lambda: CallerIdentity(api_key_hash="test")
 
         test_client = TestClient(app, raise_server_exceptions=False)
 
@@ -516,7 +516,7 @@ class TestRouterScheduledCallOverlap409:
         Regression: fixing 409 must not break the happy path.
         """
         from app.outbound.router import router as outbound_router, get_db_session, get_settings
-        from app.core.auth import require_api_key
+        from app.core.auth import CallerIdentity, require_api_key
         from app.outbound.service import DialResult
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
@@ -541,7 +541,7 @@ class TestRouterScheduledCallOverlap409:
 
         app.dependency_overrides[get_settings] = _fake_settings
         app.dependency_overrides[get_db_session] = _fake_db
-        app.dependency_overrides[require_api_key] = lambda: None
+        app.dependency_overrides[require_api_key] = lambda: CallerIdentity(api_key_hash="test")
 
         test_client = TestClient(app, raise_server_exceptions=False)
 

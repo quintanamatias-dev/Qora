@@ -38,7 +38,7 @@ def _build_app(
 ):
     """Build a test FastAPI app with all dependencies overridden."""
     from app.outbound.router import router as outbound_router, get_db_session, get_settings
-    from app.core.auth import require_api_key
+    from app.core.auth import CallerIdentity, require_api_key
 
     app = FastAPI()
     app.include_router(outbound_router)
@@ -72,7 +72,7 @@ def _build_app(
     app.dependency_overrides[get_settings] = _fake_settings
     app.dependency_overrides[get_db_session] = _fake_db
     # Bypass auth for tests
-    app.dependency_overrides[require_api_key] = lambda: None
+    app.dependency_overrides[require_api_key] = lambda: CallerIdentity(api_key_hash="test")
 
     return app, mock_settings, mock_db
 

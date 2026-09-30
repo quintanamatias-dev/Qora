@@ -17,7 +17,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app.core.auth import require_api_key
+from app.core.access import require_client_access
 from app.integrations.crm_import_service import ImportResult, import_leads_from_crm
 
 # Imported at module level for testability (can be patched in tests)
@@ -29,7 +29,7 @@ except ImportError:
 router = APIRouter(
     prefix="/clients",
     tags=["crm"],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_client_access)],
 )
 
 

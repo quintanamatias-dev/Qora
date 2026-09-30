@@ -105,7 +105,7 @@ def test_cooldown_endpoint_returns_429():
     """
     from app.outbound.router import router as outbound_router, get_db_session, get_settings
     from app.outbound.router import _record_call_attempt
-    from app.core.auth import require_api_key
+    from app.core.auth import CallerIdentity, require_api_key
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -133,7 +133,7 @@ def test_cooldown_endpoint_returns_429():
 
     app.dependency_overrides[get_settings] = _fake_settings
     app.dependency_overrides[get_db_session] = _fake_db
-    app.dependency_overrides[require_api_key] = lambda: None
+    app.dependency_overrides[require_api_key] = lambda: CallerIdentity(api_key_hash="test")
 
     client = TestClient(app, raise_server_exceptions=False)
 

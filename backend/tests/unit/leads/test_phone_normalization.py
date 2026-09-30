@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.core.auth import CallerIdentity
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -73,7 +75,7 @@ async def test_create_new_lead_returns_safe_phone_422_before_custom_fields_or_co
         new=AsyncMock(side_effect=PhoneNormalizationError("ambiguous_or_incomplete")),
     ) as create, patch("app.leads.router.cf_service.upsert_many", new=AsyncMock()) as upsert:
         with pytest.raises(HTTPException) as error:
-            await create_new_lead(body, client_id=None, session=session)
+            await create_new_lead(body, client_id=None, session=session, caller=CallerIdentity(api_key_hash="test"))
 
     assert error.value.status_code == 422
     assert error.value.detail == {
@@ -94,7 +96,7 @@ async def test_create_new_lead_requires_client_before_phone_validation():
     body = CreateLeadRequest(name="Ana", phone="011 5555-0101")
     with patch("app.leads.router.create_lead", new=AsyncMock()) as create:
         with pytest.raises(HTTPException) as error:
-            await create_new_lead(body, client_id=None, session=AsyncMock())
+            await create_new_lead(body, client_id=None, session=AsyncMock(), caller=CallerIdentity(api_key_hash="test"))
 
     assert error.value.status_code == 422
     assert error.value.detail == {"error": "client_id is required"}

@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.schemas import AgentCreate, AgentResponse, AgentUpdate, SyncStatusResponse
-from app.core.auth import require_api_key
+from app.core.access import require_client_access, require_superadmin
 from app.elevenlabs.service import sync_to_elevenlabs
 from app.tenants.models import Agent, Client
 import app.tenants.service as tenant_service
@@ -29,7 +29,7 @@ router = APIRouter(
     prefix="/clients/{client_id}/agents",
     tags=["agents"],
     redirect_slashes=False,
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_client_access)],
 )
 
 
@@ -220,7 +220,7 @@ async def list_agents(
 # ---------------------------------------------------------------------------
 
 
-@router.post("", status_code=201, response_model=AgentResponse)
+@router.post("", status_code=201, response_model=AgentResponse, dependencies=[Depends(require_superadmin)])
 async def create_agent(
     client_id: str,
     payload: AgentCreate,
@@ -293,7 +293,7 @@ async def create_agent(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{agent_id}/sync-elevenlabs", response_model=SyncStatusResponse)
+@router.post("/{agent_id}/sync-elevenlabs", response_model=SyncStatusResponse, dependencies=[Depends(require_superadmin)])
 async def sync_agent_to_elevenlabs(
     client_id: str,
     agent_id: str,
@@ -375,7 +375,7 @@ async def get_agent(
 # ---------------------------------------------------------------------------
 
 
-@router.patch("/{agent_id}", response_model=AgentResponse)
+@router.patch("/{agent_id}", response_model=AgentResponse, dependencies=[Depends(require_superadmin)])
 async def update_agent(
     client_id: str,
     agent_id: str,
@@ -428,7 +428,7 @@ async def update_agent(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{agent_id}/deactivate", response_model=AgentResponse)
+@router.post("/{agent_id}/deactivate", response_model=AgentResponse, dependencies=[Depends(require_superadmin)])
 async def deactivate_agent(
     client_id: str,
     agent_id: str,
@@ -476,7 +476,7 @@ async def deactivate_agent(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{agent_id}/make-default", response_model=AgentResponse)
+@router.post("/{agent_id}/make-default", response_model=AgentResponse, dependencies=[Depends(require_superadmin)])
 async def make_default_agent(
     client_id: str,
     agent_id: str,

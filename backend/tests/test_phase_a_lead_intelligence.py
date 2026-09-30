@@ -9,6 +9,8 @@ Tests cover:
 
 from __future__ import annotations
 
+from app.core.auth import CallerIdentity
+
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -304,6 +306,7 @@ async def test_context_preview_lead_not_found(db_session):
         await get_lead_context_preview(
             lead_id="nonexistent-lead-id",
             session=db_session,
+            caller=CallerIdentity(api_key_hash="test"),
         )
     assert exc_info.value.status_code == 404
 
@@ -329,7 +332,7 @@ async def test_context_preview_structure(db_session):
     db_session.add(lead)
     await db_session.commit()
 
-    result = await get_lead_context_preview(lead_id=lead_id, session=db_session)
+    result = await get_lead_context_preview(lead_id=lead_id, session=db_session, caller=CallerIdentity(api_key_hash="test"))
 
     # Must have all required keys
     assert "lead_id" in result
@@ -376,7 +379,7 @@ async def test_context_preview_no_agent_returns_error(db_session):
     db_session.add(lead)
     await db_session.commit()
 
-    result = await get_lead_context_preview(lead_id=lead_id, session=db_session)
+    result = await get_lead_context_preview(lead_id=lead_id, session=db_session, caller=CallerIdentity(api_key_hash="test"))
 
     # Should not raise — should return graceful error
     assert result["error"] is not None
@@ -461,7 +464,7 @@ async def test_context_preview_matches_runtime_assembly(db_session, seeded_quint
 
     ctx = await build_voice_context(agent=agent, lead=lead, db=db_session, client=client)
 
-    result = await get_lead_context_preview(lead_id=lead_id, session=db_session)
+    result = await get_lead_context_preview(lead_id=lead_id, session=db_session, caller=CallerIdentity(api_key_hash="test"))
 
     assert result["error"] is None
 
@@ -501,7 +504,7 @@ async def test_context_preview_redacts_system_prompt_content(db_session, seeded_
     system_prompt = agent.system_prompt
     assert system_prompt  # quintana agent has a real prompt
 
-    result = await get_lead_context_preview(lead_id=lead_id, session=db_session)
+    result = await get_lead_context_preview(lead_id=lead_id, session=db_session, caller=CallerIdentity(api_key_hash="test"))
 
     # Presence is signalled but the prompt text appears nowhere in the response.
     assert result["system_prompt_present"] is True
@@ -525,7 +528,7 @@ async def test_context_preview_misc_notes_match_runtime(db_session, seeded_quint
     client = await get_client(db_session, "quintana-seguros")
 
     ctx = await build_voice_context(agent=agent, lead=lead, db=db_session, client=client)
-    result = await get_lead_context_preview(lead_id=lead_id, session=db_session)
+    result = await get_lead_context_preview(lead_id=lead_id, session=db_session, caller=CallerIdentity(api_key_hash="test"))
 
     # The seeded misc_note must round-trip identically through both paths.
     assert "Prefiere ser contactado por la tarde." in result["misc_notes"]

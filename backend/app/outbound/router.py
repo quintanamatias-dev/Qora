@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.calls.states import CallStatus
 from app.core.auth import require_api_key
+from app.core.access import require_client_access
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.leads.service import get_lead
@@ -74,7 +75,7 @@ def _record_call_attempt(lead_id: str) -> None:
 router = APIRouter(
     prefix="/clients/{client_id}",
     tags=["outbound"],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_client_access)],
 )
 
 

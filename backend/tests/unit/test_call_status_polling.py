@@ -59,11 +59,11 @@ def _make_async_cm(call_session: MagicMock | None):
 def _build_app() -> FastAPI:
     """Build a minimal FastAPI app with the calls router and auth disabled."""
     from app.calls.router import router as calls_router
-    from app.core.auth import require_api_key
+    from app.core.auth import CallerIdentity, require_api_key
 
     app = FastAPI()
     app.include_router(calls_router, prefix="/api/v1")
-    app.dependency_overrides[require_api_key] = lambda: None
+    app.dependency_overrides[require_api_key] = lambda: CallerIdentity(api_key_hash="test")
     return app
 
 
