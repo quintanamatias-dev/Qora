@@ -11,7 +11,8 @@
  */
 
 import { NavLink } from 'react-router'
-import { useClient, useLeads, useAgents } from '../../api/hooks'
+import { useClient, useLeads, useAgents, useEntitlements } from '../../api/hooks'
+import type { FeatureKey } from '../../api/types'
 import { Icon } from './icon'
 import { useTheme } from './theme'
 
@@ -21,18 +22,23 @@ interface SidebarProps {
   onCollapseToggle?: () => void
 }
 
-const navItems = [
-  { label: 'Resumen', path: 'dashboard', icon: 'grid' as const },
-  { label: 'Analítica', path: 'analytics', icon: 'chart' as const },
-  { label: 'Leads', path: 'leads', icon: 'users' as const },
-  { label: 'Importar', path: 'import', icon: 'import' as const },
+const navItems: { label: string; path: string; icon: 'grid' | 'chart' | 'users' | 'import'; feature?: FeatureKey }[] = [
+  { label: 'Resumen', path: 'dashboard', icon: 'grid' },
+  { label: 'Analítica', path: 'analytics', icon: 'chart', feature: 'analytics' },
+  { label: 'Leads', path: 'leads', icon: 'users' },
+  { label: 'Importar', path: 'import', icon: 'import' },
 ]
 
 export function Sidebar({ clientId, collapsed = false, onCollapseToggle }: SidebarProps) {
   const { data: client } = useClient(clientId)
   const { data: leads } = useLeads(clientId)
   const { data: agents } = useAgents(clientId)
+  const { data: entitlements } = useEntitlements(clientId)
   const [theme, toggleTheme] = useTheme()
+  // Hide items the plan excludes; stay optimistic until entitlements load.
+  const visibleNavItems = navItems.filter(
+    (item) => !item.feature || !entitlements || entitlements.features[item.feature],
+  )
 
   return (
     <nav className="sb" aria-label="Main navigation">
@@ -60,7 +66,7 @@ export function Sidebar({ clientId, collapsed = false, onCollapseToggle }: Sideb
       </button>
 
       <div className="nav">
-        {navItems.map((item) => (
+        {visibleNavItems.map((item) => (
           <NavLink
             key={item.path}
             to={`/app/${clientId}/${item.path}`}

@@ -23,6 +23,7 @@ import {
   useLeadContextPreview,
   useIntegrations,
   useLeadDimensionRollups,
+  useFeature,
 } from '@/api/hooks'
 import type {
   LeadStatus,
@@ -37,7 +38,7 @@ import { parseUTC } from '@/lib/parse-utc'
 import { Icon } from '@/design/components'
 import { CallHistoryList } from './call-history-list'
 import { CallDrawer } from './call-drawer'
-import { CallNowCell } from './call-now-cell'
+import { CallNowCell, PLAN_EXCLUDES_OUTBOUND } from './call-now-cell'
 import { LeadStatusTag, initials } from './lead-table'
 
 const REALTIME_INTERVAL_MS = 15_000
@@ -552,6 +553,7 @@ type TabKey = 'memoria' | 'cotizacion' | 'registro' | 'crm' | 'context'
 export function LeadDetailPage() {
   const { clientId, leadId } = useParams<{ clientId: string; leadId: string }>()
   const activeClientId = clientId ?? ''
+  const canCall = useFeature(activeClientId, 'outbound_calls')
   const activeLeadId = leadId ?? ''
   const navigate = useNavigate()
   const [tab, setTab] = useState<TabKey>('memoria')
@@ -630,7 +632,13 @@ export function LeadDetailPage() {
             <Icon name="link" size={15} />
             {copyFeedback ? 'Copiado' : 'Copiar link'}
           </button>
-          <CallNowCell clientId={activeClientId} lead={lead} label="Llamar ahora" size="md" />
+          <CallNowCell
+            clientId={activeClientId}
+            lead={lead}
+            label="Llamar ahora"
+            size="md"
+            disabledReason={canCall ? undefined : PLAN_EXCLUDES_OUTBOUND}
+          />
         </div>
       </div>
 

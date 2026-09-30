@@ -22,6 +22,8 @@ vi.mock('@/api/leads', () => ({
 const { useIntegrationsMock } = vi.hoisted(() => ({ useIntegrationsMock: vi.fn() }))
 vi.mock('@/api/hooks', () => ({
   useIntegrations: useIntegrationsMock,
+  // Unrestricted plan — plan gating is covered in features/entitlements.
+  useEntitlements: () => ({ data: undefined, isLoading: false }),
 }))
 
 const { triggerCrmImportMock } = vi.hoisted(() => ({ triggerCrmImportMock: vi.fn() }))

@@ -30,6 +30,7 @@ import { parseCsv } from './csv-parser'
 import { guessColumnMapping, SKIP_FIELD_KEY, type TargetField } from './mapping'
 import { buildImportRows, type ImportRow, type RowInvalidReason } from './validation'
 import { triggerCrmImport, type CrmImportResult } from './crm-import'
+import { FeatureGate } from '@/features/entitlements/feature-gate'
 import { useToast, Toast } from './toast'
 
 const MAX_ROWS = 5000
@@ -300,17 +301,19 @@ export function ImportPage() {
         </section>
 
         <div className="stack">
-          <CrmIntegrationCard
-            clientId={activeClientId}
-            integration={integration}
-            loading={integrations.isLoading}
-            onSyncDone={(result) => {
-              queryClient.invalidateQueries({ queryKey: ['leads', activeClientId] })
-              const parts = [`${result.created} creados`, `${result.updated} actualizados`]
-              if (result.skipped > 0) parts.push(`${result.skipped} omitidos`)
-              showToast(`Airtable sincronizado · ${parts.join(' · ')}`)
-            }}
-          />
+          <FeatureGate clientId={activeClientId} feature="crm_integration">
+            <CrmIntegrationCard
+              clientId={activeClientId}
+              integration={integration}
+              loading={integrations.isLoading}
+              onSyncDone={(result) => {
+                queryClient.invalidateQueries({ queryKey: ['leads', activeClientId] })
+                const parts = [`${result.created} creados`, `${result.updated} actualizados`]
+                if (result.skipped > 0) parts.push(`${result.skipped} omitidos`)
+                showToast(`Airtable sincronizado · ${parts.join(' · ')}`)
+              }}
+            />
+          </FeatureGate>
         </div>
       </div>
 

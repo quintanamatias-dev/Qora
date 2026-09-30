@@ -8,7 +8,8 @@
 
 import { useMemo, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router'
-import { useLeads, useClient } from '@/api/hooks'
+import { useLeads, useClient, useFeature } from '@/api/hooks'
+import { PLAN_EXCLUDES_OUTBOUND } from './call-now-cell'
 import { Icon } from '@/design/components'
 import { LeadTable } from './lead-table'
 import type { Lead, LeadStatus } from '@/api/types'
@@ -32,6 +33,7 @@ function normalize(value: string): string {
 export function LeadsPage() {
   const { clientId } = useParams<{ clientId: string }>()
   const activeClientId = clientId ?? ''
+  const canCall = useFeature(activeClientId, 'outbound_calls')
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
 
@@ -121,7 +123,12 @@ export function LeadsPage() {
         )}
 
         {!isLoading && !isError && allLeads.length > 0 && (
-          <LeadTable clientId={activeClientId} leads={filtered} onSelectLead={handleSelectLead} />
+          <LeadTable
+            clientId={activeClientId}
+            leads={filtered}
+            onSelectLead={handleSelectLead}
+            callDisabledReason={canCall ? undefined : PLAN_EXCLUDES_OUTBOUND}
+          />
         )}
       </section>
     </div>

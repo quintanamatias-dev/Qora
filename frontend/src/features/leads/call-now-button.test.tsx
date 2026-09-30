@@ -357,3 +357,52 @@ describe('LeadTable — row click isolation', () => {
     expect(onSelectLead).not.toHaveBeenCalled()
   })
 })
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Plan gating (multi-tenant-readiness)
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('CallNowCell — plan gating', () => {
+  it('renders a disabled button with the reason when the plan excludes outbound calls', () => {
+    render(
+      <CallNowCell
+        clientId="demo-client"
+        lead={baseLead}
+        disabledReason="Tu plan no incluye llamadas salientes"
+      />,
+    )
+    const button = screen.getByRole('button', { name: 'Llamar' })
+    expect(button).toBeDisabled()
+    expect(button).toHaveAttribute('title', 'Tu plan no incluye llamadas salientes')
+  })
+
+  it('LeadTable forwards the disabled reason to every row', () => {
+    render(
+      <LeadTable
+        clientId="demo-client"
+        leads={[baseLead]}
+        onSelectLead={vi.fn()}
+        callDisabledReason="Tu plan no incluye llamadas salientes"
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'Llamar' })).toBeDisabled()
+  })
+
+  it.each([
+    ['plan_limit_reached', 429, 'Plan limit reached: max_monthly_minutes (200/200).', 'Alcanzaste el límite de tu plan'],
+    ['feature_not_in_plan', 403, "The client's plan does not include 'outbound_calls'.", 'Tu plan no incluye llamadas salientes'],
+  ])('explains a %s error from the backend', async (reason, status, message, expected) => {
+    server.use(
+      http.post('/api/v1/clients/:clientId/leads/:leadId/call', () =>
+        HttpResponse.json({ error: { code: status, message, reason, request_id: '' } }, { status }),
+      ),
+    )
+    const user = userEvent.setup()
+    render(<CallNowCell clientId="demo-client" lead={baseLead} />)
+
+    await user.click(screen.getByRole('button', { name: 'Llamar' }))
+    await user.click(screen.getByRole('button', { name: /confirmar|llamar ahora/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(expected)
+  })
+})

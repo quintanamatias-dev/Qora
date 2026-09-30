@@ -70,6 +70,14 @@ function TelephonyBadge({ status }: { status: TelephonyStatus }) {
 
 function resolveErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
+    // Plan refusals (multi-tenant-readiness) come with a reason code.
+    if (err.reason === 'plan_limit_reached') {
+      return `(${err.status}) Alcanzaste el límite de tu plan. ${err.message}`
+    }
+    if (err.reason === 'feature_not_in_plan') {
+      return `(${err.status}) ${PLAN_EXCLUDES_OUTBOUND}.`
+    }
+
     if (err.status === 409) {
       const body = err.body as Record<string, unknown> | undefined
       const activeSessionId =
@@ -207,9 +215,14 @@ export interface CallNowCellProps {
   label?: string
   /** "sm" for table rows (default), "md" for the detail header CTA. */
   size?: 'sm' | 'md'
+  /** When set, the trigger is disabled and this text explains why (e.g. plan). */
+  disabledReason?: string
 }
 
-export function CallNowCell({ clientId, lead, label = 'Llamar', size = 'sm' }: CallNowCellProps) {
+/** Shown when the client's plan does not include manual outbound calls. */
+export const PLAN_EXCLUDES_OUTBOUND = 'Tu plan no incluye llamadas salientes'
+
+export function CallNowCell({ clientId, lead, label = 'Llamar', size = 'sm', disabledReason }: CallNowCellProps) {
   const [state, setState] = useState<CallRowState>({ phase: 'idle' })
 
   const activeSessionId = state.phase === 'calling' ? state.callSessionId : null
@@ -333,7 +346,8 @@ export function CallNowCell({ clientId, lead, label = 'Llamar', size = 'sm' }: C
         type="button"
         className={size === 'sm' ? 'btn sm primary' : 'btn primary'}
         onClick={handleButtonClick}
-        disabled={state.phase === 'loading'}
+        disabled={state.phase === 'loading' || Boolean(disabledReason)}
+        title={disabledReason}
         style={{ whiteSpace: 'nowrap' }}
       >
         {label}

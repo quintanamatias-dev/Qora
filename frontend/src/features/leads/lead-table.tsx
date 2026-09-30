@@ -19,6 +19,8 @@ interface LeadTableProps {
   clientId: string
   leads: Lead[]
   onSelectLead: (leadId: string) => void
+  /** Disables every row's call trigger with this explanation (e.g. plan excludes outbound). */
+  callDisabledReason?: string
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -93,7 +95,7 @@ function NextActionCell({ lead }: { lead: Lead }) {
 // LeadTable
 // ──────────────────────────────────────────────────────────────────────────────
 
-export function LeadTable({ clientId, leads, onSelectLead }: LeadTableProps) {
+export function LeadTable({ clientId, leads, onSelectLead, callDisabledReason }: LeadTableProps) {
   return (
     <div className="tbl-wrap">
       <table className="tbl">
@@ -153,7 +155,7 @@ export function LeadTable({ clientId, leads, onSelectLead }: LeadTableProps) {
                 </td>
                 <td><NextActionCell lead={lead} /></td>
                 <td className="r" onClick={(e) => e.stopPropagation()}>
-                  <CallNowCell clientId={clientId} lead={lead} />
+                  <CallNowCell clientId={clientId} lead={lead} disabledReason={callDisabledReason} />
                 </td>
               </tr>
             )
