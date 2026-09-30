@@ -304,3 +304,45 @@ class TestOutboundCallEndpointSuccess:
         mock_dial.assert_called_once()
         # The provider boundary raises on construction, so this proves no dial attempt escaped the mock.
         mock_provider.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Plan gate → 403 / 429 (multi-tenant-readiness)
+# ---------------------------------------------------------------------------
+
+
+class TestOutboundCallEndpointPlanGate:
+    """Plan failures from dial_outbound_call surface as HTTP errors, not 200s."""
+
+    def _post_with_dial_result(self, dial_result):
+        app, _, _ = _build_app(enable_outbound=True)
+        client_http = TestClient(app, raise_server_exceptions=False)
+
+        with patch("app.outbound.router.get_client", new_callable=AsyncMock) as mock_client, \
+             patch("app.outbound.router.get_lead", new_callable=AsyncMock) as mock_lead, \
+             patch("app.outbound.router.get_default_agent", new_callable=AsyncMock) as mock_agent, \
+             patch("app.outbound.router.dial_outbound_call", new_callable=AsyncMock) as mock_dial:
+            mock_dial.return_value = dial_result
+            mock_client.return_value = MagicMock(id="client-a")
+            lead = MagicMock(id="lead-plan", client_id="client-a", phone="+5491155550101")
+            mock_lead.return_value = lead
+            mock_agent.return_value = MagicMock(id="agent-001")
+            return client_http.post("/clients/client-a/leads/lead-plan/call")
+
+    def test_feature_not_in_plan_returns_403(self):
+        from app.outbound.service import DialResult
+
+        response = self._post_with_dial_result(
+            DialResult(status="failed", call_session_id=None, failure_code="plan_feature_disabled", error="no outbound")
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"]["error"] == "feature_not_in_plan"
+
+    def test_plan_limit_returns_429(self):
+        from app.outbound.service import DialResult
+
+        response = self._post_with_dial_result(
+            DialResult(status="failed", call_session_id=None, failure_code="plan_limit_reached", error="limit")
+        )
+        assert response.status_code == 429
+        assert response.json()["detail"]["error"] == "plan_limit_reached"
