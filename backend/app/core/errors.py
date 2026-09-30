@@ -84,16 +84,27 @@ def build_error_response(
 
     Returns:
         JSONResponse with body: {"error": {"code": ..., "message": ..., "request_id": ...}}
+        plus "reason" (machine code) when detail is {"error": <code>, "message": <text>}.
     """
     message = _normalize_detail(detail)
-    envelope = {
-        "error": {
-            "code": status_code,
-            "message": message,
-            "request_id": request_id if request_id is not None else "",
-        }
+    reason: str | None = None
+    if (
+        isinstance(detail, dict)
+        and isinstance(detail.get("error"), str)
+        and isinstance(detail.get("message"), str)
+    ):
+        # {"error": <code>, "message": <text>}: keep the human text as the
+        # message and expose the code separately so clients can branch on it.
+        message = detail["message"]
+        reason = detail["error"]
+    error_body: dict = {
+        "code": status_code,
+        "message": message,
+        "request_id": request_id if request_id is not None else "",
     }
-    return JSONResponse(status_code=status_code, content=envelope)
+    if reason is not None:
+        error_body["reason"] = reason
+    return JSONResponse(status_code=status_code, content={"error": error_body})
 
 
 def _get_request_id(request: Request) -> str:
