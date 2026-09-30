@@ -81,6 +81,8 @@ class CallerIdentity:
     api_key_hash: str  # first 16 hex chars of SHA-256(raw_key) — for audit only
     role: PrincipalRole = "superadmin"
     client_ids: frozenset[str] = frozenset()
+    auth_method: Literal["api_key", "session"] = "api_key"
+    email: str | None = None
 
     def __post_init__(self) -> None:
         if self.role not in _PRINCIPAL_ROLES:
@@ -120,21 +122,56 @@ def _get_settings(request: Request) -> Settings:
 # ---------------------------------------------------------------------------
 
 
-def require_api_key(
+#: Cookie name for the opaque Qora session token (design.md §5).
+SESSION_COOKIE_NAME = "qora_session"
+
+#: Methods that mutate state and therefore require the CSRF header when
+#: authenticated via the session cookie (design.md §6).
+_UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+async def _get_db_session():
+    """FastAPI dependency that yields an async DB session for require_api_key.
+
+    Wraps ``app.core.database.get_session`` (an ``@asynccontextmanager``) as an
+    async-generator dependency so it is overridable via
+    ``app.dependency_overrides`` the same way every router's local
+    ``get_db_session`` helper is (see app/clients/router.py).
+
+    Yields ``None`` when the DB engine has not been initialized (e.g. tests
+    that build the app without running the lifespan). This dependency is only
+    ever used by the session-cookie branch of ``require_api_key``, which is
+    unreachable without a ``qora_session`` cookie — so an uninitialized DB
+    never breaks the Bearer API-key path.
+    """
+    from app.core import database as db_module
+
+    if db_module.async_session_factory is None:
+        yield None
+        return
+
+    async with db_module.get_session() as session:
+        yield session
+
+
+async def require_api_key(
     request: Request,
     settings: Settings = Depends(_get_settings),
+    db=Depends(_get_db_session),
 ) -> CallerIdentity:
-    """FastAPI dependency that validates the Bearer API key.
+    """FastAPI dependency that authenticates the caller (design.md §6).
 
-    Reads ``Authorization: Bearer <key>`` from the request headers and
-    compares it against ``settings.qora_api_key`` using a constant-time
-    comparison (secrets.compare_digest) to prevent timing attacks.
+    Order:
+      1. _TESTING_BYPASS → superadmin (unchanged).
+      2. Authorization header present → Bearer API-key check (unchanged, 401
+         on any problem). Returns auth_method="api_key".
+      3. Else qora_session cookie present → look up the session; missing,
+         expired or revoked → 401. For unsafe methods, the X-Qora-Client:
+         web header is required → 403 csrf_check_failed otherwise.
+      4. Else → 401 authentication_required.
 
     Returns:
-        CallerIdentity — proof of a valid key, safe to pass to route handlers.
-
-    Raises:
-        HTTPException(401) — on missing header, malformed header, or wrong key.
+        CallerIdentity — proof of a valid credential, safe to pass to route handlers.
 
     Future (Phase C):
         Replace this dependency with ``require_jwt`` — the routers stay unchanged.
@@ -147,19 +184,28 @@ def require_api_key(
     if _self._TESTING_BYPASS:
         return CallerIdentity(api_key_hash="test-bypass")
 
+    auth_header = request.headers.get("Authorization")
+    if auth_header is not None:
+        return _require_bearer_api_key(auth_header, settings)
+
+    session_token = request.cookies.get(SESSION_COOKIE_NAME)
+    if session_token:
+        return await _require_session_cookie(request, db, session_token)
+
+    raise HTTPException(
+        status_code=401,
+        detail={"error": "authentication_required", "message": "Authentication required"},
+    )
+
+
+def _require_bearer_api_key(auth_header: str, settings: Settings) -> CallerIdentity:
+    """Bearer API-key check — unchanged behaviour from the pre-session dependency."""
     if settings.qora_api_key is None:
         # API key not configured — deny all requests to protected routes.
         # This prevents accidentally open admin surfaces in misconfigured deployments.
         raise HTTPException(
             status_code=401,
             detail={"error": "authentication_required", "message": "QORA_API_KEY is not configured"},
-        )
-
-    auth_header = request.headers.get("Authorization")
-    if auth_header is None:
-        raise HTTPException(
-            status_code=401,
-            detail={"error": "authentication_required", "message": "Authorization header missing"},
         )
 
     if not auth_header.startswith("Bearer "):
@@ -187,7 +233,36 @@ def require_api_key(
     # Compute a short audit hash — first 16 hex chars of SHA-256(raw_key).
     # This identifies the key in logs without ever exposing the secret.
     audit_hash = hashlib.sha256(presented_key.encode()).hexdigest()[:16]
-    return CallerIdentity(api_key_hash=audit_hash)
+    return CallerIdentity(api_key_hash=audit_hash, auth_method="api_key")
+
+
+async def _require_session_cookie(request: Request, db, session_token: str) -> CallerIdentity:
+    """Cookie-based session check + CSRF header enforcement (design.md §6)."""
+    import json
+
+    from app.auth.sessions import lookup_session
+
+    session_row = await lookup_session(db, session_token) if db is not None else None
+    if session_row is None:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": "authentication_required", "message": "Session expired or invalid"},
+        )
+
+    if request.method in _UNSAFE_METHODS and request.headers.get("X-Qora-Client") != "web":
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "csrf_check_failed", "message": "Missing X-Qora-Client header"},
+        )
+
+    client_ids: frozenset[str] = frozenset(json.loads(session_row.client_ids))
+    return CallerIdentity(
+        api_key_hash=f"session:{session_row.id[:8]}",
+        role=session_row.role,  # type: ignore[arg-type]
+        client_ids=client_ids,
+        auth_method="session",
+        email=session_row.email,
+    )
 
 
 # ---------------------------------------------------------------------------
