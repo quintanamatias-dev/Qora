@@ -113,12 +113,18 @@ plan defaults ⊕ overrides. Unknown plan in DB (manual edit) falls back to
 - **HTTP gates**: `require_feature(key)` is a dependency factory built on
   `require_client_access`. It loads the client and returns 403
   `{"error": "feature_not_in_plan", "feature": key}`.
-- **Dial gate**: new Guard 0b in `dial_outbound_call`, after ownership and
-  before the flag guard. It returns a `DialResult` with
+- **Dial gate**: new Guard 1b in `dial_outbound_call`, after the tenant
+  ownership guard and the global `ENABLE_OUTBOUND_CALLS` flag, before any
+  `CallSession` is created. It returns a `DialResult` with
   `failure_code="plan_feature_disabled"` or `"plan_limit_reached"`. The outbound
   router maps these to 403 and 429. The scheduler already marks non-dialing
   results `failed` and logs the `failure_code` (decision 6).
 - **Agent gate**: `create_agent` counts active agents → 403 `plan_limit_reached`.
+  The default agent provisioned by `create_client` counts toward the limit.
+- **Known gap**: the concurrency cap is checked, not reserved. Two dials that
+  start at the same instant for different leads can both pass. The per-lead
+  lock and the provider's own concurrency limit bound the impact. A DB-level
+  reservation belongs with Postgres (B3).
 
 ### API
 

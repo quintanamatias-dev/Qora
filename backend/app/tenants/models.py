@@ -214,6 +214,21 @@ class Client(Base):
         String, nullable=False, default="Spanish"
     )
 
+    # ---------------------------------------------------------------------------
+    # Plan & entitlements (multi-tenant-readiness)
+    # ---------------------------------------------------------------------------
+
+    # Plan name from app/entitlements/catalog.py. "pilot" = all features, no limits.
+    plan: Mapped[str] = mapped_column(
+        String, nullable=False, default="pilot", server_default="pilot"
+    )
+    # Per-client exceptions to the plan, JSON stored as Text (nullable):
+    # {"features": {"auto_dialer": true}, "limits": {"max_monthly_minutes": 500}}
+    # Validated by app.entitlements.service.validate_overrides on write.
+    entitlement_overrides: Mapped[str | None] = mapped_column(
+        Text, nullable=True, default=None
+    )
+
     # Issue #35 — Per-client extraction configuration (JSON stored as Text, nullable)
     # NULL = use base config + generic prompt (backward compat)
     extraction_config: Mapped[str | None] = mapped_column(
