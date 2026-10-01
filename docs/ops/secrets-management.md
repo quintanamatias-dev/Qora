@@ -21,7 +21,8 @@ Qora uses a single `.env` file at the repo root as the source of truth for all s
 | `QORA_WEBHOOK_SECRET` | CONDITIONAL | HIGH | Webhook HMAC auth — required only when `QORA_WEBHOOK_AUTH_ENABLED=true` |
 | `QUINTANA_AIRTABLE_API_KEY` | PER_CLIENT | HIGH | Airtable CRM sync for Quintana Seguros; required if CRM is active |
 | `DATABASE_URL` | OPTIONAL | MEDIUM | Defaults to local SQLite; Docker overrides via `docker-compose.yml` |
-| `VITE_API_KEY` | FRONTEND | HIGH | Must match `QORA_API_KEY`; **browser-visible** — see caveat below |
+| `WORKOS_API_KEY` | CONDITIONAL | HIGH | WorkOS AuthKit login; required when `QORA_ENV=production` |
+| `WORKOS_CLIENT_ID` | CONDITIONAL | LOW | Public WorkOS client ID; required when `QORA_ENV=production` |
 | `N8N_*`, `TWILIO_*`, `BROKER_NAME` | FUTURE/LEGACY | — | Not wired in current code |
 
 ### Failure behaviour by class
@@ -127,27 +128,22 @@ python backend/scripts/check-secrets.py
 docker compose restart          # Docker
 # OR: kill uvicorn and restart  # local dev
 
-# 5. If rotating QORA_API_KEY, also update VITE_API_KEY in frontend/.env
-#    and rebuild the frontend:
-cd frontend && pnpm build
 ```
+
+Rotating `QORA_API_KEY` no longer requires a frontend rebuild: the browser
+signs in through WorkOS and never holds the key.
 
 ---
 
-## VITE_API_KEY — Browser-Visible Caveat
+## Browser Access — No Keys in the Bundle
 
-`VITE_API_KEY` in `frontend/.env` must match `QORA_API_KEY` in the backend `.env`. This value is **baked into the JavaScript bundle by Vite at build time** and is visible to anyone who opens DevTools or reads the bundle.
+The panel no longer uses `VITE_API_KEY`. Users sign in with WorkOS AuthKit;
+the backend keeps a server-side session behind an httpOnly cookie and stores
+only a SHA-256 hash of the session token. `QORA_API_KEY` is a server-side
+secret for scripts and operations only.
 
-**This is acceptable now** because:
-- The admin dashboard is internal-only (no external users)
-- The key only grants access to admin API routes
-
-**Phase C replacement:** A JWT login flow will replace `VITE_API_KEY`. Operators will log in with credentials; no static key will be embedded in the bundle. At that point, `VITE_API_KEY` is removed from `frontend/.env` and `QORA_API_KEY` is demoted to a server-side only secret.
-
-**Until Phase C:**
-- Keep the value strong and unguessable (32-byte random)
-- Never commit `frontend/.env` to version control
-- Rotate both `QORA_API_KEY` and `VITE_API_KEY` together if a rotation is needed
+If an old `VITE_API_KEY` line remains in `frontend/.env`, delete it and rotate
+`QORA_API_KEY`: every bundle built before this change contains the old value.
 
 ---
 

@@ -30,6 +30,7 @@ import {
   saveIntegrationMappings,
 } from './integrations'
 import { fetchEntitlements, updateEntitlements, fetchPlanCatalog } from './entitlements'
+import { fetchAccessState, linkOrganization, createInvitation, revokeInvitation } from './access'
 import type {
   CallAnalysis,
   CallMetricsResponse,
@@ -62,6 +63,7 @@ import type {
   PlanCatalog,
   UpdateEntitlementsPayload,
 } from './types'
+import type { AccessState, Invitation } from './access'
 
 interface MetricsParams {
   date_from?: string
@@ -575,6 +577,61 @@ export function useUpdateEntitlements(clientId: string) {
       queryClient.setQueryData(['entitlements', clientId], data)
       queryClient.invalidateQueries({ queryKey: ['clients'] })
       queryClient.invalidateQueries({ queryKey: ['client', clientId] })
+    },
+  })
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Access admin (multi-tenant-auth)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * useAccessState — linked organization, members and pending invitations
+ * queryKey: ['access', clientId]
+ */
+export function useAccessState(clientId: string) {
+  return useQuery<AccessState, ApiError>({
+    queryKey: ['access', clientId],
+    queryFn: () => fetchAccessState(clientId),
+    enabled: Boolean(clientId),
+  })
+}
+
+/**
+ * useLinkOrganization — idempotent WorkOS organization link/create
+ */
+export function useLinkOrganization(clientId: string) {
+  const queryClient = useQueryClient()
+  return useMutation<AccessState, ApiError, void>({
+    mutationFn: () => linkOrganization(clientId),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['access', clientId], data)
+    },
+  })
+}
+
+/**
+ * useCreateInvitation — invites a member by email, invalidates ['access', clientId] on success
+ */
+export function useCreateInvitation(clientId: string) {
+  const queryClient = useQueryClient()
+  return useMutation<Invitation, ApiError, string>({
+    mutationFn: (email) => createInvitation(clientId, email),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['access', clientId] })
+    },
+  })
+}
+
+/**
+ * useRevokeInvitation — revokes a pending invitation, invalidates ['access', clientId] on success
+ */
+export function useRevokeInvitation(clientId: string) {
+  const queryClient = useQueryClient()
+  return useMutation<void, ApiError, string>({
+    mutationFn: (invitationId) => revokeInvitation(clientId, invitationId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['access', clientId] })
     },
   })
 }

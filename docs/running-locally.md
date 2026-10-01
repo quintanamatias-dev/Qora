@@ -65,16 +65,36 @@ Edit `.env` (at the repo root) and fill in:
 For `QORA_ENV=production`, set `QORA_WEBHOOK_AUTH_ENABLED=true`, configure a
 nonempty `QORA_WEBHOOK_SECRET`, set explicit `QORA_ALLOWED_ORIGINS`, and set
 `QORA_DOCS_ENABLED=false`. Startup refuses to run if any condition fails.
-These checks do **not** make the browser-visible global admin key safe for
-multi-tenant login; invitation-based AuthKit integration remains a follow-up.
+Production also requires the WorkOS login variables below, with an `https://`
+redirect URI.
 
+### Login variables (WorkOS AuthKit)
+
+The panel signs users in with WorkOS AuthKit. The backend runs the login flow
+and keeps a server-side session in an httpOnly cookie; the browser never holds
+an API key or token. `QORA_API_KEY` still works as a `Bearer` token for
+scripts and `curl`.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `WORKOS_API_KEY` | For login; ✅ production | WorkOS secret key (`sk_test_...` in Staging). Dashboard → API Keys. |
+| `WORKOS_CLIENT_ID` | For login; ✅ production | WorkOS client ID (`client_...`), same page and environment as the key. |
+| `QORA_AUTH_REDIRECT_URI` | For login; ✅ production | Dev: `http://localhost:5173/api/v1/auth/callback`. Must be registered in the WorkOS dashboard → Redirects. Production must use `https://`. |
+| `QORA_SUPERADMIN_EMAILS` | Optional | Comma-separated emails that sign in as Qora superadmins. The email must be verified in WorkOS. |
+| `QORA_AUTH_SESSION_TTL_HOURS` | Optional | Session lifetime. Default: `12`. |
+
+Client users get access through their WorkOS organization: in the admin panel,
+open a client, use **Acceso → Conectar con WorkOS**, then invite users by
+email. WorkOS sends the invitation.
+
+Without these variables the panel shows "login not configured"; the API still
+works with the `Bearer` key.
 
 Edit `frontend/.env` (copy from `frontend/.env.example`):
 
 | Variable | Description |
 |----------|-------------|
-| `VITE_API_KEY` | Must match `QORA_API_KEY`. Sent by the React admin UI as a `Bearer` token. **Browser-visible — acceptable only for current Phase B static admin auth.** Will be replaced by JWT in Phase C. |
-| `VITE_API_BASE_URL` | Leave empty for Vite proxy (same-origin). |
+| `VITE_API_BASE_URL` | Leave empty for Vite proxy (same-origin). Login cookies require same-origin. |
 
 > **Do NOT create `backend/.env`.** The backend reads from root `.env` only (B8). Any old `backend/.env` is ignored — delete it if it exists.
 
