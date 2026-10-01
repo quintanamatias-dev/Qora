@@ -17,6 +17,7 @@ def _settings() -> Settings:
         openai_api_key=SecretStr("sk-test"),
         elevenlabs_api_key=SecretStr("el-test"),
         qora_api_key=SecretStr("qora-test-key"),
+        qora_superadmin_emails="admin@qora.dev",
     )
 
 
@@ -94,7 +95,7 @@ class TestRequireApiKeySessionPath:
         assert result.auth_method == "session"
 
     async def test_safe_method_does_not_require_csrf_header(self, db_session):
-        user = WorkosUser(id="u1", email="user@acme.com", email_verified=True)
+        user = WorkosUser(id="u1", email="admin@qora.dev", email_verified=True)
         identity = MappedIdentity(role="superadmin", client_ids=[])
         raw_token = await create_session(db_session, _settings(), user=user, identity=identity, workos_session_id=None)
 

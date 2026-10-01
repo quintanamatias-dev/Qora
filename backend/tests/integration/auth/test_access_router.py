@@ -213,6 +213,26 @@ class TestAccessRouter:
         assert resp.status_code == 404
 
     @respx.mock
+    async def test_revoke_on_unlinked_client_returns_409_without_touching_workos(self, superadmin_client, db_engine):
+        c, _, _ = superadmin_client
+        await _seed_client(db_engine)
+
+        get_route = respx.get("https://api.workos.com/user_management/invitations/inv_1").mock(
+            return_value=Response(
+                200,
+                json={"id": "inv_1", "email": "a@a.com", "state": "pending", "expires_at": "2026-10-01T00:00:00Z", "organization_id": None},
+            )
+        )
+        revoke_route = respx.post("https://api.workos.com/user_management/invitations/inv_1/revoke").mock(
+            return_value=Response(200, json={"id": "inv_1", "email": "a@a.com", "state": "revoked", "expires_at": "2026-10-01T00:00:00Z", "organization_id": None})
+        )
+        resp = await c.delete("/api/v1/clients/acme/access/invitations/inv_1")
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == {"error": "organization_not_linked"}
+        assert not get_route.called
+        assert not revoke_route.called
+
+    @respx.mock
     async def test_revoke_unknown_invitation_is_404(self, superadmin_client, db_engine):
         c, _, _ = superadmin_client
         await _seed_client(db_engine, workos_organization_id="org_1")

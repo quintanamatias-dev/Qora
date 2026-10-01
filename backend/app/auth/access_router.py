@@ -175,6 +175,8 @@ async def revoke_invitation(
 ):
     _require_login_configured(settings)
     client = await _get_client_or_404(db, client_id)
+    if not client.workos_organization_id:
+        raise HTTPException(status_code=409, detail={"error": "organization_not_linked"})
     ws_client = WorkosClient(settings)
 
     try:

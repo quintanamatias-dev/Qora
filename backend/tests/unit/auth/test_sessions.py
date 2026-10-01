@@ -51,6 +51,21 @@ class TestSanitizeReturnTo:
     def test_too_long_falls_back(self):
         assert sanitize_return_to("/" + "a" * 512) == "/"
 
+    @pytest.mark.parametrize(
+        "value",
+        ["/\t/evil.com", "/\n/evil.com", "/\r/evil.com", "/\t\\evil.com", "/\x00/evil.com"],
+        ids=["tab", "lf", "cr", "tab_backslash", "nul"],
+    )
+    def test_control_characters_fall_back(self, value):
+        assert sanitize_return_to(value) == "/"
+
+    @pytest.mark.parametrize("value", ["/API/v1/clients", "/Api/x", "/api", "/API"])
+    def test_api_surface_is_case_insensitive_and_covers_bare_path(self, value):
+        assert sanitize_return_to(value) == "/"
+
+    def test_path_starting_with_api_prefix_word_is_kept(self):
+        assert sanitize_return_to("/apidocs") == "/apidocs"
+
     def test_max_length_is_kept(self):
         path = "/" + "a" * 511
         assert sanitize_return_to(path) == path
@@ -150,7 +165,7 @@ class TestSessionLifecycle:
         )
         assert raw_token
 
-        found = await lookup_session(db_session, raw_token)
+        found = await lookup_session(db_session, raw_token, _settings())
         assert found is not None
         assert found.role == "client"
         assert found.email == "a@b.com"
@@ -159,15 +174,15 @@ class TestSessionLifecycle:
 
     @pytest.mark.asyncio
     async def test_raw_token_is_never_the_stored_hash(self, db_session):
-        user = WorkosUser(id="user_1", email="a@b.com", email_verified=True)
+        user = WorkosUser(id="user_1", email="admin@qora.dev", email_verified=True)
         identity = MappedIdentity(role="superadmin", client_ids=[])
         raw_token = await create_session(db_session, _settings(), user=user, identity=identity, workos_session_id=None)
-        found = await lookup_session(db_session, raw_token)
+        found = await lookup_session(db_session, raw_token, _settings())
         assert found.token_hash != raw_token
 
     @pytest.mark.asyncio
     async def test_lookup_unknown_token_returns_none(self, db_session):
-        assert await lookup_session(db_session, "does-not-exist") is None
+        assert await lookup_session(db_session, "does-not-exist", _settings()) is None
 
     @pytest.mark.asyncio
     async def test_lookup_expired_session_returns_none(self, db_session):
@@ -187,7 +202,7 @@ class TestSessionLifecycle:
             )
         )
         await db_session.commit()
-        assert await lookup_session(db_session, raw_token) is None
+        assert await lookup_session(db_session, raw_token, _settings()) is None
 
     @pytest.mark.asyncio
     async def test_lookup_revoked_session_returns_none(self, db_session):
@@ -196,7 +211,7 @@ class TestSessionLifecycle:
         raw_token = await create_session(db_session, _settings(), user=user, identity=identity, workos_session_id=None)
 
         await revoke_session(db_session, raw_token)
-        assert await lookup_session(db_session, raw_token) is None
+        assert await lookup_session(db_session, raw_token, _settings()) is None
 
     @pytest.mark.asyncio
     async def test_revoke_unknown_token_is_noop(self, db_session):
@@ -216,12 +231,12 @@ class TestSessionLifecycle:
             db_session, _settings(), user=user, identity=identity, workos_session_id=None
         )
 
-        assert await lookup_session(db_session, raw_token) is not None
+        assert await lookup_session(db_session, raw_token, _settings()) is not None
 
         client.is_active = False
         await db_session.commit()
 
-        assert await lookup_session(db_session, raw_token) is None
+        assert await lookup_session(db_session, raw_token, _settings()) is None
 
     @pytest.mark.asyncio
     async def test_lookup_client_session_is_invalid_after_client_deleted(self, db_session):
@@ -237,12 +252,12 @@ class TestSessionLifecycle:
             db_session, _settings(), user=user, identity=identity, workos_session_id=None
         )
 
-        assert await lookup_session(db_session, raw_token) is not None
+        assert await lookup_session(db_session, raw_token, _settings()) is not None
 
         await db_session.delete(client)
         await db_session.commit()
 
-        assert await lookup_session(db_session, raw_token) is None
+        assert await lookup_session(db_session, raw_token, _settings()) is None
 
     @pytest.mark.asyncio
     async def test_lookup_client_session_stays_valid_while_client_active(self, db_session):
@@ -258,18 +273,41 @@ class TestSessionLifecycle:
             db_session, _settings(), user=user, identity=identity, workos_session_id=None
         )
 
-        found = await lookup_session(db_session, raw_token)
+        found = await lookup_session(db_session, raw_token, _settings())
         assert found is not None
         assert found.role == "client"
 
     @pytest.mark.asyncio
-    async def test_lookup_superadmin_session_unaffected_by_client_state(self, db_session):
-        user = WorkosUser(id="user_1", email="a@b.com", email_verified=True)
+    async def test_lookup_superadmin_session_is_invalid_after_email_removed(self, db_session):
+        user = WorkosUser(id="user_1", email="admin@qora.dev", email_verified=True)
         identity = MappedIdentity(role="superadmin", client_ids=[])
         raw_token = await create_session(
             db_session, _settings(), user=user, identity=identity, workos_session_id=None
         )
 
-        found = await lookup_session(db_session, raw_token)
+        assert await lookup_session(db_session, raw_token, _settings()) is not None
+
+        demoted = _settings(qora_superadmin_emails="owner@qora.dev")
+        assert await lookup_session(db_session, raw_token, demoted) is None
+
+    @pytest.mark.asyncio
+    async def test_lookup_superadmin_session_matches_email_case_insensitively(self, db_session):
+        user = WorkosUser(id="user_1", email="OWNER@qora.dev", email_verified=True)
+        identity = MappedIdentity(role="superadmin", client_ids=[])
+        raw_token = await create_session(
+            db_session, _settings(), user=user, identity=identity, workos_session_id=None
+        )
+
+        assert await lookup_session(db_session, raw_token, _settings()) is not None
+
+    @pytest.mark.asyncio
+    async def test_lookup_superadmin_session_unaffected_by_client_state(self, db_session):
+        user = WorkosUser(id="user_1", email="admin@qora.dev", email_verified=True)
+        identity = MappedIdentity(role="superadmin", client_ids=[])
+        raw_token = await create_session(
+            db_session, _settings(), user=user, identity=identity, workos_session_id=None
+        )
+
+        found = await lookup_session(db_session, raw_token, _settings())
         assert found is not None
         assert found.role == "superadmin"

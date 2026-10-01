@@ -190,7 +190,7 @@ async def require_api_key(
 
     session_token = request.cookies.get(SESSION_COOKIE_NAME)
     if session_token:
-        return await _require_session_cookie(request, db, session_token)
+        return await _require_session_cookie(request, db, session_token, settings)
 
     raise HTTPException(
         status_code=401,
@@ -236,13 +236,15 @@ def _require_bearer_api_key(auth_header: str, settings: Settings) -> CallerIdent
     return CallerIdentity(api_key_hash=audit_hash, auth_method="api_key")
 
 
-async def _require_session_cookie(request: Request, db, session_token: str) -> CallerIdentity:
+async def _require_session_cookie(
+    request: Request, db, session_token: str, settings: Settings
+) -> CallerIdentity:
     """Cookie-based session check + CSRF header enforcement (design.md §6)."""
     import json
 
     from app.auth.sessions import lookup_session
 
-    session_row = await lookup_session(db, session_token) if db is not None else None
+    session_row = await lookup_session(db, session_token, settings) if db is not None else None
     if session_row is None:
         raise HTTPException(
             status_code=401,

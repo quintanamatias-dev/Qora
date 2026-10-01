@@ -164,14 +164,19 @@ class MeResponse(BaseModel):
 
 
 @router.get("/me", response_model=MeResponse)
-async def me(request: Request, caller: CallerIdentity = Depends(require_api_key), db=Depends(_get_db)) -> MeResponse:
+async def me(
+    request: Request,
+    caller: CallerIdentity = Depends(require_api_key),
+    settings: Settings = Depends(_get_settings),
+    db=Depends(_get_db),
+) -> MeResponse:
     name = None
     if caller.auth_method == "session":
         session_token = request.cookies.get(SESSION_COOKIE_NAME)
         if session_token and db is not None:
             from app.auth.sessions import lookup_session
 
-            session_row = await lookup_session(db, session_token)
+            session_row = await lookup_session(db, session_token, settings)
             if session_row is not None:
                 name = session_row.display_name
 

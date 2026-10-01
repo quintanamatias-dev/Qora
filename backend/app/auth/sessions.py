@@ -26,19 +26,24 @@ def sanitize_return_to(return_to: str | None) -> str:
     """Sanitize an untrusted ``return_to`` query param per design §5.
 
     Must start with ``/``, must not start with ``//`` or ``/\\`` (protocol-
-    relative / backslash open-redirect tricks), must not start with
-    ``/api/`` (never redirect back into the API surface), and must not
-    exceed 512 chars. Anything else falls back to ``/``.
+    relative / backslash open-redirect tricks), must not contain control
+    characters (browsers strip tab/CR/LF while parsing, so ``/\t/host``
+    would become ``//host``), must not target the API surface (``/api`` or
+    ``/api/...``, case-insensitive), and must not exceed 512 chars.
+    Anything else falls back to ``/``.
     """
     if not return_to:
         return "/"
     if len(return_to) > _MAX_RETURN_TO_LENGTH:
         return "/"
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in return_to):
+        return "/"
     if not return_to.startswith("/"):
         return "/"
     if return_to.startswith("//") or return_to.startswith("/\\"):
         return "/"
-    if return_to.startswith("/api/"):
+    lowered = return_to.lower()
+    if lowered == "/api" or lowered.startswith("/api/"):
         return "/"
     return return_to
 
@@ -61,6 +66,14 @@ class MappedIdentity:
     client_ids: list[str]
 
 
+def _superadmin_emails(settings: Settings) -> set[str]:
+    return {
+        e.strip().lower()
+        for e in settings.qora_superadmin_emails.split(",")
+        if e.strip()
+    }
+
+
 class NoAccessError(Exception):
     """Raised when an authenticated WorkOS user maps to no Qora role."""
 
@@ -79,10 +92,7 @@ async def map_identity(
        client, client_ids=[client.id].
     3. Otherwise -> NoAccessError.
     """
-    superadmin_emails = {
-        e.strip().lower() for e in settings.qora_superadmin_emails.split(",") if e.strip()
-    }
-    if user.email.lower() in superadmin_emails and user.email_verified:
+    if user.email.lower() in _superadmin_emails(settings) and user.email_verified:
         return MappedIdentity(role="superadmin", client_ids=[])
 
     if organization_id:
@@ -127,8 +137,15 @@ async def create_session(
     return raw_token
 
 
-async def lookup_session(db: AsyncSession, raw_token: str) -> AuthSession | None:
-    """Return the AuthSession for ``raw_token`` if it is valid, revoked and expired excluded."""
+async def lookup_session(
+    db: AsyncSession, raw_token: str, settings: Settings
+) -> AuthSession | None:
+    """Return the AuthSession for ``raw_token`` if it is valid, revoked and expired excluded.
+
+    Roles are re-checked against current state: a client session needs every
+    client still active, and a superadmin session needs its email still in
+    QORA_SUPERADMIN_EMAILS.
+    """
     result = await db.execute(
         select(AuthSession).where(AuthSession.token_hash == hash_token(raw_token))
     )
@@ -141,6 +158,11 @@ async def lookup_session(db: AsyncSession, raw_token: str) -> AuthSession | None
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if expires_at <= datetime.now(timezone.utc):
+        return None
+    if (
+        session_row.role == "superadmin"
+        and session_row.email.lower() not in _superadmin_emails(settings)
+    ):
         return None
     if session_row.role == "client":
         client_ids: list[str] = json.loads(session_row.client_ids)
