@@ -73,11 +73,13 @@ RUN adduser --disabled-password --no-create-home qora \
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Switch to non-root user
-USER qora
-
-# SQLite volume mount point — must match DATABASE_URL in docker-compose.yml
-VOLUME ["/app/data"]
+# The container starts as root only so the entrypoint can fix ownership of
+# the mounted data volume (Railway mounts volumes as root), then it drops to
+# the qora user before running migrations and the server.
+#
+# No VOLUME instruction: Railway rejects it. The SQLite data directory
+# /app/data is mounted by docker-compose.yml (named volume) or by a Railway
+# volume, and DATABASE_URL must point inside it.
 
 EXPOSE 8000
 
