@@ -44,4 +44,20 @@ describe('UserMenu', () => {
 
     restoreLocation(originalLocation)
   })
+
+  it('shows an error and stays on the page when logout fails', async () => {
+    server.use(http.post('/api/v1/auth/logout', () => HttpResponse.json({}, { status: 500 })))
+    const originalLocation = window.location
+    const assignMock = stubLocationAssign()
+
+    const user = userEvent.setup()
+    renderMenu()
+    await user.click(await screen.findByRole('button', { name: 'Cerrar sesión' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('No se pudo cerrar la sesión')
+    expect(assignMock).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Cerrar sesión' })).toBeEnabled()
+
+    restoreLocation(originalLocation)
+  })
 })

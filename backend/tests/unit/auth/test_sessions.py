@@ -59,7 +59,10 @@ class TestSanitizeReturnTo:
     def test_control_characters_fall_back(self, value):
         assert sanitize_return_to(value) == "/"
 
-    @pytest.mark.parametrize("value", ["/API/v1/clients", "/Api/x", "/api", "/API"])
+    @pytest.mark.parametrize(
+        "value",
+        ["/API/v1/clients", "/Api/x", "/api", "/API", "/api?x=1", "/API#frag"],
+    )
     def test_api_surface_is_case_insensitive_and_covers_bare_path(self, value):
         assert sanitize_return_to(value) == "/"
 

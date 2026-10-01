@@ -3,18 +3,19 @@
  *
  * Loads the caller identity via useMe(); shows a loading state while pending,
  * and redirects to /login?return_to=<current path+search> on a 401. Any other
- * query error is unexpected (not part of the auth contract) and is thrown so
- * it surfaces as a real error rather than a silent redirect loop.
+ * error (network, 5xx) is not an auth answer: if an identity is already known
+ * the children keep rendering, otherwise a retryable error state is shown.
  */
 
 import type { ReactNode } from 'react'
 import { Navigate, useLocation } from 'react-router'
 import { useMe } from '@/api/auth'
 import { ApiError } from '@/api/client'
+import { Button } from '@/design/components'
 
 export function RequireAuth({ children }: { children: ReactNode }) {
   const location = useLocation()
-  const { data, isLoading, isError, error } = useMe()
+  const { data, isLoading, isError, error, refetch, isFetching } = useMe()
 
   if (isLoading) {
     return (
@@ -24,15 +25,23 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     )
   }
 
-  if (isError) {
-    if (error instanceof ApiError && error.status === 401) {
-      const returnTo = location.pathname + location.search
-      return <Navigate to={`/login?return_to=${encodeURIComponent(returnTo)}`} replace />
-    }
-    throw error
+  if (isError && error instanceof ApiError && error.status === 401) {
+    const returnTo = location.pathname + location.search
+    return <Navigate to={`/login?return_to=${encodeURIComponent(returnTo)}`} replace />
   }
 
-  if (!data) return null
+  if (data) return <>{children}</>
 
-  return <>{children}</>
+  if (isError) {
+    return (
+      <div data-testid="auth-error" className="flex min-h-screen flex-col items-center justify-center gap-3 bg-pearl">
+        <p className="text-sm text-ink-3">No se pudo verificar la sesión.</p>
+        <Button variant="secondary" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+          Reintentar
+        </Button>
+      </div>
+    )
+  }
+
+  return null
 }

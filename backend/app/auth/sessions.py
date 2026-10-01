@@ -28,8 +28,9 @@ def sanitize_return_to(return_to: str | None) -> str:
     Must start with ``/``, must not start with ``//`` or ``/\\`` (protocol-
     relative / backslash open-redirect tricks), must not contain control
     characters (browsers strip tab/CR/LF while parsing, so ``/\t/host``
-    would become ``//host``), must not target the API surface (``/api`` or
-    ``/api/...``, case-insensitive), and must not exceed 512 chars.
+    would become ``//host``), must not target the API surface (``/api``,
+    ``/api/...``, ``/api?...`` or ``/api#...``, case-insensitive), and must
+    not exceed 512 chars.
     Anything else falls back to ``/``.
     """
     if not return_to:
@@ -43,7 +44,7 @@ def sanitize_return_to(return_to: str | None) -> str:
     if return_to.startswith("//") or return_to.startswith("/\\"):
         return "/"
     lowered = return_to.lower()
-    if lowered == "/api" or lowered.startswith("/api/"):
+    if lowered == "/api" or lowered.startswith(("/api/", "/api?", "/api#")):
         return "/"
     return return_to
 
