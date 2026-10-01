@@ -153,7 +153,18 @@ def _auto_bypass_api_key(request):
 
     # Tests in test_auth.py that verify real auth behavior must NOT get the bypass.
     # Identified by their class names — all classes in that module test real auth.
-    _AUTH_TEST_CLASSES = {"TestRequireApiKey", "TestAuthSettings", "TestAdminRoutesRequireAuth"}
+    _AUTH_TEST_CLASSES = {
+        "TestRequireApiKey",
+        "TestAuthSettings",
+        "TestAdminRoutesRequireAuth",
+        "TestRequireApiKeySessionPath",
+        "TestAuthConfig",
+        "TestLogin",
+        "TestCallback",
+        "TestMeAndLogout",
+        "TestAccessRouter",
+        "TestSessionScopedTenantAccess",
+    }
     cls = request.node.cls
     if cls is not None and cls.__name__ in _AUTH_TEST_CLASSES:
         # Ensure bypass is OFF for these tests
@@ -237,6 +248,7 @@ async def db_engine(test_settings):
     import app.calls.models  # noqa: F401
     import app.scheduler.models  # noqa: F401
     import app.jobs.models  # noqa: F401  — BackgroundJob model (Phase B10)
+    import app.auth.models  # noqa: F401  — AuthSession model (multi-tenant-auth)
 
     # 4. Enable WAL mode for concurrent read/write support (matches production init_db)
     from sqlalchemy import text
