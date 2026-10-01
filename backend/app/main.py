@@ -385,6 +385,8 @@ def create_app(docs_enabled: bool | None = None) -> FastAPI:
         lifespan=lifespan,
         docs_url="/docs" if docs_enabled else None,
         redoc_url="/redoc" if docs_enabled else None,
+        # The schema maps every admin route; hide it together with the docs UI.
+        openapi_url="/openapi.json" if docs_enabled else None,
     )
 
     # CORS lockdown (Phase B5 PR #3): use QORA_ALLOWED_ORIGINS to restrict origins.
