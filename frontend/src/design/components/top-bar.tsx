@@ -13,6 +13,7 @@ import { Icon } from './icon'
 
 interface TopBarProps {
   clientId: string
+  children?: React.ReactNode
 }
 
 const PAGE_LABELS: Record<string, string> = {
@@ -40,7 +41,7 @@ function buildCrumbs(pathname: string, clientId: string, clientName: string, lea
   return [{ label: clientName }, { label }]
 }
 
-export function TopBar({ clientId }: TopBarProps) {
+export function TopBar({ clientId, children }: TopBarProps) {
   const { data: client } = useClient(clientId)
   const { pathname } = useLocation()
   const navigate = useNavigate()
@@ -89,6 +90,7 @@ export function TopBar({ clientId }: TopBarProps) {
         />
         <span className="kbd">⌘K</span>
       </label>
+      {children}
     </header>
   )
 }

@@ -26,6 +26,7 @@ import type {
   DimensionRollups,
 } from '../../src/api/types'
 import { makeEntitlements, planCatalogFixture } from './entitlements'
+import { authHandlers } from './auth'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Fixtures
@@ -462,6 +463,9 @@ const airtableFieldsFixture = {
 }
 
 export const handlers = [
+  // ── Auth (multi-tenant-auth) ────────────────────────────────────────────
+  ...authHandlers,
+
   // ── Admin: Clients ────────────────────────────────────────────────────────
 
   // GET /api/v1/clients — returns all clients fixture

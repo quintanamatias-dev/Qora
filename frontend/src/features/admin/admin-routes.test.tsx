@@ -40,9 +40,9 @@ describe('Admin nested routes', () => {
     })
   })
 
-  it('/admin renders the admin header', () => {
+  it('/admin renders the admin header', async () => {
     renderAt('/admin')
-    expect(screen.getByTestId('admin-header')).toBeInTheDocument()
+    expect(await screen.findByTestId('admin-header')).toBeInTheDocument()
   })
 
   it('/admin does NOT render old tab navigation (no "Agents & Voice Config" tab)', async () => {

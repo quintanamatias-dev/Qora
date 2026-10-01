@@ -3,18 +3,35 @@
  *
  * Design decisions:
  * - VITE_API_BASE_URL defaults to "" (same-origin) — works with Vite proxy
- * - VITE_API_KEY is the admin Bearer token (Phase B5). Set in frontend/.env.
- *   Phase C: replaced by JWT from login flow — apiFetch signature unchanged.
+ * - Every request always sends X-Qora-Client: web and credentials: 'same-origin'
+ *   (multi-tenant-auth §9). Authentication is carried by the httpOnly session
+ *   cookie set by the backend at login — no client-side token handling.
  * - ApiError extends Error so try/catch instanceof checks work
  * - apiFetch is generic: apiFetch<T>(path) → Promise<T>
  */
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 
-// Phase B5: static Bearer token for admin API access.
-// Injected at build time from VITE_API_KEY env var.
-// Phase C: swap for getAccessToken() from auth provider — zero call-site changes.
-const API_KEY = import.meta.env.VITE_API_KEY ?? ''
+const AUTH_PATH_PREFIX = '/api/v1/auth/'
+
+type UnauthorizedHandler = () => void
+
+function defaultUnauthorizedHandler(): void {
+  const returnTo = window.location.pathname + window.location.search
+  window.location.assign(`/login?return_to=${encodeURIComponent(returnTo)}`)
+}
+
+let unauthorizedHandler: UnauthorizedHandler = defaultUnauthorizedHandler
+
+/** Overrides the 401 handler — used by tests to avoid real navigation. */
+export function setUnauthorizedHandler(handler: UnauthorizedHandler): void {
+  unauthorizedHandler = handler
+}
+
+/** Restores the default (redirect to /login) unauthorized handler. */
+export function resetUnauthorizedHandler(): void {
+  unauthorizedHandler = defaultUnauthorizedHandler
+}
 
 function errorMessageFromBody(status: number, body: unknown): string {
   // Primary: parse canonical error envelope {error: {code, message, request_id}}
@@ -75,28 +92,32 @@ export class ApiError extends Error {
 }
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  // Build Authorization header when API_KEY is configured.
-  // Empty string means no key is set (dev without auth or public endpoint).
-  const authHeaders: HeadersInit = API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}
-
   // Merge headers explicitly before spreading the rest of init.
-  // Spread order: defaults → auth → caller overrides (caller wins on conflict).
-  // The merged headers object is assigned last so `...init` cannot overwrite it.
+  // Spread order: defaults → caller overrides (caller wins on conflict).
   const mergedHeaders = {
     'Content-Type': 'application/json',
-    ...authHeaders,
+    'X-Qora-Client': 'web',
     ...(init?.headers as Record<string, string> | undefined),
   }
 
   const res = await fetch(`${BASE}${path}`, {
     ...init,
     headers: mergedHeaders,
+    // Always same-origin: the session cookie is httpOnly and never sent cross-origin.
+    credentials: 'same-origin',
   })
 
   if (!res.ok) {
     const body = await res.json().catch(() => null)
+    // Auth endpoints report their own 401s as part of the login flow (e.g. an
+    // expired login attempt) — they must not trigger the global redirect loop.
+    if (res.status === 401 && !path.startsWith(AUTH_PATH_PREFIX)) {
+      unauthorizedHandler()
+    }
     throw new ApiError(res.status, body)
   }
+
+  if (res.status === 204) return undefined as T
 
   return res.json() as Promise<T>
 }

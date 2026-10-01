@@ -2,15 +2,17 @@
  * Router — React Router v7 route definitions
  *
  * Route structure:
- *  /                              → redirect to /admin (multi-tenant-auth will send
- *                                   tenant users to /app/{their client}/dashboard)
- *  /app/:clientId                 → AppLayout (Sidebar + TopBar + Outlet)
+ *  /login                         → LoginPage (public, no RequireAuth)
+ *  /                              → RequireAuth + RoleHome (superadmin → /admin,
+ *                                   client → /app/{their client}/dashboard)
+ *  /app/:clientId                 → RequireAuth + AppRoleGuard + AppLayout
  *    index                        → redirect to dashboard
  *    /app/:clientId/dashboard     → DashboardPage (placeholder)
  *    /app/:clientId/leads         → LeadsPage (placeholder)
  *    /app/:clientId/leads/:leadId → LeadDetailPage (placeholder)
  *    /app/:clientId/import        → ImportPage (placeholder)
- *  *                              → redirect to /admin
+ *  /admin                         → RequireAuth + AdminRoleGuard + AdminLayout
+ *  *                              → RequireAuth + RoleHome
  *
  * Design: export `routes` so that tests can wrap the same config in
  * createMemoryRouter (avoids browser history dependency in test environments).
@@ -29,6 +31,9 @@ import { AdminPage } from './features/admin/page'
 import { ClientDetailPage } from './features/admin/client-detail-page'
 import { AnalyticsRoute } from './features/analytics/page'
 import { CallDetailPage } from './features/calls/call-detail-page'
+import { LoginPage } from './features/auth/login-page'
+import { RequireAuth } from './features/auth/require-auth'
+import { RoleHome, AdminRoleGuard, AppRoleGuard } from './features/auth/role-routing'
 
 /**
  * Shared route definitions — used by both the production router and test helpers.
@@ -36,14 +41,28 @@ import { CallDetailPage } from './features/calls/call-detail-page'
  */
 export const routes: RouteObject[] = [
   {
-    // Root redirect — no hard-coded tenant (multi-tenant-readiness)
+    path: '/login',
+    element: <LoginPage />,
+  },
+  {
+    // Root redirect — role-based (multi-tenant-auth §9)
     index: true,
     path: '/',
-    element: <Navigate to="/admin" replace />,
+    element: (
+      <RequireAuth>
+        <RoleHome />
+      </RequireAuth>
+    ),
   },
   {
     path: '/app/:clientId',
-    element: <AppLayout />,
+    element: (
+      <RequireAuth>
+        <AppRoleGuard>
+          <AppLayout />
+        </AppRoleGuard>
+      </RequireAuth>
+    ),
     children: [
       {
         index: true,
@@ -77,7 +96,13 @@ export const routes: RouteObject[] = [
   },
   {
     path: '/admin',
-    element: <AdminLayout />,
+    element: (
+      <RequireAuth>
+        <AdminRoleGuard>
+          <AdminLayout />
+        </AdminRoleGuard>
+      </RequireAuth>
+    ),
     children: [
       {
         index: true,
@@ -90,9 +115,13 @@ export const routes: RouteObject[] = [
     ],
   },
   {
-    // Catch-all → admin home (no hard-coded tenant)
+    // Catch-all — role-based (multi-tenant-auth §9)
     path: '*',
-    element: <Navigate to="/admin" replace />,
+    element: (
+      <RequireAuth>
+        <RoleHome />
+      </RequireAuth>
+    ),
   },
 ]
 
