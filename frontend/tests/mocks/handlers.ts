@@ -27,6 +27,7 @@ import type {
 } from '../../src/api/types'
 import { makeEntitlements, planCatalogFixture } from './entitlements'
 import { authHandlers } from './auth'
+import { accessHandlers } from './access'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Fixtures
@@ -465,6 +466,9 @@ const airtableFieldsFixture = {
 export const handlers = [
   // ── Auth (multi-tenant-auth) ────────────────────────────────────────────
   ...authHandlers,
+
+  // ── Access admin (multi-tenant-auth) ────────────────────────────────────
+  ...accessHandlers,
 
   // ── Admin: Clients ────────────────────────────────────────────────────────
 

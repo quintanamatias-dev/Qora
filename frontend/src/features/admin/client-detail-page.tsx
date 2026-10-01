@@ -14,6 +14,7 @@ import { useState } from 'react'
 import { useParams, Link } from 'react-router'
 import { Badge } from '@/design/components'
 import { useClient } from '@/api/hooks'
+import { AccessSection } from './access-section'
 import { AgentsSection } from './agents-section'
 import { IntegrationsSection } from './integrations-section'
 import { PlanSection } from './plan-section'
@@ -117,6 +118,10 @@ export function ClientDetailPage() {
 
       <Disclosure title="Integrations">
         <IntegrationsSection clientId={clientId} />
+      </Disclosure>
+
+      <Disclosure title="Acceso">
+        <AccessSection clientId={clientId} />
       </Disclosure>
     </div>
   )
