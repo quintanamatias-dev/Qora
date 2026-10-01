@@ -15,6 +15,7 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 - Post-call analysis, data corrections, CRM sync
 - Scheduler queue that also dials: the tick claims due scheduled calls, dials them unattended, and the completion hook closes the row (C6b slices 1–3, verified on a live call 2026-09-21), and post-call analysis schedules the follow-up itself (C9, verified live 2026-09-26)
 - Admin panel with agent config, integration setup, tools management
+- Operator login with WorkOS AuthKit (PR #175): superadmins see every client, client users see only their own; the browser no longer holds an API key
 - Lead list/detail with custom fields, call history, transcripts
 - Call state machine with formal telephony states (CallStatus StrEnum, polling endpoint, voicemail heuristic)
 - Structured logging with request correlation, canonical error envelopes, optional Sentry, PII scrubbing
@@ -23,7 +24,6 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 - No real phone calls to production leads (outbound tested in dev; inbound not implemented)
 - No public deployment (local + ngrok only)
 - SQLite only (no production DB)
-- No operator login (API key auth exists; JWT/managed auth planned)
 
 ---
 
@@ -52,10 +52,10 @@ Qora is a working AI call center platform with browser-based voice demo, CRM int
 | # | Item | Status | Notes |
 |---|------|--------|-------|
 | B1 | Dockerfile + docker-compose | - [x] | Completed in PR #105: single-container FastAPI + React SPA image, compose runtime, SQLite named volume |
-| B2 | Deploy to VPS/cloud (Railway, Fly, DigitalOcean, etc.) | - [ ] | Public HTTPS endpoint for webhooks; do last after security hardening |
+| B2 | Deploy to VPS/cloud (Railway, Fly, DigitalOcean, etc.) | - [ ] | Public HTTPS endpoint for webhooks. Unblocked by operator login (PR #175); production needs the WorkOS variables, an `https://` redirect URI registered in WorkOS, and a rotated `QORA_API_KEY` |
 | B3 | Replace SQLite with PostgreSQL | - [ ] | Deferred for now; continue with SQLite + migrations unless production needs change |
 | B4 | Database migrations (Alembic) | - [x] | Completed in PR #103: Alembic migration foundation and startup DDL cleanup |
-| B5 | API authentication | - [x] | Completed in PRs #107, #109, #111: admin API key auth, session-scoped demo/pipeline auth, tool scope validation |
+| B5 | API authentication | - [x] | Completed in PRs #107, #109, #111: admin API key auth, session-scoped demo/pipeline auth, tool scope validation. Operator login added in PR #175: WorkOS AuthKit, httpOnly server sessions, per-client access, `VITE_API_KEY` removed |
 | B6 | Webhook signature verification | - [x] | Completed in PR #111: opt-in webhook secret auth for initiation and Custom LLM routes |
 | B7 | CORS lockdown | - [x] | Completed in PR #111: configurable `QORA_ALLOWED_ORIGINS` replaces hardcoded allow-all for production |
 | B8 | Secrets management | - [x] | Completed in PRs #113, #115: startup validation, active CRM credential checks, root `.env` convention, pre-flight script, operator runbook |

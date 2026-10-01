@@ -28,6 +28,7 @@ Contract: `design.md`. Strict TDD (RED → GREEN) for every behavior.
 
 ## Close-out
 
-- [ ] Full backend + frontend suites, lint, build
-- [ ] Independent security review
-- [ ] Docs: `.env.example`, `docs/running-locally.md`, `docs/ROADMAP.md`
+- [x] Full backend + frontend suites, lint, build
+- [x] Independent security review (two blind reviewers, plus a Gentle AI native review of every commit in PR #175)
+- [x] Docs: `.env.example`, `docs/running-locally.md`, `docs/ROADMAP.md`
+- [x] Browser E2E against WorkOS Staging: superadmin login and logout, client user scoped to its own client
