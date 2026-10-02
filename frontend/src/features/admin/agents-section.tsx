@@ -44,10 +44,13 @@ import { computeReadinessChecklist } from './agents-panel'
 
 const AVAILABLE_TOOLS = [
   'get_lead_details',
-  'register_interest',
-  'mark_not_interested',
-  'schedule_followup',
+  'get_lead_profile',
+  'get_lead_history',
+  'get_lead_pain_points',
+  'capture_data',
 ]
+
+const DEFAULT_TOOLS = ['get_lead_details']
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Types
@@ -84,7 +87,7 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
     voice_id: '',
     model: 'gpt-4o',
     system_prompt: '',
-    tools_enabled: [...AVAILABLE_TOOLS],
+    tools_enabled: [...DEFAULT_TOOLS],
     tts_speed: 0.95,
     tts_stability: 0.4,
     tts_similarity_boost: 0.75,
@@ -156,7 +159,7 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
             voice_id: '',
             model: 'gpt-4o',
             system_prompt: '',
-            tools_enabled: [...AVAILABLE_TOOLS],
+            tools_enabled: [...DEFAULT_TOOLS],
             tts_speed: 0.95,
             tts_stability: 0.4,
             tts_similarity_boost: 0.75,
