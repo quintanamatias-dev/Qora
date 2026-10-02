@@ -85,6 +85,10 @@ def _client_to_response(client: Client, agent_count: int = 0) -> ClientResponse:
         scheduler_retry_on_outcomes=client.scheduler_retry_on_outcomes,
         scheduler_timezone=client.scheduler_timezone,
         scheduler_backoff_multiplier=client.scheduler_backoff_multiplier,
+        next_action_max_attempts=client.next_action_max_attempts,
+        next_action_min_interest_for_followup=client.next_action_min_interest_for_followup,
+        next_action_close_on_hard_rejection=client.next_action_close_on_hard_rejection,
+        analysis_language=client.analysis_language,
         plan=client.plan or "pilot",
     )
 
