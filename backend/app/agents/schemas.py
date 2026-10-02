@@ -254,6 +254,27 @@ class AgentResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AgentConfigRevisionResponse(BaseModel):
+    """Response shape for revision endpoints (PATCH .../config, GET .../revisions[...], rollback).
+
+    config is returned as a dict (deserialized from the DB TEXT column) so API
+    consumers get a normal JSON object instead of a JSON-encoded string.
+    """
+
+    id: str
+    agent_id: str
+    revision_number: int
+    config: dict
+    schema_version: str
+    source: str
+    created_by: str
+    created_at: datetime
+    note: str | None = None
+    elevenlabs_sync_status: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
 class SyncStatusResponse(BaseModel):
     """Response body for POST .../sync-elevenlabs.
 

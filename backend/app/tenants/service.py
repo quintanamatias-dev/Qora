@@ -11,7 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from pathlib import Path
 
-from app.tenants.models import Agent, AgentConfigRevision, Client
+from app.tenants.agent_config_schema import AgentConfigV1
+from app.tenants.models import Agent, Client
+from app.tenants import revisions_service
 
 # backend/app/tenants/service.py -> parents[2] == backend/
 _SEED_CLIENTS_DIR = Path(__file__).resolve().parents[2] / "clients"
@@ -40,8 +42,8 @@ async def _ensure_active_revision(session: AsyncSession, agent: Agent) -> None:
     system_prompt = _resolve_seed_system_prompt(
         agent.client_id, agent.slug, agent.system_prompt
     )
-    config = build_agent_config_v1_snapshot(agent, system_prompt)
-    await create_agent_config_revision(
+    config = AgentConfigV1(**build_agent_config_v1_snapshot(agent, system_prompt))
+    await revisions_service.create_revision(
         session,
         agent=agent,
         config=config,
@@ -88,49 +90,6 @@ def build_agent_config_v1_snapshot(agent: Agent, system_prompt: str | None) -> d
         "voicemail_detection_enabled": agent.voicemail_detection_enabled,
         "max_call_duration_seconds": agent.max_call_duration_seconds,
     }
-
-
-async def create_agent_config_revision(
-    session: AsyncSession,
-    *,
-    agent: Agent,
-    config: dict,
-    source: str,
-    created_by: str,
-    note: str | None = None,
-) -> AgentConfigRevision:
-    """Insert-only revision creation + activation (design.md D4/D7).
-
-    revision_number = max(existing for agent_id) + 1, starting at 1. This is
-    the Phase 1 primitive seeders use to create+activate revision 1; the full
-    revisions_service (create_revision/rollback_to_revision/etc.) is Phase 2
-    scope and is NOT built here.
-    """
-    existing_max = await session.execute(
-        select(AgentConfigRevision.revision_number)
-        .where(AgentConfigRevision.agent_id == agent.id)
-        .order_by(AgentConfigRevision.revision_number.desc())
-        .limit(1)
-    )
-    max_number = existing_max.scalar_one_or_none()
-    next_number = (max_number or 0) + 1
-
-    agent_revision = AgentConfigRevision(
-        id=str(uuid.uuid4()),
-        agent_id=agent.id,
-        revision_number=next_number,
-        config=json.dumps(config),
-        schema_version="v1",
-        source=source,
-        created_by=created_by,
-        note=note,
-    )
-    session.add(agent_revision)
-    await session.flush()
-
-    agent.active_revision_id = agent_revision.id
-    await session.flush()
-    return agent_revision
 
 
 async def create_client(

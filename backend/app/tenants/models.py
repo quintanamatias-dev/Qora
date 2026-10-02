@@ -158,6 +158,12 @@ class AgentConfigRevision(Base):
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
     note: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    # Outcome of the ElevenLabs projection sync triggered when this revision was
+    # activated (design.md D7): one of "synced", "drift", "error", "skipped", or
+    # NULL when no sync was attempted (e.g. imported revisions).
+    elevenlabs_sync_status: Mapped[str | None] = mapped_column(
+        String, nullable=True, default=None
+    )
 
     __table_args__ = (
         UniqueConstraint(
