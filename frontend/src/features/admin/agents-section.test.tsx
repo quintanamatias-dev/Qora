@@ -81,7 +81,14 @@ describe('AgentsSection', () => {
       expect(screen.queryByTestId('agents-loading')).not.toBeInTheDocument()
     })
     expect(screen.getByLabelText('get_lead_details')).toBeInTheDocument()
-    expect(screen.getByLabelText('register_interest')).toBeInTheDocument()
+    expect(screen.getByLabelText('get_lead_profile')).toBeInTheDocument()
+    expect(screen.getByLabelText('get_lead_history')).toBeInTheDocument()
+    expect(screen.getByLabelText('get_lead_pain_points')).toBeInTheDocument()
+    expect(screen.getByLabelText('capture_data')).toBeInTheDocument()
+    expect(screen.queryByLabelText('register_interest')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('mark_not_interested')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('schedule_followup')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('load_skill')).not.toBeInTheDocument()
   })
 
   it('shows Edit button for each agent', async () => {

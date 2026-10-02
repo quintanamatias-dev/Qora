@@ -93,10 +93,23 @@ async def test_resync_endpoint_returns_synced_on_success(sync_app):
         json={"soft_timeout_seconds": 3.0},
     )
 
-    # Mock EL API success
+    # Mock EL API success; read-back GET echoes exactly what was PATCHed so no drift is detected
+    import json as _json
+    _captured: dict = {}
+
+    def _capture_patch(request, route):
+        _captured["body"] = _json.loads(request.content)
+        return httpx.Response(200, json={"ok": True})
+
+    def _echo_get(request, route):
+        return httpx.Response(200, json=_captured.get("body", {}))
+
     respx.patch(
         "https://api.elevenlabs.io/v1/convai/agents/agent_8201kra4wjhve0srcwgbtwfetr5n"
-    ).mock(return_value=httpx.Response(200, json={"ok": True}))
+    ).mock(side_effect=_capture_patch)
+    respx.get(
+        "https://api.elevenlabs.io/v1/convai/agents/agent_8201kra4wjhve0srcwgbtwfetr5n"
+    ).mock(side_effect=_echo_get)
 
     resp = await client.post(
         f"/api/v1/clients/qora-demo/agents/{agent_id}/sync-elevenlabs"
@@ -218,9 +231,22 @@ async def test_agent_create_with_soft_timeout_updates_sync_status(sync_app):
     import asyncio
     client, db_module = sync_app
 
-    # Mock EL PATCH for a custom agent ID we'll create
+    # Mock EL PATCH for a custom agent ID we'll create; read-back GET echoes it back
+    import json as _json
+    _captured: dict = {}
+
+    def _capture_patch(request, route):
+        _captured["body"] = _json.loads(request.content)
+        return httpx.Response(200, json={"ok": True})
+
+    def _echo_get(request, route):
+        return httpx.Response(200, json=_captured.get("body", {}))
+
     respx.patch("https://api.elevenlabs.io/v1/convai/agents/el-custom-id").mock(
-        return_value=httpx.Response(200, json={"ok": True})
+        side_effect=_capture_patch
+    )
+    respx.get("https://api.elevenlabs.io/v1/convai/agents/el-custom-id").mock(
+        side_effect=_echo_get
     )
 
     resp = await client.post(
@@ -323,9 +349,15 @@ async def test_resync_endpoint_with_all_three_config_groups_patch_body(sync_app)
         captured["body"] = _json.loads(request.content)
         return httpx.Response(200, json={"ok": True})
 
+    def echo_get(request, route):
+        return httpx.Response(200, json=captured.get("body", {}))
+
     respx.patch(
         "https://api.elevenlabs.io/v1/convai/agents/agent_8201kra4wjhve0srcwgbtwfetr5n"
     ).mock(side_effect=capture)
+    respx.get(
+        "https://api.elevenlabs.io/v1/convai/agents/agent_8201kra4wjhve0srcwgbtwfetr5n"
+    ).mock(side_effect=echo_get)
 
     resp = await client.post(
         f"/api/v1/clients/qora-demo/agents/{agent_id}/sync-elevenlabs"
@@ -364,8 +396,21 @@ async def test_agent_create_with_voicemail_and_max_duration_triggers_sync(sync_a
     import asyncio as _asyncio
     client, db_module = sync_app
 
+    import json as _json2
+    _captured_vm: dict = {}
+
+    def _capture_patch_vm(request, route):
+        _captured_vm["body"] = _json2.loads(request.content)
+        return httpx.Response(200, json={"ok": True})
+
+    def _echo_get_vm(request, route):
+        return httpx.Response(200, json=_captured_vm.get("body", {}))
+
     respx.patch("https://api.elevenlabs.io/v1/convai/agents/el-vm-agent").mock(
-        return_value=httpx.Response(200, json={"ok": True})
+        side_effect=_capture_patch_vm
+    )
+    respx.get("https://api.elevenlabs.io/v1/convai/agents/el-vm-agent").mock(
+        side_effect=_echo_get_vm
     )
 
     resp = await client.post(
@@ -432,9 +477,15 @@ async def test_resync_endpoint_with_only_voicemail_sends_only_voicemail_block(sy
         captured["body"] = _json.loads(request.content)
         return httpx.Response(200, json={"ok": True})
 
+    def echo_get(request, route):
+        return httpx.Response(200, json=captured.get("body", {}))
+
     respx.patch(
         "https://api.elevenlabs.io/v1/convai/agents/el-vm-only-agent"
     ).mock(side_effect=capture)
+    respx.get(
+        "https://api.elevenlabs.io/v1/convai/agents/el-vm-only-agent"
+    ).mock(side_effect=echo_get)
 
     resp = await client.post(
         f"/api/v1/clients/qora-demo/agents/{agent_id}/sync-elevenlabs"

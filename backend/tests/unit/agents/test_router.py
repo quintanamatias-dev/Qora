@@ -56,7 +56,14 @@ async def agents_app(tmp_path: Path):
     """Isolated FastAPI app with agents router + a fresh SQLite DB.
 
     Pre-seeds one client ('test-client') with its default agent.
+
+    Any agent with an elevenlabs_agent_id has a non-NULL voice_id, so creating one
+    now schedules a fire-and-forget ElevenLabs sync (sdd/elevenlabs-config, item 2).
+    app.agents.router.sync_to_elevenlabs is patched for the lifetime of this fixture
+    so no test here makes a real outbound HTTP call; no test in this file asserts
+    on sync behavior (that is covered by tests/unit/agents/test_sync_trigger.py).
     """
+    from unittest.mock import AsyncMock, patch
     from app.core.config import Settings
     from app.core import database as db_module
 
@@ -85,14 +92,16 @@ async def agents_app(tmp_path: Path):
     from fastapi import FastAPI
 
     test_app = FastAPI()
+    test_app.state.settings = settings
     test_app.include_router(agents_router, prefix="/api/v1")
 
-    async with AsyncClient(
-        transport=ASGITransport(app=test_app),
-        base_url="http://test",
-        follow_redirects=True,
-    ) as client:
-        yield client
+    with patch("app.agents.router.sync_to_elevenlabs", AsyncMock()):
+        async with AsyncClient(
+            transport=ASGITransport(app=test_app),
+            base_url="http://test",
+            follow_redirects=True,
+        ) as client:
+            yield client
 
     await db_module.close_db()
 

@@ -172,6 +172,7 @@ class TestFinding1DirectPathAuthBinding:
         ctx.agent_slug = "test-agent"
         ctx.skill_registry_entries = []
         ctx.agent_tool_config = None
+        ctx.profile_facts_block = ""
 
         async def _fake_stream(self_or_messages=None, **kwargs):
             yield StreamDone()
@@ -445,6 +446,7 @@ class TestFinding3ZeroDbHotPathStrengthened:
         ctx.agent_slug = "agent-1"
         ctx.skill_registry_entries = []
         ctx.agent_tool_config = None
+        ctx.profile_facts_block = ""
 
         conv = ConversationState(
             conversation_id="hotpath-conv-strengthened",
@@ -536,6 +538,7 @@ class TestFinding3ZeroDbHotPathStrengthened:
         ctx.agent_slug = "agent-proof"
         ctx.skill_registry_entries = []
         ctx.agent_tool_config = None
+        ctx.profile_facts_block = ""
 
         conv = ConversationState(
             conversation_id=conv_id,
@@ -650,6 +653,7 @@ class TestFinding3ZeroDbHotPathStrengthened:
         ctx.agent_slug = "agent-scope"
         ctx.skill_registry_entries = []
         ctx.agent_tool_config = None
+        ctx.profile_facts_block = ""
 
         conv = ConversationState(
             conversation_id=conv_id,

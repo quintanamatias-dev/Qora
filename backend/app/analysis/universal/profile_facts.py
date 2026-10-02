@@ -172,6 +172,52 @@ _EXCLUSION_REGEX_PATTERNS: list[tuple[str, str, "re.Pattern[str]"]] = [
 ]
 
 
+_LEAD_LABEL_RE = re.compile(r"\bLead\s*:", re.IGNORECASE)
+_AGENT_LABEL_RE = re.compile(r"\bAgente\s*:", re.IGNORECASE)
+
+
+def is_lead_evidence(evidence: str) -> bool:
+    """Return True when evidence is attributable to the lead, not the agent alone.
+
+    Evidence containing a 'Lead:' labeled transcript segment is lead-attributed.
+    Evidence containing only an 'Agente:' labeled segment (no lead line) is
+    agent-only and must be dropped. Evidence without any speaker label
+    (a free-form paraphrase) is treated as lead-attributed by default, since it
+    cannot be proven agent-only.
+    """
+    if not evidence or not evidence.strip():
+        return False
+    if _LEAD_LABEL_RE.search(evidence):
+        return True
+    if _AGENT_LABEL_RE.search(evidence):
+        return False
+    return True
+
+
+def _drop_agent_only_evidence(
+    updates: list["ProfileFactUpdate"],
+    *,
+    call_id: str | None = None,
+) -> list["ProfileFactUpdate"]:
+    """Drop add/update operations whose evidence is not attributed to the lead.
+
+    remove operations are unaffected — deleting a fact never needs lead-attributed
+    evidence to be trustworthy.
+    """
+    kept: list[ProfileFactUpdate] = []
+    for update in updates:
+        if update.operation != "remove" and not is_lead_evidence(update.evidence):
+            identifier = update.target_fact_id or str(update.category)
+            logger.info(
+                "profile_fact_dropped_agent_evidence: fact_key=%s call_id=%s",
+                identifier,
+                call_id,
+            )
+            continue
+        kept.append(update)
+    return kept
+
+
 def _filter_excluded_profile_facts(
     updates: list["ProfileFactUpdate"],
     *,
@@ -373,6 +419,10 @@ async def run_profile_facts_pipeline(
         validated_updates = _validate_updates_against_current_facts(
             raw_axis.updates, facts
         )
+
+        # qora-profile-facts memory injection: drop add/update ops whose evidence
+        # is attributed only to the agent's own lines, not the lead's.
+        validated_updates = _drop_agent_only_evidence(validated_updates, call_id=call_id)
 
         # post-call-analysis-bi-friendly PR 2: apply structured field exclusion filter.
         # Suppresses profile facts that duplicate known structured lead fields (age, zona,

@@ -56,7 +56,7 @@ class Agent(Base):
     tools_enabled: Mapped[str] = mapped_column(
         Text,
         nullable=False,
-        default='["get_lead_details","mark_not_interested","schedule_followup"]',
+        default='["get_lead_details"]',
     )
     elevenlabs_agent_id: Mapped[str | None] = mapped_column(
         String, nullable=True, default=None

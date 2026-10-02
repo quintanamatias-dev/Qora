@@ -4,8 +4,12 @@ Provides:
 - ElevenLabsService.sync_soft_timeout() — DEPRECATED (use sync_agent_config).
   Sends a partial PATCH with only the soft_timeout_config block.
 - ElevenLabsService.sync_agent_config() — Unified config sync (sdd/elevenlabs-config).
-  Sends a single PATCH combining soft_timeout, voicemail_detection, and max_duration.
+  Sends a single PATCH combining soft_timeout, voicemail_detection, max_duration, and
+  TTS/voice (voice_id, tts_model, tts_speed, tts_stability, tts_similarity_boost).
   NULL agent fields → that block is omitted from the payload (NULL-means-skip).
+  After a successful PATCH, reads the agent config back from ElevenLabs and compares
+  every field it sent — outcome is "drift" when the provider does not reflect what
+  was sent (see _verify_synced_config).
 
 Design decisions (from design.md):
 - Per-call httpx.AsyncClient (matches webhook.py get_signed_url pattern — infrequent calls)
@@ -34,6 +38,8 @@ from app.elevenlabs.models import (  # noqa: F401 — re-exported
     ConversationListResponse,
     SipMessagesResponse,
 )
+
+_DRIFT_FLOAT_TOLERANCE = 1e-6
 
 logger = get_logger(__name__)
 
@@ -68,8 +74,9 @@ class ElevenLabsService:
     async def sync_agent_config(self, agent) -> SyncResult:
         """Send a single unified PATCH to configure all ElevenLabs agent settings.
 
-        Combines soft_timeout_config, voicemail_detection, and max_duration_seconds
-        into one PATCH payload. NULL agent fields → that block is omitted (NULL-means-skip).
+        Combines soft_timeout_config, voicemail_detection, max_duration_seconds, and
+        TTS/voice (voice_id, model_id, speed, stability, similarity_boost) into one
+        PATCH payload. NULL agent fields → that block is omitted (NULL-means-skip).
 
         Skip conditions (no HTTP call):
         - agent.elevenlabs_agent_id is None
@@ -78,6 +85,13 @@ class ElevenLabsService:
         Retry: exactly one retry on 5xx responses.
         Timeout: 10 seconds per attempt.
         On failure: logs structured error, returns SyncResult(outcome="error").
+
+        After a successful PATCH, reads the agent config back from ElevenLabs and
+        compares every field that was sent against what the provider now reports:
+        - All fields match → SyncResult(outcome="synced")
+        - Any field differs → SyncResult(outcome="drift", drift_fields=[...])
+        - The read-back GET fails → SyncResult(outcome="error")
+
         Never raises to caller.
 
         DEPRECATION NOTE: sync_soft_timeout is deprecated. Call this method instead.
@@ -97,10 +111,19 @@ class ElevenLabsService:
         api_key = self._settings.elevenlabs_api_key.get_secret_value()
         headers = {"xi-api-key": api_key, "Content-Type": "application/json"}
 
-        return await _patch_with_retry(
+        patch_result = await _patch_with_retry(
             url=url,
             payload=payload,
             headers=headers,
+            elevenlabs_agent_id=agent.elevenlabs_agent_id,
+        )
+        if patch_result.outcome != "synced":
+            return patch_result
+
+        return await _verify_synced_config(
+            url=url,
+            headers=headers,
+            payload=payload,
             elevenlabs_agent_id=agent.elevenlabs_agent_id,
         )
 
@@ -615,12 +638,15 @@ def _build_soft_timeout_payload(
 def _build_config_payload(agent) -> dict:
     """Build the unified PATCH payload for sync_agent_config.
 
-    Merges up to three config blocks from agent DB fields:
+    Merges up to four config blocks from agent DB fields:
     - conversation_config.turn.soft_timeout_config (via _build_soft_timeout_payload)
     - conversation_config.agent.prompt.built_in_tools.voicemail_detection
       (from agent.voicemail_detection_enabled)
     - conversation_config.conversation.max_duration_seconds
       (from agent.max_call_duration_seconds)
+    - conversation_config.tts (voice_id, model_id, speed, stability, similarity_boost)
+      (from agent.voice_id, agent.tts_model, agent.tts_speed, agent.tts_stability,
+      agent.tts_similarity_boost)
 
     NULL-means-skip: if an agent field is NULL, that block is omitted entirely.
     Returns {} when all fields are NULL (caller must skip the HTTP call).
@@ -683,6 +709,26 @@ def _build_config_payload(agent) -> dict:
         if "conversation" not in cc:
             cc["conversation"] = {}
         cc["conversation"]["max_duration_seconds"] = int(agent.max_call_duration_seconds)
+
+    # --- TTS / voice block ---
+    # Correct path: conversation_config.tts
+    # Each field is only included when the agent value is not None (NULL-means-skip).
+    # agent.tts_model maps to the wire field "model_id".
+    tts: dict = {}
+    if agent.voice_id is not None:
+        tts["voice_id"] = agent.voice_id
+    if agent.tts_model is not None:
+        tts["model_id"] = agent.tts_model
+    if agent.tts_speed is not None:
+        tts["speed"] = agent.tts_speed
+    if agent.tts_stability is not None:
+        tts["stability"] = agent.tts_stability
+    if agent.tts_similarity_boost is not None:
+        tts["similarity_boost"] = agent.tts_similarity_boost
+    if tts:
+        if "conversation_config" not in payload:
+            payload["conversation_config"] = {}
+        payload["conversation_config"]["tts"] = tts
 
     return payload
 
@@ -748,6 +794,132 @@ async def _patch_with_retry(
     return SyncResult(outcome="error", error_detail=last_error)
 
 
+def _flatten_leaves(node: dict, path: tuple[str, ...] = ()) -> list[tuple[tuple[str, ...], object]]:
+    """Flatten a nested dict into (path, leaf_value) pairs.
+
+    None and scalar values are leaves; nested dicts are walked recursively.
+    Used to turn a PATCH payload into the list of (field path, sent value) pairs
+    that must be verified against the read-back GET response.
+    """
+    leaves: list[tuple[tuple[str, ...], object]] = []
+    for key, value in node.items():
+        current_path = path + (key,)
+        if isinstance(value, dict):
+            leaves.extend(_flatten_leaves(value, current_path))
+        else:
+            leaves.append((current_path, value))
+    return leaves
+
+
+def _get_nested(node: dict, path: tuple[str, ...]) -> object:
+    """Walk a nested dict by path, returning None if any segment is missing."""
+    current: object = node
+    for key in path:
+        if not isinstance(current, dict) or key not in current:
+            return None
+        current = current[key]
+    return current
+
+
+def _values_match(sent: object, actual: object) -> bool:
+    """Compare a sent value to the provider's actual value, with float tolerance."""
+    if isinstance(sent, (int, float)) and not isinstance(sent, bool) and isinstance(
+        actual, (int, float)
+    ) and not isinstance(actual, bool):
+        return abs(float(sent) - float(actual)) < _DRIFT_FLOAT_TOLERANCE
+    return sent == actual
+
+
+def _compute_drift_fields(payload: dict, actual_conversation_config: dict) -> list[str]:
+    """Return dotted field paths sent in payload whose provider value differs.
+
+    Walks every leaf under payload["conversation_config"] and compares it to the
+    same path under the read-back response's conversation_config.
+    """
+    sent_cc = payload.get("conversation_config", {})
+    mismatches: list[str] = []
+    for path, sent_value in _flatten_leaves(sent_cc):
+        actual_value = _get_nested(actual_conversation_config, path)
+        if not _values_match(sent_value, actual_value):
+            mismatches.append(".".join(("conversation_config",) + path))
+    return mismatches
+
+
+async def _fetch_agent_config(
+    url: str,
+    headers: dict,
+    elevenlabs_agent_id: str,
+) -> dict | None:
+    """GET the live agent config for read-back verification.
+
+    Returns the parsed JSON body on success, or None on any failure (never raises).
+    """
+    try:
+        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_SECONDS) as client:
+            response = await client.get(url, headers=headers)
+    except httpx.HTTPError as exc:
+        logger.error(
+            "elevenlabs_sync_readback_error",
+            error=str(exc),
+            elevenlabs_agent_id=elevenlabs_agent_id,
+        )
+        return None
+
+    if not response.is_success:
+        logger.error(
+            "elevenlabs_sync_readback_failed",
+            http_status=response.status_code,
+            elevenlabs_agent_id=elevenlabs_agent_id,
+        )
+        return None
+
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        logger.error(
+            "elevenlabs_sync_readback_invalid_body",
+            elevenlabs_agent_id=elevenlabs_agent_id,
+        )
+        return None
+    return body
+
+
+async def _verify_synced_config(
+    url: str,
+    headers: dict,
+    payload: dict,
+    elevenlabs_agent_id: str,
+) -> SyncResult:
+    """Read the agent back from ElevenLabs and compare it to what was just sent.
+
+    Called only after a successful PATCH. Returns:
+    - SyncResult(outcome="synced")  — every sent field matches the provider
+    - SyncResult(outcome="drift", drift_fields=[...]) — at least one field differs
+    - SyncResult(outcome="error")  — the read-back GET failed
+
+    Never raises to caller.
+    """
+    actual = await _fetch_agent_config(
+        url=url, headers=headers, elevenlabs_agent_id=elevenlabs_agent_id
+    )
+    if actual is None:
+        return SyncResult(outcome="error", error_detail="readback_failed")
+
+    actual_conversation_config = actual.get("conversation_config", {}) if isinstance(actual, dict) else {}
+    drift_fields = _compute_drift_fields(payload, actual_conversation_config)
+    if drift_fields:
+        logger.warning(
+            "elevenlabs_sync_drift",
+            elevenlabs_agent_id=elevenlabs_agent_id,
+            drift_fields=drift_fields,
+        )
+        return SyncResult(outcome="drift", drift_fields=drift_fields)
+
+    return SyncResult(outcome="synced")
+
+
 # ---------------------------------------------------------------------------
 # Background helper — called via asyncio.create_task from router
 # ---------------------------------------------------------------------------
@@ -783,6 +955,9 @@ async def sync_to_elevenlabs(agent_id: str, settings) -> None:
         if result.outcome == "synced":
             agent.elevenlabs_sync_status = "synced"
             agent.elevenlabs_last_synced_at = datetime.now(tz=timezone.utc)
+            await session.commit()
+        elif result.outcome == "drift":
+            agent.elevenlabs_sync_status = "drift"
             await session.commit()
         elif result.outcome == "error":
             agent.elevenlabs_sync_status = "error"

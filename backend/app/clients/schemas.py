@@ -201,6 +201,47 @@ class ClientUpdate(_SchedulerValidatorMixin):
     scheduler_timezone: str | None = None
     # C6: Backoff multiplier for recontact delay escalation.
     scheduler_backoff_multiplier: float | None = None
+    # Next Action Engine configuration (qora-next-action, Issue #47)
+    next_action_max_attempts: int | None = None
+    next_action_min_interest_for_followup: int | None = None
+    next_action_close_on_hard_rejection: bool | None = None
+    # Analysis locale configuration (qora-analysis-locale)
+    analysis_language: str | None = None
+
+    @field_validator("next_action_max_attempts", check_fields=False)
+    @classmethod
+    def validate_next_action_max_attempts(cls, v: int | None) -> int | None:
+        """Validate that next_action_max_attempts is within [1, 20]."""
+        if v is not None and not (1 <= v <= 20):
+            raise ValueError(
+                f"next_action_max_attempts must be between 1 and 20 (inclusive), got {v}."
+            )
+        return v
+
+    @field_validator("next_action_min_interest_for_followup", check_fields=False)
+    @classmethod
+    def validate_next_action_min_interest_for_followup(cls, v: int | None) -> int | None:
+        """Validate that next_action_min_interest_for_followup is within [0, 100]."""
+        if v is not None and not (0 <= v <= 100):
+            raise ValueError(
+                f"next_action_min_interest_for_followup must be between 0 and 100 (inclusive), got {v}."
+            )
+        return v
+
+    @field_validator("analysis_language", check_fields=False)
+    @classmethod
+    def validate_analysis_language(cls, v: str | None) -> str | None:
+        """Validate analysis_language is a non-empty, stripped string up to 40 chars."""
+        if v is None:
+            return v
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("analysis_language must not be empty.")
+        if len(stripped) > 40:
+            raise ValueError(
+                f"analysis_language must be at most 40 characters, got {len(stripped)}."
+            )
+        return stripped
 
 
 class ClientResponse(BaseModel):
@@ -219,10 +260,16 @@ class ClientResponse(BaseModel):
     scheduler_cooldown_minutes: int = 60
     scheduler_allowed_hours_start: int = 9
     scheduler_allowed_hours_end: int = 20
-    scheduler_retry_on_outcomes: str = '["call_again","follow_up"]'
+    scheduler_retry_on_outcomes: str = '["follow_up","retry_call","schedule_call"]'
     scheduler_timezone: str = "America/Argentina/Buenos_Aires"
     # C6: Backoff multiplier for recontact delay escalation.
     scheduler_backoff_multiplier: float = 1.0
+    # Next Action Engine configuration (qora-next-action, Issue #47)
+    next_action_max_attempts: int = 5
+    next_action_min_interest_for_followup: int = 40
+    next_action_close_on_hard_rejection: bool = True
+    # Analysis locale configuration (qora-analysis-locale)
+    analysis_language: str = "Spanish"
     # Plan name (app/entitlements/catalog.py). Managed via /clients/{id}/entitlements.
     plan: str = "pilot"
 
