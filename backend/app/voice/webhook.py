@@ -195,6 +195,47 @@ def _sse_stop() -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
+def _sse_tool_call_chunk(tool_call_id: str, function_name: str, function_args: str) -> str:
+    """Format a forwarded (passthrough) tool call as an OpenAI tool_calls delta chunk."""
+    payload = {
+        "id": "chatcmpl-qora",
+        "object": "chat.completion.chunk",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": tool_call_id,
+                            "type": "function",
+                            "function": {"name": function_name, "arguments": function_args},
+                        }
+                    ]
+                },
+                "finish_reason": None,
+            }
+        ],
+    }
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+def _sse_tool_calls_finish() -> str:
+    """SSE finish chunk with finish_reason=tool_calls, for forwarded passthrough tools."""
+    payload = {
+        "id": "chatcmpl-qora",
+        "object": "chat.completion.chunk",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {},
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+    return f"data: {json.dumps(payload)}\n\n"
+
+
 # ---------------------------------------------------------------------------
 # Filler speech config — emitted to SSE stream BEFORE tool execution
 # ---------------------------------------------------------------------------
@@ -203,6 +244,35 @@ def _sse_stop() -> str:
 # Pause between filler TTS emission and tool execution (seconds).
 # Gives the TTS engine time to begin speaking before the tool call blocks.
 FILLER_PAUSE_SECONDS = 0.7
+
+
+# ---------------------------------------------------------------------------
+# Passthrough tool merging — ElevenLabs system tools (end_call, voicemail_detection, etc.)
+# ---------------------------------------------------------------------------
+
+
+def _merge_passthrough_tools(
+    qora_tools: list[dict] | None,
+    request_tools: list[dict] | None,
+) -> tuple[list[dict] | None, set[str]]:
+    """Merge request-provided tools into Qora's tool list.
+
+    Any tool in request_tools whose function name is not already a Qora tool name
+    is appended as a passthrough tool. Qora tools always win on name collisions.
+    """
+    if not request_tools:
+        return qora_tools, set()
+
+    qora_names = {t["function"]["name"] for t in (qora_tools or [])}
+    merged = list(qora_tools or [])
+    passthrough_names: set[str] = set()
+    for tool in request_tools:
+        name = tool.get("function", {}).get("name")
+        if not name or name in qora_names:
+            continue
+        merged.append(tool)
+        passthrough_names.add(name)
+    return (merged or None), passthrough_names
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +344,7 @@ async def _stream_llm_response(
     agent_tool_config: dict | None = None,
     crm_config: "Any | None" = None,
     authorized_session: "Any | None" = None,
+    passthrough_tool_names: set[str] | None = None,
 ) -> AsyncGenerator[str, None]:
     """Generate SSE chunks from GPT-4o, handling tool calls mid-stream.
 
@@ -296,6 +367,8 @@ async def _stream_llm_response(
             load_skill results and skip duplicate tool calls on subsequent turns.
     """
     full_response_text = ""
+    passthrough_handled = False
+    _passthrough_names = passthrough_tool_names or set()
 
     try:
         async with asyncio.timeout(60.0):  # 60 second max per LLM turn
@@ -308,6 +381,50 @@ async def _stream_llm_response(
                 if isinstance(event, ContentDelta):
                     full_response_text += event.text
                     yield _sse_chunk(event.text)
+
+                elif isinstance(event, ToolCallDelta) and event.function_name in _passthrough_names:
+                    # System tool owned by ElevenLabs (e.g. end_call, voicemail_detection):
+                    # forward as a standard OpenAI tool_calls delta instead of executing
+                    # it locally, so ElevenLabs can run it (e.g. hang up the call).
+                    tool_call_id = event.tool_call_id or f"call_{uuid.uuid4().hex[:8]}"
+                    try:
+                        passthrough_args = (
+                            json.loads(event.function_args) if event.function_args else {}
+                        )
+                    except json.JSONDecodeError:
+                        passthrough_args = {}
+
+                    structlog.get_logger().info(
+                        "system_tool_forwarded",
+                        tool_name=event.function_name,
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                    )
+
+                    if session_id:
+                        try:
+                            async with db_session() as db:
+                                await add_transcript_turn(
+                                    db,
+                                    session_id,
+                                    "tool_call",
+                                    json.dumps(
+                                        {"function": event.function_name, "args": passthrough_args}
+                                    ),
+                                )
+                        except Exception as exc:  # noqa: BLE001
+                            structlog.get_logger().warning(
+                                "tool_turn_persist_failed",
+                                error=str(exc),
+                                session_id=session_id,
+                            )
+
+                    yield _sse_tool_call_chunk(
+                        tool_call_id, event.function_name, event.function_args
+                    )
+                    yield _sse_tool_calls_finish()
+                    passthrough_handled = True
+                    break
 
                 elif isinstance(event, ToolCallDelta):
                     # Tool call detected — emit filler FIRST, then execute
@@ -522,7 +639,10 @@ async def _stream_llm_response(
     if conversation_id and client_id:
         session_store.increment_turn(client_id, conversation_id)
 
-    yield _sse_stop()
+    # Passthrough tools already emitted their own finish_reason="tool_calls" chunk;
+    # do not also emit finish_reason="stop".
+    if not passthrough_handled:
+        yield _sse_stop()
     yield _sse_done()
 
 
@@ -1156,6 +1276,10 @@ async def _process_custom_llm_request(
             )
             system_content = system_content + lead_context
 
+    # Merge ElevenLabs system tools (end_call, voicemail_detection, etc.) from the
+    # request into Qora's own tool list. Qora tools win on name collisions.
+    tools, _passthrough_tool_names = _merge_passthrough_tools(tools, body.tools)
+
     messages = [{"role": "system", "content": system_content}] + list(body.messages)
 
     # Set up streaming client — use resolved model config
@@ -1304,6 +1428,7 @@ async def _process_custom_llm_request(
                 agent_tool_config=_agent_tool_config_resolved,
                 crm_config=_crm_config_resolved,
                 authorized_session=_authorized_session,
+                passthrough_tool_names=_passthrough_tool_names,
             ):
                 yield chunk
         except Exception as exc:
