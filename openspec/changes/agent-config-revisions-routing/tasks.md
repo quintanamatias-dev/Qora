@@ -30,6 +30,14 @@ Chain strategy: stacked-to-main
 | 6 | Minimal admin UI | PR 6 | Depends on PR 2. Rollback: revert PR 6, frontend-only. |
 | 7 | Prod rollout + verification | PR 7 | Depends on all prior tasks. Rollback: re-sync prod EL agents via API; restore DB backup if needed. |
 
+## Phase 0: Align New-Agent Defaults with the Production Standard
+
+- [ ] 0.1 Change the `Agent.model` default to `gpt-4.1-mini` and `Agent.tts_model` to `eleven_v4_turbo` (model columns, `core/config.py` fallbacks, create-agent schema defaults), per agent-config-inheritance design.md D17. Existing rows are untouched.
+      RED: `test_new_agent_defaults_match_production_standard` — fails (defaults are `gpt-4o` / `eleven_flash_v2_5`).
+      GREEN: an agent created without `model` / `tts_model` gets `gpt-4.1-mini` / `eleven_v4_turbo`.
+      Check: `cd backend && uv run pytest -q -p no:cacheprovider tests/unit/agents/ tests/unit/tenants/`
+      Rollback: revert the commit.
+
 ## Phase 1: Schema + Migration + Import
 
 - [ ] 1.1 Add `AgentConfigRevision` model (`backend/app/tenants/models.py`): id, agent_id FK, revision_number, config (Text/JSON), schema_version, source enum, created_by, created_at, note. Add `Agent.active_revision_id` FK column.

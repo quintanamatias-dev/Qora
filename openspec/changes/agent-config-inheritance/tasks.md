@@ -43,11 +43,9 @@ Chain strategy: stacked-to-main
       Check: `cd backend && uv run pytest -q -p no:cacheprovider tests/unit/tenants/test_config_standard.py`
       Rollback: delete the file; revert commit.
 
-- [ ] 1.3 Confirm against live production (via 1a's admin API, no SSH) which `tts_model` and `model` value each currently-synced prod agent actually uses, to validate the Open Questions flagged in design.md before the standard's values are locked in.
-      RED: n/a — data-gathering task, no production code changes.
-      GREEN: documented finding (scratch note, not a persisted artifact) confirming or correcting `eleven_v4_turbo` / `gpt-4.1-mini` as the standard's intended values.
-      Check: manual API read against both prod EL-mapped agents from 1a's success criteria.
-      Rollback: n/a — no writes.
+- [x] 1.3 Production values confirmed on 2026-10-02 (design.md D17): standard `model = gpt-4.1-mini`, `tts_model = eleven_v4_turbo`.
+      Follow-up in 1b rollout (task 7): new revisions for `qora-explainer` and `jaumpablo` that drop their `gpt-4o` / `eleven_flash_v2_5` overrides so they inherit the standard; verify with simulate-conversation.
+      Rollback: rollback endpoint restores the previous agent revision.
 
 ## Phase 2: Resolver + Provenance
 

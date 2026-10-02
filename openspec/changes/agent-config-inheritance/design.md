@@ -30,11 +30,11 @@ Every `AgentConfigV1` field from 1a (`agent-config-revisions-routing/design.md` 
 | `system_prompt` | `agent_required` | — (no default) | Carries the agent's entire behavior; two agents of one client legitimately need different prompts (D1, 1a's original routing fix exists precisely because a second agent needs its own voice) |
 | `goal` | `agent_required` | — (no default); grandfathered for pre-1b agents (D14) | Same reasoning as `system_prompt` — a goal-less agent has no measurable success criterion; 1a left it optional only because it did not yet exist as a concept |
 | `voice_id` | `agent_required` | — (no default) | Confirmed in code: `Agent.voice_id` is `nullable=False` with no column default — the schema already treats it as mandatory; this policy formalizes that |
-| `tts_model` | `overridable` | `eleven_v4_turbo` | Confirmed in test fixtures (`tests/unit/elevenlabs/test_tts_sync.py`) as the model currently synced to production agents. **Contradiction**: the `Agent.tts_model` DB column default is `eleven_flash_v2_5` (confirmed in `tenants/models.py`) — the Qora standard default is being SET to the architect-specified production value here, not imported from today's column default; see Open Questions |
+| `tts_model` | `overridable` | `eleven_v4_turbo` | Confirmed live in production on 2026-10-02 (ElevenLabs API read of `agent_3001m3x8c6wfeqa8j7gz2qwysyg6`, Quintana `leads-agent`, the production agent the user tuned and approved). The old `Agent.tts_model` column default `eleven_flash_v2_5` was never a deliberate choice; 1a aligns new-agent defaults to this standard (see D17) |
 | `tts_speed` | `overridable` | `0.95` | Matches both `Agent.tts_speed` column default and `Settings.elevenlabs_speed` (confirmed, `core/config.py`) |
 | `tts_stability` | `overridable` | `0.4` | Matches `Agent.tts_stability` column default and `Settings.elevenlabs_stability` |
 | `tts_similarity_boost` | `overridable` | `0.75` | Matches `Agent.tts_similarity_boost` column default and `Settings.elevenlabs_similarity_boost` |
-| `model` (LLM) | `overridable` | `gpt-4.1-mini` | Architect-specified production value: OpenAI Tier 1 gives `gpt-4o` only 30k TPM, insufficient for concurrent call volume. **Contradiction**: the `Agent.model` DB column default is `gpt-4o` (confirmed in `tenants/models.py` and `core/config.py`'s `openai_model`) — same pattern as `tts_model`: the standard is being set here, not imported; see Open Questions |
+| `model` (LLM) | `overridable` | `gpt-4.1-mini` | Confirmed live in production on 2026-10-02 (Qora API read of Quintana `leads-agent`). OpenAI Tier 1 gives `gpt-4o` only 30k TPM, which one call can saturate; `gpt-4.1-mini` gets 200k. The old `Agent.model` column default `gpt-4o` is a Tier 1 hazard; 1a aligns new-agent defaults to this standard (see D17) |
 | `temperature` | `overridable` | `0.7` | Matches `Agent.temperature` column default |
 | `max_tokens` | `overridable` | `300` | Matches `Agent.max_tokens` column default |
 | `tools_enabled` | `overridable` | `["get_lead_details"]` | Matches `Agent.tools_enabled` column default; each client's agents legitimately need different tool sets (quoting, scheduling, etc.) |
@@ -301,4 +301,21 @@ class ClientConfigRevision(Base):
 
 - [ ] Should `language` (conversation) ever get a per-agent override path, and if so, is it a Qora-reviewed field-policy exception (per D16) or a self-service toggle gated by a client-level "allow multilingual agents" flag? Not blocking tasks 1–6; resolve before building any UI affordance for it.
 - [ ] Exact cadence/trigger for noticing a grandfathered (`goal`-less) agent should be completed — purely visible-in-UI today; a reminder/nudge mechanism is explicitly deferred, not designed here.
-- [ ] `tts_model` and `model` Qora-standard VALUES in this design (`eleven_v4_turbo`, `gpt-4.1-mini`) are the architect-specified production targets, not values confirmed by reading the current `Agent`/`Client` DB column defaults (which are `eleven_flash_v2_5` and `gpt-4o`, confirmed by code read). Before task 1 ships, confirm against the live production agent config (via the 1a admin API, no SSH) which value each currently-synced agent actually uses, so the standard being "set" here does not silently change production behavior for any agent whose resolved value would otherwise come from the standard.
+- [x] `tts_model` / `model` standard values — RESOLVED 2026-10-02 by reading production (see D17): `eleven_v4_turbo` / `gpt-4.1-mini`.
+
+
+## D17 — Standard values confirmed from production (2026-10-02)
+
+Production read (Qora API with the production key, ElevenLabs API; no SSH):
+
+| Client | Agent | `model` | `tts_model` | ElevenLabs agent | custom LLM URL today |
+|---|---|---|---|---|---|
+| quintana-seguros | leads-agent | `gpt-4.1-mini` | `eleven_v4_turbo` | `agent_3001m3x8c6wfeqa8j7gz2qwysyg6` | `/api/v1/voice/quintana-seguros/custom-llm` (legacy, client-scoped) |
+| quintana-seguros | jaumpablo | `gpt-4o` | `eleven_flash_v2_5` | none | — |
+| qora-demo | qora-explainer | `gpt-4o` | `eleven_flash_v2_5` | `agent_4701m3ynzr4jfb0tyj836t437rbh` | `/api/v1/voice/qora-demo/custom-llm` (legacy, client-scoped) |
+
+Decision: the Qora standard takes the values of the agent the user deliberately tuned in production (`leads-agent`): `model = gpt-4.1-mini`, `tts_model = eleven_v4_turbo`. The other two agents only carry the old column defaults, which nobody chose.
+
+- 1a aligns the `Agent.model` / `Agent.tts_model` column defaults and the `core/config.py` fallbacks to these values so new agents stop starting on a Tier 1 hazard (first 1a implementation unit).
+- The 1a import (revision 1) copies each agent's current values unchanged, and the 1b equivalence test stays strict, so no existing agent changes behavior silently.
+- Moving `qora-explainer` and `jaumpablo` to the standard is an explicit, visible change: a new revision with `model` / `tts_model` removed from the agent overrides (inherit the standard), done during 1b rollout and verified with simulate-conversation.
