@@ -32,7 +32,7 @@ def test_agent_create_minimal_valid():
     assert agent.name == "Main Agent"
     assert agent.voice_id == "voice-123"
     # Defaults
-    assert agent.model == "gpt-4o"
+    assert agent.model == "gpt-4.1-mini"
     assert agent.temperature == 0.7
     assert agent.max_tokens == 300
     assert agent.is_default is False

@@ -9,7 +9,128 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.tenants.models import Agent, Client
+from pathlib import Path
+
+from app.tenants.models import Agent, AgentConfigRevision, Client
+
+# backend/app/tenants/service.py -> parents[2] == backend/
+_SEED_CLIENTS_DIR = Path(__file__).resolve().parents[2] / "clients"
+
+
+def _resolve_seed_system_prompt(
+    client_id: str, agent_slug: str, db_system_prompt: str | None
+) -> str | None:
+    """Filesystem system-prompt.md wins over the DB column (design.md D6),
+    matching the priority app.prompts.loader.PromptLoader currently uses.
+    """
+    prompt_path = _SEED_CLIENTS_DIR / client_id / "agents" / agent_slug / "system-prompt.md"
+    if prompt_path.exists():
+        return prompt_path.read_text(encoding="utf-8")
+    return db_system_prompt
+
+
+async def _ensure_active_revision(session: AsyncSession, agent: Agent) -> None:
+    """Create + activate a seeded revision 1 for *agent* if it has none yet.
+
+    Idempotent: a no-op when agent.active_revision_id is already set.
+    """
+    if agent.active_revision_id is not None:
+        return
+
+    system_prompt = _resolve_seed_system_prompt(
+        agent.client_id, agent.slug, agent.system_prompt
+    )
+    config = build_agent_config_v1_snapshot(agent, system_prompt)
+    await create_agent_config_revision(
+        session,
+        agent=agent,
+        config=config,
+        source="import",
+        created_by="system",
+        note="seeded revision 1 (seed_quintana/seed_qora_demo)",
+    )
+
+
+def build_agent_config_v1_snapshot(agent: Agent, system_prompt: str | None) -> dict:
+    """Build the AgentConfigV1-shaped dict snapshot for one Agent (design.md D5).
+
+    Reusable by both the one-time import's equivalent inline logic (which does
+    NOT call this — see the import migration's own docstring on why) and by
+    Phase 2's write path once AgentConfigV1 the Pydantic schema exists.
+
+    Fields with no Agent column source today (goal, first_message, language,
+    turn_eagerness) are None.
+    """
+    try:
+        tools_enabled = json.loads(agent.tools_enabled) if agent.tools_enabled else []
+    except (TypeError, ValueError):
+        tools_enabled = []
+
+    return {
+        "schema_version": "v1",
+        "system_prompt": system_prompt,
+        "goal": None,
+        "voice_id": agent.voice_id,
+        "tts_model": agent.tts_model,
+        "tts_speed": agent.tts_speed,
+        "tts_stability": agent.tts_stability,
+        "tts_similarity_boost": agent.tts_similarity_boost,
+        "model": agent.model,
+        "temperature": agent.temperature,
+        "max_tokens": agent.max_tokens,
+        "tools_enabled": tools_enabled,
+        "first_message": None,
+        "language": None,
+        "turn_eagerness": None,
+        "soft_timeout_seconds": agent.soft_timeout_seconds,
+        "soft_timeout_message": agent.soft_timeout_message,
+        "soft_timeout_use_llm": agent.soft_timeout_use_llm,
+        "voicemail_detection_enabled": agent.voicemail_detection_enabled,
+        "max_call_duration_seconds": agent.max_call_duration_seconds,
+    }
+
+
+async def create_agent_config_revision(
+    session: AsyncSession,
+    *,
+    agent: Agent,
+    config: dict,
+    source: str,
+    created_by: str,
+    note: str | None = None,
+) -> AgentConfigRevision:
+    """Insert-only revision creation + activation (design.md D4/D7).
+
+    revision_number = max(existing for agent_id) + 1, starting at 1. This is
+    the Phase 1 primitive seeders use to create+activate revision 1; the full
+    revisions_service (create_revision/rollback_to_revision/etc.) is Phase 2
+    scope and is NOT built here.
+    """
+    existing_max = await session.execute(
+        select(AgentConfigRevision.revision_number)
+        .where(AgentConfigRevision.agent_id == agent.id)
+        .order_by(AgentConfigRevision.revision_number.desc())
+        .limit(1)
+    )
+    max_number = existing_max.scalar_one_or_none()
+    next_number = (max_number or 0) + 1
+
+    agent_revision = AgentConfigRevision(
+        id=str(uuid.uuid4()),
+        agent_id=agent.id,
+        revision_number=next_number,
+        config=json.dumps(config),
+        schema_version="v1",
+        source=source,
+        created_by=created_by,
+        note=note,
+    )
+    session.add(agent_revision)
+    await session.flush()
+
+    agent.active_revision_id = agent_revision.id
+    await session.flush()
+    return agent_revision
 
 
 async def create_client(
@@ -21,7 +142,7 @@ async def create_client(
     voice_id: str,
     system_prompt_override: str | None = None,
     knowledge_base: str | None = None,
-    model: str = "gpt-4o",
+    model: str = "gpt-4.1-mini",
     temperature: float = 0.7,
     max_tokens: int = 300,
     tools_enabled: str = '["get_lead_details","capture_data","mark_not_interested","schedule_followup"]',
@@ -365,6 +486,8 @@ async def seed_quintana(session: AsyncSession) -> None:
                 updated = True
             if updated:
                 await session.flush()
+            # Task 1.5: backfill revision 1 for agents seeded before this change.
+            await _ensure_active_revision(session, agent)
         return  # Already seeded — skip client creation
 
     await create_client(
@@ -382,6 +505,9 @@ async def seed_quintana(session: AsyncSession) -> None:
     )
     # Note: create_client() auto-creates the default Agent — no separate create_agent() needed.
     # tool_config column not set — capture_data schema is generated from crm.yaml at runtime.
+    agent = await get_default_agent(session, "quintana-seguros")
+    if agent is not None:
+        await _ensure_active_revision(session, agent)
 
 
 _QORA_EXPLAINER_SYSTEM_PROMPT = """\
@@ -467,6 +593,7 @@ async def seed_qora_demo(session: AsyncSession) -> None:
             agent.voicemail_detection_enabled = True
             agent.max_call_duration_seconds = 120
             await session.flush()
+            await _ensure_active_revision(session, agent)
     else:
         # AD-2: Idempotent corrections — update elevenlabs_agent_id and system_prompt
         # if they are missing or stale (e.g. old Quintana agent ID, stale system_prompt).
@@ -489,6 +616,8 @@ async def seed_qora_demo(session: AsyncSession) -> None:
                 updated = True
             if updated:
                 await session.flush()
+            # Task 1.5: backfill revision 1 for agents seeded before this change.
+            await _ensure_active_revision(session, agent)
 
     # Idempotently seed the demo lead for qora-demo.
     # Jorge is a broker/sales manager evaluating Qora as a potential customer.
@@ -519,7 +648,7 @@ async def create_agent(
     voice_id: str,
     system_prompt: str | None = None,
     knowledge_base: str | None = None,
-    model: str = "gpt-4o",
+    model: str = "gpt-4.1-mini",
     temperature: float = 0.7,
     max_tokens: int = 300,
     tools_enabled: str = '["get_lead_details","capture_data","mark_not_interested","schedule_followup"]',
@@ -530,7 +659,7 @@ async def create_agent(
     tts_speed: float = 0.95,
     tts_stability: float = 0.4,
     tts_similarity_boost: float = 0.75,
-    tts_model: str = "eleven_flash_v2_5",
+    tts_model: str = "eleven_v4_turbo",
     tool_config: str | None = None,
     soft_timeout_seconds: float | None = None,
     soft_timeout_message: str | None = None,

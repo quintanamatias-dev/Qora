@@ -114,7 +114,7 @@ async def test_create_agent_with_defaults(session: AsyncSession):
     assert agent.slug == "default-agent"
     assert agent.name == "Default Agent"
     assert agent.voice_id == "voice-xyz"
-    assert agent.model == "gpt-4o"
+    assert agent.model == "gpt-4.1-mini"
     assert agent.temperature == 0.7
     assert agent.max_tokens == 300
     assert agent.is_active is True

@@ -50,7 +50,7 @@ class Agent(Base):
     knowledge_base: Mapped[str | None] = mapped_column(
         Text, nullable=True, default=None
     )
-    model: Mapped[str] = mapped_column(String, nullable=False, default="gpt-4o")
+    model: Mapped[str] = mapped_column(String, nullable=False, default="gpt-4.1-mini")
     temperature: Mapped[float] = mapped_column(nullable=False, default=0.7)
     max_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
     tools_enabled: Mapped[str] = mapped_column(
@@ -74,7 +74,7 @@ class Agent(Base):
     # ElevenLabs TTS model — determines voice synthesis capabilities.
     # "eleven_flash_v2_5" (default): low-latency, supports speed/stability/similarity_boost.
     # "eleven_v3_conversational": expressive tags ([laughs], [slow], etc.), NO speed/stability/similarity_boost.
-    tts_model: Mapped[str] = mapped_column(String, nullable=False, default="eleven_flash_v2_5")
+    tts_model: Mapped[str] = mapped_column(String, nullable=False, default="eleven_v4_turbo")
     # ElevenLabs soft timeout configuration (sdd/elevenlabs-provisioning)
     # NULL = use ElevenLabs dashboard defaults — no PATCH is sent.
     # soft_timeout_use_llm stored as BOOLEAN (SQLAlchemy maps to INTEGER 0/1 in SQLite)
@@ -114,6 +114,14 @@ class Agent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
+    # agent-config-revisions-routing (D4): single pointer to this agent's active
+    # AgentConfigRevision. NULL until the import migration (or a seeder) activates one.
+    active_revision_id: Mapped[str | None] = mapped_column(
+        String,
+        ForeignKey("agent_config_revisions.id"),
+        nullable=True,
+        default=None,
+    )
 
     __table_args__ = (
         # Enforce that slug is unique per client (not globally)
@@ -122,6 +130,46 @@ class Agent(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Agent id={self.id!r} slug={self.slug!r} client={self.client_id!r}>"
+
+
+class AgentConfigRevision(Base):
+    """Immutable, versioned agent configuration snapshot (design.md D4).
+
+    Rows are insert-only: no UPDATE or DELETE path exists anywhere in the
+    service layer. revision_number is monotonically increasing per agent_id,
+    starting at 1. source distinguishes how the revision was created.
+    """
+
+    __tablename__ = "agent_config_revisions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid4)
+    agent_id: Mapped[str] = mapped_column(
+        String, ForeignKey("agents.id"), nullable=False, index=True
+    )
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    # AgentConfigV1-shaped JSON payload, stored as TEXT (same pattern as
+    # Agent.tools_enabled / Client.entitlement_overrides elsewhere in this module).
+    config: Mapped[str] = mapped_column(Text, nullable=False)
+    schema_version: Mapped[str] = mapped_column(String, nullable=False, default="v1")
+    # One of: "import", "api", "rollback".
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    created_by: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    note: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "agent_id", "revision_number", name="uq_agent_config_revisions_agent_number"
+        ),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<AgentConfigRevision id={self.id!r} agent_id={self.agent_id!r} "
+            f"revision_number={self.revision_number!r} source={self.source!r}>"
+        )
 
 
 class Client(Base):

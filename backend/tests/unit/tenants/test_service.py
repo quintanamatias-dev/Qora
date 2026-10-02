@@ -356,7 +356,7 @@ async def test_update_agent_changes_specified_fields(session: AsyncSession):
     assert updated.temperature == 0.9
     # Unchanged fields preserved
     assert updated.voice_id == "v-original"
-    assert updated.model == "gpt-4o"
+    assert updated.model == "gpt-4.1-mini"
 
 
 async def test_update_agent_rejects_cross_client_lookup(session: AsyncSession):

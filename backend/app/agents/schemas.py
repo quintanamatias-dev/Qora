@@ -99,7 +99,7 @@ class AgentCreate(BaseModel):
     voice_id: str
     system_prompt: str | None = None
     knowledge_base: str | None = None
-    model: str = "gpt-4o"
+    model: str = "gpt-4.1-mini"
     temperature: float = 0.7
     max_tokens: int = 300
     tools_enabled: list[str] = _DEFAULT_TOOLS
@@ -115,7 +115,7 @@ class AgentCreate(BaseModel):
     tts_speed: float = Field(default=0.95, ge=0.7, le=1.2)
     tts_stability: float = Field(default=0.4, ge=0.0, le=1.0)
     tts_similarity_boost: float = Field(default=0.75, ge=0.0, le=1.0)
-    tts_model: str = "eleven_flash_v2_5"
+    tts_model: str = "eleven_v4_turbo"
     # ElevenLabs soft timeout config (sdd/elevenlabs-provisioning)
     # NULL = use ElevenLabs dashboard defaults. Range [0.5, 8.0] seconds.
     soft_timeout_seconds: float | None = Field(default=None, ge=0.5, le=8.0)
