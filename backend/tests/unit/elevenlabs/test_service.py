@@ -48,8 +48,19 @@ def _make_agent(
     soft_timeout_use_llm: bool | None = False,
     voicemail_detection_enabled: bool | None = None,
     max_call_duration_seconds: int | None = None,
+    voice_id: str | None = None,
+    tts_model: str | None = None,
+    tts_speed: float | None = None,
+    tts_stability: float | None = None,
+    tts_similarity_boost: float | None = None,
 ):
-    """Return a mock agent object mirroring the Agent model fields we need."""
+    """Return a mock agent object mirroring the Agent model fields we need.
+
+    TTS/voice fields default to None (unlike real Agent rows, where voice_id and
+    the tts_* columns are never NULL) so existing tests that don't pass them keep
+    exercising only soft-timeout/voicemail/max-duration, without a MagicMock
+    auto-attribute leaking a non-None value into the tts payload block.
+    """
     agent = MagicMock()
     agent.elevenlabs_agent_id = elevenlabs_agent_id
     agent.soft_timeout_seconds = soft_timeout_seconds
@@ -57,6 +68,11 @@ def _make_agent(
     agent.soft_timeout_use_llm = soft_timeout_use_llm
     agent.voicemail_detection_enabled = voicemail_detection_enabled
     agent.max_call_duration_seconds = max_call_duration_seconds
+    agent.voice_id = voice_id
+    agent.tts_model = tts_model
+    agent.tts_speed = tts_speed
+    agent.tts_stability = tts_stability
+    agent.tts_similarity_boost = tts_similarity_boost
     return agent
 
 
@@ -529,6 +545,14 @@ async def test_sync_agent_config_all_three_blocks_sends_single_patch():
     route = respx.patch(
         "https://api.elevenlabs.io/v1/convai/agents/el-abc123"
     ).mock(side_effect=capture)
+    # Read-back verification (sdd/elevenlabs-config): sync_agent_config GETs the
+    # agent after a successful PATCH and compares every sent field. Echoing the
+    # same conversation_config back keeps this test asserting outcome='synced'.
+    respx.get("https://api.elevenlabs.io/v1/convai/agents/el-abc123").mock(
+        side_effect=lambda request: httpx.Response(
+            200, json={"conversation_config": captured["body"]["conversation_config"]}
+        )
+    )
 
     service = ElevenLabsService(settings=settings)
     result = await service.sync_agent_config(agent)
@@ -572,6 +596,11 @@ async def test_sync_agent_config_partial_only_soft_timeout():
     respx.patch(
         "https://api.elevenlabs.io/v1/convai/agents/el-abc123"
     ).mock(side_effect=capture)
+    respx.get("https://api.elevenlabs.io/v1/convai/agents/el-abc123").mock(
+        side_effect=lambda request: httpx.Response(
+            200, json={"conversation_config": captured["body"]["conversation_config"]}
+        )
+    )
 
     service = ElevenLabsService(settings=settings)
     result = await service.sync_agent_config(agent)

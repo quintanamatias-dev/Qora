@@ -138,10 +138,15 @@ async def test_create_agent_without_el_id_does_not_fire_sync(agents_app):
 
 
 @pytest.mark.asyncio
-async def test_create_agent_without_soft_timeout_fields_does_not_fire_sync(agents_app):
+async def test_create_agent_with_elevenlabs_binding_fires_sync(agents_app):
     """GIVEN AgentCreate with elevenlabs_agent_id but NO soft_timeout fields
     WHEN POST is called
-    THEN sync_to_elevenlabs is NOT called (nothing to sync)
+    THEN sync_to_elevenlabs IS called, because agents always have a voice_id and
+    TTS/voice config must reach ElevenLabs on create (sdd/elevenlabs-config).
+
+    Renamed and flipped from test_create_agent_without_soft_timeout_fields_does_not_fire_sync:
+    _should_trigger_sync's create-path condition now also triggers on voice_id /
+    tts_* fields, which are never NULL on a real agent row.
     """
     mock_sync = AsyncMock()
     with patch("app.agents.router.sync_to_elevenlabs", mock_sync):
@@ -157,7 +162,7 @@ async def test_create_agent_without_soft_timeout_fields_does_not_fire_sync(agent
         import asyncio as _asyncio
         await _asyncio.sleep(0)
     assert resp.status_code == 201
-    mock_sync.assert_not_called()
+    mock_sync.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -220,9 +225,26 @@ async def test_background_sync_updates_status_to_synced(agents_app, tmp_path):
     from app.core import database as db_module
     from app.core.config import Settings
 
-    # Set up the EL mock
+    # Set up the EL mocks BEFORE any PATCH to the agents API, so the fire-and-forget
+    # background sync triggered by that PATCH (soft_timeout_seconds is a sync field)
+    # also hits a registered route instead of racing an unmocked request. The PATCH
+    # payload now always includes the agent's tts/voice block (voice_id and tts_*
+    # are never NULL), so the read-back GET (sdd/elevenlabs-config drift
+    # verification) must echo the same values back for outcome='synced'.
+    captured: dict = {}
+
+    def _capture_patch(request, route):
+        import json as _json
+        captured["body"] = _json.loads(request.content)
+        return httpx.Response(200, json={"ok": True})
+
     respx.patch("https://api.elevenlabs.io/v1/convai/agents/agent_8201kra4wjhve0srcwgbtwfetr5n").mock(
-        return_value=httpx.Response(200, json={"ok": True})
+        side_effect=_capture_patch
+    )
+    respx.get("https://api.elevenlabs.io/v1/convai/agents/agent_8201kra4wjhve0srcwgbtwfetr5n").mock(
+        side_effect=lambda request: httpx.Response(
+            200, json={"conversation_config": captured["body"]["conversation_config"]}
+        )
     )
 
     # Get the agent ID

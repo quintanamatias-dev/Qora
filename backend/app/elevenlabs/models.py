@@ -50,14 +50,19 @@ class SyncResult(BaseModel):
     """Result of an ElevenLabs sync attempt.
 
     outcome:
-        "synced"  — PATCH succeeded (2xx response)
+        "synced"  — PATCH succeeded and the read-back GET matches every sent field
         "skipped" — No HTTP call made (missing agent_id or all fields None)
-        "error"   — PATCH failed after retry (5xx) or timed out
+        "drift"   — PATCH succeeded but the read-back GET does not match what was
+                     sent — see drift_fields for the mismatched field paths
+        "error"   — PATCH failed after retry (5xx), timed out, or the read-back GET failed
     error_detail: Human-readable error string, None when outcome != "error"
+    drift_fields: Dotted conversation_config field paths that differed from the
+        provider, set only when outcome == "drift"
     """
 
-    outcome: Literal["synced", "skipped", "error"]
+    outcome: Literal["synced", "skipped", "error", "drift"]
     error_detail: str | None = None
+    drift_fields: list[str] | None = None
 
 
 # ---------------------------------------------------------------------------

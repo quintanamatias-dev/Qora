@@ -154,6 +154,12 @@ _SYNC_FIELDS = frozenset({
     # Agent config sync — new fields (sdd/elevenlabs-config)
     "voicemail_detection_enabled",
     "max_call_duration_seconds",
+    # TTS / voice config — phone calls never received these without a sync trigger
+    "voice_id",
+    "tts_model",
+    "tts_speed",
+    "tts_stability",
+    "tts_similarity_boost",
 })
 
 
@@ -174,13 +180,20 @@ def _should_trigger_sync(agent: Agent, changed_fields: set[str] | None = None) -
         # Update path: only trigger if a sync field was actually changed
         return bool(changed_fields & _SYNC_FIELDS)
 
-    # Create path: trigger if any EL config field is non-None
+    # Create path: trigger if any EL config field is non-None. Agents always have
+    # a voice_id, so in practice any agent with an elevenlabs_agent_id syncs on
+    # create — that is intended (voice/TTS must reach ElevenLabs immediately).
     return (
         agent.soft_timeout_seconds is not None
         or agent.soft_timeout_message is not None
         or agent.soft_timeout_use_llm is not None
         or agent.voicemail_detection_enabled is not None
         or agent.max_call_duration_seconds is not None
+        or agent.voice_id is not None
+        or agent.tts_model is not None
+        or agent.tts_speed is not None
+        or agent.tts_stability is not None
+        or agent.tts_similarity_boost is not None
     )
 
 
@@ -343,6 +356,9 @@ async def sync_agent_to_elevenlabs(
         synced_at = datetime.now(tz=timezone.utc)
         agent.elevenlabs_sync_status = "synced"
         agent.elevenlabs_last_synced_at = synced_at
+        await session.commit()
+    elif result.outcome == "drift":
+        agent.elevenlabs_sync_status = "drift"
         await session.commit()
     elif result.outcome == "error":
         agent.elevenlabs_sync_status = "error"
