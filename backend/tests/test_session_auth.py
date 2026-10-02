@@ -584,6 +584,7 @@ class TestZeroDbHotPath:
         ctx.agent_slug = "agent-1"
         ctx.skill_registry_entries = []
         ctx.agent_tool_config = None
+        ctx.profile_facts_block = ""
 
         conv = ConversationState(
             conversation_id="conv-hotpath",
