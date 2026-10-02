@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import structlog
-from sqlalchemy import case, func, select, update
+from sqlalchemy import case, event, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.calls.models import CallAnalysis, CallSession, TranscriptTurn
@@ -601,7 +601,7 @@ async def _reconcile_session(
             db=session,
         )
     else:
-        _schedule_summarize(cs.id)
+        _schedule_summarize_after_commit(session, cs.id)
 
     return cs
 
@@ -693,6 +693,11 @@ async def close_session(
     from app.outbound.linkage import update_telephony_status_on_session_end
     update_telephony_status_on_session_end(cs)
 
+    # Merge sibling sessions BEFORE the voicemail heuristic and the flush:
+    # the heuristic reads total_user_turns, which the merge recounts, and the
+    # summarizer must see the full transcript (Issue #22).
+    merged_ids = await _merge_sibling_sessions(session, completed_session=cs)
+
     # call-state-machine: Voicemail heuristic.
     # After telephony_status is set (by update_telephony_status_on_session_end above),
     # apply the voicemail heuristic for outbound sessions. If the call was very short
@@ -714,9 +719,6 @@ async def close_session(
         await resolve_scheduled_call_for_session(
             session, call_session_id=cs.id, telephony_status=cs.telephony_status
         )
-
-    # Merge sibling sessions BEFORE flush so summarizer sees full transcript (Issue #22)
-    merged_ids = await _merge_sibling_sessions(session, completed_session=cs)
 
     await session.flush()
 
@@ -747,7 +749,7 @@ async def close_session(
             db=session,
         )
     else:
-        _schedule_summarize(session_id)
+        _schedule_summarize_after_commit(session, session_id)
 
     return cs, False
 
@@ -806,6 +808,33 @@ def _apply_voicemail_heuristic(cs: "CallSession") -> None:
 # ---------------------------------------------------------------------------
 # Fire-and-forget summary scheduling (CAP-4)
 # ---------------------------------------------------------------------------
+
+
+def _schedule_summarize_after_commit(session: AsyncSession, session_id: str) -> None:
+    """Schedule summarization once the caller's transaction commits.
+
+    The summarizer opens its own DB session. Started before the commit, it
+    cannot see the turns merged in from sibling sessions and skips the call,
+    so the lead's profile facts are never written. Same after_commit pattern
+    as executor.enqueue(); a rollback cancels the pending schedule.
+    """
+    sync_session = session.sync_session
+
+    def _on_commit(_session) -> None:
+        try:
+            event.remove(sync_session, "after_rollback", _on_rollback)
+        except Exception:
+            pass  # already removed
+        _schedule_summarize(session_id)
+
+    def _on_rollback(_session) -> None:
+        try:
+            event.remove(sync_session, "after_commit", _on_commit)
+        except Exception:
+            pass  # already removed
+
+    event.listen(sync_session, "after_commit", _on_commit, once=True)
+    event.listen(sync_session, "after_rollback", _on_rollback, once=True)
 
 
 def _schedule_summarize(session_id: str, client_id: str | None = None) -> None:
