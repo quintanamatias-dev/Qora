@@ -389,7 +389,12 @@ class TestMeAndLogout:
         resp = await c.post("/api/v1/auth/logout", headers={"X-Qora-Client": "web"})
         assert resp.status_code == 200
         body = resp.json()
-        assert body["logout_url"] == "https://api.workos.com/user_management/sessions/logout?session_id=sess_123"
+        # Return to the plain login page, never the WorkOS default sign-out
+        # redirect (which may be the no_access error page).
+        assert body["logout_url"] == (
+            "https://api.workos.com/user_management/sessions/logout?session_id=sess_123"
+            "&return_to=http%3A%2F%2Flocalhost%3A5173%2Flogin"
+        )
 
         # Session must now be revoked — a follow-up /me with the same cookie is 401.
         c.cookies.set("qora_session", session_cookie)

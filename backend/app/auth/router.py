@@ -209,7 +209,10 @@ async def logout(request: Request, settings: Settings = Depends(_get_settings), 
     if session_token and db is not None:
         session_row = await revoke_session(db, session_token)
         if session_row is not None and session_row.workos_session_id:
-            logout_url = build_logout_url(session_row.workos_session_id)
+            logout_url = build_logout_url(
+                session_row.workos_session_id,
+                return_to=settings.frontend_url.rstrip("/") + "/login",
+            )
 
     response = JSONResponse(content={"logout_url": logout_url})
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
