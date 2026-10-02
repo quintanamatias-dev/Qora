@@ -11,12 +11,12 @@ Decisions:
 
 - [x] 1. Remove iCloud duplicate files (34 untracked `* 2.*` copies, byte-identical to originals).
 - [x] 2. Make the container Railway-ready: honor `$PORT`, fix volume ownership for the non-root user, drop the `VOLUME` instruction Railway rejects. (`railway.toml` skipped: Railway deprecated config-as-code for new services; health check set on the service.)
-- [ ] 3. Write the Railway runbook (`docs/ops/deploy-railway.md`): variables, volume, deploy, rollback, backups.
+- [x] 3. Write the Railway runbook (`docs/ops/deploy-railway.md`): variables, volume, deploy, rollback, backups.
 - [x] 4. Install Railway CLI and link the project (user runs `railway login`).
 - [x] 5. Create the service and volume, load production variables, first deploy, health check green.
 - [x] 6. Register the WorkOS redirect URI and log in on the public URL.
-- [ ] 7. Point an ElevenLabs agent at the public custom-LLM URL with webhook auth (confirm with user first).
-- [ ] 8. Controlled real call; capture event-loop evidence (closes stall T4 if possible).
+- [x] 7. Point an ElevenLabs agent at the public custom-LLM URL with webhook auth (confirm with user first).
+- [x] 8. Controlled real call; capture event-loop evidence (closes stall T4 if possible).
 - [ ] 9. Daily SQLite backup.
 
 ## Evidence
@@ -35,3 +35,7 @@ Decisions:
 - Task 8 attempt 1 (conv_8501m3xan241exy9ppzqykht3nra, 120 s): end-to-end path works in prod — dial via Telnyx SIP, custom LLM on Railway with secret (all 200), post-call webhook HMAC-verified (200). The user's phone was off, so carrier voicemail answered. Findings: (1) OpenAI Tier 1 limits gpt-4o to 30k TPM; ~4k-token prompt × 21 custom-LLM requests (ElevenLabs re-requests) → 12/26 OpenAI calls 429, first agent reply at 49 s. Account limits: gpt-4o/gpt-4.1 30k TPM, gpt-4o-mini/gpt-4.1-mini 200k, gpt-5-mini 500k. (2) The agent said it would hang up but ElevenLabs `end_call` is disabled, so the call ran to max duration (120 s). (3) voicemail_detection is enabled but never fired.
 - Task 8 attempt 2 (conv_0801m3xb12j2e9yty0whnwt98vv1): real conversation with the user on gpt-4.1-mini. 0 OpenAI 429s, LLM TTFB 0.66-0.92 s, TTS TTFB 0.12-0.19 s over 9 agent turns. The user rated it good. The call ended at 120 s on ElevenLabs max duration. Not done yet: end_call/voicemail_detection need the custom LLM to forward ElevenLabs system tools (code change); eleven_v4_turbo is available on the account but untested.
 - Memory loss after prod calls, root cause: (a) prod ElevenLabs agent initiation URL had `client_id=qora-demo`, so custom-LLM turns landed on `demo-` sibling sessions; fixed in ElevenLabs (now `quintana-seguros`, agent renamed "Quintana Seguros - leads-agent (prod)"). (b) Legacy summarize path started before the close transaction committed, so the summarizer saw 0 turns and skipped facts; the voicemail heuristic ran before the sibling merge. Fixed test-first in `43a6577` (RED observed on 3 new tests; 660 adjacent tests green); deployed. Pending: re-run the summarizer for sessions 0a0463fd… (20 turns) and af47fa70… (33 turns) — needs Railway SSH key. Note: prod qora-demo `qora-explainer` also points to the Quintana prod ElevenLabs agent through the ELEVENLABS_AGENT_ID seed (cleanup in the config redesign).
+- Task 3: `docs/ops/deploy-railway.md` (`ce1cae9`).
+- Memory recovery: superadmin `POST /api/v1/calls/{session_id}/reanalyze` (`b574f41`, 7 tests, RED→GREEN by worker; 159 calls tests green). Deployed and ran on 0a0463fd… and af47fa70… → 200 analyzed; re-run returns 409. Lead context-preview now includes the call history.
+- Task 9: Railway volume backups exist on Hobby, but the CLI token gets `NotAuthorized` on `volumeInstanceBackupScheduleUpdate`/`BackupCreate`. User action: dashboard → qora-app → Backups → Daily + Weekly. Offsite copy is a follow-up.
+- Deferred: ElevenLabs `end_call`/voicemail system tools through the custom LLM (needs a live call to validate; Telnyx balance depleted), turn-taking/interruption tuning, prompt tool names `mark_not_interested`/`schedule_followup` no longer valid, tenant config redesign + onboarding harness + data MCP.
