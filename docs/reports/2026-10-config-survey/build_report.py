@@ -35,23 +35,23 @@ INVENTORY: dict[str, list[tuple[str, str, str, str, str, str]]] = {
         ("Cliente activo / inactivo", DB, "Superadmin (UI)", "—", "Cliente", "ok"),
         ("Slug del agente", DB, "Superadmin, solo al crear", "—", "Agente", "ok"),
         ("Nombre del agente", DB, "Superadmin (UI)", "—", "Agente", "ok"),
-        ("Agente por defecto / activo", DB, "Superadmin (UI)", "—", "Agente", "warn"),
+        ("Agente «por defecto»", DB, "Superadmin (UI)", "—", "Eliminar: solo agentes activos", "bad"),
         ("Copia vieja de config del agente en el cliente", DB, "Superadmin (UI)", "—", "Eliminar", "dead"),
         ("Objetivo del agente", NONE, "—", "—", "Agente (obligatorio)", "missing"),
     ],
     "Conversación y prompt": [
         ("System prompt (archivo)", FILE, "Git (deploy)", "Indirecto: texto del LLM", "Agente, versionado", "warn"),
         ("System prompt (base de datos)", DB, "Superadmin (UI), ignorado", "—", "Unificar con el anterior", "bad"),
-        ("Prompt de cliente y plantilla Jaumpablo", CODE, "Git (deploy)", "—", "Plantillas de Qora", "warn"),
-        ("Knowledge base (DB y knowledge.md)", DB, "Superadmin (UI), sin efecto", "—", "Skill «info de la empresa»", "dead"),
+        ("Prompt de cliente (prompt.md) y plantilla Jaumpablo", CODE, "Git (deploy), respaldo viejo", "—", "Eliminar; queda como plantilla", "dead"),
+        ("Knowledge base (DB y knowledge.md)", DB, "Sin efecto; la tool de skills no la ve", "—", "Skill «info de la empresa»", "dead"),
         ("Primer mensaje", EL, "Manual (vacío hoy)", "Sí, a mano", "Agente", "warn"),
         ("Idioma de la conversación", EL, "Manual", "Sí, a mano", "Agente", "warn"),
-        ("Variables dinámicas por llamada", CODE, "3 implementaciones", "Sí, por llamada", "Contrato único de Qora", "warn"),
+        ("Variables dinámicas por llamada", CODE, "Fijas para autos, en 3 lugares", "Sí, por llamada", "Campos que define el cliente", "bad"),
     ],
     "Modelo de lenguaje": [
         ("Modelo del agente", DB, "Superadmin, la UI solo al crear", "—", "Estándar Qora + override", "warn"),
         ("Temperatura y largo de respuesta", DB, "Superadmin (UI)", "—", "Estándar Qora + override", "ok"),
-        ("Modelo del análisis post-llamada", ENV, "Railway", "—", "Estándar Qora", "warn"),
+        ("Modelo del análisis post-llamada (gpt-4o-mini)", ENV, "Solo editando Railway", "—", "Estándar Qora", "warn"),
         ("Frases de espera de las tools", CODE, "—", "—", "Estándar Qora + idioma", "warn"),
     ],
     "Voz": [
@@ -76,20 +76,19 @@ INVENTORY: dict[str, list[tuple[str, str, str, str, str, str]]] = {
         ("Contenido de cada skill", FILE, "Git (deploy)", "—", "Paquetes, versionado", "warn"),
     ],
     "Memoria y análisis": [
-        ("Llamadas previas en memoria (3)", CODE, "—", "—", "Estándar Qora + override", "ok"),
-        ("Hechos del lead extraídos", DB, "Se guardan, nunca se usan", "—", "Agente (activar)", "bad"),
+        ("Cuántas llamadas previas recuerda (rotan; el 3 es fijo)", CODE, "—", "—", "Estándar Qora + override", "ok"),
+        ("Hechos del perfil del lead", DB, "Se guardan, nunca se usan; calidad mixta", "—", "Memoria del agente, filtrados", "bad"),
         ("Zona horaria de la memoria", CODE, "Fija: Buenos Aires", "—", "Cliente", "warn"),
         ("Catálogo de productos y necesidades", CODE, "Fijo: productos de Quintana", "—", "Perfil de análisis", "bad"),
-        ("Reglas de próxima acción", DB, "Nadie (sin API)", "—", "Cliente", "bad"),
-        ("Idioma del análisis", DB, "Nadie (sin API)", "—", "Cliente", "bad"),
-        ("Configuración de extracción", DB, "Nadie (sin uso)", "—", "Eliminar", "dead"),
-        ("Tipo de memoria del agente", NONE, "—", "—", "Agente (futuro)", "missing"),
+        ("Reglas de próxima acción (qué hacer tras la llamada)", DB, "Nadie (sin API)", "—", "Perfil de análisis", "bad"),
+        ("Idioma de lo entregable (hereda del cliente)", DB, "Nadie (sin API)", "—", "Cliente", "bad"),
+        ("Configuración de extracción (columna nunca conectada)", DB, "Nadie: nada la lee", "—", "Eliminar; vive en el perfil de análisis", "dead"),
     ],
-    "Agenda y reintentos (cliente)": [
-        ("Agenda habilitada", DB, "API, sin UI", "—", "Cliente", "warn"),
-        ("Intentos, espera y backoff", DB, "API, sin UI", "—", "Cliente", "warn"),
-        ("Horario permitido", DB, "API, sin UI", "—", "Cliente", "warn"),
-        ("Resultados que reintentan", DB, "API, sin validar", "—", "Cliente", "warn"),
+    "Recontacto (cliente)": [
+        ("Recontacto automático (encendido / apagado)", DB, "API, sin UI", "—", "Cliente", "warn"),
+        ("Recontacto: intentos, espera y backoff", DB, "API, sin UI", "—", "Cliente", "warn"),
+        ("Horario en que se puede llamar", DB, "API, sin UI", "—", "Cliente", "warn"),
+        ("Resultados que disparan recontacto", DB, "API, sin validar", "—", "Cliente", "warn"),
         ("Zona horaria del cliente", DB, "API, sin UI", "—", "Cliente", "warn"),
         ("Reintento técnico y timeouts", CODE, "—", "—", "Estándar Qora", "ok"),
         ("Llamadas simultáneas del discador", ENV, "Railway (1 global)", "—", "Plan del cliente", "warn"),
@@ -352,6 +351,8 @@ CRITICAL = [
      "El chequeo de credenciales al arrancar corta el servidor completo si falta la key de un solo cliente. Sumar un cliente obliga a tocar Railway y reiniciar."),
     ("El análisis «universal» tiene los productos de Quintana",
      "El catálogo de interés son los 9 seguros de Quintana (<code>catalog.py:20</code>). Cualquier cliente de otro rubro recibe un análisis de interés equivocado."),
+    ("ElevenLabs no podía colgar ni detectar buzones",
+     "ElevenLabs manda sus herramientas de sistema (colgar, buzón) en cada pedido a nuestro LLM y Qora las ignoraba. Por eso Juanma decía «voy a colgar» y no colgaba. <b>Resuelto en la fase 0.</b>"),
     ("Lo que el análisis aprende del lead no llega al agente",
      "Los hechos del perfil se guardan pero nadie los inyecta en la conversación (<code>memory.py:147</code>, <code>_format_accumulated_profile</code> sin uso). La memoria real es: últimos 3 resúmenes, notas y campos del lead."),
 ]
@@ -385,14 +386,42 @@ QUICK_WINS = [
 ]
 
 DECISIONS = [
-    ("¿Qué puede tocar el cliente?",
-     "Propuesta: el cliente ve todo, pero edita solo lo de negocio (horarios, primer mensaje, datos de su empresa, voz desde un catálogo curado). Modelo, turnos y análisis quedan en manos de Qora."),
-    ("¿Un agente de ElevenLabs por cada agente de Qora?",
-     "Propuesta: sí, creado y mantenido por la API, nunca a mano. Un agente de ElevenLabs es solo configuración, no cuesta capacidad. Si algún día conviene compartir, ElevenLabs permite pisar voz, prompt y primer mensaje por llamada."),
-    ("¿Perfiles de análisis por rubro o por cliente?",
-     "Propuesta: por rubro (seguros, cobranzas, inmobiliaria) con override por cliente. Arranca con «seguros» = lo de hoy."),
-    ("¿Por dónde empezamos?",
-     "Propuesta: fase 0 primero (arreglos rápidos, 1 o 2 días) y después fase 1. Las fases 2 a 6 se diseñan con OpenSpec antes de tocar código."),
+    ("Paneles", "Panel de configuración (Qora, partners con sus clientes asignados, y el cliente si se autogestiona) y panel de operación para el cliente, con casi nada editable."),
+    ("Estándares de Qora", "Configuración global que ningún panel puede cambiar. La lista concreta se define en la fase 1."),
+    ("Un agente de ElevenLabs por agente de Qora", "Confirmado: ElevenLabs permite agentes ilimitados en todos los planes y cobra por minuto (US$0,08 el adicional) y por llamadas simultáneas. La cantidad de agentes no suma costo."),
+    ("Sin «agente por defecto»", "Cada llamada identifica a su agente. Un cliente tiene agentes activos, no uno principal."),
+    ("Idioma", "Todo lo interno en inglés. Lo que lee una persona se entrega en su idioma, heredado del cliente."),
+    ("Memoria", "Las últimas 3 llamadas rotan (bien). Los hechos del perfil entran a la memoria, categorizados y al final del prompt, solo si la evidencia es algo que dijo la persona."),
+    ("Prompt y cacheo", "Lo fijo arriba, lo variable (lead, memoria, hora) al final: OpenAI cachea el inicio del prompt y cualquier dato variable corta el cache desde ese punto."),
+    ("Catálogo de productos", "Existe para cross-selling futuro: se mantiene, pero pasa a ser configuración de cada cliente."),
+]
+
+GLOSSARY = [
+    ("Prompt del agente", "Las instrucciones de un agente. Uno solo por agente. Hoy es system-prompt.md; pasa a la base, versionado."),
+    ("Plantilla de prompt", "Un punto de partida de Qora para crear agentes. No se usa en llamadas."),
+    ("Skill", "Conocimiento que el agente carga solo cuando lo necesita (tool load_skill). La info de la empresa es una skill."),
+    ("Paquete de skills", "Skills de Qora o de un cliente; el cliente tiene una sección general y secciones por agente."),
+    ("Variables dinámicas", "Datos del lead que se insertan en cada llamada (nombre, auto…). Deben salir de los campos de cada cliente."),
+    ("Memoria", "Resúmenes de las últimas 3 llamadas, notas y hechos del perfil del lead."),
+    ("Hechos del perfil", "Datos estables de la persona que el análisis extrae (preferencias, situación)."),
+    ("Próxima acción", "Qué hacer después de una llamada: seguir, recontactar o cerrar. La decide el análisis."),
+    ("Recontacto", "Cuándo y cómo se vuelve a llamar: intentos, espera, backoff, horario y resultados que lo disparan."),
+    ("Perfil de análisis", "La configuración del análisis post-llamada: productos, reglas de próxima acción e idioma, por rubro o cliente."),
+    ("Agente de Qora / de ElevenLabs", "El de Qora es la fuente de verdad; el de ElevenLabs es su reflejo, creado y actualizado por API."),
+    ("Estándar de Qora", "Configuración global que todos los agentes comparten y ningún panel modifica."),
+]
+
+PHASE0 = [
+    ("La voz configurada en Qora llega a las llamadas", "Juanma sincronizado: Qora lee el agente de vuelta y los valores coinciden", "s-ok", "Resuelto"),
+    ("«Sincronizado» ahora es real", "Si ElevenLabs no refleja lo enviado, el estado es «drift»", "s-ok", "Resuelto"),
+    ("El agente puede colgar y detectar buzones", "Simulación contra producción: el modelo llamó a end_call y ElevenLabs cortó", "s-ok", "Resuelto"),
+    ("Turnos menos agresivos", "Juanma pasó de «eager» a «normal»", "s-ok", "Resuelto"),
+    ("Agente de ElevenLabs propio para el demo", "Demo y Quintana ya no comparten agente", "s-ok", "Resuelto"),
+    ("Login de clientes en producción", "+demo entra a qora-demo; invitación enviada para Quintana", "s-ok", "Resuelto"),
+    ("Panel de tools y teléfono al crear", "Tests nuevos; las 5 tools reales en el panel", "s-ok", "Resuelto"),
+    ("Idioma y reglas de próxima acción por API", "Editables por API; validados en producción", "s-ok", "Resuelto"),
+    ("Hechos del perfil en la memoria", "8 hechos en el contexto de tu lead; los nuevos se filtran", "s-ok", "Resuelto"),
+    ("Limpiar hechos viejos mal extraídos", "Pendiente: el filtro no corrige los ya guardados", "s-warn", "Pendiente"),
 ]
 
 
@@ -405,7 +434,7 @@ def build() -> str:
 <section class="page cover">
   <div class="cover-top"><span class="brand big">QORA</span><span class="dot"></span></div>
   <div class="cover-mid">
-    <p class="eyebrow">RELEVAMIENTO · OCTUBRE 2026</p>
+    <p class="eyebrow">RELEVAMIENTO · OCTUBRE 2026 · VERSIÓN 2</p>
     <h1>Configuración de clientes y agentes</h1>
     <p class="lead">Qué se puede configurar hoy, dónde vive cada cosa, qué no funciona y cómo lo ordenamos para que Qora sea un producto de producción.</p>
   </div>
@@ -501,36 +530,30 @@ def build() -> str:
     # Proposal: ElevenLabs + skills
     pages.append(page("Modelo propuesto", "ElevenLabs como reflejo y skills en paquetes", f"""
 {RECONCILE_DIAGRAM}
-<p class="intro"><b>Un agente de ElevenLabs por cada agente de Qora</b>, creado y actualizado por la API. Es solo configuración: tener muchos no consume capacidad. La URL del LLM pasa a identificar al agente, así cada uno usa su propio prompt.</p>
+<p class="intro"><b>Un agente de ElevenLabs por cada agente de Qora</b>, creado y actualizado por la API. ElevenLabs permite agentes ilimitados en todos sus planes y cobra por <b>minutos</b> (US$0,08 el minuto adicional) y por <b>llamadas simultáneas</b> (10 a 40 según el plan); el LLM y la telefonía van aparte. Para el pricing de Qora, lo que escala son minutos y concurrencia, no agentes. La URL del LLM pasa a identificar al agente, así cada uno usa su propio prompt.</p>
 {SKILLS_DIAGRAM}
 <p class="intro">Cada agente ve el paquete Qora, la sección general de su cliente y su propia sección. Una skill puede vivir en una sección y estar habilitada en varios agentes.</p>"""))
 
-    # Who edits what
-    matrix_rows = [
-        ("Objetivo, prompt y skills del agente", "Edita", "Ve y propone"),
-        ("Voz y parámetros de voz", "Edita", "Elige de un catálogo"),
-        ("Primer mensaje e idioma", "Edita", "Edita"),
-        ("Modelo de lenguaje y temperatura", "Edita", "No ve"),
-        ("Turnos, interrupciones y muletillas", "Edita", "No ve"),
-        ("Horarios, reintentos y zona horaria", "Edita", "Edita"),
-        ("Integración con su CRM", "Edita", "Conecta y mapea"),
-        ("Perfil de análisis", "Edita", "Ve"),
-        ("Plan, features y límites", "Edita", "Ve"),
-        ("Usuarios de su empresa", "Edita", "Invita"),
-    ]
-    trs = "".join(
-        f"<tr><td class='c-set'>{escape(a)}</td><td><span class='pill s-ok'>{escape(b)}</span></td>"
-        f"<td><span class='pill {'s-dead' if c == 'No ve' else 's-missing'}'>{escape(c)}</span></td></tr>"
-        for a, b, c in matrix_rows
-    )
-    pages.append(page("Modelo propuesto", "Quién toca qué", f"""
-<p class="intro">Propuesta para validar. Hoy todo es superadmin y el cliente no tiene ninguna pantalla de configuración.</p>
-<table class="inv matrix"><thead><tr><th>Configuración</th><th>Qora (superadmin)</th><th>Cliente</th></tr></thead><tbody>{trs}</tbody></table>
+    # Panels and roles
+    pages.append(page("Modelo propuesto", "Dos paneles, permisos simples", f"""
+<p class="intro">Un cliente se configura por tres caminos: <b>Qora como implementador</b>, <b>un partner</b> (por ejemplo una agencia) o, si algún día tiene sentido, <b>el propio cliente</b>. Los tres usan el mismo panel; lo que cambia es a qué clientes tiene acceso cada uno.</p>
+<div class="two">
+  {card("Panel de configuración", "Prompt, voz, skills, recontacto, CRM y análisis de un cliente. Lo usan Qora (todos los clientes), cada partner (solo sus clientes asignados) y el cliente si se autogestiona. Es la misma pantalla que hoy ve el superadmin al elegir un cliente.", "ok")}
+  {card("Panel de operación", "El día a día del cliente: llamadas, leads, resultados y monitor en vivo. Casi nada editable. Es lo que Qora fomenta: la configuración la hacemos con el cliente, a medida.", "violet")}
+</div>
 <div class="three">
-  {card("Hoy", "Todas las pantallas de configuración son de superadmin. El usuario cliente solo ve dashboards y el monitor en vivo.", "warn")}
-  {card("Por qué separar", "Lo que define la calidad de la llamada (modelo, turnos, análisis) es parte del producto Qora. Lo que define el negocio (horarios, mensajes, CRM) es del cliente.", "ok")}
-  {card("Siempre con permiso", "Cada edición queda registrada como revisión con autor. Un cambio del cliente se puede auditar y revertir.", "violet")}
+  {card("Partner = usuario con varios clientes", "No hace falta un panel especial: un partner tiene una lista de clientes asignados, elige uno y entra a su panel. La sesión de login ya guarda una lista de clientes.", "ok")}
+  {card("Estándares de Qora bloqueados", "Lo que define la calidad (modelo, turnos, reglas técnicas) es configuración global de Qora: igual para todos los agentes y fuera de cualquier panel.", "warn")}
+  {card("Todo queda registrado", "Cada cambio es una revisión con autor y fecha: se puede auditar quién tocó qué y volver atrás.", "violet")}
 </div>"""))
+
+    # Glossary
+    gl = "".join(
+        f"<tr><td class='c-set'>{escape(a)}</td><td>{escape(b)}</td></tr>" for a, b in GLOSSARY
+    )
+    pages.append(page("Glosario", "Un nombre para cada cosa", f"""
+<p class="intro">Para no mezclarnos: estos son los términos que usamos de acá en adelante.</p>
+<table class="inv matrix gloss"><thead><tr><th>Término</th><th>Qué es</th></tr></thead><tbody>{gl}</tbody></table>"""))
 
     # Roadmap
     qw = "".join(f"<li>{escape(x)}</li>" for x in QUICK_WINS)
@@ -539,11 +562,18 @@ def build() -> str:
 <h3 class="sub">Fase 0 en detalle</h3>
 <ul class="clean small">{qw}</ul>"""))
 
-    # Decisions
+    # Decisions taken
     dec = "".join(card(t, x, "violet") for t, x in DECISIONS)
-    pages.append(page("Para decidir", "Lo que necesito de vos", f"""
-<p class="intro">Con estas cuatro respuestas arranco la fase 0 y escribo la propuesta formal de la fase 1.</p>
-<div class="grid2">{dec}</div>"""))
+    pages.append(page("Decisiones", "Lo que ya definimos", f"""<div class="grid2">{dec}</div>"""))
+
+    # Phase 0 progress
+    rows = "".join(
+        f"<tr><td class='c-set'>{escape(a)}</td><td>{escape(b)}</td><td><span class='pill {c}'>{escape(d)}</span></td></tr>"
+        for a, b, c, d in PHASE0
+    )
+    pages.append(page("Avance", "Fase 0: arreglos rápidos", f"""
+<p class="intro">Hecho y verificado en producción el 2 de octubre de 2026. Cada arreglo tiene tests y su propio commit.</p>
+<table class="inv matrix"><thead><tr><th>Arreglo</th><th>Cómo se verificó</th><th>Estado</th></tr></thead><tbody>{rows}</tbody></table>"""))
 
     return HTML_HEAD + "".join(pages) + "</body></html>"
 
@@ -594,7 +624,7 @@ table.inv {{ width: 100%; border-collapse: collapse; font-size: 8.1pt; }}
 table.inv th {{ text-align: left; font-weight: 600; color: #bbcabf; font-size: 7pt; text-transform: uppercase; letter-spacing: .06em; padding: 1.6mm 1.5mm; background: #151b2d; }}
 table.inv td {{ padding: 1.6mm 1.5mm; border-bottom: 1px solid rgba(60,74,66,.35); color: #c9cfe6; vertical-align: top; }}
 td.c-set {{ color: #eef1ff; font-weight: 500; width: 27%; }} td.c-level {{ color: #4edea3; }}
-.matrix {{ font-size: 10pt; }} .matrix td {{ padding: 3mm 2mm; }}
+.matrix {{ font-size: 10pt; }} .gloss td {{ padding: 2.4mm 2mm; font-size: 9.5pt; }} .matrix td {{ padding: 3mm 2mm; }}
 .pill {{ display: inline-block; padding: .5mm 2mm; border-radius: 10px; font-size: 7pt; font-weight: 600; white-space: nowrap; }}
 .matrix .pill {{ font-size: 8.5pt; }}
 .s-ok {{ background: rgba(78,222,163,.15); color: #4edea3; }} .s-warn {{ background: rgba(245,158,11,.15); color: #f5b54a; }}
