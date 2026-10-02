@@ -811,7 +811,9 @@ def _assemble_context_system_content(
     2. skills_index (## Available Skills block, when not None/empty)
     3. misc_notes (when not empty; single channel for operational notes)
     4. lead_profile (when not empty and skip_lead_profile_in_assembly is False)
-    5. Loaded skill blocks (## Loaded Skill: {name} + content, one per entry)
+    5. profile_facts_block (when not empty; accumulated LeadProfileFact rows,
+       read-time injection — qora-profile-facts memory injection)
+    6. Loaded skill blocks (## Loaded Skill: {name} + content, one per entry)
 
     Empty components are skipped so no trailing whitespace or stray separators
     are added.
@@ -841,6 +843,8 @@ def _assemble_context_system_content(
         parts.append(ctx.misc_notes)
     if ctx.lead_profile and not ctx.skip_lead_profile_in_assembly:
         parts.append(ctx.lead_profile)
+    if ctx.profile_facts_block:
+        parts.append(ctx.profile_facts_block)
     if loaded_skills:
         for skill_name, skill_content in loaded_skills.items():
             parts.append(f"## Loaded Skill: {skill_name}\n{skill_content}")

@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from app.memory import _format_accumulated_profile
 from app.prompts.loader import PromptLoader
 from app.prompts.skill_loader import SkillRegistryEntry
 
@@ -99,6 +100,8 @@ class VoiceSessionContext:
             directly. Do NOT use for new code; use skills_index instead.
         misc_notes: From extracted_facts["misc_notes"] (empty if absent/no lead).
         lead_profile: Formatted lead data block (empty if no lead).
+        profile_facts_block: Accumulated active LeadProfileFact rows for this lead,
+            rendered via _format_accumulated_profile (empty if no lead or no facts).
         model: LLM model identifier from agent config.
         temperature: Sampling temperature from agent config.
         max_tokens: Max tokens from agent config.
@@ -137,6 +140,10 @@ class VoiceSessionContext:
     # Agent slug stored for tool routing (load_skill needs client_id + agent_slug)
     # NEW in Phase 2
     agent_slug: str | None = None
+    # Accumulated LeadProfileFact rows, rendered read-time (qora-profile-facts memory
+    # injection). Empty string when the lead has no active profile facts or when
+    # tests construct this dataclass directly without it (backward compatible).
+    profile_facts_block: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -306,6 +313,25 @@ async def build_voice_context(
     # the agent system_prompt has template vars (see _assemble_context_system_content).
     lead_profile = _build_lead_profile_block(lead, lead_custom_fields) if lead is not None else ""
 
+    # qora-profile-facts: inject accumulated profile facts at read time, grouped
+    # by category/namespace and capped per _MAX_FACTS_PER_NAMESPACE.
+    profile_facts_block = ""
+    if lead is not None:
+        try:
+            profile_facts_block = await _format_accumulated_profile(db, str(lead.id))
+        except Exception as exc:  # noqa: BLE001 - profile facts are best-effort context
+            logger.warning(
+                "voice_context_profile_facts_load_failed",
+                **_agent_log_fields(agent),
+                error_type=type(exc).__name__,
+                error_msg=str(exc),
+            )
+    logger.info(
+        "voice_context_profile_facts_built",
+        **_agent_log_fields(agent),
+        profile_facts_count=len(profile_facts_block.splitlines()) if profile_facts_block else 0,
+    )
+
     # Track whether the effective prompt template uses lead vars. Filesystem
     # prompts are canonical; agent.system_prompt is only the legacy fallback.
     try:
@@ -408,6 +434,7 @@ async def build_voice_context(
         skills_content=skills_content,
         misc_notes=misc_notes,
         lead_profile=lead_profile,
+        profile_facts_block=profile_facts_block,
         model=model,
         temperature=temperature,
         max_tokens=max_tokens,
