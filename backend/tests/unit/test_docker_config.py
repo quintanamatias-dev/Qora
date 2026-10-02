@@ -98,9 +98,17 @@ class TestEntrypointSh:
             "uvicorn must bind to 0.0.0.0 to be reachable from outside container"
         )
 
-    def test_uvicorn_port_8000(self):
+    def test_uvicorn_port_defaults_to_8000(self):
         content = self._read()
-        assert "--port 8000" in content, "uvicorn must listen on port 8000"
+        assert '--port "${PORT:-8000}"' in content, (
+            "uvicorn must listen on $PORT (Railway) and default to 8000"
+        )
+
+    def test_drops_root_before_running_app(self):
+        content = self._read()
+        assert "setpriv --reuid=qora" in content, (
+            "entrypoint must drop to the non-root qora user after fixing volume ownership"
+        )
 
     def test_is_executable(self):
         assert os.access(str(self._path), os.X_OK), (
@@ -156,8 +164,14 @@ class TestDockerfile:
 
     def test_non_root_user(self):
         content = self._read()
-        assert "qora" in content and "USER" in content, (
-            "Dockerfile must create and use a non-root 'qora' user"
+        assert "adduser" in content and "qora" in content, (
+            "Dockerfile must create the non-root 'qora' user the entrypoint drops to"
+        )
+
+    def test_no_volume_instruction(self):
+        content = self._read()
+        assert not any(line.strip().startswith("VOLUME") for line in content.splitlines()), (
+            "Railway rejects the VOLUME instruction; volumes are mounted by the platform"
         )
 
     def test_exposes_port_8000(self):

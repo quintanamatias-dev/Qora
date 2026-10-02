@@ -206,6 +206,10 @@ class TestCloseSessionSummarizeRouting:
 
             async with db_engine.async_session_factory() as db:
                 await close_session(db, session_id=session_id, closed_reason="test")
+                # The legacy path schedules only after the caller commits, so the
+                # summarizer's own DB session sees the merged transcript.
+                msched.assert_not_called()
+                await db.commit()
 
         me.enqueue.assert_not_called()
         msched.assert_called_once_with(session_id)
@@ -282,6 +286,8 @@ class TestReconcileSessionSummarizeRouting:
                     closed_reason="call_ended",
                     update_lead_counters=False,
                 )
+                msched.assert_not_called()
+                await db.commit()
 
         assert result is not None
         msched.assert_called_once_with(result.id)

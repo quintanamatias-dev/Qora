@@ -518,7 +518,9 @@ class TestEndFallbackSessionLifecycleIntegration:
             mock_settings.enable_job_executor = False
             mock_executor.enqueue = AsyncMock()
 
-            with patch("app.calls.service._schedule_summarize"):
+            # mock_db is not a real SQLAlchemy session, so the after-commit
+            # listener cannot be registered on it.
+            with patch("app.calls.service._schedule_summarize_after_commit"):
                 cs, was_already_closed = await real_close_session(
                     mock_db,
                     session_id="fake-sess-close-001",

@@ -82,9 +82,15 @@ def build_authorize_url(settings: Settings, *, state: str) -> str:
     return f"{WORKOS_BASE_URL}/user_management/authorize?{urlencode(params)}"
 
 
-def build_logout_url(workos_session_id: str) -> str:
-    """Build the WorkOS-hosted logout URL for a known WorkOS session id."""
+def build_logout_url(workos_session_id: str, *, return_to: str | None = None) -> str:
+    """Build the WorkOS-hosted logout URL for a known WorkOS session id.
+
+    ``return_to`` must be registered in the WorkOS dashboard as a sign-out
+    redirect; when omitted WorkOS uses the default sign-out redirect.
+    """
     params = {"session_id": workos_session_id}
+    if return_to:
+        params["return_to"] = return_to
     return f"{WORKOS_BASE_URL}/user_management/sessions/logout?{urlencode(params)}"
 
 

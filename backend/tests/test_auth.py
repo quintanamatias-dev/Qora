@@ -288,6 +288,25 @@ class TestDocsEnabledToggle:
         response = client.get("/redoc")
         assert response.status_code == 404
 
+    def test_openapi_schema_disabled_returns_404(self):
+        """When QORA_DOCS_ENABLED=false, /openapi.json must not expose the route map."""
+        from app.main import create_app
+
+        test_app = create_app(docs_enabled=False)
+        client = TestClient(test_app, raise_server_exceptions=False)
+        response = client.get("/openapi.json")
+        assert response.status_code == 404
+
+    def test_openapi_schema_enabled_by_default(self):
+        """When QORA_DOCS_ENABLED is not set, /openapi.json returns the schema."""
+        from app.main import create_app
+
+        test_app = create_app(docs_enabled=True)
+        client = TestClient(test_app, raise_server_exceptions=False)
+        response = client.get("/openapi.json")
+        assert response.status_code == 200
+        assert "paths" in response.json()
+
     def test_docs_toggle_does_not_affect_health_check(self):
         """Disabling docs must not affect /api/v1/health availability."""
         from app.main import create_app

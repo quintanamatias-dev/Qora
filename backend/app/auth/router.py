@@ -135,6 +135,13 @@ async def callback(
     try:
         identity = await map_identity(db, settings, user=result.user, organization_id=result.organization_id)
     except NoAccessError:
+        # End the AuthKit session too: otherwise the next login attempt reuses
+        # it silently and the user loops back here without ever seeing the
+        # sign-in form to choose another account.
+        if result.session_id:
+            return_to = settings.frontend_url.rstrip("/") + "/login?error=no_access"
+            logout_url = build_logout_url(result.session_id, return_to=return_to)
+            return _clear_state_cookies(RedirectResponse(url=logout_url, status_code=302))
         return _clear_state_cookies(_login_redirect(request, "no_access"))
 
     raw_token = await create_session(
@@ -202,7 +209,10 @@ async def logout(request: Request, settings: Settings = Depends(_get_settings), 
     if session_token and db is not None:
         session_row = await revoke_session(db, session_token)
         if session_row is not None and session_row.workos_session_id:
-            logout_url = build_logout_url(session_row.workos_session_id)
+            logout_url = build_logout_url(
+                session_row.workos_session_id,
+                return_to=settings.frontend_url.rstrip("/") + "/login",
+            )
 
     response = JSONResponse(content={"logout_url": logout_url})
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")

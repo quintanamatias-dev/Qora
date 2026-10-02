@@ -210,6 +210,44 @@ class TestCallback:
         assert resp.headers["location"] == "/login?error=no_access"
 
     @respx.mock
+    async def test_no_access_ends_workos_session_before_showing_error(self, client):
+        """A rejected identity must not stay signed in at AuthKit.
+
+        Otherwise the next login attempt silently reuses the same AuthKit
+        session and the user loops back to no_access without ever seeing the
+        sign-in form to pick another account.
+        """
+        import base64
+        import json
+        from urllib.parse import parse_qs, urlparse
+
+        c, settings = client
+        c.cookies.set("qora_auth_state", "state-a")
+        payload = base64.urlsafe_b64encode(json.dumps({"sid": "session_abc"}).encode()).decode().rstrip("=")
+        respx.post("https://api.workos.com/user_management/authenticate").mock(
+            return_value=Response(
+                200,
+                json={
+                    "user": {"id": "user_1", "email": "nobody@nowhere.com", "email_verified": True},
+                    "organization_id": "org_unknown",
+                    "access_token": f"h.{payload}.s",
+                },
+            )
+        )
+        resp = await c.get("/api/v1/auth/callback?code=abc&state=state-a", follow_redirects=False)
+
+        assert resp.status_code == 302
+        location = urlparse(resp.headers["location"])
+        assert f"{location.scheme}://{location.netloc}{location.path}" == (
+            "https://api.workos.com/user_management/sessions/logout"
+        )
+        query = parse_qs(location.query)
+        assert query["session_id"] == ["session_abc"]
+        assert query["return_to"] == [settings.frontend_url.rstrip("/") + "/login?error=no_access"]
+        assert {"qora_auth_state", "qora_auth_return"} <= _cleared_cookie_names(resp)
+        assert not any(h.startswith("qora_session=") for h in resp.headers.get_list("set-cookie"))
+
+    @respx.mock
     async def test_success_superadmin_sets_session_cookie_and_redirects_return_to(self, client):
         c, settings = client
         c.cookies.set("qora_auth_state", "state-a")
@@ -351,7 +389,12 @@ class TestMeAndLogout:
         resp = await c.post("/api/v1/auth/logout", headers={"X-Qora-Client": "web"})
         assert resp.status_code == 200
         body = resp.json()
-        assert body["logout_url"] == "https://api.workos.com/user_management/sessions/logout?session_id=sess_123"
+        # Return to the plain login page, never the WorkOS default sign-out
+        # redirect (which may be the no_access error page).
+        assert body["logout_url"] == (
+            "https://api.workos.com/user_management/sessions/logout?session_id=sess_123"
+            "&return_to=http%3A%2F%2Flocalhost%3A5173%2Flogin"
+        )
 
         # Session must now be revoked — a follow-up /me with the same cookie is 401.
         c.cookies.set("qora_session", session_cookie)
