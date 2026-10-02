@@ -45,6 +45,7 @@ from app.calls.service import (
     _schedule_summarize,
     add_transcript_turn,
     close_session,
+    count_turns,
     get_call_analysis,
     get_call_metrics,
     get_session,
@@ -62,6 +63,7 @@ from app.core.access import ensure_resource_access, require_client_access, requi
 from app.core.database import get_session as db_session
 from app.entitlements.deps import require_feature
 from app.outbound.linkage import link_outbound_session_by_webhook
+from app.summarizer import generate_summary_and_facts_durable
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
@@ -705,3 +707,63 @@ async def get_call_analysis_endpoint(session_id: str, caller: CallerIdentity = D
             analysis_error=analysis.analysis_error,
             analyzed_at=analysis.analyzed_at,
         )
+
+
+@router.post("/{session_id}/reanalyze", dependencies=[Depends(require_superadmin)])
+async def reanalyze_call_session(session_id: str):
+    """Re-run post-call analysis for a completed session (superadmin only).
+
+    Operator recovery route for sessions left without a call_analyses row
+    by a production race (now fixed): transcript turns exist but analysis
+    never ran. Runs the durable summarizer synchronously so the caller gets
+    an authoritative result instead of a fire-and-forget background job.
+
+    Returns 404 if the session does not exist, 409 if an analysis already
+    exists (never overwrites or duplicates analysis/facts), 422 if the
+    session is not completed or has zero transcript turns, and 502 if the
+    summarizer fails or does not produce an analysis row.
+    """
+    logger.info("call_reanalyze_requested", session_id=session_id)
+
+    async with db_session() as session:
+        cs = await get_session(session, session_id)
+        if cs is None:
+            raise HTTPException(status_code=404, detail="Call session not found")
+
+        existing_analysis = await get_call_analysis(session, session_id)
+        if existing_analysis is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "analysis_exists",
+                    "message": "An analysis already exists for this call session",
+                },
+            )
+
+        if cs.status != "completed":
+            raise HTTPException(
+                status_code=422,
+                detail="Call session must be completed before it can be re-analyzed",
+            )
+
+        user_turns, agent_turns = await count_turns(session, session_id)
+        if user_turns + agent_turns == 0:
+            raise HTTPException(
+                status_code=422,
+                detail="Call session has no transcript turns to analyze",
+            )
+
+        try:
+            await generate_summary_and_facts_durable(session_id, session)
+            await session.commit()
+        except Exception as exc:
+            logger.error("call_reanalyze_failed", session_id=session_id, error=str(exc))
+            raise HTTPException(status_code=502, detail="Failed to re-analyze call session")
+
+        analysis = await get_call_analysis(session, session_id)
+        if analysis is None:
+            logger.error("call_reanalyze_no_analysis_produced", session_id=session_id)
+            raise HTTPException(status_code=502, detail="Failed to re-analyze call session")
+
+    logger.info("call_reanalyze_completed", session_id=session_id)
+    return {"session_id": session_id, "status": "analyzed"}
