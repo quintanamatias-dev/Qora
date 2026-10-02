@@ -14,7 +14,7 @@ Decisions:
 - [ ] 3. Write the Railway runbook (`docs/ops/deploy-railway.md`): variables, volume, deploy, rollback, backups.
 - [x] 4. Install Railway CLI and link the project (user runs `railway login`).
 - [x] 5. Create the service and volume, load production variables, first deploy, health check green.
-- [ ] 6. Register the WorkOS redirect URI and log in on the public URL.
+- [x] 6. Register the WorkOS redirect URI and log in on the public URL.
 - [ ] 7. Point an ElevenLabs agent at the public custom-LLM URL with webhook auth (confirm with user first).
 - [ ] 8. Controlled real call; capture event-loop evidence (closes stall T4 if possible).
 - [ ] 9. Daily SQLite backup.
@@ -29,3 +29,4 @@ Decisions:
 - Found during task 5: /openapi.json stayed public with docs disabled. Fixed test-first (RED observed, then 37 + 12 focused tests green) in `096992d`; redeployed, /openapi.json no longer serves the schema.
 - Native review of `fee767a`: START blocked by harness (`candidate-view-invalid`); no lineage created.
 - Task 6 finding: first public login looped on `no_access` because AuthKit reused last night's `+demo` session (unmapped in the fresh prod DB). Fixed test-first in `eeaa589`: on no_access the callback now redirects through WorkOS logout with `return_to=<FRONTEND_URL>/login?error=no_access` (RED observed; 110 auth tests green). Requires that URL in WorkOS Sign-out redirects. Deployed.
+- Task 6: logout returned to the WorkOS default sign-out URL (the no_access page); fixed test-first in `17237bf` (logout passes `return_to=<FRONTEND_URL>/login`). WorkOS Sign-out redirects now list `/login` (default) and `/login?error=no_access`. User verified: superadmin login/logout OK, `+demo` rejected with the no_access message, no loop.
