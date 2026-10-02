@@ -857,7 +857,7 @@ async def _fetch_agent_config(
     try:
         async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_SECONDS) as client:
             response = await client.get(url, headers=headers)
-    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+    except httpx.HTTPError as exc:
         logger.error(
             "elevenlabs_sync_readback_error",
             error=str(exc),
@@ -873,7 +873,17 @@ async def _fetch_agent_config(
         )
         return None
 
-    return response.json()
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        logger.error(
+            "elevenlabs_sync_readback_invalid_body",
+            elevenlabs_agent_id=elevenlabs_agent_id,
+        )
+        return None
+    return body
 
 
 async def _verify_synced_config(

@@ -287,3 +287,35 @@ async def test_sync_agent_config_readback_get_failure_returns_error():
 
     assert isinstance(result, SyncResult)
     assert result.outcome == "error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "get_side_effect",
+    [
+        httpx.Response(200, content=b"<html>not json</html>"),
+        httpx.RemoteProtocolError("server disconnected"),
+    ],
+    ids=["non_json_body", "protocol_error"],
+)
+@respx.mock
+async def test_sync_agent_config_unexpected_readback_failure_returns_error(get_side_effect):
+    """GIVEN the PATCH succeeds but the read-back fails in a way that is neither
+    a timeout nor a network error
+    WHEN sync_agent_config is called
+    THEN outcome='error' and nothing is raised, so the caller can record it
+    """
+    from app.elevenlabs.service import ElevenLabsService, SyncResult
+
+    respx.patch("https://api.elevenlabs.io/v1/convai/agents/el-abc123").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    respx.get("https://api.elevenlabs.io/v1/convai/agents/el-abc123").mock(
+        side_effect=get_side_effect
+    )
+
+    service = ElevenLabsService(settings=_make_settings())
+    result = await service.sync_agent_config(_make_agent())
+
+    assert isinstance(result, SyncResult)
+    assert result.outcome == "error"
