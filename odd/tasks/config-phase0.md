@@ -10,7 +10,7 @@ Goal: make what is configured in Qora actually reach production calls, without c
 - [x] 4. Give the qora-demo client its own production ElevenLabs agent (stop sharing Quintana's).
 - [x] 5. Production login for Quintana users (link the WorkOS organization).
 - [x] 6. Expose `analysis_language` and next-action rules through the client API.
-- [ ] 7. Inject lead profile facts into the agent memory, categorized, at the end of the prompt, only facts evidenced by the lead's own words.
+- [x] 7. Inject lead profile facts into the agent memory, categorized, at the end of the prompt, only facts evidenced by the lead's own words.
 - [ ] 8. Update the survey PDF with the user's corrections: prompt glossary, recontact vs next action, partner model, ElevenLabs cost facts.
 
 ## Decisions (from the user)
@@ -31,3 +31,4 @@ Goal: make what is configured in Qora actually reach production calls, without c
 - Task 2: `4b58703` (worker; strict RED: 7 new tests failed first; 196 voice tests green; ruff clean). Request tools not named like Qora tools are offered to the model and forwarded to ElevenLabs as a tool_calls delta + finish_reason tool_calls, without local execution, filler or follow-up call. Deployed; `end_call` enabled on the prod Quintana agent (voicemail_detection already on). Live check via ElevenLabs simulate-conversation against prod: the user declined, the model called end_call (reason recorded) and ElevenLabs ended the conversation. Follow-up: the prompt should ask the agent to pass a farewell `message` with end_call (it hung up without saying goodbye).
 - Task 3: `08e4caf` (worker; RED: new phone test failed with None; 120 agents tests, 119 admin frontend tests, lint and tsc green). Create persists elevenlabs_phone_number_id and returns it; Agent.tools_enabled default is ["get_lead_details"]; the admin form offers the 5 valid tools (load_skill is auto-injected). Not deployed yet (batched).
 - Task 6: `0d764d0` (worker; RED 15/16 new tests; 16 + 107 client tests green; ruff clean). analysis_language and next_action_* in ClientUpdate/ClientResponse with validation; retry-outcomes response default aligned with DB. Tasks 3 and 6 deployed together and verified via GET /clients/quintana-seguros.
+- Task 7: `ef7f274` (worker; RED not captured by the worker — parent verified it afterwards by stashing the implementation: 6/7 new tests failed, 7/7 pass with it; 477 related tests green). Write-time gate drops profile facts whose evidence is only an "Agente:" line; active facts rendered after the lead block (before per-turn loaded skills). Deployed; prod log shows profile_facts_count=8 for the test lead. Facts written before the gate (e.g. the WhatsApp one) remain — cleanup is a follow-up.
