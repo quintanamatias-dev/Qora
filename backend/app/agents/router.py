@@ -33,9 +33,8 @@ from app.tenants.agent_config_schema import (
     AgentConfigV1,
     AgentConfigV2Patch,
 )
-from app.tenants.config_resolver import EffectiveConfig, resolve_effective_config
-from app.tenants.config_standard import AgentConfigStandard
 from app.tenants.field_policy import AGENT_REQUIRED_FIELDS
+from app.tenants.materialize import materialize_agent_config
 from app.tenants.models import Agent, AgentConfigRevision, Client
 import app.tenants.service as tenant_service
 from app.tenants import revisions_service
@@ -295,57 +294,6 @@ async def _agent_completeness(
         overrides = json.loads(active.config)
     missing = sorted(f for f in AGENT_REQUIRED_FIELDS if overrides.get(f) is None)
     return (len(missing) > 0, missing)
-
-
-async def _resolve_effective_for_agent(
-    session: AsyncSession, agent: Agent
-) -> EffectiveConfig:
-    """design.md D13/D18: resolve the agent's effective config through the
-    same standard → client → agent chain used everywhere else, treating a
-    legacy V1 full-snapshot revision's present fields as agent-provenance
-    overrides (spec.md's "pre-existing V1 revision resolves without migration").
-    """
-    client_overrides: dict = {}
-    client_revision = await revisions_service.get_active_client_revision(
-        session, agent.client_id
-    )
-    if client_revision is not None:
-        client_overrides = json.loads(client_revision.config)
-        client_overrides.pop("schema_version", None)
-
-    agent_overrides: dict = {}
-    active = await revisions_service.get_active_revision(
-        session, agent.client_id, agent.id
-    )
-    if active is not None:
-        agent_overrides = json.loads(active.config)
-        agent_overrides.pop("schema_version", None)
-
-    return resolve_effective_config(AgentConfigStandard, client_overrides, agent_overrides)
-
-
-def _mirror_effective_config_to_agent(agent: Agent, effective: EffectiveConfig) -> None:
-    """TRANSITIONAL (design.md D18's decision #4): every agent revision write
-    still mirrors the EFFECTIVE values into the legacy Agent.* columns, so the
-    runtime (still reading columns until the Phase 5 cutover) behaves
-    identically regardless of which level a field's value came from.
-    """
-    fields = effective.fields
-    agent.system_prompt = fields["system_prompt"].value or ""
-    agent.voice_id = fields["voice_id"].value
-    agent.tts_model = fields["tts_model"].value
-    agent.tts_speed = fields["tts_speed"].value
-    agent.tts_stability = fields["tts_stability"].value
-    agent.tts_similarity_boost = fields["tts_similarity_boost"].value
-    agent.model = fields["model"].value
-    agent.temperature = fields["temperature"].value
-    agent.max_tokens = fields["max_tokens"].value
-    agent.tools_enabled = json.dumps(fields["tools_enabled"].value)
-    agent.soft_timeout_seconds = fields["soft_timeout_seconds"].value
-    agent.soft_timeout_message = fields["soft_timeout_message"].value
-    agent.soft_timeout_use_llm = fields["soft_timeout_use_llm"].value
-    agent.voicemail_detection_enabled = fields["voicemail_detection_enabled"].value
-    agent.max_call_duration_seconds = fields["max_call_duration_seconds"].value
 
 
 def _revision_to_response(revision: AgentConfigRevision) -> AgentConfigRevisionResponse:
@@ -647,8 +595,7 @@ async def update_agent(
                 detail={"error": "invalid_config", "fields": exc.fields, "detail": str(exc)},
             ) from exc
 
-        effective = await _resolve_effective_for_agent(session, agent)
-        _mirror_effective_config_to_agent(agent, effective)
+        await materialize_agent_config(session, agent)
 
     # Serialize tool_config dict to JSON string for DB storage
     if "tool_config" in non_config_data and isinstance(
@@ -731,8 +678,7 @@ async def patch_agent_config(
     # still mirrors the EFFECTIVE values into the legacy Agent.* columns, so
     # the runtime (still reading columns until the Phase 5 cutover) behaves
     # identically regardless of which level a field's value came from.
-    effective = await _resolve_effective_for_agent(session, agent)
-    _mirror_effective_config_to_agent(agent, effective)
+    await materialize_agent_config(session, agent)
 
     await session.commit()
     await session.refresh(agent)
@@ -843,8 +789,7 @@ async def rollback_agent_config(
     # TRANSITIONAL (design.md D18 decision #4): rollback preserves whichever
     # schema_version the target revision was recorded in (V1 full snapshot or
     # V2 sparse overrides); mirror the resolved EFFECTIVE values either way.
-    effective = await _resolve_effective_for_agent(session, agent)
-    _mirror_effective_config_to_agent(agent, effective)
+    await materialize_agent_config(session, agent)
 
     await session.commit()
     await session.refresh(agent)

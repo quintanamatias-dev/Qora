@@ -363,6 +363,76 @@ implementation, all additive to the existing agent-config-revisions-routing
    one — that bootstrap agent is simply `config_incomplete=True` from the
    start, exactly like any other legacy agent, until explicitly configured.
 
+## D19 — Phase 5: materialized effective config instead of rewiring the hot path
+
+Phase 4 already mirrors every agent-config write's resolved `EffectiveConfig`
+onto the legacy `Agent.*` columns (`_resolve_effective_for_agent` /
+`_mirror_effective_config_to_agent`, D18 decision #4). D19 makes that the
+official model for the remainder of Phase 5, superseding the original plan
+(tasks 5.2/5.3) to rewire `build_voice_context` and
+`ElevenLabsService._build_config_payload` to call `resolve_effective_config`
+directly on every turn/sync.
+
+**Decision**: `Agent.*` config columns are a MATERIALIZED projection of
+`resolve_effective_config(standard, client active revision, agent active
+revision)`. A single function, `tenants/materialize.materialize_agent_config
+(session, agent) -> EffectiveConfig`, is the sole derivation point: it
+resolves, mirrors the result onto `Agent.*`, and stamps
+`agent.materialized_standard_version`. Every write path
+(`agents/router.py`) and every propagation path (client-config PATCH/
+rollback, the standard resync endpoint) calls it instead of
+resolving/mirroring inline. The voice hot path (`voice/context.py`, the
+webhook) and `ElevenLabsService._build_config_payload` are UNCHANGED — they
+keep reading `Agent.*` columns directly.
+
+**Rejected**: resolving `EffectiveConfig` per turn inside
+`build_voice_context` (tasks 5.2/5.3 as originally scoped). This would add a
+client-revision + agent-revision DB read to every voice turn and every EL
+sync call, for a resolution that is already fully captured by the mirrored
+columns the moment any config-affecting event happens (an agent write, a
+client write, or an explicit standard resync) — strictly larger blast radius
+and latency risk in the call path for no behavioral gain.
+
+**Rationale**: one derivation point (the resolver stays pure, called from
+exactly one place); the hot path's existing column reads are untouched, so
+there is zero new latency or behavior risk on a live call; and the
+equivalence test (5.1) becomes a direct, literal column-diff check instead
+of an indirect runtime-behavior comparison.
+
+**Empirically widened exception list (5.1)**: materializing every agent
+seeded by `seed_quintana`/`seed_qora_demo` (+ a plain `create_agent()`) was
+verified to change THREE Agent.* columns, not the single
+`voicemail_detection_enabled` example in D15/D19's original framing:
+
+- `voicemail_detection_enabled`: `NULL` -> standard `True`, for any agent
+  that never had it set explicitly.
+- `max_call_duration_seconds`: `NULL` -> standard `120`, same NULL-carrying
+  agents.
+- `system_prompt`: changes whenever the agent's active revision's
+  agent-override `system_prompt` differs from the raw `Agent.system_prompt`
+  column — either `NULL` -> `""` for a brand-new agent with none set, or
+  (jaumpablo, qora-explainer) the DB-seed-constant column text being
+  replaced by the filesystem `system-prompt.md` content that
+  `_resolve_seed_system_prompt()` already prefers when building each
+  seeder's active revision. `PromptLoader.render_for_agent()` already serves
+  the filesystem content at call time (D6) regardless of the column value,
+  so this materialization does not change runtime behavior — it only makes
+  the column match what is already served.
+
+See `tests/unit/tenants/test_config_equivalence.py` for the exhaustive,
+self-verifying exception list (a test asserts the observed exceptions equal
+the documented set, so a future seeder change that resolves the divergence
+is caught instead of leaving dead documentation).
+
+**Deviation — standard resync endpoint mount point**: task 5.6 named the
+route `POST /admin/standards/resync`. `backend/app/main.py` (where a bare
+`/admin` router would need to be registered) was outside this task's
+allowed edit surfaces. The endpoint is mounted on the existing clients
+router instead (the only allowed-surface router with no client-id-scoped
+dependency), giving the reachable path
+`POST /api/v1/clients/admin/standards/resync`, still gated by
+`require_superadmin`. Revisit the exact path if/when `main.py` is in scope.
+
 ## Open Questions
 
 - [ ] Should `language` (conversation) ever get a per-agent override path, and if so, is it a Qora-reviewed field-policy exception (per D16) or a self-service toggle gated by a client-level "allow multilingual agents" flag? Not blocking tasks 1–6; resolve before building any UI affordance for it.

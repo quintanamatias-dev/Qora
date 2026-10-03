@@ -12,10 +12,11 @@ Uses existing `tenants` SQLAlchemy models — no new DB models created.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -29,7 +30,9 @@ from app.clients.schemas import (
 )
 from app.core.access import require_client_access, require_superadmin
 from app.core.auth import CallerIdentity, require_api_key
+from app.elevenlabs.service import sync_to_elevenlabs
 from app.tenants.client_config_schema import ClientConfigPatch, ClientConfigV1
+from app.tenants.materialize import materialize_agent_config, snapshot_mirrored_fields
 from app.tenants.models import Agent, Client, ClientConfigRevision
 import app.tenants.service as tenant_service
 from app.tenants import revisions_service
@@ -363,6 +366,72 @@ async def delete_client(
 
 
 # ---------------------------------------------------------------------------
+# POST /api/v1/clients/admin/standards/resync (task 5.6, design.md D15/D19)
+#
+# Deviation (documented): the parent's scope named this route
+# `POST /admin/standards/resync`, but backend/app/main.py — where a bare
+# `/admin` router would need to be mounted — is outside this task's allowed
+# edit surfaces. It is mounted on this router instead (the only
+# allowed-surface router with no client-id-scoped dependency), giving the
+# reachable path `POST /api/v1/clients/admin/standards/resync`.
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/admin/standards/resync",
+    dependencies=[Depends(require_superadmin)],
+)
+async def resync_standard(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+) -> dict:
+    """Re-materialize every active agent platform-wide against the current
+    AgentConfigStandard, and trigger the existing EL sync (fire-and-forget)
+    only for agents whose resolved config actually changed, or whose
+    materialized_standard_version no longer matches STANDARD_VERSION.
+
+    design.md D15: a STANDARD_VERSION code deploy never auto-syncs anyone —
+    this explicit endpoint is the only path that fans EL syncs out across a
+    standard change, avoiding a deploy-time API-rate-limited sync storm.
+
+    Returns:
+        200: {standard_version, agents_checked, agents_changed, synced}
+    """
+    from app.tenants.config_standard import STANDARD_VERSION
+
+    result = await session.execute(select(Agent).where(Agent.is_active == True))  # noqa: E712
+    agents = list(result.scalars().all())
+
+    agents_checked = 0
+    agents_changed = 0
+    agents_to_sync: list[str] = []
+    for agent in agents:
+        agents_checked += 1
+        was_drifted_version = agent.materialized_standard_version != STANDARD_VERSION
+        before = snapshot_mirrored_fields(agent)
+        await materialize_agent_config(session, agent)
+        after = snapshot_mirrored_fields(agent)
+        changed = any(before[field] != after[field] for field in before)
+        if changed:
+            agents_changed += 1
+        if (changed or was_drifted_version) and agent.elevenlabs_agent_id:
+            agents_to_sync.append(agent.id)
+
+    await session.commit()
+
+    settings = request.app.state.settings
+    for agent_id in agents_to_sync:
+        asyncio.create_task(sync_to_elevenlabs(agent_id=agent_id, settings=settings))
+
+    return {
+        "standard_version": STANDARD_VERSION,
+        "agents_checked": agents_checked,
+        "agents_changed": agents_changed,
+        "synced": len(agents_to_sync),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Client config revisions (agent-config-inheritance D11)
 # ---------------------------------------------------------------------------
 
@@ -383,6 +452,34 @@ def _client_revision_to_response(
     )
 
 
+async def _materialize_and_propagate(
+    session: AsyncSession, request: Request, client_id: str
+) -> None:
+    """design.md D19/task 5.5: after a client config revision is activated,
+    re-materialize every ACTIVE agent of that client and trigger the
+    existing EL sync (fire-and-forget, same mechanism agents/router.py uses)
+    for agents whose mirrored columns actually changed and that have an
+    elevenlabs_agent_id. Agents with no column change are left alone — an
+    unrelated client-level edit must not fan out a sync storm.
+    """
+    agents = await tenant_service.list_agents_for_client(session, client_id)
+    agents_to_sync: list[str] = []
+    for agent in agents:
+        before = snapshot_mirrored_fields(agent)
+        await materialize_agent_config(session, agent)
+        after = snapshot_mirrored_fields(agent)
+        changed = any(before[field] != after[field] for field in before)
+        if changed and agent.elevenlabs_agent_id:
+            agents_to_sync.append(agent.id)
+
+    await session.commit()
+
+    if agents_to_sync:
+        settings = request.app.state.settings
+        for agent_id in agents_to_sync:
+            asyncio.create_task(sync_to_elevenlabs(agent_id=agent_id, settings=settings))
+
+
 # ---------------------------------------------------------------------------
 # PATCH /api/v1/clients/{client_id}/config
 # ---------------------------------------------------------------------------
@@ -396,6 +493,7 @@ def _client_revision_to_response(
 async def patch_client_config(
     client_id: str,
     payload: ClientConfigPatch,
+    request: Request,
     caller: CallerIdentity = Depends(require_client_access),
     session: AsyncSession = Depends(get_db_session),
 ) -> ClientConfigRevisionResponse:
@@ -446,6 +544,8 @@ async def patch_client_config(
 
     await session.commit()
     await session.refresh(revision)
+
+    await _materialize_and_propagate(session, request, client_id)
 
     return _client_revision_to_response(revision)
 
@@ -531,6 +631,7 @@ async def get_client_config_revision(
 async def rollback_client_config(
     client_id: str,
     revision_id: str,
+    request: Request,
     caller: CallerIdentity = Depends(require_client_access),
     session: AsyncSession = Depends(get_db_session),
 ) -> ClientConfigRevisionResponse:
@@ -560,5 +661,7 @@ async def rollback_client_config(
 
     await session.commit()
     await session.refresh(new_revision)
+
+    await _materialize_and_propagate(session, request, client_id)
 
     return _client_revision_to_response(new_revision)

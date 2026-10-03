@@ -79,6 +79,15 @@ class CallSession(Base):
     agent_config_revision_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("agent_config_revisions.id"), nullable=True, default=None
     )
+    # agent-config-inheritance D19: STANDARD_VERSION and the client's active
+    # ClientConfigRevision at session creation time, stamped alongside
+    # agent_config_revision_id above. NULL for pre-migration sessions.
+    standard_version: Mapped[str | None] = mapped_column(
+        String, nullable=True, default=None
+    )
+    client_config_revision_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("client_config_revisions.id"), nullable=True, default=None
+    )
     # PR 3: transcript finalization audit — stamped by transcript_flush_handler
     # after the call ends. NULL means not yet finalized (call still live or handler pending).
     # Operators and B9 can inspect these to confirm off-call durability ran.

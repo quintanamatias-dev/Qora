@@ -122,6 +122,12 @@ class Agent(Base):
         nullable=True,
         default=None,
     )
+    # agent-config-inheritance (D19): STANDARD_VERSION active when this agent's
+    # Agent.* columns were last derived by materialize_agent_config(). NULL until
+    # the agent has been materialized by a 1b write/propagation path.
+    materialized_standard_version: Mapped[str | None] = mapped_column(
+        String, nullable=True, default=None
+    )
 
     __table_args__ = (
         # Enforce that slug is unique per client (not globally)

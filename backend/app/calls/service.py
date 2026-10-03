@@ -88,6 +88,24 @@ async def create_session(
         resolved_agent.active_revision_id if resolved_agent is not None else None
     )
 
+    # agent-config-inheritance task 5.4 (design.md D19): standard_version is
+    # the resolved agent's own materialization provenance when it has one,
+    # falling back to the CURRENT STANDARD_VERSION for an agent never
+    # materialized by a 1b write/propagation path. client_config_revision_id
+    # is the client's active revision at creation time, mirroring
+    # agent_config_revision_id above.
+    from app.tenants.config_standard import STANDARD_VERSION
+    from app.tenants.models import Client
+
+    standard_version = None
+    client_config_revision_id = None
+    if resolved_agent is not None:
+        standard_version = resolved_agent.materialized_standard_version or STANDARD_VERSION
+        client = await session.get(Client, client_id)
+        client_config_revision_id = (
+            client.active_config_revision_id if client is not None else None
+        )
+
     cs = CallSession(
         id=session_id or str(uuid.uuid4()),
         client_id=client_id,
@@ -96,6 +114,8 @@ async def create_session(
         status="initiated",
         agent_id=resolved_agent_id,
         agent_config_revision_id=agent_config_revision_id,
+        standard_version=standard_version,
+        client_config_revision_id=client_config_revision_id,
     )
     session.add(cs)
     await session.flush()

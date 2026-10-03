@@ -240,3 +240,83 @@ async def test_create_session_without_agent_id_records_resolved_revision(seeded_
         await sess.commit()
 
     assert cs.agent_config_revision_id == expected_revision_id
+
+
+async def test_create_session_records_standard_version_from_current_standard_when_agent_never_materialized(
+    seeded_db,
+):
+    """agent-config-inheritance task 5.4: create_session() stamps
+    standard_version from the resolved agent's materialized_standard_version,
+    falling back to the current STANDARD_VERSION when the agent has never
+    been materialized (design.md D19).
+    """
+    from app.calls.service import create_session
+    from app.tenants.config_standard import STANDARD_VERSION
+    from app.tenants.service import resolve_single_active_agent
+
+    async with seeded_db.async_session_factory() as sess:
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
+        assert agent.materialized_standard_version is None
+
+    async with seeded_db.async_session_factory() as sess:
+        cs = await create_session(
+            sess,
+            client_id="quintana-seguros",
+            lead_id="agent-test-lead-001",
+        )
+        await sess.commit()
+
+    assert cs.standard_version == STANDARD_VERSION
+
+
+async def test_create_session_records_standard_version_from_materialized_agent(
+    seeded_db,
+):
+    """Once an agent has been materialized, create_session() stamps the
+    STAMPED materialized_standard_version, not the (possibly newer) current
+    STANDARD_VERSION — this is the provenance fact the column exists to
+    record (design.md D19).
+    """
+    from app.calls.service import create_session
+    from app.tenants.materialize import materialize_agent_config
+    from app.tenants.service import resolve_single_active_agent
+
+    async with seeded_db.async_session_factory() as sess:
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
+        await materialize_agent_config(sess, agent)
+        agent.materialized_standard_version = "2020-01-01.1"
+        await sess.commit()
+
+    async with seeded_db.async_session_factory() as sess:
+        cs = await create_session(
+            sess,
+            client_id="quintana-seguros",
+            lead_id="agent-test-lead-001",
+        )
+        await sess.commit()
+
+    assert cs.standard_version == "2020-01-01.1"
+
+
+async def test_create_session_records_client_active_config_revision_id(seeded_db):
+    """agent-config-inheritance task 5.4: create_session() stamps
+    client_config_revision_id from the client's active_config_revision_id at
+    creation time.
+    """
+    from app.calls.service import create_session
+    from app.tenants.service import get_client
+
+    async with seeded_db.async_session_factory() as sess:
+        client = await get_client(sess, "quintana-seguros")
+        assert client.active_config_revision_id is not None
+        expected_revision_id = client.active_config_revision_id
+
+    async with seeded_db.async_session_factory() as sess:
+        cs = await create_session(
+            sess,
+            client_id="quintana-seguros",
+            lead_id="agent-test-lead-001",
+        )
+        await sess.commit()
+
+    assert cs.client_config_revision_id == expected_revision_id

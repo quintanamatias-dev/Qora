@@ -12,6 +12,7 @@ No EL sync wiring in this slice (task 5.5, out of scope here).
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
@@ -188,3 +189,149 @@ async def test_client_rollback_endpoint_activates_new_revision(client_revisions_
         "/api/v1/clients/quintana-seguros"
     )
     assert client_response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Propagation (task 5.5, design.md D19): PATCH/rollback client config
+# re-materializes every ACTIVE agent of that client, and triggers the
+# existing EL sync for agents whose mirrored columns changed and that have
+# an elevenlabs_agent_id.
+# ---------------------------------------------------------------------------
+
+
+async def _get_quintana_agent_id() -> str:
+    from app.core import database as db_module
+    from app.tenants.service import resolve_single_active_agent
+
+    async with db_module.async_session_factory() as session:
+        agent = await resolve_single_active_agent(session, "quintana-seguros")
+        return agent.id
+
+
+async def _set_elevenlabs_agent_id(agent_id: str, el_id: str) -> None:
+    from app.core import database as db_module
+    from app.tenants.models import Agent
+
+    async with db_module.async_session_factory() as session:
+        agent = await session.get(Agent, agent_id)
+        agent.elevenlabs_agent_id = el_id
+        await session.commit()
+
+
+async def _get_agent_max_call_duration(agent_id: str) -> int | None:
+    from app.core import database as db_module
+    from app.tenants.models import Agent
+
+    async with db_module.async_session_factory() as session:
+        agent = await session.get(Agent, agent_id)
+        return agent.max_call_duration_seconds
+
+
+async def test_patch_client_config_materializes_every_active_agent(
+    client_revisions_app,
+):
+    agent_id = await _get_quintana_agent_id()
+    assert await _get_agent_max_call_duration(agent_id) is None
+
+    response = await client_revisions_app.patch(
+        "/api/v1/clients/quintana-seguros/config",
+        json={"max_call_duration_seconds": 90},
+    )
+    assert response.status_code == 200
+
+    assert await _get_agent_max_call_duration(agent_id) == 90
+
+
+async def test_patch_client_config_syncs_changed_agent_with_elevenlabs_id(
+    client_revisions_app,
+):
+    agent_id = await _get_quintana_agent_id()
+    await _set_elevenlabs_agent_id(agent_id, "el-agent-quintana")
+
+    mock_sync = AsyncMock()
+    with patch("app.clients.router.sync_to_elevenlabs", mock_sync):
+        response = await client_revisions_app.patch(
+            "/api/v1/clients/quintana-seguros/config",
+            json={"max_call_duration_seconds": 90},
+        )
+        assert response.status_code == 200
+
+    mock_sync.assert_called_once()
+    _, kwargs = mock_sync.call_args
+    assert kwargs["agent_id"] == agent_id
+
+
+async def test_patch_client_config_skips_sync_when_no_column_changed(
+    client_revisions_app,
+):
+    agent_id = await _get_quintana_agent_id()
+    await _set_elevenlabs_agent_id(agent_id, "el-agent-quintana")
+
+    # First patch materializes jaumpablo for the first time ever, which
+    # always surfaces design.md D19's documented NULL->standard exceptions
+    # (voicemail_detection_enabled, max_call_duration_seconds) regardless of
+    # what the patch itself touches — consume that one-time transition before
+    # asserting the no-op case below.
+    await client_revisions_app.patch(
+        "/api/v1/clients/quintana-seguros/config", json={"turn_eagerness": "normal"}
+    )
+
+    # language is client_only with no Agent.* column mirror — never changes a
+    # materialized column, so no sync should fire even with an EL id set.
+    mock_sync = AsyncMock()
+    with patch("app.clients.router.sync_to_elevenlabs", mock_sync):
+        response = await client_revisions_app.patch(
+            "/api/v1/clients/quintana-seguros/config", json={"language": "es"}
+        )
+        assert response.status_code == 200
+
+    mock_sync.assert_not_called()
+
+
+async def test_patch_client_config_skips_sync_without_elevenlabs_id(
+    client_revisions_app,
+):
+    agent_id = await _get_quintana_agent_id()
+    # No elevenlabs_agent_id set on this agent.
+
+    mock_sync = AsyncMock()
+    with patch("app.clients.router.sync_to_elevenlabs", mock_sync):
+        response = await client_revisions_app.patch(
+            "/api/v1/clients/quintana-seguros/config",
+            json={"max_call_duration_seconds": 90},
+        )
+        assert response.status_code == 200
+
+    assert await _get_agent_max_call_duration(agent_id) == 90
+    mock_sync.assert_not_called()
+
+
+async def test_client_rollback_syncs_changed_agent_with_elevenlabs_id(
+    client_revisions_app,
+):
+    agent_id = await _get_quintana_agent_id()
+    await _set_elevenlabs_agent_id(agent_id, "el-agent-quintana")
+
+    first = await client_revisions_app.patch(
+        "/api/v1/clients/quintana-seguros/config",
+        json={"max_call_duration_seconds": 90},
+    )
+    first_revision_id = first.json()["id"]
+
+    await client_revisions_app.patch(
+        "/api/v1/clients/quintana-seguros/config",
+        json={"max_call_duration_seconds": 60},
+    )
+    assert await _get_agent_max_call_duration(agent_id) == 60
+
+    mock_sync = AsyncMock()
+    with patch("app.clients.router.sync_to_elevenlabs", mock_sync):
+        rollback_response = await client_revisions_app.post(
+            f"/api/v1/clients/quintana-seguros/revisions/{first_revision_id}/rollback"
+        )
+        assert rollback_response.status_code == 200
+
+    assert await _get_agent_max_call_duration(agent_id) == 90
+    mock_sync.assert_called_once()
+    _, kwargs = mock_sync.call_args
+    assert kwargs["agent_id"] == agent_id
