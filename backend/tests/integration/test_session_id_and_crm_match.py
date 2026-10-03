@@ -127,33 +127,6 @@ async def test_crm_import_populates_external_lead_id(db_engine, test_settings, t
     WHEN the CRM import runs
     THEN the created Lead has external_lead_id = 987654 (integer).
     """
-    # Write a crm.yaml with external_lead_id mapping
-    crm_yaml = tmp_path / "quintana-seguros" / "crm.yaml"
-    crm_yaml.parent.mkdir(parents=True)
-    crm_yaml.write_text(
-        """
-provider: airtable
-base_id: appTEST
-table_id: tblTEST
-api_key_env: TEST_KEY
-match_field: "lead_id"
-field_mappings:
-  - source: external_lead_id
-    target: "lead_id"
-    type: integer
-  - source: name
-    target: "Nombre Completo"
-    type: string
-  - source: phone
-    target: "Teléfono"
-    type: phone
-  - source: email
-    target: "Correo electrónico"
-    type: string
-""",
-        encoding="utf-8",
-    )
-
     # Fake Airtable records with a numeric lead_id
     fake_records = [
         {
@@ -171,6 +144,12 @@ field_mappings:
     from app.leads.models import Lead
     from sqlalchemy import select
 
+    # Seed a client_integrations row with external_lead_id mapping instead of
+    # a crm.yaml file (client-integrations-secrets Phase 4 cutover).
+    import json
+
+    from app.tenants.models import ClientIntegration
+
     async with db_engine.async_session_factory() as db:
         # Seed the client using the service (handles required fields)
         from app.tenants.service import create_client
@@ -181,7 +160,35 @@ field_mappings:
             name="Quintana Seguros",
             voice_id="EXAMPLEvoice00",
         )
+        db.add(
+            ClientIntegration(
+                client_id="quintana-seguros",
+                provider="airtable",
+                enabled=True,
+                config=json.dumps(
+                    {
+                        "base_id": "appTEST",
+                        "table_id": "tblTEST",
+                        "match_field": "lead_id",
+                        "legacy_env_var_name": "TEST_KEY",
+                        "field_mappings": [
+                            {"source": "external_lead_id", "target": "lead_id", "type": "integer"},
+                            {"source": "name", "target": "Nombre Completo", "type": "string"},
+                            {"source": "phone", "target": "Teléfono", "type": "phone"},
+                            {"source": "email", "target": "Correo electrónico", "type": "string"},
+                        ],
+                    }
+                ),
+                status="ok",
+                created_by="test",
+                updated_by="test",
+            )
+        )
         await db.commit()
+
+    from app.integrations.integration_store import get_default_store
+
+    get_default_store().invalidate("quintana-seguros")
 
     with (
         patch("app.integrations.crm_import_service.AirtableAdapter") as mock_adapter_cls,
@@ -195,7 +202,6 @@ field_mappings:
             result = await import_leads_from_crm(
                 "quintana-seguros",
                 db,
-                clients_root=tmp_path,
             )
             await db.commit()
 

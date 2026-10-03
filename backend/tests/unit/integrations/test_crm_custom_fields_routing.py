@@ -38,6 +38,18 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+
+def _mock_store(config):
+    """Patch target for crm_import_service.get_default_store returning a
+    fresh IntegrationStore-shaped mock whose .get() resolves to `config`.
+    """
+    mock_store = MagicMock()
+    mock_store.get = AsyncMock(return_value=config)
+    return patch(
+        "app.integrations.crm_import_service.get_default_store",
+        return_value=mock_store,
+    )
+
 import pytest
 
 
@@ -500,7 +512,7 @@ class TestImportLeadsCustomFieldIntegration:
         ]
         mock_config.status_mapping = None
         mock_config.import_status_mapping = None
-        mock_config.resolve_api_key.return_value = "pat_test"
+        mock_config.resolve_api_key_async = AsyncMock(return_value="pat_test")
 
         mock_records = [
             {
@@ -532,10 +544,7 @@ class TestImportLeadsCustomFieldIntegration:
             })
             return len(fields)
 
-        with patch(
-            "app.integrations.crm_import_service.CRMConfigLoader.load",
-            return_value=mock_config,
-        ), patch(
+        with _mock_store(mock_config), patch(
             "app.integrations.crm_import_service.AirtableAdapter"
         ) as MockAdapter, patch(
             "app.integrations.crm_import_service.lead_custom_fields_service.upsert_many",
@@ -588,7 +597,7 @@ class TestImportLeadsCustomFieldIntegration:
         ]
         mock_config.status_mapping = None
         mock_config.import_status_mapping = None
-        mock_config.resolve_api_key.return_value = "pat_test"
+        mock_config.resolve_api_key_async = AsyncMock(return_value="pat_test")
 
         mock_records = [
             {
@@ -617,10 +626,7 @@ class TestImportLeadsCustomFieldIntegration:
             })
             return len(fields)
 
-        with patch(
-            "app.integrations.crm_import_service.CRMConfigLoader.load",
-            return_value=mock_config,
-        ), patch(
+        with _mock_store(mock_config), patch(
             "app.integrations.crm_import_service.AirtableAdapter"
         ) as MockAdapter, patch(
             "app.integrations.crm_import_service.lead_custom_fields_service.upsert_many",
@@ -660,7 +666,7 @@ class TestImportLeadsCustomFieldIntegration:
         mock_config.custom_fields = []  # no custom field definitions
         mock_config.status_mapping = None
         mock_config.import_status_mapping = None
-        mock_config.resolve_api_key.return_value = "pat_test"
+        mock_config.resolve_api_key_async = AsyncMock(return_value="pat_test")
 
         mock_records = [
             {
@@ -685,10 +691,7 @@ class TestImportLeadsCustomFieldIntegration:
             upsert_many_calls.append(fields)
             return len(fields)
 
-        with patch(
-            "app.integrations.crm_import_service.CRMConfigLoader.load",
-            return_value=mock_config,
-        ), patch(
+        with _mock_store(mock_config), patch(
             "app.integrations.crm_import_service.AirtableAdapter"
         ) as MockAdapter, patch(
             "app.integrations.crm_import_service.lead_custom_fields_service.upsert_many",

@@ -31,19 +31,15 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.adapters.airtable import AirtableAdapter
-from app.integrations.crm_config import (
-    CRMConfigLoader,
-    CredentialResolutionError,
-    ConfigValidationError,
-)
+from app.integrations.crm_config import ConfigValidationError, CredentialResolutionError
 from app.integrations.field_mapping import FieldMapper
+from app.integrations.integration_store import get_default_store
 from app.leads import lead_custom_fields_service
 from app.phones.normalization import PhoneNormalizationError, normalize_phone
 from app.leads.models import Lead, LeadStatus
@@ -131,14 +127,14 @@ class ImportResult:
 async def import_leads_from_crm(
     client_id: str,
     db_session: AsyncSession,
-    *,
-    clients_root: Path | None = None,
 ) -> ImportResult:
     """Import leads from the configured external CRM into Qora's DB.
 
     Algorithm:
-    1. Load CRMConfig from crm.yaml; return empty ImportResult if missing.
-    2. Resolve API key from env var; return empty result with error on failure.
+    1. Load CRMConfig via IntegrationStore (client_integrations row); return
+       empty ImportResult if not configured.
+    2. Resolve API key (DB secret -> legacy env -> None, P3-D3); return empty
+       result with error on failure.
     3. Fetch all records from Airtable via AirtableAdapter.fetch_records().
     4. For each record:
        a. Reverse-map Airtable fields → Qora field names.
@@ -153,25 +149,20 @@ async def import_leads_from_crm(
     transaction boundary (all-or-nothing). See module docstring.
 
     Args:
-        client_id: Client slug (matches directory under clients/).
+        client_id: Client slug.
         db_session: Active async SQLAlchemy session.
-        clients_root: Override clients root path (used in tests).
 
     Returns:
         ImportResult with created/updated/skipped/errors counts.
     """
     result = ImportResult()
 
-    # 1. Load CRM config
+    # 1. Load CRM config (client-integrations-secrets P3-D5)
     try:
-        load_kwargs: dict[str, Any] = {}
-        if clients_root is not None:
-            load_kwargs["clients_root"] = clients_root
-
-        config = await CRMConfigLoader.load_async(client_id, **load_kwargs)
+        config = await get_default_store().get(db_session, client_id, provider="airtable")
     except ConfigValidationError as exc:
         logger.error(
-            "crm_import_skipped: invalid crm.yaml",
+            "crm_import_skipped: invalid client_integrations config",
             extra={"client_id": client_id, "error": str(exc)},
         )
         result.errors.append(f"Config error: {exc}")
@@ -179,20 +170,31 @@ async def import_leads_from_crm(
 
     if config is None:
         logger.info(
-            "crm_import_skipped: no crm.yaml for client",
+            "crm_import_skipped: no CRM integration configured for client",
             extra={"client_id": client_id},
         )
         return result
 
-    # 2. Resolve credentials
+    # 2. Resolve credentials (P3-D3: DB -> legacy env -> None; P3-D4: degraded,
+    # never crash — a resolvable-but-unusable credential is treated the same
+    # as a missing one for this batch operation).
     try:
-        api_key = config.resolve_api_key()
+        api_key = await config.resolve_api_key_async(db_session, client_id)
     except CredentialResolutionError as exc:
         logger.error(
             "crm_import_skipped: credential resolution failed",
             extra={"client_id": client_id, "error": str(exc)},
         )
         result.errors.append(f"Credential error: {exc}")
+        return result
+
+    if api_key is None:
+        logger.error(
+            "crm_import_skipped: CRM integration unavailable for this client "
+            "(credential did not resolve)",
+            extra={"client_id": client_id},
+        )
+        result.errors.append("Credential error: CRM integration unavailable for this client")
         return result
 
     # 3. Fetch records from Airtable

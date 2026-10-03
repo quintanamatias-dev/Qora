@@ -57,13 +57,33 @@ class IntegrationStore:
 
         config = await self._load_from_db(session, client_id, provider)
 
+        # Cache misses too (negative cache): a client without a CRM must not
+        # open a DB session on every voice turn. Writes call invalidate().
         with self._lock:
-            if config is not None:
-                self._cache[cache_key] = (config, now)
-            else:
-                self._cache.pop(cache_key, None)
+            self._cache[cache_key] = (config, now)
 
         return config
+
+    def peek_cached(
+        self, client_id: str, provider: str = "airtable"
+    ) -> tuple[bool, CRMConfig | None]:
+        """Return (hit, config) from the in-memory cache only — no DB access.
+
+        Used by true hot-path callers (e.g. the per-turn voice webhook) that
+        must not pay for a DB session open just to serve a cache hit. ``hit``
+        is False on a cold cache or an expired TTL window; callers must then
+        fall back to :meth:`get` with a real session.
+        """
+        cache_key = (client_id, provider)
+        now = time.monotonic()
+        with self._lock:
+            cached = self._cache.get(cache_key)
+        if cached is None:
+            return False, None
+        config, cached_at = cached
+        if now - cached_at >= self._ttl_seconds:
+            return False, None
+        return True, config
 
     def invalidate(self, client_id: str) -> None:
         """Drop every cached entry for this client, across all providers.

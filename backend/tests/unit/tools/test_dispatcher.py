@@ -256,7 +256,7 @@ async def test_dispatcher_capture_data_partial_capture_with_required_crm_fields(
         provider="airtable",
         base_id="app123",
         table_id="tbl123",
-        api_key="LITERAL_KEY",
+        api_key="literal_key_123",
         match_field="lead_id",
         custom_fields=[
             CustomFieldDef(field_key="car_make", field_type="string", label="Car Make", required=True),
@@ -287,6 +287,81 @@ async def test_dispatcher_capture_data_partial_capture_with_required_crm_fields(
             sess, "lead-quintana-001", "quintana-seguros"
         )
     assert stored.get("car_make") == "Toyota"
+
+
+async def test_degraded_integration_returns_tool_error_not_exception(db, monkeypatch):
+    """client-integrations-secrets P3-D4: a CRM integration whose credential
+    cannot resolve (degraded) must return a clear tool error, never raise —
+    and must not affect a sibling client's own tool calls (survey-critical-#4).
+    """
+    from app.tools.dispatcher import dispatch_tool
+    from app.integrations.crm_config import CRMConfig, CustomFieldDef
+
+    monkeypatch.delenv("DEGRADED_CLIENT_AIRTABLE_KEY", raising=False)
+
+    degraded_crm_config = CRMConfig(
+        provider="airtable",
+        base_id="app123",
+        table_id="tbl123",
+        legacy_env_var_name="DEGRADED_CLIENT_AIRTABLE_KEY",
+        match_field="lead_id",
+        custom_fields=[
+            CustomFieldDef(field_key="car_make", field_type="string", label="Car Make"),
+        ],
+    )
+
+    async with db.async_session_factory() as sess:
+        result = await dispatch_tool(
+            tool_name="capture_data",
+            tool_args={"lead_id": "lead-quintana-001", "car_make": "Toyota"},
+            client_id="quintana-seguros",
+            lead_id="lead-quintana-001",
+            session=sess,
+            crm_config=degraded_crm_config,
+        )
+
+    assert result == {
+        "error": "crm_unavailable",
+        "detail": "CRM integration unavailable for this client",
+    }
+
+    # Sibling client with a healthy (literal-key) CRM config must be unaffected.
+    from app.tenants.service import create_client
+    from app.leads.service import create_lead
+
+    healthy_crm_config = CRMConfig(
+        provider="airtable",
+        base_id="app456",
+        table_id="tbl456",
+        api_key="literal_key_456",
+        match_field="lead_id",
+        custom_fields=[
+            CustomFieldDef(field_key="car_make", field_type="string", label="Car Make"),
+        ],
+    )
+
+    async with db.async_session_factory() as sess:
+        await create_client(sess, id="other-client", name="Other Client", voice_id="EXAMPLEvoice01")
+        sibling_lead = await create_lead(
+            sess, client_id="other-client", name="Sibling Lead", phone="+5491100001234"
+        )
+        await sess.commit()
+        sibling_lead_id = sibling_lead.id
+
+    async with db.async_session_factory() as sess:
+        sibling_result = await dispatch_tool(
+            tool_name="capture_data",
+            tool_args={"lead_id": sibling_lead_id, "car_make": "Ford"},
+            client_id="other-client",
+            lead_id=sibling_lead_id,
+            session=sess,
+            crm_config=healthy_crm_config,
+        )
+        await sess.commit()
+
+    assert sibling_result.get("status") == "captured", (
+        f"A degraded sibling client must not affect this client's capture: {sibling_result}"
+    )
 
 
 async def test_dispatcher_capture_data_without_tool_config_returns_error(db):

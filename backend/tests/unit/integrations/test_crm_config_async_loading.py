@@ -271,14 +271,14 @@ def test_sync_load_is_callable_without_a_running_event_loop(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+# client-integrations-secrets Phase 4: app.voice.webhook, app.voice.context,
+# app.integrations.crm_sync_service, app.integrations.crm_import_service and
+# app.summarizer were cut over to IntegrationStore (a DB read, not a blocking
+# filesystem read) and no longer import CRMConfigLoader at all. Only the two
+# call sites deferred to a later phase remain on the sync loader.
 _MODULES_WITH_CRM_LOADER_CALLS = [
-    "app.voice.webhook",
-    "app.voice.context",
-    "app.integrations.crm_sync_service",
-    "app.integrations.crm_import_service",
     "app.integrations.crm_config_router",
     "app.leads.router",
-    "app.summarizer",
 ]
 
 
@@ -302,13 +302,8 @@ def test_async_modules_never_call_sync_crm_loader(module_name):
 @pytest.mark.parametrize(
     ("module_name", "expected_async_call_sites"),
     [
-        ("app.voice.webhook", 4),
-        ("app.voice.context", 1),
-        ("app.integrations.crm_sync_service", 1),
-        ("app.integrations.crm_import_service", 1),
         ("app.integrations.crm_config_router", 3),
         ("app.leads.router", 1),
-        ("app.summarizer", 1),
     ],
 )
 def test_async_modules_await_load_async_at_every_call_site(
@@ -353,58 +348,13 @@ def test_sync_helper_in_crm_config_router_keeps_using_sync_load():
     )
 
 
-@pytest.mark.asyncio
-async def test_build_voice_context_loads_crm_config_off_the_loop_thread():
-    """`build_voice_context` must not run CRM config loading on the loop thread."""
-    from app.integrations import crm_config
-    from app.voice.context import build_voice_context
-
-    call_threads: list[int] = []
-    real_load = crm_config.CRMConfigLoader.load
-
-    def _recording_load(client_id, **kwargs):
-        call_threads.append(threading.get_ident())
-        return real_load(client_id, **kwargs)
-
-    agent = MagicMock()
-    agent.client_id = "acme"
-    agent.slug = "aria"
-    agent.name = "Aria"
-    agent.system_prompt = ""
-    agent.knowledge_base = None
-    agent.model = "gpt-4o"
-    agent.temperature = 0.7
-    agent.max_tokens = 300
-    agent.tools_enabled = '["capture_data"]'
-    agent.tool_config = None
-
-    client = MagicMock()
-    client.id = "acme"
-    client.name = "Acme Seguros"
-    client.agent_name = "Aria"
-
-    loop_thread = threading.get_ident()
-
-    with patch.object(
-        crm_config.CRMConfigLoader, "load", staticmethod(_recording_load)
-    ), patch("app.voice.context.PromptLoader") as MockLoader:
-        mock_instance = MockLoader.return_value
-        mock_instance.render_for_agent = AsyncMock(return_value="prompt")
-        mock_instance.load_agent_skills = AsyncMock(return_value="")
-        mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
-
-        await build_voice_context(
-            agent=agent,
-            lead=None,
-            db=AsyncMock(),
-            client=client,
-        )
-
-    assert call_threads, "build_voice_context never loaded CRM config"
-    assert loop_thread not in call_threads, (
-        "build_voice_context loaded CRM config on the event loop thread "
-        f"(loop={loop_thread}, calls={call_threads})"
-    )
+# client-integrations-secrets Phase 4: build_voice_context's CRM config read
+# moved from a blocking filesystem load (CRMConfigLoader, hence this file's
+# off-loop-thread concern) to an awaited DB read via IntegrationStore — an
+# async session.execute() call, which is never a loop-blocking operation in
+# the way Path.read_text()/yaml.safe_load() were. The off-thread guarantee
+# this test pinned no longer applies; coverage for the new read path lives in
+# tests/unit/voice/test_context.py and tests/unit/integrations/test_integration_store.py.
 
 
 @pytest.mark.asyncio

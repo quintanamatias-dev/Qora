@@ -633,3 +633,104 @@ async def test_per_turn_fallback_render_failure_uses_safe_prompt(webhook_app_cli
     assert system_content == SAFE_CONTEXT_RENDER_FAILURE_PROMPT
     assert "inconveniente tecnico temporal" in system_content
     assert "No inventes detalles" in system_content
+
+
+# ---------------------------------------------------------------------------
+# client-integrations-secrets Phase 4.4 — CRM config cache on the FAST PATH
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_webhook_fast_path_crm_config_read_uses_cache_not_one_query_per_turn(
+    webhook_app_client,
+):
+    """HOT PATH: IntegrationStore's cache must keep CRM config reads on the
+    cached-context fast path to at most one DB SELECT per TTL window, not
+    one per turn (client-integrations-secrets P3-D5).
+    """
+    import json
+
+    http_client, store, settings = webhook_app_client
+
+    from app.core import database as db_module
+    from app.tenants.models import ClientIntegration
+    from app.integrations import integration_store as integration_store_module
+
+    async with db_module.async_session_factory() as sess:
+        sess.add(
+            ClientIntegration(
+                client_id="quintana-seguros",
+                provider="airtable",
+                enabled=True,
+                config=json.dumps(
+                    {
+                        "base_id": "appXXXXXXXXXXXXXX",
+                        "table_id": "tblYYYYYYYYYYYYYY",
+                        "match_field": "phone",
+                        "field_mappings": [],
+                        "legacy_env_var_name": "QUINTANA_AIRTABLE_API_KEY",
+                    }
+                ),
+                status="ok",
+                created_by="test",
+                updated_by="test",
+            )
+        )
+        await sess.commit()
+
+    # Reset the process-wide singleton's cache so this test starts clean —
+    # other tests in this file use the same client_id against a different
+    # (closed) DB and must not leak a stale cache entry into this one.
+    integration_store_module.get_default_store().invalidate("quintana-seguros")
+
+    ctx = make_voice_context(system_prompt="Fast path prompt")
+    conversation_id = "cached-conv-crm-001"
+    store.create(
+        conversation_id=conversation_id,
+        client_id="quintana-seguros",
+        lead_id=None,
+        session_id="sess-crm-001",
+        context=ctx,
+    )
+
+    db_calls: list[int] = []
+    store_instance = integration_store_module.get_default_store()
+    original_load = store_instance._load_from_db
+
+    async def counting_load(sess, client_id, provider):
+        db_calls.append(1)
+        return await original_load(sess, client_id, provider)
+
+    store_instance._load_from_db = counting_load
+
+    import respx
+    import httpx
+
+    try:
+        with respx.mock:
+            respx.post("https://api.openai.com/v1/chat/completions").mock(
+                return_value=httpx.Response(200, content=make_sse_stream("OK"))
+            )
+
+            for _ in range(3):
+                response = await http_client.post(
+                    "/api/v1/voice/quintana-seguros/custom-llm/chat/completions",
+                    json={
+                        "model": "gpt-4o",
+                        "messages": [{"role": "user", "content": "Hola"}],
+                        "stream": True,
+                        "elevenlabs_extra_body": {
+                            "client_id": "quintana-seguros",
+                            "conversation_id": conversation_id,
+                        },
+                    },
+                )
+                assert response.status_code == 200
+    finally:
+        store_instance._load_from_db = original_load
+        integration_store_module.get_default_store().invalidate("quintana-seguros")
+
+    assert len(db_calls) <= 1, (
+        f"Expected at most 1 DB read across 3 turns within the cache TTL window, "
+        f"got {len(db_calls)}"
+    )

@@ -1169,10 +1169,10 @@ async def _merge_facts_into_lead(
     if client_id:
         try:
             from app.leads.lead_custom_fields_service import get_all as _get_custom_fields
-            from app.integrations.crm_config import CRMConfigLoader as _CRMConfigLoader
+            from app.integrations.integration_store import get_default_store as _get_default_store
 
             _custom_fields_for_status = await _get_custom_fields(db, lead_id, client_id)
-            _crm_cfg = await _CRMConfigLoader.load_async(client_id)
+            _crm_cfg = await _get_default_store().get(db, client_id, provider="airtable")
             if _crm_cfg is not None:
                 _quote_ready_fields_for_status = list(_crm_cfg.quote_ready_fields or [])
         except Exception as _qr_exc:

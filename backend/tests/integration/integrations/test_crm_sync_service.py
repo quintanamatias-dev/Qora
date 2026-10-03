@@ -13,18 +13,21 @@ Covers spec scenarios:
 Design constraints (design.md):
 - sync_lead reads lead from SQLite (authoritative source), never from Airtable
 - adapter is mocked — no live Airtable calls
-- CRMConfigLoader is used for config, monkeypatched to point at tmp_path
+- CRM config is seeded as a client_integrations row (IntegrationStore)
 
-Test layer: Integration (db_session fixture + mocked adapter + tmp_path crm.yaml)
+Test layer: Integration (db_session fixture + mocked adapter + seeded client_integrations rows)
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import yaml
+
+from app.integrations.integration_store import IntegrationStore
+from app.tenants.models import ClientIntegration
 
 
 # ---------------------------------------------------------------------------
@@ -32,9 +35,35 @@ import yaml
 # ---------------------------------------------------------------------------
 
 
-def _write_crm_yaml(client_dir: Path, data: dict) -> None:
-    client_dir.mkdir(parents=True, exist_ok=True)
-    (client_dir / "crm.yaml").write_text(yaml.dump(data))
+async def _seed_crm_integration(session, client_id: str, data: dict) -> None:
+    """Seed a client_integrations row shaped like the given crm.yaml dict
+    (client-integrations-secrets Phase 4.2: replaces writing a tmp crm.yaml file).
+    """
+    config = {k: v for k, v in data.items() if k not in ("provider", "api_key_env")}
+    if "api_key_env" in data:
+        config["legacy_env_var_name"] = data["api_key_env"]
+    session.add(
+        ClientIntegration(
+            client_id=client_id,
+            provider=data.get("provider", "airtable"),
+            enabled=True,
+            config=json.dumps(config),
+            status="ok",
+            created_by="test",
+            updated_by="test",
+        )
+    )
+    await session.flush()
+
+
+def _fresh_store_patch():
+    """Patch crm_sync_service.get_default_store with a brand-new IntegrationStore
+    instance (no cache) so each test is isolated from the process-wide singleton.
+    """
+    return patch(
+        "app.integrations.crm_sync_service.get_default_store",
+        return_value=IntegrationStore(),
+    )
 
 
 def _valid_crm_yaml_data(api_key_env: str = "TEST_CRM_API_KEY") -> dict:
@@ -90,23 +119,14 @@ async def test_sync_lead_success_calls_upsert_with_mapped_payload(
 
     # Set up crm.yaml
     monkeypatch.setenv("TEST_CRM_API_KEY", "pat_test_secret")
-    client_dir = tmp_path / "clients" / "test-client-001"
-    _write_crm_yaml(client_dir, _valid_crm_yaml_data())
+    await _seed_crm_integration(db_session, "test-client-001", _valid_crm_yaml_data())
 
     # Mock adapter to capture upsert call
     mock_adapter = MagicMock()
     mock_adapter.upsert_record = AsyncMock(return_value="recSUCCESS0001")
 
-    from app.integrations.crm_config import CRMConfigLoader
 
-    real_config = CRMConfigLoader.load(
-        "test-client-001", clients_root=tmp_path / "clients"
-    )
-
-    with patch(
-        "app.integrations.crm_sync_service.CRMConfigLoader.load",
-        return_value=real_config,
-    ), patch(
+    with _fresh_store_patch(), patch(
         "app.integrations.crm_sync_service.make_adapter",
         return_value=mock_adapter,
     ):
@@ -147,22 +167,13 @@ async def test_sync_lead_success_uses_config_match_field(
     await db_session.flush()
 
     monkeypatch.setenv("TEST_CRM_API_KEY", "pat_test_secret")
-    client_dir = tmp_path / "clients" / "test-client-002"
-    _write_crm_yaml(client_dir, _valid_crm_yaml_data())
+    await _seed_crm_integration(db_session, "test-client-002", _valid_crm_yaml_data())
 
     mock_adapter = MagicMock()
     mock_adapter.upsert_record = AsyncMock(return_value="recMATCH0001")
 
-    from app.integrations.crm_config import CRMConfigLoader
 
-    real_config = CRMConfigLoader.load(
-        "test-client-002", clients_root=tmp_path / "clients"
-    )
-
-    with patch(
-        "app.integrations.crm_sync_service.CRMConfigLoader.load",
-        return_value=real_config,
-    ), patch(
+    with _fresh_store_patch(), patch(
         "app.integrations.crm_sync_service.make_adapter",
         return_value=mock_adapter,
     ):
@@ -204,10 +215,7 @@ async def test_sync_lead_no_crm_yaml_is_silent_noop(
     mock_adapter = MagicMock()
     mock_adapter.upsert_record = AsyncMock()
 
-    with patch(
-        "app.integrations.crm_sync_service.CRMConfigLoader.load",
-        return_value=None,  # simulates missing crm.yaml
-    ), patch(
+    with _fresh_store_patch(), patch(
         "app.integrations.crm_sync_service.make_adapter",
         return_value=mock_adapter,
     ):
@@ -240,19 +248,10 @@ async def test_sync_lead_unknown_lead_id_is_noop(
     mock_adapter.upsert_record = AsyncMock()
 
     # Config says there IS a crm.yaml — but lead doesn't exist
-    client_dir = tmp_path / "clients" / "ghost-client"
-    _write_crm_yaml(client_dir, _valid_crm_yaml_data())
+    await _seed_crm_integration(db_session, "ghost-client", _valid_crm_yaml_data())
 
-    from app.integrations.crm_config import CRMConfigLoader
 
-    real_config = CRMConfigLoader.load(
-        "ghost-client", clients_root=tmp_path / "clients"
-    )
-
-    with patch(
-        "app.integrations.crm_sync_service.CRMConfigLoader.load",
-        return_value=real_config,
-    ), patch(
+    with _fresh_store_patch(), patch(
         "app.integrations.crm_sync_service.make_adapter",
         return_value=mock_adapter,
     ):
@@ -275,9 +274,8 @@ async def test_sync_lead_unknown_lead_id_is_noop(
 async def test_sync_lead_credential_error_is_swallowed(
     db_session, tmp_path: Path, monkeypatch
 ):
-    """FM-3/CS-5: CredentialResolutionError is caught — does not propagate."""
+    """FM-3/CS-5: an unresolvable credential (P3-D4 degraded) is caught — does not propagate."""
     from app.integrations.crm_sync_service import sync_lead
-    from app.integrations.crm_config import CredentialResolutionError
     from app.leads.service import create_lead
 
     await _seed_test_client(db_session, "test-client-cred", "Cred Test Client")
@@ -289,20 +287,22 @@ async def test_sync_lead_credential_error_is_swallowed(
     )
     await db_session.flush()
 
-    # Config loads successfully but resolve_api_key will fail
+    # Config loads successfully but the credential never resolves (DB -> env
+    # -> None per P3-D3) — degraded, not a crash.
     mock_config = MagicMock()
-    mock_config.resolve_api_key = MagicMock(
-        side_effect=CredentialResolutionError("TEST_KEY not set")
-    )
+    mock_config.resolve_api_key_async = AsyncMock(return_value=None)
     mock_config.provider = "airtable"
     mock_config.base_id = "appXXX"
     mock_config.table_id = "tblYYY"
     mock_config.match_field = "Teléfono"
     mock_config.field_mappings = []
 
+    mock_store = MagicMock()
+    mock_store.get = AsyncMock(return_value=mock_config)
+
     with patch(
-        "app.integrations.crm_sync_service.CRMConfigLoader.load",
-        return_value=mock_config,
+        "app.integrations.crm_sync_service.get_default_store",
+        return_value=mock_store,
     ):
         # Must NOT raise — CRM errors are fully isolated
         await sync_lead(
@@ -311,8 +311,8 @@ async def test_sync_lead_credential_error_is_swallowed(
             db_session=db_session,
         )
 
-    # resolve_api_key was called (we tried to resolve)
-    mock_config.resolve_api_key.assert_called_once()
+    # resolve_api_key_async was called (we tried to resolve)
+    mock_config.resolve_api_key_async.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -339,24 +339,15 @@ async def test_sync_lead_adapter_error_is_swallowed(
     await db_session.flush()
 
     monkeypatch.setenv("TEST_CRM_API_KEY", "pat_test")
-    client_dir = tmp_path / "clients" / "test-client-err"
-    _write_crm_yaml(client_dir, _valid_crm_yaml_data())
+    await _seed_crm_integration(db_session, "test-client-err", _valid_crm_yaml_data())
 
     mock_adapter = MagicMock()
     mock_adapter.upsert_record = AsyncMock(
         side_effect=AirtableUpsertError("Airtable failed after 3 retries")
     )
 
-    from app.integrations.crm_config import CRMConfigLoader
 
-    real_config = CRMConfigLoader.load(
-        "test-client-err", clients_root=tmp_path / "clients"
-    )
-
-    with patch(
-        "app.integrations.crm_sync_service.CRMConfigLoader.load",
-        return_value=real_config,
-    ), patch(
+    with _fresh_store_patch(), patch(
         "app.integrations.crm_sync_service.make_adapter",
         return_value=mock_adapter,
     ):
@@ -403,20 +394,12 @@ async def test_sync_lead_cross_client_mismatch_does_not_upsert(
     # client B has a perfectly valid crm.yaml — the only thing stopping the
     # sync is the ownership check.
     monkeypatch.setenv("TEST_CRM_API_KEY", "pat_test_secret")
-    client_dir = tmp_path / "clients" / "tenant-b"
-    _write_crm_yaml(client_dir, _valid_crm_yaml_data())
+    await _seed_crm_integration(db_session, "tenant-b", _valid_crm_yaml_data())
 
     mock_adapter = MagicMock()
     mock_adapter.upsert_record = AsyncMock(return_value="recSHOULDNOTHAPPEN")
 
-    from app.integrations.crm_config import CRMConfigLoader
-
-    real_config = CRMConfigLoader.load("tenant-b", clients_root=tmp_path / "clients")
-
-    with patch(
-        "app.integrations.crm_sync_service.CRMConfigLoader.load",
-        return_value=real_config,
-    ), patch(
+    with _fresh_store_patch(), patch(
         "app.integrations.crm_sync_service.make_adapter",
         return_value=mock_adapter,
     ):
@@ -450,22 +433,13 @@ async def test_sync_lead_matching_client_does_upsert(
     await db_session.flush()
 
     monkeypatch.setenv("TEST_CRM_API_KEY", "pat_test_secret")
-    client_dir = tmp_path / "clients" / "tenant-match"
-    _write_crm_yaml(client_dir, _valid_crm_yaml_data())
+    await _seed_crm_integration(db_session, "tenant-match", _valid_crm_yaml_data())
 
     mock_adapter = MagicMock()
     mock_adapter.upsert_record = AsyncMock(return_value="recMATCHOK0001")
 
-    from app.integrations.crm_config import CRMConfigLoader
 
-    real_config = CRMConfigLoader.load(
-        "tenant-match", clients_root=tmp_path / "clients"
-    )
-
-    with patch(
-        "app.integrations.crm_sync_service.CRMConfigLoader.load",
-        return_value=real_config,
-    ), patch(
+    with _fresh_store_patch(), patch(
         "app.integrations.crm_sync_service.make_adapter",
         return_value=mock_adapter,
     ):
@@ -502,19 +476,10 @@ async def test_sync_lead_factory_error_is_swallowed(
     await db_session.flush()
 
     monkeypatch.setenv("TEST_CRM_API_KEY", "pat_test_secret")
-    client_dir = tmp_path / "clients" / "test-client-factory"
-    _write_crm_yaml(client_dir, _valid_crm_yaml_data())
+    await _seed_crm_integration(db_session, "test-client-factory", _valid_crm_yaml_data())
 
-    from app.integrations.crm_config import CRMConfigLoader
 
-    real_config = CRMConfigLoader.load(
-        "test-client-factory", clients_root=tmp_path / "clients"
-    )
-
-    with patch(
-        "app.integrations.crm_sync_service.CRMConfigLoader.load",
-        return_value=real_config,
-    ), patch(
+    with _fresh_store_patch(), patch(
         "app.integrations.crm_sync_service.make_adapter",
         side_effect=RuntimeError("factory blew up unexpectedly"),
     ):
@@ -549,22 +514,13 @@ async def test_sync_lead_does_not_call_airtable_read_methods(
     await db_session.flush()
 
     monkeypatch.setenv("TEST_CRM_API_KEY", "pat_test")
-    client_dir = tmp_path / "clients" / "test-client-ro"
-    _write_crm_yaml(client_dir, _valid_crm_yaml_data())
+    await _seed_crm_integration(db_session, "test-client-ro", _valid_crm_yaml_data())
 
     mock_adapter = MagicMock(spec=["upsert_record", "health_check"])
     mock_adapter.upsert_record = AsyncMock(return_value="recROTEST0001")
 
-    from app.integrations.crm_config import CRMConfigLoader
 
-    real_config = CRMConfigLoader.load(
-        "test-client-ro", clients_root=tmp_path / "clients"
-    )
-
-    with patch(
-        "app.integrations.crm_sync_service.CRMConfigLoader.load",
-        return_value=real_config,
-    ), patch(
+    with _fresh_store_patch(), patch(
         "app.integrations.crm_sync_service.make_adapter",
         return_value=mock_adapter,
     ):
@@ -616,7 +572,6 @@ async def test_sync_lead_null_external_lead_id_skips_gracefully(
 
     # crm.yaml with match_field=lead_id (the config that requires external_lead_id)
     monkeypatch.setenv("TEST_CRM_API_KEY_FB", "pat_test_fallback")
-    client_dir = tmp_path / "clients" / "test-client-fallback"
     crm_data = {
         "provider": "airtable",
         "base_id": "appFALLBACKBASE",
@@ -629,21 +584,13 @@ async def test_sync_lead_null_external_lead_id_skips_gracefully(
             {"source": "phone", "target": "Teléfono", "type": "phone"},
         ],
     }
-    _write_crm_yaml(client_dir, crm_data)
+    await _seed_crm_integration(db_session, "test-client-fallback", crm_data)
 
-    from app.integrations.crm_config import CRMConfigLoader
-
-    real_config = CRMConfigLoader.load(
-        "test-client-fallback", clients_root=tmp_path / "clients"
-    )
 
     mock_adapter = MagicMock()
     mock_adapter.upsert_record = AsyncMock(return_value="recSHOULDNOTBECALLED")
 
-    with patch(
-        "app.integrations.crm_sync_service.CRMConfigLoader.load",
-        return_value=real_config,
-    ), patch(
+    with _fresh_store_patch(), patch(
         "app.integrations.crm_sync_service.make_adapter",
         return_value=mock_adapter,
     ):
@@ -692,7 +639,6 @@ async def test_sync_lead_null_external_lead_id_falls_back_to_external_crm_id(
     await db_session.flush()
 
     monkeypatch.setenv("TEST_CRM_API_KEY_CRM", "pat_test_crm_fallback")
-    client_dir = tmp_path / "clients" / "test-client-crm-fallback"
     crm_data = {
         "provider": "airtable",
         "base_id": "appCRMFALLBACKBASE",
@@ -706,21 +652,13 @@ async def test_sync_lead_null_external_lead_id_falls_back_to_external_crm_id(
             {"source": "phone", "target": "Teléfono", "type": "phone"},
         ],
     }
-    _write_crm_yaml(client_dir, crm_data)
+    await _seed_crm_integration(db_session, "test-client-crm-fallback", crm_data)
 
-    from app.integrations.crm_config import CRMConfigLoader
-
-    real_config = CRMConfigLoader.load(
-        "test-client-crm-fallback", clients_root=tmp_path / "clients"
-    )
 
     mock_adapter = MagicMock()
     mock_adapter.upsert_record = AsyncMock(return_value="recCRMFALLBACK001")
 
-    with patch(
-        "app.integrations.crm_sync_service.CRMConfigLoader.load",
-        return_value=real_config,
-    ), patch(
+    with _fresh_store_patch(), patch(
         "app.integrations.crm_sync_service.make_adapter",
         return_value=mock_adapter,
     ):
@@ -771,7 +709,6 @@ async def test_sync_lead_null_external_lead_id_and_crm_id_falls_back_to_email(
     await db_session.flush()
 
     monkeypatch.setenv("TEST_CRM_API_KEY_EMAIL", "pat_test_email_fallback")
-    client_dir = tmp_path / "clients" / "test-client-email-fallback"
     crm_data = {
         "provider": "airtable",
         "base_id": "appEMAILFALLBACKBASE",
@@ -786,21 +723,13 @@ async def test_sync_lead_null_external_lead_id_and_crm_id_falls_back_to_email(
             {"source": "phone", "target": "Teléfono", "type": "phone"},
         ],
     }
-    _write_crm_yaml(client_dir, crm_data)
+    await _seed_crm_integration(db_session, "test-client-email-fallback", crm_data)
 
-    from app.integrations.crm_config import CRMConfigLoader
-
-    real_config = CRMConfigLoader.load(
-        "test-client-email-fallback", clients_root=tmp_path / "clients"
-    )
 
     mock_adapter = MagicMock()
     mock_adapter.upsert_record = AsyncMock(return_value="recEMAILFALLBACK001")
 
-    with patch(
-        "app.integrations.crm_sync_service.CRMConfigLoader.load",
-        return_value=real_config,
-    ), patch(
+    with _fresh_store_patch(), patch(
         "app.integrations.crm_sync_service.make_adapter",
         return_value=mock_adapter,
     ):
@@ -851,7 +780,6 @@ async def test_sync_lead_all_fallbacks_null_skips_with_warning(
     await db_session.flush()
 
     monkeypatch.setenv("TEST_CRM_API_KEY_NOIDS", "pat_test_noids")
-    client_dir = tmp_path / "clients" / "test-client-no-ids"
     crm_data = {
         "provider": "airtable",
         "base_id": "appNOIDSBASE",
@@ -866,21 +794,13 @@ async def test_sync_lead_all_fallbacks_null_skips_with_warning(
             {"source": "phone", "target": "Teléfono", "type": "phone"},
         ],
     }
-    _write_crm_yaml(client_dir, crm_data)
+    await _seed_crm_integration(db_session, "test-client-no-ids", crm_data)
 
-    from app.integrations.crm_config import CRMConfigLoader
-
-    real_config = CRMConfigLoader.load(
-        "test-client-no-ids", clients_root=tmp_path / "clients"
-    )
 
     mock_adapter = MagicMock()
     mock_adapter.upsert_record = AsyncMock(return_value="recSHOULDNOTBECALLED")
 
-    with patch(
-        "app.integrations.crm_sync_service.CRMConfigLoader.load",
-        return_value=real_config,
-    ), patch(
+    with _fresh_store_patch(), patch(
         "app.integrations.crm_sync_service.make_adapter",
         return_value=mock_adapter,
     ):
@@ -936,7 +856,6 @@ async def test_sync_lead_duplicate_external_lead_id_logs_warning_but_still_pushe
     await db_session.flush()
 
     monkeypatch.setenv("TEST_CRM_API_KEY_DUP", "pat_test_dup")
-    client_dir = tmp_path / "clients" / "test-client-dup"
     crm_data = {
         "provider": "airtable",
         "base_id": "appDUPBASE",
@@ -949,21 +868,13 @@ async def test_sync_lead_duplicate_external_lead_id_logs_warning_but_still_pushe
             {"source": "phone", "target": "Teléfono", "type": "phone"},
         ],
     }
-    _write_crm_yaml(client_dir, crm_data)
+    await _seed_crm_integration(db_session, "test-client-dup", crm_data)
 
-    from app.integrations.crm_config import CRMConfigLoader
-
-    real_config = CRMConfigLoader.load(
-        "test-client-dup", clients_root=tmp_path / "clients"
-    )
 
     mock_adapter = MagicMock()
     mock_adapter.upsert_record = AsyncMock(return_value="recDUP001")
 
-    with patch(
-        "app.integrations.crm_sync_service.CRMConfigLoader.load",
-        return_value=real_config,
-    ), patch(
+    with _fresh_store_patch(), patch(
         "app.integrations.crm_sync_service.make_adapter",
         return_value=mock_adapter,
     ), patch("app.integrations.crm_sync_service.logger") as mock_logger:

@@ -20,6 +20,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from app.integrations.crm_config import CRMConfig
+
 from app.tools.get_lead_details import TOOL_DEFINITION as _get_lead_details_def
 from app.tools.get_lead_profile import TOOL_DEFINITION as _get_lead_profile_def
 from app.tools.get_lead_history import TOOL_DEFINITION as _get_lead_history_def

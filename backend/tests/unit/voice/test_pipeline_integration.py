@@ -16,7 +16,20 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+
 import pytest
+def make_db() -> AsyncMock:
+    """AsyncMock db session that resolves IntegrationStore's query to "no row".
+
+    client-integrations-secrets P3-D5: build_voice_context now reads CRM config
+    via IntegrationStore (a real DB query) instead of the filesystem loader.
+    """
+    db = AsyncMock()
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none = MagicMock(return_value=None)
+    db.execute = AsyncMock(return_value=execute_result)
+    return db
+
 
 # Path to the real clients directory (production fixture)
 # test file lives at backend/tests/unit/voice/test_pipeline_integration.py
@@ -78,7 +91,7 @@ async def test_build_voice_context_leads_agent_has_skills_index():
 
     agent = _make_agent("quintana-seguros", "leads-agent")
     client = _make_client("quintana-seguros")
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     # Use real PromptLoader (real filesystem) but mock only render_for_agent
     # to avoid DB calls while keeping load_agent_skills as real code
@@ -121,7 +134,7 @@ async def test_build_voice_context_leads_agent_index_contains_skill_name():
 
     agent = _make_agent("quintana-seguros", "leads-agent")
     client = _make_client("quintana-seguros")
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         real_loader = PromptLoader(clients_dir=_CLIENTS_DIR)
@@ -157,7 +170,7 @@ async def test_build_voice_context_leads_agent_registry_entries_populated():
 
     agent = _make_agent("quintana-seguros", "leads-agent")
     client = _make_client("quintana-seguros")
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         real_loader = PromptLoader(clients_dir=_CLIENTS_DIR)
@@ -200,7 +213,7 @@ async def test_assembled_system_content_contains_skills_index_for_leads_agent():
 
     agent = _make_agent("quintana-seguros", "leads-agent", system_prompt="You are Mariano.")
     client = _make_client("quintana-seguros")
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         real_loader = PromptLoader(clients_dir=_CLIENTS_DIR)
@@ -253,7 +266,7 @@ async def test_build_voice_context_jaumpablo_no_skills_index():
 
     agent = _make_agent("quintana-seguros", "jaumpablo")
     client = _make_client("quintana-seguros")
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         real_loader = PromptLoader(clients_dir=_CLIENTS_DIR)
@@ -289,7 +302,7 @@ async def test_assembled_content_no_skills_block_for_jaumpablo():
 
     agent = _make_agent("quintana-seguros", "jaumpablo", system_prompt="You are Jaumpablo.")
     client = _make_client("quintana-seguros")
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         real_loader = PromptLoader(clients_dir=_CLIENTS_DIR)

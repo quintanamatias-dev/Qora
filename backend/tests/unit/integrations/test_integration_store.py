@@ -245,6 +245,69 @@ async def test_integration_store_ttl_expires_cache(db):
     assert reread.base_id == "appUPDATED"
 
 
+async def test_integration_store_peek_cached_misses_before_any_get(db):
+    from app.integrations.integration_store import IntegrationStore
+
+    store = IntegrationStore()
+    hit, config = store.peek_cached("quintana-seguros", "airtable")
+
+    assert hit is False
+    assert config is None
+
+
+async def test_integration_store_peek_cached_hits_after_get_no_db(db):
+    from app.integrations.integration_store import IntegrationStore
+
+    async with db.async_session_factory() as session:
+        await _insert_integration(session, "quintana-seguros")
+
+    store = IntegrationStore()
+    async with db.async_session_factory() as session:
+        await store.get(session, "quintana-seguros", "airtable")
+
+    # Pure in-memory read — no session needed, no DB call possible.
+    hit, config = store.peek_cached("quintana-seguros", "airtable")
+
+    assert hit is True
+    assert config is not None
+    assert config.base_id == "appXXXXXXXXXXXXXX"
+
+
+async def test_integration_store_caches_missing_integration(db):
+    """A client without a CRM is cached as None so the voice hot path does
+    not open a DB session on every turn."""
+    from app.integrations.integration_store import IntegrationStore
+
+    store = IntegrationStore()
+    async with db.async_session_factory() as session:
+        assert await store.get(session, "no-crm-client", "airtable") is None
+
+    hit, config = store.peek_cached("no-crm-client", "airtable")
+
+    assert hit is True
+    assert config is None
+
+
+async def test_integration_store_peek_cached_misses_after_ttl_expires(db):
+    import asyncio
+
+    from app.integrations.integration_store import IntegrationStore
+
+    async with db.async_session_factory() as session:
+        await _insert_integration(session, "quintana-seguros")
+
+    store = IntegrationStore(ttl_seconds=0.05)
+    async with db.async_session_factory() as session:
+        await store.get(session, "quintana-seguros", "airtable")
+
+    await asyncio.sleep(0.1)
+
+    hit, config = store.peek_cached("quintana-seguros", "airtable")
+
+    assert hit is False
+    assert config is None
+
+
 # ---------------------------------------------------------------------------
 # 3.3 — resolve_client_secret: DB -> env -> None
 # ---------------------------------------------------------------------------
