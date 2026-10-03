@@ -320,6 +320,41 @@ async def test_list_agents_for_client_excludes_inactive_by_default(
 
 
 # ---------------------------------------------------------------------------
+# elevenlabs-reconciler Phase 6 (6.1): is_default write-time uniqueness removed
+# ---------------------------------------------------------------------------
+
+
+async def test_create_agent_no_longer_enforces_is_default_uniqueness(
+    session: AsyncSession,
+):
+    """create_agent() no longer raises when a second is_default=True agent is
+    created for the same client (design.md R-D3: resolve_single_active_agent
+    already ignores is_default; the write-time check is dead-weight cleanup).
+    """
+    from app.tenants.service import create_client, create_agent
+
+    await create_client(
+        session,
+        id="dup-default-ok",
+        name="Dup Default OK",
+        agent_name="DefaultAgent",
+        voice_id="v1",
+    )
+    # create_client() already bootstrapped one is_default=True agent.
+
+    second = await create_agent(
+        session,
+        client_id="dup-default-ok",
+        slug="agent-two",
+        name="Agent Two",
+        voice_id="v2",
+        is_default=True,
+    )
+    assert second is not None
+    assert second.is_default is True
+
+
+# ---------------------------------------------------------------------------
 # Phase 7 — Task 2.2: update_agent()
 # ---------------------------------------------------------------------------
 

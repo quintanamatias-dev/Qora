@@ -503,8 +503,6 @@ export interface Agent {
   system_prompt: string | null
   tools_enabled: string[]
   is_active: boolean
-  /** @deprecated default-agent semantics removed (agent-config-revisions-routing); do not render in the UI. */
-  is_default: boolean
   created_at: string
   // ElevenLabs binding + readiness (PR 2 — qora-agent-studio-demo)
   elevenlabs_agent_id: string | null

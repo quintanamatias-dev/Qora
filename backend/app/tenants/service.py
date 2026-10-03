@@ -603,7 +603,10 @@ async def create_agent(
 ) -> Agent:
     """Create and persist a new Agent record.
 
-    Enforces that at most one Agent per client has is_default=True.
+    elevenlabs-reconciler Phase 6 (R-D3): is_default's write-time uniqueness
+    enforcement is removed — resolve_single_active_agent() never reads
+    is_default, so a duplicate is_default=True no longer has any behavioral
+    meaning worth guarding against. The column itself stays (drop deferred).
 
     Args:
         session: Active async DB session.
@@ -615,25 +618,7 @@ async def create_agent(
 
     Returns:
         The persisted Agent instance.
-
-    Raises:
-        ValueError: If is_default=True and another default already exists for this client.
     """
-    if is_default:
-        existing_default_result = await session.execute(
-            select(Agent).where(
-                Agent.client_id == client_id,
-                Agent.is_default == True,  # noqa: E712
-                Agent.is_active == True,  # noqa: E712
-            )
-        )
-        existing_default = existing_default_result.scalar_one_or_none()
-        if existing_default is not None:
-            raise ValueError(
-                f"Client {client_id!r} already has a default agent: {existing_default.id!r}. "
-                "Only one agent per client may have is_default=True."
-            )
-
     # Validate slug uniqueness per client (before DB flush to give a clean error)
     existing_slug = await session.execute(
         select(Agent).where(
