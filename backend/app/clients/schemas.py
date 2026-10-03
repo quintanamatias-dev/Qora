@@ -10,8 +10,11 @@ import json
 import math
 import re
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, field_validator, model_validator
+
+from app.analysis.profiles.schema import NeedTagEntry, ProductEntry
 
 # Slug must be all lowercase alphanumeric + hyphens, no leading/trailing hyphen.
 # Allows single alphanumeric chars (e.g. "a", "1").
@@ -295,3 +298,59 @@ class ClientConfigRevisionResponse(BaseModel):
     note: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Analysis profile revisions (design.md P5-D2/P5-D7)
+# ---------------------------------------------------------------------------
+
+
+class AnalysisProfileResponse(BaseModel):
+    """Response shape for analysis-profile revision endpoints (design.md P5-D7).
+
+    config is a FULL snapshot (products + need_tags) — not sparse, unlike
+    ClientConfigRevisionResponse's override-only config.
+    """
+
+    id: str
+    client_id: str
+    revision_number: int
+    vertical: str
+    products: list[ProductEntry]
+    need_tags: list[NeedTagEntry]
+    source: str
+    created_by: str
+    created_at: datetime
+    note: str | None = None
+
+
+class PutAnalysisProfilePayload(BaseModel):
+    """Write payload for PUT /clients/{client_id}/analysis-profile.
+
+    Validates: product ids unique within the submitted list, need-tag ids
+    unique within the submitted list (every label_es/label_en non-empty is
+    enforced by ProductEntry/NeedTagEntry themselves) — 422 on violation.
+    """
+
+    vertical: str
+    products: list[ProductEntry] = []
+    need_tags: list[NeedTagEntry] = []
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def _unique_ids(self) -> "PutAnalysisProfilePayload":
+        product_ids = [p.id for p in self.products]
+        if len(product_ids) != len(set(product_ids)):
+            raise ValueError("products contains a duplicate id")
+        need_tag_ids = [n.id for n in self.need_tags]
+        if len(need_tag_ids) != len(set(need_tag_ids)):
+            raise ValueError("need_tags contains a duplicate id")
+        return self
+
+
+class RollbackAnalysisProfilePayload(BaseModel):
+    target_revision_id: str
+
+
+class ApplyAnalysisProfileTemplatePayload(BaseModel):
+    vertical: Literal["insurance", "generic"]

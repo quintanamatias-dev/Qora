@@ -23,17 +23,21 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.schemas import (
+    AnalysisProfileResponse,
+    ApplyAnalysisProfileTemplatePayload,
     ClientConfigRevisionResponse,
     ClientCreate,
     ClientResponse,
     ClientUpdate,
+    PutAnalysisProfilePayload,
+    RollbackAnalysisProfilePayload,
 )
 from app.core.access import require_client_access, require_superadmin
 from app.core.auth import CallerIdentity, require_api_key
 from app.elevenlabs.service import sync_to_elevenlabs
 from app.tenants.client_config_schema import ClientConfigPatch, ClientConfigV1
 from app.tenants.materialize import materialize_agent_config, snapshot_mirrored_fields
-from app.tenants.models import Agent, Client, ClientConfigRevision
+from app.tenants.models import Agent, Client, ClientAnalysisProfileRevision, ClientConfigRevision
 import app.tenants.service as tenant_service
 from app.tenants import revisions_service
 
@@ -599,3 +603,214 @@ async def rollback_client_config(
     await _materialize_and_propagate(session, request, client_id)
 
     return _client_revision_to_response(new_revision)
+
+
+# ---------------------------------------------------------------------------
+# Analysis profile revisions (analysis-profiles, design.md P5-D7)
+# ---------------------------------------------------------------------------
+
+
+def _analysis_profile_revision_to_response(
+    revision: ClientAnalysisProfileRevision,
+) -> AnalysisProfileResponse:
+    from app.analysis.profiles.schema import AnalysisProfileConfigV1
+
+    config = AnalysisProfileConfigV1.model_validate_json(revision.config)
+    return AnalysisProfileResponse(
+        id=revision.id,
+        client_id=revision.client_id,
+        revision_number=revision.revision_number,
+        vertical=config.vertical,
+        products=config.products,
+        need_tags=config.need_tags,
+        source=revision.source,
+        created_by=revision.created_by,
+        created_at=revision.created_at,
+        note=revision.note,
+    )
+
+
+@router.get(
+    "/{client_id}/analysis-profile",
+    response_model=AnalysisProfileResponse,
+)
+async def get_analysis_profile(
+    client_id: str,
+    session: AsyncSession = Depends(get_db_session),
+) -> AnalysisProfileResponse:
+    """Returns the client's active analysis profile revision.
+
+    Returns:
+        200: AnalysisProfileResponse.
+        404: If the client does not exist, or has no active revision.
+    """
+    client = await session.get(Client, client_id)
+    if client is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "client not found", "client_id": client_id},
+        )
+    revision = await revisions_service.get_active_analysis_profile_revision(session, client_id)
+    if revision is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "no active analysis profile", "client_id": client_id},
+        )
+    return _analysis_profile_revision_to_response(revision)
+
+
+@router.put(
+    "/{client_id}/analysis-profile",
+    response_model=AnalysisProfileResponse,
+    dependencies=[Depends(require_superadmin)],
+)
+async def put_analysis_profile(
+    client_id: str,
+    payload: PutAnalysisProfilePayload,
+    caller: CallerIdentity = Depends(require_client_access),
+    session: AsyncSession = Depends(get_db_session),
+) -> AnalysisProfileResponse:
+    """Creates and activates a new analysis profile revision.
+
+    Validates: product ids unique within the submitted list, need-tag ids
+    unique within the submitted list, every label_es/label_en non-empty
+    (enforced by ProductEntry/NeedTagEntry) — 422 on any violation.
+
+    Returns:
+        200: The newly-created AnalysisProfileResponse.
+        404: If the client does not exist.
+        422: If the payload fails validation.
+    """
+    from app.analysis.profiles.schema import AnalysisProfileConfigV1
+
+    client = await session.get(Client, client_id)
+    if client is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "client not found", "client_id": client_id},
+        )
+
+    config = AnalysisProfileConfigV1(
+        vertical=payload.vertical,
+        products=payload.products,
+        need_tags=payload.need_tags,
+    )
+    revision = await revisions_service.create_analysis_profile_revision(
+        session,
+        client=client,
+        config=config,
+        source="api",
+        created_by=caller.email or "api",
+        note=payload.note,
+    )
+    await session.commit()
+    await session.refresh(revision)
+    return _analysis_profile_revision_to_response(revision)
+
+
+@router.get(
+    "/{client_id}/analysis-profile/revisions",
+    response_model=list[AnalysisProfileResponse],
+)
+async def list_analysis_profile_revisions(
+    client_id: str,
+    session: AsyncSession = Depends(get_db_session),
+) -> list[AnalysisProfileResponse]:
+    """Returns every analysis profile revision for a client, newest first.
+
+    Returns:
+        200: List of AnalysisProfileResponse.
+        404: If the client does not exist.
+    """
+    client = await session.get(Client, client_id)
+    if client is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "client not found", "client_id": client_id},
+        )
+    revisions = await revisions_service.list_analysis_profile_revisions(session, client_id)
+    return [_analysis_profile_revision_to_response(r) for r in revisions]
+
+
+@router.post(
+    "/{client_id}/analysis-profile/rollback",
+    response_model=AnalysisProfileResponse,
+    dependencies=[Depends(require_superadmin)],
+)
+async def rollback_analysis_profile(
+    client_id: str,
+    payload: RollbackAnalysisProfilePayload,
+    caller: CallerIdentity = Depends(require_client_access),
+    session: AsyncSession = Depends(get_db_session),
+) -> AnalysisProfileResponse:
+    """Rolls back to a prior revision: creates a NEW revision (source=
+    "rollback") copying the target's config, then activates it. The target
+    row is never reactivated or mutated.
+
+    Returns:
+        200: The newly-created rollback AnalysisProfileResponse.
+        404: If the client or target revision does not exist (or the
+             revision belongs to another client — identical response, no
+             probing signal, same tenant-scoping precedent as every prior
+             revisions router).
+    """
+    client = await session.get(Client, client_id)
+    if client is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "client not found", "client_id": client_id},
+        )
+
+    new_revision = await revisions_service.rollback_analysis_profile_revision(
+        session,
+        client_id=client_id,
+        target_revision_id=payload.target_revision_id,
+        created_by=caller.email or "api",
+    )
+    if new_revision is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "revision not found", "revision_id": payload.target_revision_id},
+        )
+
+    await session.commit()
+    await session.refresh(new_revision)
+    return _analysis_profile_revision_to_response(new_revision)
+
+
+@router.post(
+    "/{client_id}/analysis-profile/apply-template",
+    response_model=AnalysisProfileResponse,
+    dependencies=[Depends(require_superadmin)],
+)
+async def apply_analysis_profile_template(
+    client_id: str,
+    payload: ApplyAnalysisProfileTemplatePayload,
+    caller: CallerIdentity = Depends(require_client_access),
+    session: AsyncSession = Depends(get_db_session),
+) -> AnalysisProfileResponse:
+    """Creates a new revision from a code-defined template's current data
+    (design.md P5-D3) — an explicit, auditable action, never an implicit
+    side effect.
+
+    Returns:
+        200: The newly-created AnalysisProfileResponse.
+        404: If the client does not exist.
+        422: If `vertical` is not a known template name.
+    """
+    client = await session.get(Client, client_id)
+    if client is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "client not found", "client_id": client_id},
+        )
+
+    revision = await revisions_service.apply_analysis_profile_template(
+        session,
+        client=client,
+        vertical=payload.vertical,
+        created_by=caller.email or "api",
+    )
+    await session.commit()
+    await session.refresh(revision)
+    return _analysis_profile_revision_to_response(revision)

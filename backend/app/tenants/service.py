@@ -221,6 +221,21 @@ async def create_client(
         note="initial revision created with the client",
     )
 
+    # analysis-profiles (design.md P5-D3): every new client defaults to the
+    # empty generic analysis profile — insurance (or any other vertical) is
+    # an explicit POST .../analysis-profile/apply-template action, never an
+    # implicit side effect of client creation.
+    from app.analysis.profiles.templates import generic as generic_profile_template
+
+    await revisions_service.create_analysis_profile_revision(
+        session,
+        client=client,
+        config=generic_profile_template.config,
+        source="api",
+        created_by="system",
+        note="initial generic analysis profile created with the client",
+    )
+
     return client
 
 

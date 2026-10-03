@@ -777,7 +777,7 @@ class TestRealMigrationExecution:
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
         # PR3 transcript finalization fields: 20260625_0003
         # C2 outbound telephony: 20260702_0004
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020", "20261003_0021", "20261003_0022"}
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020", "20261003_0021", "20261003_0022", "20261003_0023"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"alembic_version should contain a known Qora revision. "
             f"Got: {versions}. Known: {_KNOWN_REVISIONS}"
@@ -961,7 +961,7 @@ class TestRealMigrationExecution:
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
         # PR3 transcript finalization fields: 20260625_0003
         # C2 outbound telephony: 20260702_0004
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020", "20261003_0021", "20261003_0022"}
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020", "20261003_0021", "20261003_0022", "20261003_0023"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"Stamp head did not record a known Qora revision. Got: {versions}. "
             f"Known revisions: {_KNOWN_REVISIONS}"
@@ -3146,3 +3146,158 @@ import_status_mapping:
         count = cur.fetchone()[0]
         conn.close()
         assert count == 1, f"expected re-run to stay idempotent (1 row), got {count}"
+
+
+# ===========================================================================
+# analysis-profiles — Task 1.4: client_analysis_profile_revisions schema +
+# per-client seed (Quintana = insurance, everyone else = generic)
+# ===========================================================================
+
+
+class TestAnalysisProfilesSchemaMigration:
+    """20261003_0023: client_analysis_profile_revisions table + seed."""
+
+    def test_analysis_profiles_schema_migration_creates_tables_and_seeds_every_client(
+        self, tmp_path
+    ):
+        import sqlite3
+
+        from alembic import command
+
+        db_file = tmp_path / "analysis_profiles_schema.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "20261003_0022")
+
+        conn = sqlite3.connect(str(db_file))
+        conn.execute(
+            "INSERT INTO clients (id, name, voice_id, is_active, created_at) "
+            "VALUES ('quintana-seguros', 'Quintana Seguros', 'v1', 1, '2026-10-03T00:00:00+00:00')"
+        )
+        conn.execute(
+            "INSERT INTO clients (id, name, voice_id, is_active, created_at) "
+            "VALUES ('other-client', 'Other Client', 'v1', 1, '2026-10-03T00:00:00+00:00')"
+        )
+        conn.commit()
+        conn.close()
+
+        command.upgrade(cfg, "head")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cur.fetchall()}
+        assert "client_analysis_profile_revisions" in tables
+
+        cur.execute("PRAGMA table_info(client_analysis_profile_revisions)")
+        columns = {row[1] for row in cur.fetchall()}
+        expected_columns = {
+            "id",
+            "client_id",
+            "revision_number",
+            "config",
+            "schema_version",
+            "source",
+            "created_by",
+            "created_at",
+            "note",
+        }
+        assert expected_columns.issubset(columns), f"Missing columns: {expected_columns - columns}"
+
+        cur.execute("PRAGMA index_list(client_analysis_profile_revisions)")
+        indexes = cur.fetchall()
+        assert any(row[2] == 1 for row in indexes), (
+            "client_analysis_profile_revisions must have a unique index (client_id, revision_number)"
+        )
+
+        cur.execute("PRAGMA table_info(clients)")
+        client_columns = {row[1] for row in cur.fetchall()}
+        assert "active_analysis_profile_revision_id" in client_columns
+
+        import json as _json
+
+        cur.execute(
+            "SELECT c.id, r.id, r.revision_number, r.config, r.source "
+            "FROM clients c JOIN client_analysis_profile_revisions r "
+            "ON r.id = c.active_analysis_profile_revision_id "
+            "WHERE c.id IN ('quintana-seguros', 'other-client')"
+        )
+        rows = {row[0]: row for row in cur.fetchall()}
+        assert set(rows) == {"quintana-seguros", "other-client"}, (
+            "every existing client must have exactly one seeded, activated revision"
+        )
+
+        for client_id, (_, _, revision_number, _, source) in rows.items():
+            assert revision_number == 1
+            assert source == "import"
+
+        from app.analysis.universal.interest.catalog import NEED_TAGS, PRODUCT_CATALOG
+
+        quintana_config = _json.loads(rows["quintana-seguros"][3])
+        assert {p["id"] for p in quintana_config["products"]} == set(PRODUCT_CATALOG)
+        assert {n["id"] for n in quintana_config["need_tags"]} == set(NEED_TAGS)
+        assert quintana_config["vertical"] == "insurance"
+
+        other_config = _json.loads(rows["other-client"][3])
+        assert other_config["products"] == []
+        assert other_config["need_tags"] == []
+        assert other_config["vertical"] == "generic"
+
+        conn.close()
+
+    def test_analysis_profiles_schema_migration_downgrade(self, tmp_path):
+        import sqlite3
+
+        from alembic import command
+
+        db_file = tmp_path / "analysis_profiles_schema_downgrade.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "20261003_0022")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cur.fetchall()}
+        assert "client_analysis_profile_revisions" not in tables
+
+        cur.execute("PRAGMA table_info(clients)")
+        client_columns = {row[1] for row in cur.fetchall()}
+        assert "active_analysis_profile_revision_id" not in client_columns
+        conn.close()
+
+    def test_analysis_profiles_schema_migration_seed_guard_is_idempotent(self, tmp_path):
+        """The seed loop only targets clients with active_analysis_profile_revision_id
+        IS NULL — re-running just the seed statement (the realistic re-entry path,
+        since CREATE TABLE/batch_alter_table are not themselves re-runnable outside
+        a fresh alembic upgrade) does not duplicate a client's seeded revision."""
+        import sqlite3
+
+        from alembic import command
+
+        db_file = tmp_path / "analysis_profiles_schema_seed_guard.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "20261003_0022")
+
+        conn = sqlite3.connect(str(db_file))
+        conn.execute(
+            "INSERT INTO clients (id, name, voice_id, is_active, created_at) "
+            "VALUES ('quintana-seguros', 'Quintana Seguros', 'v1', 1, '2026-10-03T00:00:00+00:00')"
+        )
+        conn.commit()
+        conn.close()
+
+        command.upgrade(cfg, "head")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM clients WHERE id = 'quintana-seguros' "
+            "AND active_analysis_profile_revision_id IS NULL"
+        )
+        null_pointer_count = cur.fetchone()[0]
+        conn.close()
+        assert null_pointer_count == 0, (
+            "a seeded client must never have a NULL active_analysis_profile_revision_id "
+            "afterwards — the seed loop's own re-entry guard depends on this"
+        )
