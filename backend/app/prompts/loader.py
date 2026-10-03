@@ -135,34 +135,29 @@ class PromptLoader:
             return await asyncio.to_thread(prompt_path.read_text, encoding="utf-8")
         return JAUMPABLO_PROMPT_TEMPLATE
 
-    async def load_agent_skills(self, client_id: str, agent_slug: str) -> str:
-        """Return the registry-based ## Available Skills index block for the agent.
+    async def load_agent_skills(self, session: "AsyncSession", agent: "Agent") -> str:
+        """Return the DB-based ## Available Skills index block for the agent.
 
-        Reads ``clients/{client_id}/agents/{agent_slug}/skills/registry.yaml`` and
-        builds a compact index text for injection into the system prompt.
+        Resolves the agent's skills via app.prompts.skill_loader.load_skill_registry()
+        (skill-packages, DB-backed) and builds a compact index text for injection
+        into the system prompt.
 
-        The old glob-all behavior (concatenating all *.agent-skill.md files) is
-        REMOVED. No registry.yaml → empty string. Empty registry → empty string.
-        There is NO fallback to globbing skill files.
+        No contributing skills → empty string. There is NO filesystem fallback.
 
         Args:
-            client_id: Client slug (e.g. ``"quintana-seguros"``).
-            agent_slug: Agent slug (e.g. ``"aria"``).
+            session: Async DB session used to resolve the agent's skills.
+            agent: Agent ORM instance.
 
         Returns:
-            Formatted ``## Available Skills`` index block, or ``""`` if no registry.
+            Formatted ``## Available Skills`` index block, or ``""`` if no skills.
         """
         from app.prompts.skill_loader import load_skill_registry, build_skills_index
 
-        entries = await load_skill_registry(
-            client_id=client_id,
-            agent_slug=agent_slug,
-            clients_dir=self.clients_dir,
-        )
+        entries = await load_skill_registry(session, agent)
         return build_skills_index(entries)
 
     async def load_skill_registry_entries(
-        self, client_id: str, agent_slug: str
+        self, session: "AsyncSession", agent: "Agent"
     ) -> list:
         """Return the raw list of SkillRegistryEntry objects for the agent.
 
@@ -171,19 +166,27 @@ class PromptLoader:
         for allowlist validation.
 
         Args:
-            client_id: Client slug (e.g. ``"quintana-seguros"``).
-            agent_slug: Agent slug (e.g. ``"aria"``).
+            session: Async DB session used to resolve the agent's skills.
+            agent: Agent ORM instance.
 
         Returns:
-            List of SkillRegistryEntry objects, empty if no registry.
+            List of SkillRegistryEntry objects, empty if no skills.
         """
         from app.prompts.skill_loader import load_skill_registry
 
-        return await load_skill_registry(
-            client_id=client_id,
-            agent_slug=agent_slug,
-            clients_dir=self.clients_dir,
-        )
+        return await load_skill_registry(session, agent)
+
+    async def load_skill_content_by_slug(
+        self, session: "AsyncSession", agent: "Agent"
+    ) -> dict[str, str]:
+        """Return {skill_name: content_md} for the agent's resolved skills.
+
+        Used by handle_load_skill() to source skill content from the
+        already-resolved session data instead of a per-call DB query.
+        """
+        from app.prompts.skill_loader import load_skill_content_by_slug
+
+        return await load_skill_content_by_slug(session, agent)
 
     async def load_agent_system_prompt(
         self, client_id: str, agent_slug: str

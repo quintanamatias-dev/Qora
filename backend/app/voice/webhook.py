@@ -248,7 +248,7 @@ async def _execute_tool(
     *,
     agent_slug: str | None = None,
     registry_entries: list | None = None,
-    clients_dir: Any | None = None,
+    content_by_slug: dict[str, str] | None = None,
     agent_tool_config: dict | None = None,
     crm_config: Any | None = None,
     authorized_session: Any | None = None,
@@ -259,6 +259,8 @@ async def _execute_tool(
     Phase 2 adds load_skill support via agent_slug + registry_entries.
     Phase B5 PR #2: authorized_session passed through to dispatch_tool for
         scope and tenant boundary validation before any data read/write.
+    skill-packages P4-D3: content_by_slug carries the DB-resolved skill
+        content for load_skill, sourced once per session.
     """
     try:
         from app.tools.dispatcher import dispatch_tool
@@ -270,7 +272,7 @@ async def _execute_tool(
             lead_id=lead_id,
             agent_slug=agent_slug,
             registry_entries=registry_entries or [],
-            clients_dir=clients_dir,
+            content_by_slug=content_by_slug,
             agent_tool_config=agent_tool_config,
             crm_config=crm_config,
             authorized_session=authorized_session,
@@ -300,6 +302,7 @@ async def _stream_llm_response(
     conversation_id: str | None,
     agent_slug: str | None = None,
     registry_entries: "list | None" = None,
+    content_by_slug: dict[str, str] | None = None,
     conv_state: "ConversationState | None" = None,
     agent_tool_config: dict | None = None,
     crm_config: "Any | None" = None,
@@ -467,6 +470,7 @@ async def _stream_llm_response(
                             lead_id=lead_id,
                             agent_slug=agent_slug,
                             registry_entries=registry_entries or [],
+                            content_by_slug=content_by_slug,
                             agent_tool_config=_resolved_tool_config,
                             crm_config=crm_config,
                             authorized_session=_resolved_auth,
@@ -990,6 +994,8 @@ async def _process_custom_llm_request(
     # agent_slug + registry_entries for load_skill tool routing (Phase 2)
     _agent_slug: str | None = None
     _registry_entries: "list" = []
+    # DB-sourced skill content for load_skill (skill-packages P4-D3)
+    _content_by_slug: dict = {}
 
     if conv_state is not None and conv_state.context is not None:
         # -----------------------------------------------------------------------
@@ -1005,6 +1011,7 @@ async def _process_custom_llm_request(
         # Extract skill routing data from context (Phase 2)
         _agent_slug = ctx.agent_slug
         _registry_entries = list(ctx.skill_registry_entries)
+        _content_by_slug = dict(ctx.skill_content_by_slug)
         _agent_tool_config_resolved = ctx.agent_tool_config
 
         # Load CRM config for capture_data field_type_map (FIX-7).
@@ -1109,6 +1116,7 @@ async def _process_custom_llm_request(
                         # Phase 2: extract skill routing data
                         _agent_slug = getattr(agent, "slug", None)
                         _registry_entries = list(lazy_ctx.skill_registry_entries)
+                        _content_by_slug = dict(lazy_ctx.skill_content_by_slug)
                         _agent_tool_config_resolved = lazy_ctx.agent_tool_config
                         try:
                             from app.integrations.integration_store import (
@@ -1156,6 +1164,7 @@ async def _process_custom_llm_request(
                     # Phase 2: extract skill routing data
                     _agent_slug = getattr(agent, "slug", None)
                     _registry_entries = list(new_ctx.skill_registry_entries)
+                    _content_by_slug = dict(new_ctx.skill_content_by_slug)
                     _agent_tool_config_resolved = new_ctx.agent_tool_config
                     try:
                         from app.integrations.integration_store import (
@@ -1499,6 +1508,7 @@ async def _process_custom_llm_request(
                 conversation_id=conversation_id,
                 agent_slug=_agent_slug,
                 registry_entries=_registry_entries,
+                content_by_slug=_content_by_slug,
                 conv_state=conv_state,
                 agent_tool_config=_agent_tool_config_resolved,
                 crm_config=_crm_config_resolved,

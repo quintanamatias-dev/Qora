@@ -18,23 +18,72 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 
 import pytest
-def make_db() -> AsyncMock:
-    """AsyncMock db session that resolves IntegrationStore's query to "no row".
-
-    client-integrations-secrets P3-D5: build_voice_context now reads CRM config
-    via IntegrationStore (a real DB query) instead of the filesystem loader.
-    """
-    db = AsyncMock()
-    execute_result = MagicMock()
-    execute_result.scalar_one_or_none = MagicMock(return_value=None)
-    db.execute = AsyncMock(return_value=execute_result)
-    return db
-
-
 # Path to the real clients directory (production fixture)
 # test file lives at backend/tests/unit/voice/test_pipeline_integration.py
 # parents[3] = backend/
 _CLIENTS_DIR = Path(__file__).resolve().parents[3] / "clients"
+
+
+async def _make_quintana_migrated_db(tmp_path: Path):
+    """Run the real migration chain (including 20261003_0026's import of the real
+    quintana-seguros/leads-agent registry.yaml + *.agent-skill.md files) against a
+    tmp DB, seed quintana-seguros + leads-agent + jaumpablo rows, then return real
+    Agent ORM instances for both (skill-packages P4-D3 runtime cutover —
+    build_voice_context() now resolves skills from the DB, not the filesystem).
+    """
+    import concurrent.futures
+    import sqlite3
+
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+
+    from app.tenants.models import Agent
+
+    backend_dir = Path(__file__).resolve().parents[3]
+    db_file = tmp_path / "pipeline_integration.db"
+    cfg = Config(str(backend_dir / "alembic.ini"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_file}")
+    cfg.set_main_option("script_location", str(backend_dir / "alembic"))
+
+    def _upgrade(revision: str) -> None:
+        # Run in a separate thread so alembic/env.py's asyncio.run() gets a
+        # fresh event loop (this helper runs inside an async test's running loop).
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(command.upgrade, cfg, revision).result()
+
+    _upgrade("20261003_0025")
+
+    conn = sqlite3.connect(str(db_file))
+    conn.execute(
+        "INSERT INTO clients (id, name, voice_id, is_active, created_at) "
+        "VALUES ('quintana-seguros', 'Quintana Seguros', 'v1', 1, '2026-10-03T00:00:00+00:00')"
+    )
+    conn.execute(
+        "INSERT INTO agents (id, client_id, slug, name, voice_id, created_at) "
+        "VALUES ('leads-agent-id', 'quintana-seguros', 'leads-agent', 'Leads Agent', "
+        "'v1', '2026-10-03T00:00:00+00:00')"
+    )
+    conn.execute(
+        "INSERT INTO agents (id, client_id, slug, name, voice_id, created_at) "
+        "VALUES ('jaumpablo-id', 'quintana-seguros', 'jaumpablo', 'Jaumpablo', "
+        "'v1', '2026-10-03T00:00:00+00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    _upgrade("head")
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
+    session = AsyncSession(engine)
+    leads_agent = (
+        await session.execute(select(Agent).where(Agent.slug == "leads-agent"))
+    ).scalar_one()
+    jaumpablo = (
+        await session.execute(select(Agent).where(Agent.slug == "jaumpablo"))
+    ).scalar_one()
+    return session, engine, leads_agent, jaumpablo
 
 
 # ---------------------------------------------------------------------------
@@ -78,39 +127,41 @@ def _make_client(client_id: str) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_build_voice_context_leads_agent_has_skills_index():
-    """build_voice_context() with real quintana-seguros/leads-agent registry returns skills_index.
+async def test_build_voice_context_leads_agent_has_skills_index(tmp_path: Path):
+    """build_voice_context() with real quintana-seguros/leads-agent skills (DB-backed,
+    seeded by the real import migration) returns skills_index.
 
-    GIVEN quintana-seguros/leads-agent has a valid registry.yaml on disk (auto-insurance-knowledge skill)
-    WHEN build_voice_context() is called (PromptLoader uses real clients dir)
+    GIVEN quintana-seguros/leads-agent's skills were imported from the real
+          registry.yaml + *.agent-skill.md files (auto-insurance-knowledge, lead-qualification)
+    WHEN build_voice_context() is called
     THEN skills_index is not None and contains '## Available Skills'
     AND skills_content is None (registry mode)
     """
     from app.voice.context import build_voice_context
     from app.prompts.loader import PromptLoader
 
-    agent = _make_agent("quintana-seguros", "leads-agent")
+    session, engine, leads_agent, _jaumpablo = await _make_quintana_migrated_db(tmp_path)
     client = _make_client("quintana-seguros")
-    mock_db = make_db()
 
-    # Use real PromptLoader (real filesystem) but mock only render_for_agent
-    # to avoid DB calls while keeping load_agent_skills as real code
-    with patch("app.voice.context.PromptLoader") as MockLoader:
-        real_loader = PromptLoader(clients_dir=_CLIENTS_DIR)
-        MockLoader.return_value = real_loader
+    try:
+        with patch("app.voice.context.PromptLoader") as MockLoader:
+            real_loader = PromptLoader()
+            MockLoader.return_value = real_loader
+            # Mock render_for_agent only — skills resolution stays real (DB-backed)
+            real_loader.render_for_agent = AsyncMock(return_value="You are a leads agent.")
 
-        # Mock render_for_agent so no DB is needed
-        real_loader.render_for_agent = AsyncMock(return_value="You are a leads agent.")
-
-        result = await build_voice_context(
-            agent=agent,
-            lead=None,
-            db=mock_db,
-            client=client,
-        )
+            result = await build_voice_context(
+                agent=leads_agent,
+                lead=None,
+                db=session,
+                client=client,
+            )
+    finally:
+        await session.close()
+        await engine.dispose()
 
     assert result.skills_index is not None, (
-        "leads-agent has a registry.yaml — skills_index must be populated"
+        "leads-agent has imported skills — skills_index must be populated"
     )
     assert "## Available Skills" in result.skills_index, (
         "skills_index must contain '## Available Skills' header"
@@ -121,10 +172,10 @@ async def test_build_voice_context_leads_agent_has_skills_index():
 
 
 @pytest.mark.asyncio
-async def test_build_voice_context_leads_agent_index_contains_skill_name():
-    """skills_index contains 'auto-insurance-knowledge' from the real registry.yaml.
+async def test_build_voice_context_leads_agent_index_contains_skill_name(tmp_path: Path):
+    """skills_index contains 'auto-insurance-knowledge' from the imported skill.
 
-    GIVEN quintana-seguros/leads-agent registry.yaml lists 'auto-insurance-knowledge'
+    GIVEN quintana-seguros/leads-agent's imported skills include 'auto-insurance-knowledge'
     WHEN build_voice_context() assembles the context
     THEN skills_index contains 'auto-insurance-knowledge'
     AND skills_index contains 'load_skill' instruction
@@ -132,24 +183,27 @@ async def test_build_voice_context_leads_agent_index_contains_skill_name():
     from app.voice.context import build_voice_context
     from app.prompts.loader import PromptLoader
 
-    agent = _make_agent("quintana-seguros", "leads-agent")
+    session, engine, leads_agent, _jaumpablo = await _make_quintana_migrated_db(tmp_path)
     client = _make_client("quintana-seguros")
-    mock_db = make_db()
 
-    with patch("app.voice.context.PromptLoader") as MockLoader:
-        real_loader = PromptLoader(clients_dir=_CLIENTS_DIR)
-        MockLoader.return_value = real_loader
-        real_loader.render_for_agent = AsyncMock(return_value="system prompt")
+    try:
+        with patch("app.voice.context.PromptLoader") as MockLoader:
+            real_loader = PromptLoader()
+            MockLoader.return_value = real_loader
+            real_loader.render_for_agent = AsyncMock(return_value="system prompt")
 
-        result = await build_voice_context(
-            agent=agent,
-            lead=None,
-            db=mock_db,
-            client=client,
-        )
+            result = await build_voice_context(
+                agent=leads_agent,
+                lead=None,
+                db=session,
+                client=client,
+            )
+    finally:
+        await session.close()
+        await engine.dispose()
 
     assert "auto-insurance-knowledge" in (result.skills_index or ""), (
-        "skills_index must contain 'auto-insurance-knowledge' from the real registry entry"
+        "skills_index must contain 'auto-insurance-knowledge' from the imported skill"
     )
     assert "load_skill" in (result.skills_index or ""), (
         "skills_index must contain load_skill instruction"
@@ -157,39 +211,44 @@ async def test_build_voice_context_leads_agent_index_contains_skill_name():
 
 
 @pytest.mark.asyncio
-async def test_build_voice_context_leads_agent_registry_entries_populated():
-    """build_voice_context() populates skill_registry_entries from real registry.
+async def test_build_voice_context_leads_agent_registry_entries_populated(tmp_path: Path):
+    """build_voice_context() populates skill_registry_entries from the imported skills.
 
-    GIVEN quintana-seguros/leads-agent has a valid registry.yaml
+    GIVEN quintana-seguros/leads-agent has two imported skills
     WHEN build_voice_context() is called
     THEN skill_registry_entries is a non-empty tuple
-    AND the first entry has name='auto-insurance-knowledge'
+    AND one entry has name='auto-insurance-knowledge'
     """
     from app.voice.context import build_voice_context
     from app.prompts.loader import PromptLoader
 
-    agent = _make_agent("quintana-seguros", "leads-agent")
+    session, engine, leads_agent, _jaumpablo = await _make_quintana_migrated_db(tmp_path)
     client = _make_client("quintana-seguros")
-    mock_db = make_db()
 
-    with patch("app.voice.context.PromptLoader") as MockLoader:
-        real_loader = PromptLoader(clients_dir=_CLIENTS_DIR)
-        MockLoader.return_value = real_loader
-        real_loader.render_for_agent = AsyncMock(return_value="system prompt")
+    try:
+        with patch("app.voice.context.PromptLoader") as MockLoader:
+            real_loader = PromptLoader()
+            MockLoader.return_value = real_loader
+            real_loader.render_for_agent = AsyncMock(return_value="system prompt")
 
-        result = await build_voice_context(
-            agent=agent,
-            lead=None,
-            db=mock_db,
-            client=client,
-        )
+            result = await build_voice_context(
+                agent=leads_agent,
+                lead=None,
+                db=session,
+                client=client,
+            )
+    finally:
+        await session.close()
+        await engine.dispose()
 
     assert len(result.skill_registry_entries) == 2, (
-        "leads-agent registry has exactly 2 skills — auto-insurance-knowledge, lead-qualification"
+        "leads-agent's imported skills must number exactly 2 — "
+        "auto-insurance-knowledge, lead-qualification"
     )
-    assert result.skill_registry_entries[0].name == "auto-insurance-knowledge", (
-        "The registry entry name must match the file stem: 'auto-insurance-knowledge'"
-    )
+    assert {e.name for e in result.skill_registry_entries} == {
+        "auto-insurance-knowledge",
+        "lead-qualification",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +257,7 @@ async def test_build_voice_context_leads_agent_registry_entries_populated():
 
 
 @pytest.mark.asyncio
-async def test_assembled_system_content_contains_skills_index_for_leads_agent():
+async def test_assembled_system_content_contains_skills_index_for_leads_agent(tmp_path: Path):
     """_assemble_context_system_content includes the skills_index block.
 
     GIVEN build_voice_context() returned a context with skills_index populated
@@ -211,21 +270,24 @@ async def test_assembled_system_content_contains_skills_index_for_leads_agent():
     from app.voice.webhook import _assemble_context_system_content
     from app.prompts.loader import PromptLoader
 
-    agent = _make_agent("quintana-seguros", "leads-agent", system_prompt="You are Mariano.")
+    session, engine, leads_agent, _jaumpablo = await _make_quintana_migrated_db(tmp_path)
     client = _make_client("quintana-seguros")
-    mock_db = make_db()
 
-    with patch("app.voice.context.PromptLoader") as MockLoader:
-        real_loader = PromptLoader(clients_dir=_CLIENTS_DIR)
-        MockLoader.return_value = real_loader
-        real_loader.render_for_agent = AsyncMock(return_value="You are Mariano.")
+    try:
+        with patch("app.voice.context.PromptLoader") as MockLoader:
+            real_loader = PromptLoader()
+            MockLoader.return_value = real_loader
+            real_loader.render_for_agent = AsyncMock(return_value="You are Mariano.")
 
-        ctx = await build_voice_context(
-            agent=agent,
-            lead=None,
-            db=mock_db,
-            client=client,
-        )
+            ctx = await build_voice_context(
+                agent=leads_agent,
+                lead=None,
+                db=session,
+                client=client,
+            )
+    finally:
+        await session.close()
+        await engine.dispose()
 
     assembled = _assemble_context_system_content(ctx)
 
@@ -253,32 +315,36 @@ async def test_assembled_system_content_contains_skills_index_for_leads_agent():
 
 
 @pytest.mark.asyncio
-async def test_build_voice_context_jaumpablo_no_skills_index():
-    """build_voice_context() with jaumpablo (empty registry) → skills_index is None.
+async def test_build_voice_context_jaumpablo_no_skills_index(tmp_path: Path):
+    """build_voice_context() with jaumpablo (no imported skills) → skills_index is None.
 
-    GIVEN quintana-seguros/jaumpablo has registry.yaml with empty skills list
+    GIVEN quintana-seguros/jaumpablo's registry.yaml is skills: [] — the import
+          migration creates zero rows for it
     WHEN build_voice_context() is called
-    THEN skills_index is None (empty registry = no block injected)
+    THEN skills_index is None (no contributing skills = no block injected)
     AND skill_registry_entries is an empty tuple
     """
     from app.voice.context import build_voice_context
     from app.prompts.loader import PromptLoader
 
-    agent = _make_agent("quintana-seguros", "jaumpablo")
+    session, engine, _leads_agent, jaumpablo = await _make_quintana_migrated_db(tmp_path)
     client = _make_client("quintana-seguros")
-    mock_db = make_db()
 
-    with patch("app.voice.context.PromptLoader") as MockLoader:
-        real_loader = PromptLoader(clients_dir=_CLIENTS_DIR)
-        MockLoader.return_value = real_loader
-        real_loader.render_for_agent = AsyncMock(return_value="You are Jaumpablo.")
+    try:
+        with patch("app.voice.context.PromptLoader") as MockLoader:
+            real_loader = PromptLoader()
+            MockLoader.return_value = real_loader
+            real_loader.render_for_agent = AsyncMock(return_value="You are Jaumpablo.")
 
-        result = await build_voice_context(
-            agent=agent,
-            lead=None,
-            db=mock_db,
-            client=client,
-        )
+            result = await build_voice_context(
+                agent=jaumpablo,
+                lead=None,
+                db=session,
+                client=client,
+            )
+    finally:
+        await session.close()
+        await engine.dispose()
 
     assert result.skills_index is None, (
         "Empty registry → skills_index must be None (no ## Available Skills block)"
@@ -289,10 +355,10 @@ async def test_build_voice_context_jaumpablo_no_skills_index():
 
 
 @pytest.mark.asyncio
-async def test_assembled_content_no_skills_block_for_jaumpablo():
+async def test_assembled_content_no_skills_block_for_jaumpablo(tmp_path: Path):
     """_assemble_context_system_content has NO ## Available Skills for jaumpablo.
 
-    GIVEN jaumpablo has an empty registry → skills_index is None
+    GIVEN jaumpablo has no imported skills → skills_index is None
     WHEN _assemble_context_system_content(ctx) is called
     THEN '## Available Skills' does NOT appear in the result
     """
@@ -300,21 +366,24 @@ async def test_assembled_content_no_skills_block_for_jaumpablo():
     from app.voice.webhook import _assemble_context_system_content
     from app.prompts.loader import PromptLoader
 
-    agent = _make_agent("quintana-seguros", "jaumpablo", system_prompt="You are Jaumpablo.")
+    session, engine, _leads_agent, jaumpablo = await _make_quintana_migrated_db(tmp_path)
     client = _make_client("quintana-seguros")
-    mock_db = make_db()
 
-    with patch("app.voice.context.PromptLoader") as MockLoader:
-        real_loader = PromptLoader(clients_dir=_CLIENTS_DIR)
-        MockLoader.return_value = real_loader
-        real_loader.render_for_agent = AsyncMock(return_value="You are Jaumpablo.")
+    try:
+        with patch("app.voice.context.PromptLoader") as MockLoader:
+            real_loader = PromptLoader()
+            MockLoader.return_value = real_loader
+            real_loader.render_for_agent = AsyncMock(return_value="You are Jaumpablo.")
 
-        ctx = await build_voice_context(
-            agent=agent,
-            lead=None,
-            db=mock_db,
-            client=client,
-        )
+            ctx = await build_voice_context(
+                agent=jaumpablo,
+                lead=None,
+                db=session,
+                client=client,
+            )
+    finally:
+        await session.close()
+        await engine.dispose()
 
     assembled = _assemble_context_system_content(ctx)
 
@@ -332,70 +401,75 @@ async def test_assembled_content_no_skills_block_for_jaumpablo():
 
 
 @pytest.mark.asyncio
-async def test_full_tool_flow_load_skill_returns_real_file_content():
-    """Full tool-call flow: LLM calls load_skill → handler reads real auto-insurance-knowledge file.
+async def test_full_tool_flow_load_skill_returns_real_file_content(tmp_path: Path):
+    """Full tool-call flow: LLM calls load_skill → handler returns the imported
+    auto-insurance-knowledge content from the DB (skill-packages P4-D3).
 
-    GIVEN quintana-seguros/leads-agent registry with 'auto-insurance-knowledge' skill
-    AND the real auto-insurance-knowledge.agent-skill.md file exists on disk
+    GIVEN quintana-seguros/leads-agent's skills were imported from the real
+          registry.yaml + *.agent-skill.md files
     WHEN dispatch_tool is called with tool_name='load_skill', skill_name='auto-insurance-knowledge'
-    THEN the result contains the file content
-    AND the content includes real text from auto-insurance-knowledge.agent-skill.md
+    THEN the result contains the imported content
+    AND the content includes real text from the original auto-insurance-knowledge.agent-skill.md
     """
-    from app.prompts.skill_loader import load_skill_registry
+    from app.prompts.loader import PromptLoader
     from app.tools.dispatcher import dispatch_tool
 
-    # Load real registry entries (no mocking)
-    registry_entries = await load_skill_registry(
-        client_id="quintana-seguros",
-        agent_slug="leads-agent",
-        clients_dir=_CLIENTS_DIR,
-    )
+    session, engine, leads_agent, _jaumpablo = await _make_quintana_migrated_db(tmp_path)
+    try:
+        loader = PromptLoader()
+        registry_entries = await loader.load_skill_registry_entries(session, leads_agent)
+        content_by_slug = await loader.load_skill_content_by_slug(session, leads_agent)
 
-    assert len(registry_entries) > 0, (
-        "Registry must have entries — registry.yaml must be present"
-    )
+        assert len(registry_entries) > 0, (
+            "leads-agent must have imported skills"
+        )
 
-    result = await dispatch_tool(
-        tool_name="load_skill",
-        tool_args={"skill_name": "auto-insurance-knowledge"},
-        client_id="quintana-seguros",
-        lead_id=None,
-        agent_slug="leads-agent",
-        registry_entries=registry_entries,
-        clients_dir=_CLIENTS_DIR,
-    )
+        result = await dispatch_tool(
+            tool_name="load_skill",
+            tool_args={"skill_name": "auto-insurance-knowledge"},
+            client_id="quintana-seguros",
+            lead_id=None,
+            agent_slug="leads-agent",
+            registry_entries=registry_entries,
+            content_by_slug=content_by_slug,
+        )
+    finally:
+        await session.close()
+        await engine.dispose()
 
     # dispatch_tool('load_skill') returns plain string (WARNING-2 fix)
     assert isinstance(result, str), f"Expected plain string, got {type(result)}: {result!r}"
     assert "error" not in result.lower() or "Quintana" in result, (
         f"Expected success (skill content), got error: {result}"
     )
-    # The real file contains 'Quintana' in its content
+    # The imported content contains 'Quintana' (same text as the original file)
     assert "Quintana" in result, (
-        "Content must come from the real auto-insurance-knowledge.agent-skill.md file"
+        "Content must come from the imported auto-insurance-knowledge content"
     )
 
 
 @pytest.mark.asyncio
-async def test_full_tool_flow_load_skill_filler_emitted_with_real_registry():
-    """Full flow: SSE stream emits registry filler_text before file is read.
+async def test_full_tool_flow_load_skill_filler_emitted_with_real_registry(tmp_path: Path):
+    """Full flow: SSE stream emits registry filler_text before the tool executes.
 
-    GIVEN quintana-seguros/leads-agent registry with 'auto-insurance-knowledge' entry
+    GIVEN quintana-seguros/leads-agent's imported skills include 'auto-insurance-knowledge'
     WHEN _stream_llm_response processes a load_skill ToolCallDelta
     THEN the filler_text from the registry ('Dejame buscar esa informacion...')
-         is emitted to SSE BEFORE the skill file is read
+         is emitted to SSE BEFORE the tool executes
     """
-    from app.prompts.skill_loader import load_skill_registry
+    from app.prompts.loader import PromptLoader
     from app.ai.llm_streaming import ToolCallDelta, StreamDone
     from app.voice.webhook import _stream_llm_response
 
-    registry_entries = await load_skill_registry(
-        client_id="quintana-seguros",
-        agent_slug="leads-agent",
-        clients_dir=_CLIENTS_DIR,
-    )
+    session, engine, leads_agent, _jaumpablo = await _make_quintana_migrated_db(tmp_path)
+    try:
+        loader = PromptLoader()
+        registry_entries = await loader.load_skill_registry_entries(session, leads_agent)
+    finally:
+        await session.close()
+        await engine.dispose()
 
-    # Verify the real registry entry has a filler_text
+    # Verify the imported registry entry has a filler_text
     assert registry_entries, "Registry must have entries"
     skill_entry = next(e for e in registry_entries if e.name == "auto-insurance-knowledge")
     expected_filler = skill_entry.filler_text  # e.g. "Dejame buscar esa informacion..."
@@ -459,7 +533,7 @@ async def test_full_tool_flow_load_skill_filler_emitted_with_real_registry():
 
 
 @pytest.mark.asyncio
-async def test_full_tool_flow_multi_skill_sequential_calls(tmp_path: Path):
+async def test_full_tool_flow_multi_skill_sequential_calls():
     """Two sequential load_skill calls in one session load different skills independently.
 
     GIVEN a registry with skill-a and skill-b
@@ -469,12 +543,6 @@ async def test_full_tool_flow_multi_skill_sequential_calls(tmp_path: Path):
     """
     from app.prompts.skill_loader import SkillRegistryEntry
     from app.tools.dispatcher import dispatch_tool
-
-    # Set up two skill files
-    skills_dir = tmp_path / "test-client" / "agents" / "test-agent" / "skills"
-    skills_dir.mkdir(parents=True)
-    (skills_dir / "skill-a.agent-skill.md").write_text("# Skill A\nContent of skill A.")
-    (skills_dir / "skill-b.agent-skill.md").write_text("# Skill B\nContent of skill B.")
 
     registry_entries = [
         SkillRegistryEntry(
@@ -490,6 +558,10 @@ async def test_full_tool_flow_multi_skill_sequential_calls(tmp_path: Path):
             filler_text="Loading skill B...",
         ),
     ]
+    content_by_slug = {
+        "skill-a": "# Skill A\nContent of skill A.",
+        "skill-b": "# Skill B\nContent of skill B.",
+    }
 
     # First call: load skill-a
     result_a = await dispatch_tool(
@@ -499,7 +571,7 @@ async def test_full_tool_flow_multi_skill_sequential_calls(tmp_path: Path):
         lead_id=None,
         agent_slug="test-agent",
         registry_entries=registry_entries,
-        clients_dir=tmp_path,
+        content_by_slug=content_by_slug,
     )
 
     # Second call in same session: load skill-b
@@ -510,7 +582,7 @@ async def test_full_tool_flow_multi_skill_sequential_calls(tmp_path: Path):
         lead_id=None,
         agent_slug="test-agent",
         registry_entries=registry_entries,
-        clients_dir=tmp_path,
+        content_by_slug=content_by_slug,
     )
 
     # dispatch_tool('load_skill') returns plain string (WARNING-2 fix)

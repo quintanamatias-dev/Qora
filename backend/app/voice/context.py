@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import structlog
@@ -140,6 +140,11 @@ class VoiceSessionContext:
     # Agent slug stored for tool routing (load_skill needs client_id + agent_slug)
     # NEW in Phase 2
     agent_slug: str | None = None
+    # DB-sourced skill content keyed by skill name — populated alongside
+    # skill_registry_entries so the load_skill tool reads from the
+    # already-resolved session data instead of a per-call DB query
+    # (skill-packages P4-D3 runtime cutover).
+    skill_content_by_slug: dict[str, str] = field(default_factory=dict)
     # Accumulated LeadProfileFact rows, rendered read-time (qora-profile-facts memory
     # injection). Empty string when the lead has no active profile facts or when
     # tests construct this dataclass directly without it (backward compatible).
@@ -236,10 +241,10 @@ async def build_voice_context(
     # Render system prompt (may raise — let it propagate per VSC-2)
     system_prompt = await loader.render_for_agent(agent, lead, db=db, client=client)
 
-    # Load skills registry index — returns ## Available Skills block or '' if no registry
-    # The old glob-all behavior is REMOVED. No registry.yaml → no skills.
+    # Resolve skills from the DB (skill-packages) — returns ## Available Skills
+    # block or '' if the agent has no contributing skills. No filesystem fallback.
     try:
-        _skills_raw = await loader.load_agent_skills(client_id, agent_slug)
+        _skills_raw = await loader.load_agent_skills(db, agent)
     except Exception as exc:  # noqa: BLE001 - skills are optional context, not critical path
         logger.warning(
             "voice_context_skills_index_load_failed",
@@ -256,7 +261,7 @@ async def build_voice_context(
     # Load registry entries (raw objects) for load_skill allowlist validation
     # Stored as a tuple (frozen dataclass requires hashable types)
     try:
-        _registry_entries_list = await loader.load_skill_registry_entries(client_id, agent_slug)
+        _registry_entries_list = await loader.load_skill_registry_entries(db, agent)
     except Exception as exc:  # noqa: BLE001 - registry entries degrade to no load_skill allowlist
         logger.warning(
             "voice_context_skill_registry_entries_load_failed",
@@ -266,6 +271,19 @@ async def build_voice_context(
         )
         _registry_entries_list = []
     skill_registry_entries: tuple[SkillRegistryEntry, ...] = tuple(_registry_entries_list)
+
+    # DB-sourced skill content, keyed by skill name — sourced from the same
+    # cached resolution as the two calls above (no extra DB query, P4-D3).
+    try:
+        skill_content_by_slug = await loader.load_skill_content_by_slug(db, agent)
+    except Exception as exc:  # noqa: BLE001 - load_skill degrades to a not-found error per call
+        logger.warning(
+            "voice_context_skill_content_load_failed",
+            **_agent_log_fields(agent),
+            error_type=type(exc).__name__,
+            error_msg=str(exc),
+        )
+        skill_content_by_slug = {}
 
     # Extract misc_notes from lead.extracted_facts. confirmed_facts no longer
     # carries misc_notes, so this is the single runtime channel for those notes.
@@ -453,4 +471,5 @@ async def build_voice_context(
         skills_index=skills_index,
         skill_registry_entries=skill_registry_entries,
         agent_slug=agent_slug,
+        skill_content_by_slug=skill_content_by_slug,
     )

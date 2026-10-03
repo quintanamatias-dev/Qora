@@ -255,3 +255,15 @@ class AgentSkillsCache:
         ]
         for agent_id in stale_agent_ids:
             self.invalidate_agent(agent_id)
+
+
+_default_skills_cache: AgentSkillsCache | None = None
+
+
+def get_default_skills_cache() -> AgentSkillsCache:
+    """Return the process-wide AgentSkillsCache singleton runtime readers use
+    (mirrors app.integrations.integration_store.get_default_store())."""
+    global _default_skills_cache
+    if _default_skills_cache is None:
+        _default_skills_cache = AgentSkillsCache()
+    return _default_skills_cache

@@ -187,15 +187,10 @@ def test_crm_tools_unchanged_after_load_skill_added():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_tool_routes_load_skill(tmp_path: Path):
+async def test_dispatch_tool_routes_load_skill():
     """dispatch_tool routes 'load_skill' to handle_load_skill handler."""
     from app.prompts.skill_loader import SkillRegistryEntry
     from app.tools.dispatcher import dispatch_tool
-
-    # Write skill file to tmp_path
-    skills_dir = tmp_path / "clients" / "test-client" / "agents" / "test-agent" / "skills"
-    skills_dir.mkdir(parents=True)
-    (skills_dir / "qora-info.agent-skill.md").write_text("# Qora Info\nPlatform details.")
 
     registry_entries = [
         SkillRegistryEntry(
@@ -213,7 +208,7 @@ async def test_dispatch_tool_routes_load_skill(tmp_path: Path):
         lead_id=None,
         agent_slug="test-agent",
         registry_entries=registry_entries,
-        clients_dir=tmp_path / "clients",
+        content_by_slug={"qora-info": "# Qora Info\nPlatform details."},
     )
 
     # dispatch_tool returns plain string (not wrapped dict) — WARNING-2 fix
@@ -225,7 +220,7 @@ async def test_dispatch_tool_routes_load_skill(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_tool_load_skill_unknown_name(tmp_path: Path):
+async def test_dispatch_tool_load_skill_unknown_name():
     """dispatch_tool returns graceful error for unknown skill name."""
     from app.prompts.skill_loader import SkillRegistryEntry
     from app.tools.dispatcher import dispatch_tool
@@ -246,7 +241,7 @@ async def test_dispatch_tool_load_skill_unknown_name(tmp_path: Path):
         lead_id=None,
         agent_slug="test-agent",
         registry_entries=registry_entries,
-        clients_dir=tmp_path / "clients",
+        content_by_slug={"qora-info": "content"},
     )
 
     # dispatch_tool returns plain string (not wrapped dict) — WARNING-2 fix
@@ -255,7 +250,7 @@ async def test_dispatch_tool_load_skill_unknown_name(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_tool_load_skill_no_registry_entries(tmp_path: Path):
+async def test_dispatch_tool_load_skill_no_registry_entries():
     """dispatch_tool returns error when registry_entries is empty."""
     from app.tools.dispatcher import dispatch_tool
 
@@ -266,7 +261,7 @@ async def test_dispatch_tool_load_skill_no_registry_entries(tmp_path: Path):
         lead_id=None,
         agent_slug="test-agent",
         registry_entries=[],
-        clients_dir=tmp_path / "clients",
+        content_by_slug={},
     )
 
     # dispatch_tool returns plain string (not wrapped dict) — WARNING-2 fix
@@ -320,7 +315,7 @@ async def test_dispatch_tool_crm_tools_unchanged_after_load_skill_wired(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_dispatch_tool_load_skill_returns_plain_string(tmp_path: Path):
+async def test_dispatch_tool_load_skill_returns_plain_string():
     """dispatch_tool('load_skill') must return a plain string, not {'content': ...}.
 
     The LLM receives the tool result via json.dumps(tool_result). A plain string
@@ -329,10 +324,7 @@ async def test_dispatch_tool_load_skill_returns_plain_string(tmp_path: Path):
     from app.prompts.skill_loader import SkillRegistryEntry
     from app.tools.dispatcher import dispatch_tool
 
-    skills_dir = tmp_path / "clients" / "test-client" / "agents" / "test-agent" / "skills"
-    skills_dir.mkdir(parents=True)
     skill_content = "# Qora Info\nThis is the platform overview."
-    (skills_dir / "qora-info.agent-skill.md").write_text(skill_content)
 
     registry_entries = [
         SkillRegistryEntry(
@@ -350,7 +342,7 @@ async def test_dispatch_tool_load_skill_returns_plain_string(tmp_path: Path):
         lead_id=None,
         agent_slug="test-agent",
         registry_entries=registry_entries,
-        clients_dir=tmp_path / "clients",
+        content_by_slug={"qora-info": skill_content},
     )
 
     # Result must be a plain string (the skill text), not a dict
@@ -358,12 +350,12 @@ async def test_dispatch_tool_load_skill_returns_plain_string(tmp_path: Path):
         f"dispatch_tool('load_skill') must return a plain string. Got {type(result)}: {result!r}"
     )
     assert result == skill_content, (
-        f"Expected skill file content. Got: {result!r}"
+        f"Expected skill content. Got: {result!r}"
     )
 
 
 @pytest.mark.asyncio
-async def test_dispatch_tool_load_skill_error_still_returns_string(tmp_path: Path):
+async def test_dispatch_tool_load_skill_error_still_returns_string():
     """Triangulation: dispatch_tool('load_skill') returns error string when skill not found."""
     from app.tools.dispatcher import dispatch_tool
 
@@ -374,7 +366,7 @@ async def test_dispatch_tool_load_skill_error_still_returns_string(tmp_path: Pat
         lead_id=None,
         agent_slug="test-agent",
         registry_entries=[],
-        clients_dir=tmp_path / "clients",
+        content_by_slug={},
     )
 
     # Error case must also be a plain string
