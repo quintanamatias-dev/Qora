@@ -11,7 +11,7 @@ Branch `feat/config-phase1b`, stacked on `feat/config-phase1a` (`29fa96b`). Not 
 - [x] 3. Phase 4: AgentConfigV2 sparse overrides, write validation (locked / agent_required), grandfathering and the "incomplete" marker.
 - [x] 4. Phase 5: equivalence test, runtime and ElevenLabs projection read the effective config, call sessions record standard and client revision, client-change propagation, explicit standard resync.
 - [x] 5. Phase 6: effective-config API and minimal UI (provenance badges, locked fields read-only).
-- [ ] 6. Full suites green; production rollout plan prepared (includes moving qora-explainer and jaumpablo to the standard per D17).
+- [x] 6. Full suites green; production rollout plan prepared (includes moving qora-explainer and jaumpablo to the standard per D17).
 
 ## Evidence
 
@@ -22,3 +22,13 @@ Branch `feat/config-phase1b`, stacked on `feat/config-phase1a` (`29fa96b`). Not 
 - Task 3b: legacy PATCH `/agents/{id}` now sends only the changed config fields through the sparse V2 path (validation before any column write; no revision when only non-config fields change). RED observed for 3 tests (one of them a 500 IntegrityError that is now a 422). Worker full suite: 3914 passed.
 - Task 4 (design D19): the Agent.* columns are a MATERIALIZED projection of the effective config (`tenants/materialize.py`, `materialize_agent_config`), so the voice hot path and the ElevenLabs payload stay as they are (tasks 5.2 and 5.3 superseded). A client change or rollback re-materializes its active agents and syncs the ones that changed. Resync endpoint at `POST /api/v1/clients/admin/standards/resync` (temporary path: main.py was outside the surfaces; move it in task 5). Migration `20261003_0019`: `agents.materialized_standard_version`, `call_sessions.standard_version` and `client_config_revision_id`. Equivalence test with explicit exceptions, all NULL → standard: `voicemail_detection_enabled` (true), `max_call_duration_seconds` (120), and `system_prompt` in the column (the revision already held the file prompt, so the runtime does not change). Parent checked prod: leads-agent has 600 s explicitly (kept); voicemail already on in ElevenLabs; jaumpablo has no ElevenLabs agent. So no visible change in prod. RED observed; worker full suite: 3931 passed.
 - Task 5: GET `/clients/{c}/agents/{a}/effective-config` (value, provenance and policy per field, standard_version, incomplete flag); resync moved to `POST /api/v1/admin/standards/resync` (superadmin, `app/admin/standards_router.py`). UI changes: Goal is required on create and editable; provenance badge per field; locked fields are read-only; "Reset to inherited"; "Incomplete" badge. Config writes go through PATCH `.../config`. RED observed (404s); backend 3934 passed, frontend 891 passed, lint and tsc clean.
+- Task 6 (verifier + parent): backend 3934 passed; Alembic from empty to 0019, down to 0013 and back up again all OK; frontend 891 passed, lint and tsc clean. Real data (copy of the local qora.db): the migrations reach 0019; all 3 agents have an active revision and both clients have an active config revision. The verifier misreported the agent list; the parent re-checked it directly.
+
+## Production rollout (waits for the user; ships together with 1a)
+
+1. Run the 1a rollout steps (odd/tasks/config-phase1a.md): `PUBLIC_BASE_URL`, deploy (migrations up to 0019), API checks.
+2. `POST /api/v1/admin/standards/resync` (superadmin): it materializes every agent at `STANDARD_VERSION 2026-10-02.1`. Expected changes: voicemail detection on (already on in ElevenLabs) and the agent-scoped custom-LLM URL on both ElevenLabs agents.
+3. Explicit move to the standard (D17): for qora-explainer and jaumpablo, PATCH `/agents/{id}/config` with `model: null, tts_model: null`, so they inherit gpt-4.1-mini / eleven_v4_turbo. The demo voice will sound like v4 Turbo; confirm with the user before this step.
+4. Load each agent's `goal` (all 3 show as "Incomplete").
+5. GET `effective-config` for the 3 agents; simulate-conversation on both ElevenLabs agents.
+6. Rollback: agent or client revision rollback endpoints; for routing, see the 1a plan.
