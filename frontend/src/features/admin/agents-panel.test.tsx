@@ -28,6 +28,14 @@ beforeEach(() => {
   // the same edit panel without caring about revision history.
   server.use(
     http.get('/api/v1/clients/:clientId/agents/:agentId/revisions', () => HttpResponse.json([])),
+    http.get('/api/v1/clients/:clientId/agents/:agentId/effective-config', () =>
+      HttpResponse.json({
+        standard_version: '2026-10-02.1',
+        config_incomplete: false,
+        missing_required_fields: [],
+        fields: {},
+      }),
+    ),
   )
 })
 

@@ -5,7 +5,14 @@
  */
 
 import { apiFetch } from './client'
-import type { Agent, AgentConfigRevision, CreateAgentPayload, UpdateAgentPayload } from './types'
+import type {
+  Agent,
+  AgentConfigPatchPayload,
+  AgentConfigRevision,
+  CreateAgentPayload,
+  EffectiveConfig,
+  UpdateAgentPayload,
+} from './types'
 
 /**
  * GET /api/v1/clients/:clientId/agents
@@ -65,6 +72,38 @@ export async function fetchAgentRevisions(
 ): Promise<AgentConfigRevision[]> {
   return apiFetch<AgentConfigRevision[]>(
     `/api/v1/clients/${encodeURIComponent(clientId)}/agents/${encodeURIComponent(agentId)}/revisions`,
+  )
+}
+
+/**
+ * GET /api/v1/clients/:clientId/agents/:agentId/effective-config
+ * Returns every config field's resolved value, provenance (standard/client/agent),
+ * and policy, plus completeness markers.
+ */
+export async function fetchAgentEffectiveConfig(
+  clientId: string,
+  agentId: string,
+): Promise<EffectiveConfig> {
+  return apiFetch<EffectiveConfig>(
+    `/api/v1/clients/${encodeURIComponent(clientId)}/agents/${encodeURIComponent(agentId)}/effective-config`,
+  )
+}
+
+/**
+ * PATCH /api/v1/clients/:clientId/agents/:agentId/config
+ * Sparse override write: a null value removes an existing override (inherit again).
+ */
+export async function patchAgentConfig(
+  clientId: string,
+  agentId: string,
+  payload: AgentConfigPatchPayload,
+): Promise<AgentConfigRevision> {
+  return apiFetch<AgentConfigRevision>(
+    `/api/v1/clients/${encodeURIComponent(clientId)}/agents/${encodeURIComponent(agentId)}/config`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    },
   )
 }
 

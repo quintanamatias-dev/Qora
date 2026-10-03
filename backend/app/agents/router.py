@@ -23,6 +23,8 @@ from app.agents.schemas import (
     AgentCreate,
     AgentResponse,
     AgentUpdate,
+    EffectiveConfigFieldResponse,
+    EffectiveConfigResponse,
     SyncStatusResponse,
 )
 from app.core.access import require_client_access, require_superadmin
@@ -33,8 +35,9 @@ from app.tenants.agent_config_schema import (
     AgentConfigV1,
     AgentConfigV2Patch,
 )
-from app.tenants.field_policy import AGENT_REQUIRED_FIELDS
-from app.tenants.materialize import materialize_agent_config
+from app.tenants.config_standard import STANDARD_VERSION
+from app.tenants.field_policy import AGENT_REQUIRED_FIELDS, FIELD_POLICY
+from app.tenants.materialize import materialize_agent_config, resolve_effective_for_agent
 from app.tenants.models import Agent, AgentConfigRevision, Client
 import app.tenants.service as tenant_service
 from app.tenants import revisions_service
@@ -534,6 +537,42 @@ async def get_agent(
         )
     incomplete, missing = await _agent_completeness(session, agent)
     return _agent_to_response(agent, config_incomplete=incomplete, missing_required_fields=missing)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/clients/{client_id}/agents/{agent_id}/effective-config
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{agent_id}/effective-config", response_model=EffectiveConfigResponse)
+async def get_agent_effective_config(
+    client_id: str,
+    agent_id: str,
+    session: AsyncSession = Depends(get_db_session),
+) -> EffectiveConfigResponse:
+    """Return every FIELD_POLICY field's resolved value, provenance, and policy
+    (design.md D13), plus the standard version used and completeness markers.
+
+    Returns:
+        200: EffectiveConfigResponse.
+        404: If client or agent does not exist (or belongs to another tenant).
+    """
+    await _require_client(session, client_id)
+    agent = await _require_agent(session, client_id, agent_id)
+
+    effective = await resolve_effective_for_agent(session, agent)
+    fields = {
+        name: EffectiveConfigFieldResponse(
+            value=field.value, provenance=field.provenance, policy=FIELD_POLICY[name]
+        )
+        for name, field in effective.fields.items()
+    }
+    return EffectiveConfigResponse(
+        fields=fields,
+        standard_version=STANDARD_VERSION,
+        config_incomplete=bool(effective.missing_required),
+        missing_required_fields=effective.missing_required,
+    )
 
 
 # ---------------------------------------------------------------------------

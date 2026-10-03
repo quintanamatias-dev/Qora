@@ -1,4 +1,4 @@
-"""Phase 5.6 (agent-config-inheritance) — standard resync endpoint.
+"""Phase 5.6/6 (agent-config-inheritance) — standard resync endpoint.
 
 design.md D15: a STANDARD_VERSION bump never auto-syncs anyone; re-syncing
 after a standard change requires this explicit superadmin action, which
@@ -6,12 +6,10 @@ re-materializes every active agent platform-wide and triggers the existing
 EL sync only for agents whose resolved config actually changed, or whose
 materialized_standard_version no longer matches the current STANDARD_VERSION.
 
-Deviation (documented, see final report): the parent's scope named this
-route `POST /admin/standards/resync`, but `backend/app/main.py` (where a
-bare `/admin` router would need to be mounted) is outside this task's
-allowed edit surfaces. It is mounted on the existing clients router instead
-(the only allowed-surface router with no client-id-scoped dependency),
-giving the reachable path `POST /api/v1/clients/admin/standards/resync`.
+Moved in Phase 6 to its intended platform-wide mount point
+`POST /api/v1/admin/standards/resync` (`app/admin/standards_router.py`,
+registered in `main.py`), superseding the temporary
+`/api/v1/clients/admin/standards/resync` deviation from task 5.6.
 """
 
 from __future__ import annotations
@@ -45,12 +43,12 @@ async def resync_app(tmp_path: Path):
         await seed_qora_demo(session)
         await session.commit()
 
-    from app.clients.router import router as clients_router
+    from app.admin.standards_router import router as admin_standards_router
     from fastapi import FastAPI
 
     test_app = FastAPI()
     test_app.state.settings = settings
-    test_app.include_router(clients_router, prefix="/api/v1")
+    test_app.include_router(admin_standards_router, prefix="/api/v1")
 
     async with AsyncClient(
         transport=ASGITransport(app=test_app),
@@ -92,7 +90,7 @@ async def test_standard_resync_not_wired_into_startup_or_background_jobs(resync_
     resync_app fixture) must not, by itself, trigger any sync.
     """
     mock_sync = AsyncMock()
-    with patch("app.clients.router.sync_to_elevenlabs", mock_sync):
+    with patch("app.admin.standards_router.sync_to_elevenlabs", mock_sync):
         # Merely having the app running with seeded agents (fixture setup
         # already ran above) must not have triggered a sync.
         pass
@@ -103,7 +101,7 @@ async def test_standard_resync_not_wired_into_startup_or_background_jobs(resync_
 async def test_standard_resync_endpoint_materializes_every_active_agent(resync_app):
     agent_ids = await _get_agent_ids()
 
-    response = await resync_app.post("/api/v1/clients/admin/standards/resync")
+    response = await resync_app.post("/api/v1/admin/standards/resync")
     assert response.status_code == 200
     body = response.json()
     assert body["agents_checked"] == len(agent_ids)
@@ -118,15 +116,15 @@ async def test_standard_resync_only_syncs_drifted_agents(resync_app):
     # First resync consumes every agent's initial drift (NULL->standard
     # columns, filesystem-sourced system_prompt — see test_config_equivalence
     # .py) so both agents are now fully materialized and un-drifted.
-    first = await resync_app.post("/api/v1/clients/admin/standards/resync")
+    first = await resync_app.post("/api/v1/admin/standards/resync")
     assert first.json()["agents_changed"] == 2
 
     for agent_id in agent_ids.values():
         await _set_elevenlabs_agent_id(agent_id, f"el-{agent_id}")
 
     mock_sync = AsyncMock()
-    with patch("app.clients.router.sync_to_elevenlabs", mock_sync):
-        response = await resync_app.post("/api/v1/clients/admin/standards/resync")
+    with patch("app.admin.standards_router.sync_to_elevenlabs", mock_sync):
+        response = await resync_app.post("/api/v1/admin/standards/resync")
         assert response.status_code == 200
 
     body = response.json()
@@ -139,10 +137,10 @@ async def test_standard_resync_requires_superadmin(resync_app):
     """Follows the existing require_superadmin dependency pattern."""
     import inspect
 
-    from app.clients import router as clients_router_module
+    from app.admin import standards_router as admin_standards_router_module
 
-    source = inspect.getsource(clients_router_module)
+    source = inspect.getsource(admin_standards_router_module)
     # The resync route must declare require_superadmin, matching every other
     # mutating admin endpoint in this router.
-    resync_block = source[source.index('"/admin/standards/resync"') :]
+    resync_block = source[source.index('"/standards/resync"') :]
     assert "require_superadmin" in resync_block[: resync_block.index("async def resync_standard")]

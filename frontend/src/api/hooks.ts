@@ -19,6 +19,8 @@ import {
   deactivateAgent,
   fetchAgentRevisions,
   rollbackAgentRevision,
+  fetchAgentEffectiveConfig,
+  patchAgentConfig,
 } from './agents'
 import {
   fetchAnalyticsOverview,
@@ -47,6 +49,8 @@ import type {
   Client,
   Agent,
   AgentConfigRevision,
+  AgentConfigPatchPayload,
+  EffectiveConfig,
   CreateClientPayload,
   UpdateClientPayload,
   CreateAgentPayload,
@@ -366,6 +370,38 @@ export function useRollbackAgentRevision(clientId: string, agentId: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agents', clientId] })
       queryClient.invalidateQueries({ queryKey: ['agent-revisions', clientId, agentId] })
+      queryClient.invalidateQueries({ queryKey: ['agent-effective-config', clientId, agentId] })
+    },
+  })
+}
+
+/**
+ * useAgentEffectiveConfig — fetches every config field's resolved value,
+ * provenance, and policy for one agent.
+ * queryKey: ['agent-effective-config', clientId, agentId]
+ */
+export function useAgentEffectiveConfig(clientId: string, agentId: string) {
+  return useQuery<EffectiveConfig>({
+    queryKey: ['agent-effective-config', clientId, agentId],
+    queryFn: () => fetchAgentEffectiveConfig(clientId, agentId),
+    enabled: Boolean(clientId) && Boolean(agentId),
+  })
+}
+
+/**
+ * usePatchAgentConfig — sparse config override write (design.md D18); a null
+ * field value removes an existing override (inherit again). Invalidates
+ * ['agents', clientId], ['agent-revisions', ...], and
+ * ['agent-effective-config', ...] on success.
+ */
+export function usePatchAgentConfig(clientId: string, agentId: string) {
+  const queryClient = useQueryClient()
+  return useMutation<AgentConfigRevision, Error, AgentConfigPatchPayload>({
+    mutationFn: (payload) => patchAgentConfig(clientId, agentId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents', clientId] })
+      queryClient.invalidateQueries({ queryKey: ['agent-revisions', clientId, agentId] })
+      queryClient.invalidateQueries({ queryKey: ['agent-effective-config', clientId, agentId] })
     },
   })
 }

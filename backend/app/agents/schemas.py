@@ -287,6 +287,27 @@ class AgentConfigRevisionResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class EffectiveConfigFieldResponse(BaseModel):
+    """One resolved field from GET .../effective-config (design.md D13, task 6.1)."""
+
+    value: object
+    provenance: str
+    policy: str
+
+
+class EffectiveConfigResponse(BaseModel):
+    """Response shape for GET .../effective-config.
+
+    fields contains every FIELD_POLICY field, keyed by field name, each with
+    its resolved value, provenance (standard/client/agent), and policy.
+    """
+
+    fields: dict[str, EffectiveConfigFieldResponse]
+    standard_version: str
+    config_incomplete: bool
+    missing_required_fields: list[str]
+
+
 class SyncStatusResponse(BaseModel):
     """Response body for POST .../sync-elevenlabs.
 
