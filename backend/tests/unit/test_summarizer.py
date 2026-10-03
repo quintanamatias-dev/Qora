@@ -58,27 +58,9 @@ async def seeded_db(tmp_path: Path):
             lead_id="test-lead-sum-001",
         )
 
-        # analysis-profiles: seed_quintana() creates the client via create_client(),
-        # which defaults every new client to the empty "generic" analysis profile
-        # (P5-D3 — explicit apply-template only, never implicit). Production's real
-        # Quintana Seguros tenant already carries the "insurance" catalog via
-        # migration 20261003_0023; apply the same template here so this test
-        # fixture matches production instead of silently skipping the interest
-        # pipeline (P5-D5 empty-products skip) for every summarizer test below.
-        from app.analysis.profiles.templates import insurance as _insurance_template
-        from app.tenants.models import Client as _Client
-        from app.tenants.revisions_service import create_analysis_profile_revision
-
-        quintana_client = await sess.get(_Client, "quintana-seguros")
-        await create_analysis_profile_revision(
-            sess,
-            client=quintana_client,
-            config=_insurance_template.config,
-            source="api",
-            created_by="system",
-            note="test fixture: apply insurance template to match production Quintana",
-        )
-
+        # seed_quintana() applies the insurance analysis profile directly to
+        # revision 1 (Gap A) — no manual template application needed here,
+        # this fixture already matches production Quintana's catalog.
         await sess.commit()
 
     yield db_module

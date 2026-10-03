@@ -48,10 +48,37 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+async def _seed_client_catalog(db_session, client_id: str) -> None:
+    """Seed a minimal Client row + an insurance-vertical analysis profile
+    revision for *client_id* so resolve_client_catalog() (task 4.1's
+    per-client cutover) has something to resolve — these tests use
+    PRODUCT_CATALOG/NEED_TAGS ids against made-up client ids that never had
+    a real Client row before this cutover."""
+    from app.tenants.models import Client
+    from app.tenants.revisions_service import create_analysis_profile_revision
+    from app.analysis.profiles.templates import insurance as insurance_profile_template
+
+    existing = await db_session.get(Client, client_id)
+    if existing is not None:
+        return
+    client = Client(id=client_id, name=client_id, voice_id="v1")
+    db_session.add(client)
+    await db_session.flush()
+    await create_analysis_profile_revision(
+        db_session,
+        client=client,
+        config=insurance_profile_template.config,
+        source="api",
+        created_by="test",
+    )
+    await db_session.flush()
+
+
 async def _make_lead(db_session, client_id: str = "test-client") -> str:
     """Insert a minimal Lead and return its ID."""
     from app.leads.models import Lead
 
+    await _seed_client_catalog(db_session, client_id)
     lead_id = _lead_id()
     lead = Lead(
         id=lead_id,
@@ -75,6 +102,7 @@ async def _make_call_session(
     """Insert a minimal CallSession and return its ID."""
     from app.calls.models import CallSession
 
+    await _seed_client_catalog(db_session, client_id)
     sid = _session_id()
     cs = CallSession(
         id=sid,

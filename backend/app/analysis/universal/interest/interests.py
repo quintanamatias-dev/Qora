@@ -36,20 +36,46 @@ _NEED_TAGS_SET = frozenset(NEED_TAGS)
 
 
 def _normalize_need_tags(needs: list[str]) -> list[str]:
-    """Normalize a needs list to the NEED_TAGS allowlist (pure function).
+    """Normalize a needs list to the default (insurance) NEED_TAGS allowlist.
 
     Any tag NOT in NEED_TAGS is replaced with the ``other`` fallback. The result
     is de-duplicated while preserving first-seen order so that multiple invalid
     near-duplicate tags (e.g. ``"buscando alternativas"``, ``"viendo precios"``)
     collapse to a single ``other`` entry instead of inflating the list.
 
-    This is the BI-friendly controlled-output guarantee: after validation every
-    emitted need tag is guaranteed to be in the catalog, so arbitrary free-form
-    near-duplicates can never be stored or aggregated.
+    This is the BI-friendly controlled-output guarantee for direct InterestItem
+    construction with no client context (tests, the default/insurance catalog).
+    Per-call enforcement against a client's OWN catalog happens afterwards in
+    ``analyze()`` via ``_normalize_needs_for_catalog`` (Gap B) — this function
+    is unaffected by that and keeps its global-default behavior unchanged.
     """
     normalized: list[str] = []
     for tag in needs:
         mapped = tag if tag in _NEED_TAGS_SET else _OTHER_NEED_TAG
+        if mapped not in normalized:
+            normalized.append(mapped)
+    return normalized
+
+
+def _normalize_needs_for_catalog(needs: list[str], need_ids: frozenset[str]) -> list[str]:
+    """Normalize a needs list against a PER-CALL catalog's own need-tag ids
+    (Gap B), independent of the global NEED_TAGS allowlist.
+
+    Any tag not in ``need_ids`` maps to this catalog's own ``other`` entry
+    when it has one, or is dropped otherwise. An empty ``need_ids`` (no
+    need-tag taxonomy configured) clears every tag. De-duplicated, first-seen
+    order preserved.
+    """
+    if not need_ids:
+        return []
+    normalized: list[str] = []
+    for tag in needs:
+        if tag in need_ids:
+            mapped = tag
+        elif _OTHER_NEED_TAG in need_ids:
+            mapped = _OTHER_NEED_TAG
+        else:
+            continue
         if mapped not in normalized:
             normalized.append(mapped)
     return normalized
@@ -188,6 +214,34 @@ DIMENSION = {
 }
 
 
+def _normalize_result_for_catalog(
+    result: InterestsAxis, catalog: AnalysisProfileConfigV1
+) -> InterestsAxis:
+    """Final per-call catalog enforcement (Gap B) — drop items whose product
+    is not in THIS catalog's products, and normalize each surviving item's
+    needs against THIS catalog's own need_tags. Returns the SAME object
+    unchanged when nothing needs to change (identity-preserving — callers
+    may rely on ``is`` for the common case where the LLM already returned
+    catalog-valid data).
+    """
+    product_ids = frozenset(p.id for p in catalog.products)
+    need_ids = frozenset(n.id for n in catalog.need_tags)
+    changed = False
+    new_items: list[InterestItem] = []
+    for item in result.items:
+        if product_ids and item.product not in product_ids:
+            changed = True
+            continue
+        normalized_needs = _normalize_needs_for_catalog(item.needs, need_ids)
+        if normalized_needs != item.needs:
+            changed = True
+            item = item.model_copy(update={"needs": normalized_needs})
+        new_items.append(item)
+    if not changed:
+        return result
+    return InterestsAxis(items=new_items)
+
+
 # ---------------------------------------------------------------------------
 # Analyzer
 # ---------------------------------------------------------------------------
@@ -204,10 +258,10 @@ async def analyze(
 
     The returned axis is validated by Pydantic (``InterestItem.product``
     must be a string; Pydantic's ``max_length`` constraints are enforced).
-    Invalid product IDs returned by the LLM are NOT automatically discarded
-    here — the prompt constrains the model; post-processing / filtering
-    against the catalog happens in the pipeline orchestrator (``__init__.py``)
-    if strict enforcement is required.
+    After parsing, every item is normalized against the PER-CALL ``catalog``
+    (Gap B): an item whose product id is not in ``catalog.products`` is
+    dropped, and each surviving item's ``needs`` is normalized against
+    ``catalog.need_tags`` (not the global NEED_TAGS allowlist).
 
     Args:
         transcript: Formatted transcript text.
@@ -232,8 +286,5 @@ async def analyze(
         response_format=DIMENSION["schema"],
     )
     result: InterestsAxis = response.choices[0].message.parsed
-    if not catalog.need_tags and result.items:
-        result = InterestsAxis(
-            items=[item.model_copy(update={"needs": []}) for item in result.items]
-        )
+    result = _normalize_result_for_catalog(result, catalog)
     return result

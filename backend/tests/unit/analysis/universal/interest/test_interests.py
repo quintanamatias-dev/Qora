@@ -120,3 +120,105 @@ async def test_analyze_discards_needs_when_catalog_has_no_need_tags():
     result = await analyze("transcript", client, catalog=catalog)
 
     assert result.items[0].needs == []
+
+
+# ---------------------------------------------------------------------------
+# Gap B — analyze() normalizes needs/products against the PER-CALL catalog,
+# not the global NEED_TAGS/PRODUCT_CATALOG constants.
+# ---------------------------------------------------------------------------
+
+
+async def test_analyze_drops_item_whose_product_is_not_in_the_per_call_catalog():
+    """An item whose product id is not in THIS catalog's products is dropped,
+    even though it may be a valid id in the global PRODUCT_CATALOG."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.analysis.universal.interest.interests import InterestItem, InterestsAxis, analyze
+
+    catalog = _make_catalog(products=["only_product"], need_tags=["only_need"])
+
+    llm_result = InterestsAxis(
+        items=[
+            InterestItem(
+                product="only_product",
+                needs=[],
+                evidence="le interesa",
+                confidence="high",
+            ),
+            InterestItem(
+                product="auto_todo_riesgo",  # valid in the global catalog, NOT in this one
+                needs=[],
+                evidence="tambien mencionó el auto",
+                confidence="high",
+            ),
+        ]
+    )
+
+    client = AsyncMock()
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.parsed = llm_result
+    client.beta.chat.completions.parse = AsyncMock(return_value=response)
+
+    result = await analyze("transcript", client, catalog=catalog)
+
+    assert [item.product for item in result.items] == ["only_product"]
+
+
+async def test_analyze_normalizes_needs_to_per_call_catalogs_other_fallback():
+    """A need tag outside THIS catalog's need_tags normalizes to this
+    catalog's own 'other' fallback, independent of the global NEED_TAGS set."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.analysis.universal.interest.interests import InterestItem, InterestsAxis, analyze
+    from app.analysis.profiles.schema import AnalysisProfileConfigV1, NeedTagEntry, ProductEntry
+
+    catalog = AnalysisProfileConfigV1(
+        vertical="custom",
+        products=[ProductEntry(id="only_product", label_es="x", label_en="x")],
+        need_tags=[
+            NeedTagEntry(id="only_need", label_es="x", label_en="x"),
+            NeedTagEntry(id="other", label_es="Otro", label_en="Other"),
+        ],
+    )
+
+    llm_result = InterestsAxis(
+        items=[
+            InterestItem(
+                product="only_product",
+                needs=["precio_competitivo"],  # valid globally, not in this catalog
+                evidence="le interesa",
+                confidence="high",
+            )
+        ]
+    )
+
+    client = AsyncMock()
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.parsed = llm_result
+    client.beta.chat.completions.parse = AsyncMock(return_value=response)
+
+    result = await analyze("transcript", client, catalog=catalog)
+
+    assert result.items[0].needs == ["other"]
+
+
+async def test_analyze_preserves_result_identity_when_nothing_changes():
+    """When every item already matches the catalog, analyze() returns the
+    SAME object the LLM call produced — no unnecessary rebuild."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.analysis.universal.interest.interests import InterestsAxis, analyze
+
+    expected = InterestsAxis(items=[])
+
+    client = AsyncMock()
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.parsed = expected
+    client.beta.chat.completions.parse = AsyncMock(return_value=response)
+
+    result = await analyze("transcript", client)
+
+    assert result is expected

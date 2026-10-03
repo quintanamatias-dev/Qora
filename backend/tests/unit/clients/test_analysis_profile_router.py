@@ -21,8 +21,9 @@ from pydantic import SecretStr
 @pytest_asyncio.fixture
 async def analysis_profile_app(tmp_path: Path):
     """Isolated FastAPI app with the clients router + a seeded quintana
-    client (generic profile by default — see tenants/service.py's
-    create_client)."""
+    client (insurance profile — seed_quintana applies the insurance template
+    directly on revision 1, Gap A, matching migration 0023's production
+    seed)."""
     from app.core.config import Settings
     from app.core import database as db_module
 
@@ -64,6 +65,8 @@ async def analysis_profile_app(tmp_path: Path):
 
 
 async def test_get_profile_returns_active_revision(analysis_profile_app):
+    from app.analysis.universal.interest.catalog import NEED_TAGS, PRODUCT_CATALOG
+
     response = await analysis_profile_app.get(
         "/api/v1/clients/quintana-seguros/analysis-profile"
     )
@@ -71,9 +74,9 @@ async def test_get_profile_returns_active_revision(analysis_profile_app):
     body = response.json()
     assert body["client_id"] == "quintana-seguros"
     assert body["revision_number"] == 1
-    assert body["vertical"] == "generic"
-    assert body["products"] == []
-    assert body["need_tags"] == []
+    assert body["vertical"] == "insurance"
+    assert {p["id"] for p in body["products"]} == set(PRODUCT_CATALOG)
+    assert {n["id"] for n in body["need_tags"]} == set(NEED_TAGS)
 
 
 async def test_get_profile_404_for_unknown_client(analysis_profile_app):

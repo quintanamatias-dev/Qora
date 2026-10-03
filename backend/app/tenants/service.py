@@ -5,16 +5,21 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pathlib import Path
 
+from app.analysis.profiles.templates import insurance as insurance_profile_template
 from app.tenants.agent_config_schema import AgentConfigV1
 from app.tenants.client_config_schema import ClientConfigV1
 from app.tenants.models import Agent, Client
 from app.tenants import revisions_service
+
+if TYPE_CHECKING:
+    from app.analysis.profiles.templates import ProfileTemplate
 
 # backend/app/tenants/service.py -> parents[2] == backend/
 _SEED_CLIENTS_DIR = Path(__file__).resolve().parents[2] / "clients"
@@ -129,6 +134,12 @@ async def create_client(
     max_tokens: int = 300,
     tools_enabled: str = '["get_lead_details","capture_data","mark_not_interested","schedule_followup"]',
     is_active: bool = True,
+    # analysis-profiles (design.md P5-D3/Gap A): seeders that know a client's
+    # vertical up front (e.g. seed_quintana) may pass its template here so
+    # revision 1 is created with that vertical directly — matching migration
+    # 0023's inline production seed — instead of every client always
+    # defaulting to generic. None (default) preserves the generic default.
+    initial_analysis_profile_template: "ProfileTemplate | None" = None,
     # Scheduler configuration (Phase 7 — bootstrappable at create time)
     scheduler_enabled: bool = False,
     scheduler_max_attempts: int = 3,
@@ -224,16 +235,24 @@ async def create_client(
     # analysis-profiles (design.md P5-D3): every new client defaults to the
     # empty generic analysis profile — insurance (or any other vertical) is
     # an explicit POST .../analysis-profile/apply-template action, never an
-    # implicit side effect of client creation.
+    # implicit side effect of client creation. Gap A exception: a caller that
+    # already knows the client's vertical (seed_quintana) may pass
+    # initial_analysis_profile_template so revision 1 is created with that
+    # vertical's data directly, matching migration 0023's production seed.
     from app.analysis.profiles.templates import generic as generic_profile_template
 
+    template = initial_analysis_profile_template or generic_profile_template
     await revisions_service.create_analysis_profile_revision(
         session,
         client=client,
-        config=generic_profile_template.config,
+        config=template.config,
         source="api",
         created_by="system",
-        note="initial generic analysis profile created with the client",
+        note=(
+            "initial generic analysis profile created with the client"
+            if template is generic_profile_template
+            else f"initial {template.vertical} analysis profile created with the client"
+        ),
     )
 
     return client
@@ -446,6 +465,26 @@ Depende de la aseguradora, pero gestionamos para que sea lo más ágil posible, 
 """
 
 
+async def _ensure_quintana_insurance_analysis_profile(
+    session: AsyncSession, client: Client
+) -> None:
+    """Apply the insurance template to *client*'s analysis profile unless it
+    already has a non-generic profile (Gap A idempotency — never overwrites
+    an already-applied insurance profile or any other hand-edited one).
+    """
+    catalog = await revisions_service.resolve_client_catalog(session, client.id)
+    if catalog.vertical != "generic":
+        return
+    await revisions_service.create_analysis_profile_revision(
+        session,
+        client=client,
+        config=insurance_profile_template.config,
+        source="api",
+        created_by="system",
+        note="seed_quintana: healed pre-existing generic profile to insurance",
+    )
+
+
 async def seed_quintana(session: AsyncSession) -> None:
     """Seed the Quintana Seguros client if it does not already exist.
 
@@ -471,6 +510,10 @@ async def seed_quintana(session: AsyncSession) -> None:
 
     existing = await get_client(session, "quintana-seguros")
     if existing is not None:
+        # Gap A: heal a pre-existing Quintana row that is still on the
+        # generic default (e.g. seeded before this fix) — never overwrites
+        # an already-applied insurance profile or any other hand-edited one.
+        await _ensure_quintana_insurance_analysis_profile(session, existing)
         # AD-2: One-time migration guard — populate agent fields only when missing or blank
         agent = await _resolve_single_active_agent_or_none(session, "quintana-seguros")
         if agent is not None:
@@ -511,6 +554,11 @@ async def seed_quintana(session: AsyncSession) -> None:
         tools_enabled=_QUINTANA_TOOLS_ENABLED,
         system_prompt_override=_QUINTANA_SYSTEM_PROMPT,
         knowledge_base=_QUINTANA_KNOWLEDGE_BASE,
+        # Gap A: on a fresh DB, migration 0023 cannot have seeded Quintana's
+        # insurance profile yet (the client doesn't exist at migration time) —
+        # seed_quintana must give it directly so revision 1 matches migration
+        # 0023's production seed instead of defaulting to generic.
+        initial_analysis_profile_template=insurance_profile_template,
     )
     # Note: create_client() auto-creates the default Agent — no separate create_agent() needed.
     # tool_config column not set — capture_data schema is generated from crm.yaml at runtime.

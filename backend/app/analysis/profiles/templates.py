@@ -15,7 +15,6 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from app.analysis.profiles.schema import AnalysisProfileConfigV1, NeedTagEntry, ProductEntry
-from app.analysis.universal.interest.catalog import NEED_TAGS, PRODUCT_CATALOG
 
 
 class ProfileTemplate(BaseModel):
@@ -23,8 +22,46 @@ class ProfileTemplate(BaseModel):
     config: AnalysisProfileConfigV1
 
 
+# ---------------------------------------------------------------------------
+# Insurance vertical — authoritative product/need-tag IDs (Issue #51).
+#
+# These IDs appear verbatim in LLM prompts and in stored CallAnalysis.products/
+# specific_needs. Do NOT change IDs without a DB migration for those columns.
+#
+# catalog.py (app.analysis.universal.interest.catalog) is a thin re-export
+# DERIVED FROM this template (Gap B) — this module is now the single source
+# of truth, not catalog.py, eliminating the prior duplication-drift risk.
+# ---------------------------------------------------------------------------
+
+_PRODUCT_IDS: list[str] = [
+    "auto_todo_riesgo",  # Automobile — comprehensive coverage
+    "auto_terceros_completo",  # Automobile — third-party + extras
+    "auto_terceros",  # Automobile — basic third-party
+    "moto",  # Motorcycle
+    "hogar",  # Home/property
+    "vida",  # Life insurance
+    "comercio",  # Commercial / business
+    "art",  # Personal accident (ART)
+    "caucion",  # Surety bond
+]
+
+_NEED_TAG_IDS: list[str] = [
+    "precio_competitivo",  # Lead wants a competitive price
+    "mayor_cobertura",  # Lead wants broader coverage
+    "menor_franquicia",  # Lead wants a lower deductible
+    "atencion_personalizada",  # Lead wants personalized service
+    "rapidez",  # Lead needs fast turnaround
+    "financiacion",  # Lead needs financing / installment options
+    "comparar_con_actual",  # Lead wants to compare with their current policy
+    "renovacion_proxima",  # Lead's policy is expiring soon
+    # post-call-analysis-bi-friendly PR 1: comparison behavior reclassified from
+    # pain_points to interests. Use COMPARANDO_OPCIONES for shopping-around signals.
+    "COMPARANDO_OPCIONES",  # Lead is actively comparing options / shopping around
+    "other",  # Fallback for valid interests that match no specific allowlist tag
+]
+
 # Labels sourced from frontend/src/config/dimension-labels.ts (ES/EN pairs for
-# the same PRODUCT_CATALOG / NEED_TAGS ids).
+# the same product/need-tag ids).
 _PRODUCT_LABELS: dict[str, tuple[str, str, str | None]] = {
     "auto_todo_riesgo": ("Auto todo riesgo", "Comprehensive auto", None),
     "auto_terceros_completo": ("Auto terceros completo", "Auto third-party complete", None),
@@ -61,7 +98,7 @@ insurance = ProfileTemplate(
                 label_en=_PRODUCT_LABELS[product_id][1],
                 description=_PRODUCT_LABELS[product_id][2],
             )
-            for product_id in PRODUCT_CATALOG
+            for product_id in _PRODUCT_IDS
         ],
         need_tags=[
             NeedTagEntry(
@@ -69,7 +106,7 @@ insurance = ProfileTemplate(
                 label_es=_NEED_TAG_LABELS[need_id][0],
                 label_en=_NEED_TAG_LABELS[need_id][1],
             )
-            for need_id in NEED_TAGS
+            for need_id in _NEED_TAG_IDS
         ],
     ),
 )

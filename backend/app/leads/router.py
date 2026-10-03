@@ -541,11 +541,14 @@ async def _build_dimension_rollups(
         All arrays sorted by count descending.
     """
     from app.calls.models import CallAnalysis
-    from app.analysis.universal.interest.catalog import PRODUCT_CATALOG, NEED_TAGS
+    from app.tenants.revisions_service import resolve_client_catalog
 
-    # Authoritative allowlists for interest filtering
-    product_set = set(PRODUCT_CATALOG)
-    need_set = set(NEED_TAGS)
+    # Authoritative allowlists for interest filtering — resolved per-client
+    # (analysis-profiles P5): each client's own active analysis profile
+    # revision, not the fixed global PRODUCT_CATALOG/NEED_TAGS constants.
+    catalog = await resolve_client_catalog(session, client_id)
+    product_set = {p.id for p in catalog.products}
+    need_set = {n.id for n in catalog.need_tags}
 
     # --- Objections (SQL GROUP BY on indexed scalar BI column) ---
     # primary_objection_category is a denormalized scalar — no Python needed.
@@ -612,7 +615,7 @@ async def _build_dimension_rollups(
     rows = json_result.all()
 
     # --- Detected Interests ---
-    # Aggregate products (PRODUCT_CATALOG) and specific_needs (NEED_TAGS)
+    # Aggregate products and specific_needs against this client's resolved catalog
     interest_counter: Counter = Counter()
     interest_category: dict[str, str] = {}
 
@@ -620,7 +623,7 @@ async def _build_dimension_rollups(
     issue_counter: Counter = Counter()
 
     for row in rows:
-        # Products from PRODUCT_CATALOG
+        # Products from the client's resolved catalog
         try:
             products = json.loads(row.products or "[]")
         except (json.JSONDecodeError, TypeError):

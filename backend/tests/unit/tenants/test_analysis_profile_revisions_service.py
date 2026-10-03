@@ -51,12 +51,12 @@ async def test_resolve_client_catalog_returns_active_revision_config(session: As
 
     await _seed_quintana(session)
 
-    # create_client defaults every new client to the empty generic profile
-    # (design.md P5-D3) \u2014 confirm that default, then apply the insurance
-    # template explicitly and confirm resolution reflects the new revision.
-    generic_config = await revisions_service.resolve_client_catalog(session, "quintana-seguros")
-    assert generic_config.products == []
-    assert generic_config.need_tags == []
+    # seed_quintana() applies the insurance template directly to revision 1
+    # (Gap A) \u2014 confirm that default, then apply a fresh insurance
+    # revision explicitly and confirm resolution reflects the new revision.
+    seeded_config = await revisions_service.resolve_client_catalog(session, "quintana-seguros")
+    assert {p.id for p in seeded_config.products} == {p.id for p in insurance.config.products}
+    assert seeded_config.vertical == "insurance"
 
     client = await session.get(Client, "quintana-seguros")
     assert client is not None
