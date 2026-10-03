@@ -81,6 +81,9 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     elevenlabs_api_key: SecretStr
     elevenlabs_model: str = "eleven_v4_turbo"
+    # Periodic, fetch-only drift-check interval (elevenlabs-reconciler, R-D1).
+    # 0 disables the background reconciler loop entirely.
+    elevenlabs_reconciler_interval_hours: int = 6
     elevenlabs_stability: float = 0.4
     elevenlabs_speed: float = 0.95
     elevenlabs_similarity_boost: float = 0.75

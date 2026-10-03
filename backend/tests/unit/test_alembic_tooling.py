@@ -777,7 +777,7 @@ class TestRealMigrationExecution:
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
         # PR3 transcript finalization fields: 20260625_0003
         # C2 outbound telephony: 20260702_0004
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020", "20261003_0021", "20261003_0022", "20261003_0023", "20261003_0024", "20261003_0025", "20261003_0026"}
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020", "20261003_0021", "20261003_0022", "20261003_0023", "20261003_0024", "20261003_0025", "20261003_0026", "20261003_0027"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"alembic_version should contain a known Qora revision. "
             f"Got: {versions}. Known: {_KNOWN_REVISIONS}"
@@ -961,7 +961,7 @@ class TestRealMigrationExecution:
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
         # PR3 transcript finalization fields: 20260625_0003
         # C2 outbound telephony: 20260702_0004
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020", "20261003_0021", "20261003_0022", "20261003_0023", "20261003_0024", "20261003_0025", "20261003_0026"}
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020", "20261003_0021", "20261003_0022", "20261003_0023", "20261003_0024", "20261003_0025", "20261003_0026", "20261003_0027"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"Stamp head did not record a known Qora revision. Got: {versions}. "
             f"Known revisions: {_KNOWN_REVISIONS}"
@@ -2855,6 +2855,63 @@ class TestDeleteQoraDemoTenantMigration:
 # ===========================================================================
 # client-integrations-secrets — Task 2.2: client_integrations/client_secrets schema
 # ===========================================================================
+
+
+class TestElevenLabsReconciliationReportsSchemaMigration:
+    """20261003_0027: elevenlabs_reconciliation_reports table."""
+
+    def test_reconciliation_reports_schema_migration_creates_table(self, tmp_path):
+        """alembic upgrade head creates elevenlabs_reconciliation_reports with expected
+        columns and a unique index on agent_id."""
+        import sqlite3
+        from alembic import command
+
+        db_file = tmp_path / "elevenlabs_reconciliation_reports_schema.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "head")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cur.fetchall()}
+        assert "elevenlabs_reconciliation_reports" in tables
+
+        cur.execute("PRAGMA table_info(elevenlabs_reconciliation_reports)")
+        columns = {row[1] for row in cur.fetchall()}
+        expected = {
+            "id",
+            "agent_id",
+            "client_id",
+            "status",
+            "drift_fields",
+            "status_reason",
+            "checked_at",
+        }
+        assert expected.issubset(columns), f"Missing columns: {expected - columns}"
+
+        cur.execute("PRAGMA index_list(elevenlabs_reconciliation_reports)")
+        indexes = cur.fetchall()
+        assert any(row[2] == 1 for row in indexes), (
+            "elevenlabs_reconciliation_reports must have a unique index on agent_id"
+        )
+        conn.close()
+
+    def test_reconciliation_reports_schema_migration_downgrade(self, tmp_path):
+        """Downgrading past 20261003_0027 drops the table."""
+        import sqlite3
+        from alembic import command
+
+        db_file = tmp_path / "elevenlabs_reconciliation_reports_downgrade.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "20261003_0026")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cur.fetchall()}
+        assert "elevenlabs_reconciliation_reports" not in tables
+        conn.close()
 
 
 class TestClientIntegrationsSecretsSchemaMigration:

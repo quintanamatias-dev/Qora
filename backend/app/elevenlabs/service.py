@@ -740,6 +740,13 @@ def _build_config_payload(agent) -> dict:
     return payload
 
 
+# Public alias — the reconciler imports this name rather than reimplementing the
+# payload-building logic. The private name is kept as the same function object
+# so every existing call site and test (which imports _build_config_payload)
+# keeps working unchanged (behavioral no-op extraction).
+build_config_payload = _build_config_payload
+
+
 async def _patch_with_retry(
     url: str,
     payload: dict,

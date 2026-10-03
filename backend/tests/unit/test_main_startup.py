@@ -11,7 +11,9 @@ Design: openspec/changes/client-integrations-secrets/design.md P3-D4.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -99,3 +101,71 @@ async def test_app_starts_with_degraded_client_in_db(tmp_path: Path, monkeypatch
             assert persisted_row.status_reason is not None
     finally:
         await db_module.close_db()
+
+
+async def test_app_starts_reconciler_task_on_lifespan(tmp_path: Path, monkeypatch):
+    """elevenlabs-reconciler Task 3.2: reconciler_tick() is started alongside
+    scheduler_task/outbound_sweeper_task and cancelled cleanly on shutdown.
+
+    Spec: openspec/changes/elevenlabs-reconciler/design.md - Phase 3.
+    """
+    from app.core.config import Settings
+    from app.core import database as db_module
+    from tests.helpers.migrations import init_db_with_migrations
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/reconciler_startup_test.db"
+    settings = Settings(
+        openai_api_key=SecretStr("sk-test"),
+        elevenlabs_api_key=SecretStr("el-test"),
+        database_url=db_url,
+    )
+    await init_db_with_migrations(db_module, settings)
+
+    async with db_module.async_session_factory() as session:
+        from app.tenants.service import seed_quintana
+
+        await seed_quintana(session)
+        await session.commit()
+
+    await db_module.close_db()
+
+    from fastapi import FastAPI
+
+    from app.main import lifespan
+
+    mini_app = FastAPI(lifespan=lifespan)
+
+    flags = {"started": False, "cancelled": False}
+
+    async def _fake_reconciler_tick(settings):
+        flags["started"] = True
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            flags["cancelled"] = True
+            raise
+
+    with (
+        patch("app.main.Settings", return_value=settings),
+        patch("app.main.setup_logging"),
+        patch("app.tenants.service.seed_quintana", new_callable=AsyncMock),
+        patch("app.leads.service.seed_leads", new_callable=AsyncMock),
+        patch("app.elevenlabs.reconciler.reconciler_tick", new=_fake_reconciler_tick),
+    ):
+        from starlette.testclient import TestClient
+
+        with TestClient(mini_app):
+            for _ in range(50):
+                if flags["started"]:
+                    break
+                time.sleep(0.05)
+            assert flags["started"], "reconciler_tick must be scheduled during lifespan startup"
+
+        for _ in range(50):
+            if flags["cancelled"]:
+                break
+            time.sleep(0.05)
+        assert flags["cancelled"], "reconciler_tick task must be cancelled on shutdown"
+
+    await db_module.init_db(settings)
+    await db_module.close_db()
