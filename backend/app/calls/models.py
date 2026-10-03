@@ -204,6 +204,16 @@ class CallAnalysis(Base):
     client_id: Mapped[str] = mapped_column(
         String, ForeignKey("clients.id"), nullable=False, index=True
     )
+    # analysis-profiles P5-D6: the client's active analysis profile revision at
+    # analysis time, for historical interpretability of products/specific_needs.
+    # Nullable: rows written before this column existed have no value — they
+    # are interpreted under catalog.py's original constants (migration boundary
+    # note, not backfilled).
+    analysis_profile_revision_id: Mapped[str | None] = mapped_column(
+        String,
+        ForeignKey("client_analysis_profile_revisions.id"),
+        nullable=True,
+    )
     # Flattened scalar analysis fields
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     interest_level: Mapped[int | None] = mapped_column(Integer, nullable=True)

@@ -777,7 +777,7 @@ class TestRealMigrationExecution:
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
         # PR3 transcript finalization fields: 20260625_0003
         # C2 outbound telephony: 20260702_0004
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020", "20261003_0021", "20261003_0022", "20261003_0023"}
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020", "20261003_0021", "20261003_0022", "20261003_0023", "20261003_0024"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"alembic_version should contain a known Qora revision. "
             f"Got: {versions}. Known: {_KNOWN_REVISIONS}"
@@ -961,7 +961,7 @@ class TestRealMigrationExecution:
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
         # PR3 transcript finalization fields: 20260625_0003
         # C2 outbound telephony: 20260702_0004
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020", "20261003_0021", "20261003_0022", "20261003_0023"}
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020", "20261003_0021", "20261003_0022", "20261003_0023", "20261003_0024"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"Stamp head did not record a known Qora revision. Got: {versions}. "
             f"Known revisions: {_KNOWN_REVISIONS}"
@@ -3301,3 +3301,42 @@ class TestAnalysisProfilesSchemaMigration:
             "a seeded client must never have a NULL active_analysis_profile_revision_id "
             "afterwards — the seed loop's own re-entry guard depends on this"
         )
+
+
+class TestCallAnalysisProfileRevisionMigration:
+    """20261003_0024: call_analyses.analysis_profile_revision_id (nullable FK)."""
+
+    def test_call_analysis_profile_revision_migration_adds_nullable_column(self, tmp_path):
+        import sqlite3
+
+        from alembic import command
+
+        db_file = tmp_path / "call_analysis_profile_revision.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "head")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(call_analyses)")
+        columns = {row[1]: row for row in cur.fetchall()}
+        assert "analysis_profile_revision_id" in columns
+        # notnull flag (row[3]) must be 0 — nullable
+        assert columns["analysis_profile_revision_id"][3] == 0
+        conn.close()
+
+    def test_call_analysis_profile_revision_migration_downgrade(self, tmp_path):
+        import sqlite3
+
+        from alembic import command
+
+        db_file = tmp_path / "call_analysis_profile_revision_downgrade.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "20261003_0023")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(call_analyses)")
+        columns = {row[1] for row in cur.fetchall()}
+        assert "analysis_profile_revision_id" not in columns
+        conn.close()

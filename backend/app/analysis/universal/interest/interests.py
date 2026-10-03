@@ -7,9 +7,12 @@ Returns ``InterestsAxis`` with at most 5 ``InterestItem`` entries, each
 validated against the authoritative catalog from ``catalog.py``.
 
 Catalog injection:
-    The prompt is generated once at module load time by injecting
-    ``PRODUCT_CATALOG`` and ``NEED_TAGS`` from ``catalog.py``.  When those
-    lists are swapped for a per-client registry, this module needs no changes.
+    The prompt is built PER CALL by ``_build_prompt``/``analyze``, taking the
+    resolved client catalog (``AnalysisProfileConfigV1``) as a parameter
+    (design.md P5-D5/P5-D6). ``DIMENSION["prompt"]`` is still computed once at
+    module load using the ``insurance`` template as the default catalog, so
+    direct callers/tests that read ``DIMENSION["prompt"]`` without a client
+    context keep working unchanged.
 """
 
 from __future__ import annotations
@@ -19,7 +22,11 @@ from typing import Literal
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
 
-from app.analysis.universal.interest.catalog import NEED_TAGS, PRODUCT_CATALOG
+from app.analysis.profiles.schema import AnalysisProfileConfigV1
+from app.analysis.profiles.templates import insurance as _insurance_template
+from app.analysis.universal.interest.catalog import NEED_TAGS
+
+_DEFAULT_CATALOG: AnalysisProfileConfigV1 = _insurance_template.config
 
 DEFAULT_LANGUAGE = "Spanish"
 
@@ -104,52 +111,67 @@ class InterestsAxis(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Prompt — injected with authoritative catalog values so the LLM stays
-# constrained to the exact product IDs and need tags we validate against.
+# Prompt — injected with the resolved client catalog's product/need-tag IDs
+# so the LLM stays constrained to the exact values we validate against.
+# Built PER CALL (design.md P5-D5/P5-D6) — catalog defaults to the
+# ``insurance`` template so direct callers that pass no catalog keep the
+# pre-change prompt text exactly (golden regression, task 3.4).
 # ---------------------------------------------------------------------------
 
-_PRODUCTS_BLOCK = "\n".join(f"  - {p}" for p in PRODUCT_CATALOG)
-_NEEDS_BLOCK = "\n".join(f"  - {n}" for n in NEED_TAGS)
 
-_PROMPT_BODY = (
-    "You are an expert at detecting insurance product interests from sales call transcripts.\n\n"
-    "A product interest exists when the lead explicitly mentions, asks about, "
-    "or clearly implies interest in a specific insurance product.\n\n"
-    "For each detected interest identify:\n"
-    "- product: the product ID from the list below (EXACT match required)\n"
-    "- needs: specific needs the lead expressed for this product — "
-    "pick from the NEED_TAGS list (at most 3, can be empty)\n"
-    "- evidence: a direct quote or close paraphrase from the transcript that "
-    "proves this interest (required — no evidence means no interest)\n"
-    "- confidence: how certain you are the interest was expressed — "
-    "low, medium, or high\n\n"
-    "VALID PRODUCTS (use ONLY these IDs — do not invent new ones):\n"
-    f"{_PRODUCTS_BLOCK}\n\n"
-    "VALID NEED_TAGS (use ONLY these values — at most 3 per product):\n"
-    f"{_NEEDS_BLOCK}\n\n"
-    "CONSTRAINTS:\n"
-    "- Return at most 5 items. If more are detectable, return the 5 with highest confidence.\n"
-    "- Return an empty items array if no product interest is detected.\n"
-    "- Every item MUST include transcript evidence.\n"
-    "- Only use product IDs from the VALID PRODUCTS list — do not create new IDs.\n"
-    "- Only use need tags from the VALID NEED_TAGS list.\n\n"
-    "DO NOT include in items:\n"
-    "- Products the agent mentioned but the lead showed no interest in\n"
-    "- Vague statements like '¿tienen seguros?' without a specific product\n"
-    "- Products outside the VALID PRODUCTS list\n"
-    "- Items where the evidence is a commitment or intent to buy (not an interest signal)\n"
-    "- Speculation — only include what is clearly expressed in the transcript\n\n"
-    "Return JSON with: items (array of product interest objects)."
-)
+def _prompt_body(catalog: AnalysisProfileConfigV1) -> str:
+    products_block = "\n".join(f"  - {p.id}" for p in catalog.products)
+    needs_block = "\n".join(f"  - {n.id}" for n in catalog.need_tags)
+    return (
+        "You are an expert at detecting insurance product interests from sales call transcripts.\n\n"
+        "A product interest exists when the lead explicitly mentions, asks about, "
+        "or clearly implies interest in a specific insurance product.\n\n"
+        "For each detected interest identify:\n"
+        "- product: the product ID from the list below (EXACT match required)\n"
+        "- needs: specific needs the lead expressed for this product — "
+        "pick from the NEED_TAGS list (at most 3, can be empty)\n"
+        "- evidence: a direct quote or close paraphrase from the transcript that "
+        "proves this interest (required — no evidence means no interest)\n"
+        "- confidence: how certain you are the interest was expressed — "
+        "low, medium, or high\n\n"
+        "VALID PRODUCTS (use ONLY these IDs — do not invent new ones):\n"
+        f"{products_block}\n\n"
+        "VALID NEED_TAGS (use ONLY these values — at most 3 per product):\n"
+        f"{needs_block}\n\n"
+        "CONSTRAINTS:\n"
+        "- Return at most 5 items. If more are detectable, return the 5 with highest confidence.\n"
+        "- Return an empty items array if no product interest is detected.\n"
+        "- Every item MUST include transcript evidence.\n"
+        "- Only use product IDs from the VALID PRODUCTS list — do not create new IDs.\n"
+        "- Only use need tags from the VALID NEED_TAGS list.\n\n"
+        "DO NOT include in items:\n"
+        "- Products the agent mentioned but the lead showed no interest in\n"
+        "- Vague statements like '¿tienen seguros?' without a specific product\n"
+        "- Products outside the VALID PRODUCTS list\n"
+        "- Items where the evidence is a commitment or intent to buy (not an interest signal)\n"
+        "- Speculation — only include what is clearly expressed in the transcript\n\n"
+        "Return JSON with: items (array of product interest objects)."
+    )
 
 
-def _build_prompt(language: str) -> str:
-    """Build the dimension prompt with the given output language."""
+def _build_prompt(
+    language: str = DEFAULT_LANGUAGE,
+    *,
+    catalog: AnalysisProfileConfigV1 | None = None,
+) -> str:
+    """Build the dimension prompt with the given output language and catalog.
+
+    ``catalog`` defaults to the ``insurance`` template when omitted, so
+    existing direct callers that only pass ``language`` keep producing the
+    pre-change prompt text exactly (golden regression, task 3.4).
+    """
+    if catalog is None:
+        catalog = _DEFAULT_CATALOG
     lang_note = (
         f"LANGUAGE NOTE: Write the `evidence` field in {language}. "
         f"Keep product IDs and need tags as the exact canonical values listed above.\n\n"
     )
-    return lang_note + _PROMPT_BODY
+    return lang_note + _prompt_body(catalog)
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +198,7 @@ async def analyze(
     client: AsyncOpenAI,
     *,
     language: str = DEFAULT_LANGUAGE,
+    catalog: AnalysisProfileConfigV1 | None = None,
 ) -> InterestsAxis:
     """Run Agent 1 and return the parsed InterestsAxis.
 
@@ -191,8 +214,15 @@ async def analyze(
         client: AsyncOpenAI client instance.
         language: Output language for the `evidence` field.
             product IDs and need tags stay canonical.
+        catalog: Resolved client analysis profile catalog (products/need_tags
+            the prompt is built from). Defaults to the ``insurance`` template
+            when omitted (design.md P5-D5). When ``catalog.need_tags`` is
+            empty, every detected item's ``needs`` is discarded/emptied —
+            the client has no need-tag taxonomy configured.
     """
-    prompt = _build_prompt(language)
+    if catalog is None:
+        catalog = _DEFAULT_CATALOG
+    prompt = _build_prompt(language, catalog=catalog)
     response = await client.beta.chat.completions.parse(
         model=DIMENSION["model"],
         messages=[
@@ -201,4 +231,9 @@ async def analyze(
         ],
         response_format=DIMENSION["schema"],
     )
-    return response.choices[0].message.parsed
+    result: InterestsAxis = response.choices[0].message.parsed
+    if not catalog.need_tags and result.items:
+        result = InterestsAxis(
+            items=[item.model_copy(update={"needs": []}) for item in result.items]
+        )
+    return result

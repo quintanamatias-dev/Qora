@@ -57,6 +57,28 @@ async def seeded_db(tmp_path: Path):
             phone="+5491100000015",
             lead_id="test-lead-sum-001",
         )
+
+        # analysis-profiles: seed_quintana() creates the client via create_client(),
+        # which defaults every new client to the empty "generic" analysis profile
+        # (P5-D3 — explicit apply-template only, never implicit). Production's real
+        # Quintana Seguros tenant already carries the "insurance" catalog via
+        # migration 20261003_0023; apply the same template here so this test
+        # fixture matches production instead of silently skipping the interest
+        # pipeline (P5-D5 empty-products skip) for every summarizer test below.
+        from app.analysis.profiles.templates import insurance as _insurance_template
+        from app.tenants.models import Client as _Client
+        from app.tenants.revisions_service import create_analysis_profile_revision
+
+        quintana_client = await sess.get(_Client, "quintana-seguros")
+        await create_analysis_profile_revision(
+            sess,
+            client=quintana_client,
+            config=_insurance_template.config,
+            source="api",
+            created_by="system",
+            note="test fixture: apply insurance template to match production Quintana",
+        )
+
         await sess.commit()
 
     yield db_module
@@ -1689,6 +1711,105 @@ async def test_summarizer_dual_write_creates_call_analysis(seeded_db):
         assert ca.interest_level == 85
         assert ca.classification == "completed_positive"
         assert ca.analysis_status == "ok"
+
+
+async def test_summarizer_stamps_analysis_profile_revision_id(seeded_db):
+    """3.3: a newly analyzed call's analysis_profile_revision_id equals the
+    client's active analysis profile revision id at analysis time (P5-D6)."""
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.models import CallAnalysis
+    from app.tenants.models import Client
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "Hola"),
+            ("user", "Me interesa el todo riesgo"),
+        ],
+    )
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    assert seeded_db.async_session_factory is not None
+    async with seeded_db.async_session_factory() as db:
+        client_row = await db.get(Client, "quintana-seguros")
+        expected_revision_id = client_row.active_analysis_profile_revision_id
+    assert expected_revision_id is not None
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+        )
+        ca = result.scalar_one()
+        assert ca.analysis_profile_revision_id == expected_revision_id
+
+
+async def test_summarizer_later_edit_does_not_change_earlier_call_stamp(seeded_db):
+    """3.3: editing the client's profile AFTER a call was analyzed does not
+    change that already-written row's stamped revision id (P5-D6)."""
+    from app.summarizer import generate_summary_and_facts
+    from app.calls.models import CallAnalysis
+    from app.tenants.models import Client
+    from app.analysis.profiles.templates import generic as generic_profile_template
+    from app.tenants.revisions_service import create_analysis_profile_revision
+    from sqlalchemy import select
+
+    session_id = await _create_session(
+        seeded_db,
+        with_turns=[
+            ("agent", "Hola"),
+            ("user", "Me interesa el todo riesgo"),
+        ],
+    )
+
+    analysis = _make_full_analysis_payload()
+    mock_client = _make_mock_client(_make_parse_response(analysis))
+
+    with patch(
+        "app.summarizer._get_openai_client", return_value=(mock_client, "gpt-4o-mini")
+    ):
+        assert seeded_db.async_session_factory is not None
+        async with seeded_db.async_session_factory() as db:
+            await generate_summary_and_facts(session_id, db)
+            await db.commit()
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+        )
+        original_stamp = result.scalar_one().analysis_profile_revision_id
+    assert original_stamp is not None
+
+    # Edit the client's profile AFTER the call was analyzed — creates a new revision.
+    async with seeded_db.async_session_factory() as db:
+        client_row = await db.get(Client, "quintana-seguros")
+        new_revision = await create_analysis_profile_revision(
+            db,
+            client=client_row,
+            config=generic_profile_template.config,
+            source="api",
+            created_by="test",
+            note="later edit",
+        )
+        await db.commit()
+        new_revision_id = new_revision.id
+    assert new_revision_id != original_stamp
+
+    async with seeded_db.async_session_factory() as db:
+        result = await db.execute(
+            select(CallAnalysis).where(CallAnalysis.session_id == session_id)
+        )
+        # The earlier row's stamp is untouched by the later profile edit.
+        assert result.scalar_one().analysis_profile_revision_id == original_stamp
 
 
 async def test_summarizer_dual_write_creates_interest_history(seeded_db):
