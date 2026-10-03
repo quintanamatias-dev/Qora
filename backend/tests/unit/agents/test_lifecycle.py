@@ -85,7 +85,6 @@ async def test_full_admin_lifecycle(lifecycle_app: AsyncClient):
         len(agents) == 1
     ), "Exactly one default agent should exist after client creation"
     first_agent = agents[0]
-    assert first_agent["is_default"] is True
     assert first_agent["is_active"] is True
     assert first_agent["client_id"] == "lifecycle-broker"
     first_agent_id = first_agent["agent_id"]
@@ -105,7 +104,6 @@ async def test_full_admin_lifecycle(lifecycle_app: AsyncClient):
     assert create_agent_resp.status_code == 201
     second_agent = create_agent_resp.json()
     second_agent_id = second_agent["agent_id"]
-    assert second_agent["is_default"] is False
     assert second_agent["is_active"] is True
 
     # Confirm two active agents now

@@ -900,6 +900,15 @@ async def _fetch_agent_config(
     return body
 
 
+def _custom_llm_callback_url(agent, public_base_url: str) -> str:
+    """Build the agent-scoped custom-LLM callback URL Qora expects ElevenLabs
+    to call back on. Shared by the save-path override and the reconciler's
+    drift projection (elevenlabs-reconciler gap) so both compute the exact
+    same URL.
+    """
+    return f"{public_base_url}/api/v1/voice/{agent.client_id}/agents/{agent.id}/custom-llm"
+
+
 async def _apply_custom_llm_url_override(
     *,
     payload: dict,
@@ -953,9 +962,7 @@ async def _apply_custom_llm_url_override(
 
     current_custom_llm = current_prompt.get("custom_llm") or {}
     new_custom_llm = dict(current_custom_llm)
-    new_custom_llm["url"] = (
-        f"{public_base_url}/api/v1/voice/{agent.client_id}/agents/{agent.id}/custom-llm"
-    )
+    new_custom_llm["url"] = _custom_llm_callback_url(agent, public_base_url)
 
     if "conversation_config" not in payload:
         payload["conversation_config"] = {}

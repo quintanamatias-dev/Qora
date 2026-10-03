@@ -307,8 +307,8 @@ async def test_known_sentinel_value_error_still_returns_409(
     """POST /deactivate on the sole default agent still returns 409 (sentinel check)."""
     list_resp = await agents_app.get("/api/v1/clients/test-client/agents")
     agents = list_resp.json()
-    default_agent = next(a for a in agents if a["is_default"])
-    agent_id = default_agent["agent_id"]
+    assert len(agents) == 1, "test-client is seeded with a single agent in this fixture"
+    agent_id = agents[0]["agent_id"]
 
     resp = await agents_app.post(
         f"/api/v1/clients/test-client/agents/{agent_id}/deactivate"

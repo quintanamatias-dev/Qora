@@ -108,8 +108,9 @@ class AgentCreate(BaseModel):
     max_tokens: int = 300
     tools_enabled: list[str] = _DEFAULT_TOOLS
     # is_default removed from create input (agent-routing D3): default-agent
-    # semantics no longer exist. The column itself and AgentResponse.is_default
-    # remain, read-only, until the later cleanup migration drops the column.
+    # semantics no longer exist. elevenlabs-reconciler Phase 6 (R-D3) removed
+    # AgentResponse.is_default too; the Agent.is_default column itself stays
+    # (drop deferred).
     elevenlabs_agent_id: str | None = None
     # Per-agent tool configuration (nullable). Stores OpenAI function-calling
     # parameters schemas keyed by tool name. Required when capture_data is in
@@ -229,9 +230,6 @@ class AgentResponse(BaseModel):
     max_tokens: int
     tools_enabled: list[str]
     is_active: bool
-    # Deprecated (agent-routing D3): default-agent semantics are removed.
-    # Kept read-only for frontend contract compatibility until Phase 6.
-    is_default: bool
     created_at: datetime
     # ElevenLabs binding (qora-agent-studio-demo)
     elevenlabs_agent_id: str | None = None

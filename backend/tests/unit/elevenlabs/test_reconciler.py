@@ -261,6 +261,111 @@ async def test_one_agent_fetch_error_does_not_block_sibling_agent_isolation(db_s
 
 
 # ---------------------------------------------------------------------------
+# Gap — custom_llm.url drift reporting when PUBLIC_BASE_URL is set
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_reconciliation_once_reports_custom_llm_url_drift(db_session):
+    """When PUBLIC_BASE_URL is set and the live agent uses llm=custom-llm, the
+    projection must include the expected agent-scoped custom_llm.url so a stale
+    live URL is reported as drift — comparing only url, never secrets/headers.
+    """
+    from app.elevenlabs.reconciler import run_reconciliation_once
+    from app.elevenlabs.models import ElevenLabsReconciliationReport
+    from sqlalchemy import select
+
+    agent = await _make_client_and_agent(db_session)
+    settings = _make_settings()
+    settings.public_base_url = "https://qora.example.com"
+
+    matching_actual = {
+        "conversation_config": {
+            "tts": {
+                "voice_id": "voice-1",
+                "model_id": "eleven_v4_turbo",
+                "speed": 0.95,
+                "stability": 0.4,
+                "similarity_boost": 0.75,
+            },
+            "agent": {
+                "prompt": {
+                    "llm": "custom-llm",
+                    "custom_llm": {
+                        "url": "https://stale-url.example.com/old-path",
+                        "api_key": {"secret_id": "keep-me-untouched"},
+                    },
+                }
+            },
+        }
+    }
+    with patch(
+        "app.elevenlabs.reconciler._fetch_agent_config",
+        new=AsyncMock(return_value=matching_actual),
+    ):
+        await run_reconciliation_once(db_session, settings)
+
+    result = await db_session.execute(
+        select(ElevenLabsReconciliationReport).where(
+            ElevenLabsReconciliationReport.agent_id == agent.id
+        )
+    )
+    report = result.scalar_one()
+    assert report.status == "drift"
+    assert (
+        "conversation_config.agent.prompt.custom_llm.url" in report.drift_fields
+    )
+    # Only the url leaf is compared — the live secret must never surface as a
+    # separately-named drift field.
+    assert "custom_llm.api_key" not in report.drift_fields
+
+
+@pytest.mark.asyncio
+async def test_run_reconciliation_once_in_sync_when_custom_llm_url_matches(db_session):
+    """No drift when the live custom_llm.url already matches the expected
+    agent-scoped URL built from PUBLIC_BASE_URL."""
+    from app.elevenlabs.reconciler import run_reconciliation_once
+    from app.elevenlabs.models import ElevenLabsReconciliationReport
+    from sqlalchemy import select
+
+    agent = await _make_client_and_agent(db_session)
+    settings = _make_settings()
+    settings.public_base_url = "https://qora.example.com"
+    expected_url = f"https://qora.example.com/api/v1/voice/{agent.client_id}/agents/{agent.id}/custom-llm"
+
+    matching_actual = {
+        "conversation_config": {
+            "tts": {
+                "voice_id": "voice-1",
+                "model_id": "eleven_v4_turbo",
+                "speed": 0.95,
+                "stability": 0.4,
+                "similarity_boost": 0.75,
+            },
+            "agent": {
+                "prompt": {
+                    "llm": "custom-llm",
+                    "custom_llm": {"url": expected_url},
+                }
+            },
+        }
+    }
+    with patch(
+        "app.elevenlabs.reconciler._fetch_agent_config",
+        new=AsyncMock(return_value=matching_actual),
+    ):
+        await run_reconciliation_once(db_session, settings)
+
+    result = await db_session.execute(
+        select(ElevenLabsReconciliationReport).where(
+            ElevenLabsReconciliationReport.agent_id == agent.id
+        )
+    )
+    report = result.scalar_one()
+    assert report.status == "in_sync"
+
+
+# ---------------------------------------------------------------------------
 # Task 3.1 — reconciler_tick
 # ---------------------------------------------------------------------------
 

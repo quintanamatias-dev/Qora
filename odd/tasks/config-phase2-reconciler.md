@@ -10,10 +10,12 @@ Deferred on purpose (R-D4): deleting the legacy client-keyed custom-LLM routes a
 
 - [x] 1. Report model, migration 0027 and reconciliation logic (fetch-only, per-agent error isolation).
 - [x] 2. Background loop (interval setting, default 6 h) and admin API (latest report, run now).
-- [ ] 3. Remove the webhook fallbacks to DEPRECATED Client columns and the remaining `is_default` writes and response field.
+- [x] 3. Remove the webhook fallbacks to DEPRECATED Client columns and the remaining `is_default` writes and response field.
 - [ ] 4. Full suites and rollout notes.
 
 ## Evidence
 
 - Design commit `01908ff` (R-D1..R-D4).
 - Tasks 1-2: `ElevenLabsReconciliationReport` plus migration 0027 (unique constraint declared inline, because SQLite cannot add it afterwards); public `build_config_payload`; `reconciler.py` with `run_reconciliation_once` (GET only, error isolation per agent) and `reconciler_tick` (`elevenlabs_reconciler_interval_hours`, default 6) wired into main.py; GET/POST `/api/v1/admin/elevenlabs/reconciliation[/run]` (superadmin). The no-PATCH test (respx) passes. RED observed per unit. Worker full suite: 3975 passed.
+- Task 3: webhook.py no longer reads DEPRECATED Client columns (agent=None falls back to a generic render without tools); `is_default` uniqueness and `AgentResponse.is_default` removed (the column stays), along with the frontend type and fixtures. The reconciler projects the expected agent-scoped `custom_llm.url` (shared helper `_custom_llm_callback_url`) and compares only the URL, never secrets. RED observed. Worker full suite: 3982 passed; frontend tsc clean. The worker could not run vitest/eslint (they hung).
+- **Root cause of the slowness and the hangs:** iCloud had evicted ~93k repo files (node_modules 3.6k, backend .venv 2.4k, plus Plugin/ and docs). Overnight work moves to worktrees in ~/Developer, outside iCloud.

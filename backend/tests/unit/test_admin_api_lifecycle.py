@@ -90,8 +90,8 @@ async def test_admin_agent_list_returns_default_agent(admin_app: AsyncClient):
     assert len(data) == 1
     agent = data[0]
     assert agent["client_id"] == "lifecycle-client"
-    assert agent["is_default"] is True
     assert agent["is_active"] is True
+    assert "is_default" not in agent
     # tools_enabled must be a list in response
     assert isinstance(agent["tools_enabled"], list)
 

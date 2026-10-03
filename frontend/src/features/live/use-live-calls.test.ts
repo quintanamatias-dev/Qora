@@ -34,7 +34,6 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     system_prompt: null,
     tools_enabled: [],
     is_active: true,
-    is_default: true,
     created_at: '2026-01-01T00:00:00Z',
     has_prompt: true,
     has_elevenlabs_agent_id: true,

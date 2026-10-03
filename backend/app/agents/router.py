@@ -144,7 +144,6 @@ def _agent_to_response(
         max_tokens=agent.max_tokens,
         tools_enabled=_deserialize_tools(agent.tools_enabled),
         is_active=agent.is_active,
-        is_default=agent.is_default,
         created_at=agent.created_at,
         elevenlabs_agent_id=getattr(agent, "elevenlabs_agent_id", None),
         elevenlabs_phone_number_id=getattr(agent, "elevenlabs_phone_number_id", None),

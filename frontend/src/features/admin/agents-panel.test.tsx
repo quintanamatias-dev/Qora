@@ -131,7 +131,6 @@ describe('computeReadinessChecklist', () => {
     system_prompt: 'You are Sofia, an insurance agent.',
     tools_enabled: [],
     is_active: true,
-    is_default: true,
     created_at: '2026-01-01T00:00:00Z',
     // New fields
     elevenlabs_agent_id: 'el_abc123',

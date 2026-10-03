@@ -24,6 +24,7 @@ from app.elevenlabs.models import ElevenLabsReconciliationReport
 from app.elevenlabs.service import (
     _ELEVENLABS_BASE_URL,
     _compute_drift_fields,
+    _custom_llm_callback_url,
     _fetch_agent_config,
     build_config_payload,
 )
@@ -32,6 +33,38 @@ from app.tenants.models import Agent
 logger = get_logger(__name__)
 
 _DEFAULT_TICK_INTERVAL_HOURS = 6
+
+
+def _overlay_expected_custom_llm_url(
+    projection_payload: dict, agent, actual_conversation_config: dict, settings
+) -> None:
+    """Add the expected agent-scoped custom_llm.url to the projection in place
+    when PUBLIC_BASE_URL is set and the live agent currently uses llm=custom-llm.
+
+    Compares only the url leaf — never secrets/headers the EL dashboard may
+    hold in the live custom_llm block — so drift reporting never leaks or
+    flags provider-managed secrets.
+
+    Gap closed per openspec/changes/elevenlabs-reconciler task delegation:
+    reuses service.py's _custom_llm_callback_url (shared with the save path's
+    _apply_custom_llm_url_override) rather than reimplementing the URL shape.
+    """
+    public_base_url = getattr(settings, "public_base_url", None)
+    if not public_base_url:
+        return
+
+    actual_prompt = (
+        actual_conversation_config.get("agent", {}).get("prompt", {})
+        if isinstance(actual_conversation_config, dict)
+        else {}
+    )
+    if actual_prompt.get("llm") != "custom-llm":
+        return
+
+    cc = projection_payload.setdefault("conversation_config", {})
+    cc.setdefault("agent", {}).setdefault("prompt", {})["custom_llm"] = {
+        "url": _custom_llm_callback_url(agent, public_base_url)
+    }
 
 
 async def run_reconciliation_once(db: AsyncSession, settings) -> None:
@@ -62,7 +95,7 @@ async def run_reconciliation_once(db: AsyncSession, settings) -> None:
 
     for agent in agents:
         try:
-            await _reconcile_one_agent(db, agent, headers)
+            await _reconcile_one_agent(db, agent, headers, settings)
         except Exception as exc:
             logger.warning(
                 "elevenlabs_reconciler_agent_error",
@@ -80,7 +113,7 @@ async def run_reconciliation_once(db: AsyncSession, settings) -> None:
             await db.commit()
 
 
-async def _reconcile_one_agent(db: AsyncSession, agent, headers: dict) -> None:
+async def _reconcile_one_agent(db: AsyncSession, agent, headers: dict, settings) -> None:
     url = f"{_ELEVENLABS_BASE_URL}/convai/agents/{agent.elevenlabs_agent_id}"
 
     actual = await _fetch_agent_config(
@@ -100,6 +133,7 @@ async def _reconcile_one_agent(db: AsyncSession, agent, headers: dict) -> None:
 
     projection_payload = build_config_payload(agent)
     actual_conversation_config = actual.get("conversation_config", {}) if isinstance(actual, dict) else {}
+    _overlay_expected_custom_llm_url(projection_payload, agent, actual_conversation_config, settings)
     drift_fields = _compute_drift_fields(projection_payload, actual_conversation_config)
 
     if drift_fields:

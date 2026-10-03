@@ -257,7 +257,6 @@ def test_agent_response_from_dict():
     assert resp.agent_id == "uuid-1234"
     assert resp.client_id == "test-client"
     assert resp.slug == "main"
-    assert resp.is_default is True
     assert resp.is_active is True
     assert isinstance(resp.tools_enabled, list)
     assert resp.tools_enabled == ["get_lead_details"]
