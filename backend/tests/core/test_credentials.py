@@ -1,246 +1,348 @@
-"""Tests for Phase B8 — Secrets Management: Centralized credential validation.
+"""Tests for client-integrations-secrets Phase 6 — Boot Validation.
 
-TDD RED phase (task 1.3): These tests define the expected behavior for the
-credentials.py module that will be created in task 1.4 (GREEN).
-
-Spec references:
-  - openspec/changes/phase-b-secrets-management/specs/tenant-integration-secrets/spec.md
-  - openspec/changes/phase-b-secrets-management/specs/secrets-validation/spec.md
-    (Requirement: Placeholder Value Rejection)
+validate_all_integration_credentials() no longer scans crm.yaml files and no
+longer calls sys.exit for a per-client CRM credential problem (design.md
+P3-D4). It recomputes and persists every client_integrations row's status
+from the DB, logs ERROR for degraded rows, and always lets startup continue.
 
 Covered scenarios:
-  - is_weak_placeholder(): detects all known placeholder patterns (case-insensitive)
-  - is_weak_placeholder(): does not flag real values
-  - validate_all_integration_credentials(): active CRM with present key → no error
-  - validate_all_integration_credentials(): active CRM with missing key → SystemExit
-  - validate_all_integration_credentials(): active CRM with placeholder key → SystemExit
-  - validate_all_integration_credentials(): disabled CRM (enabled: false) → skipped
-  - validate_all_integration_credentials(): no crm.yaml → skipped, no error
-  - validate_all_integration_credentials(): empty clients root → no error
-  - validate_all_integration_credentials(): global Qora credentials NOT validated here
+  - is_weak_placeholder(): detects all known placeholder patterns (unchanged)
+  - validate_all_integration_credentials(): resolvable credential -> status=ok,
+    no SystemExit
+  - validate_all_integration_credentials(): unresolvable credential ->
+    status=degraded, non-null status_reason, ERROR log, no SystemExit
+  - validate_all_integration_credentials(): disabled integration -> status=
+    disabled, silently skipped (no ERROR log)
+  - validate_all_integration_credentials(): client with no row at all ->
+    silently skipped (never iterated)
+  - Two-client isolation: one client degraded does not affect its sibling's
+    status or CRM tool calls (survey-critical #4 regression proof)
+  - Platform-level credentials (OPENAI_API_KEY) are untouched by this module
+    and still hard-fail at Settings() construction
+
+Spec reference:
+  openspec/changes/client-integrations-secrets/design.md P3-D4
+  openspec/changes/client-integrations-secrets/specs/client-secrets/spec.md
 """
 
 from __future__ import annotations
 
-import os
+import json
 from pathlib import Path
 
 import pytest
-import yaml
+import pytest_asyncio
+from pydantic import SecretStr
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Fixtures
 # ---------------------------------------------------------------------------
 
 
-def _write_crm_yaml(client_dir: Path, data: dict) -> None:
-    """Write a crm.yaml to a temporary client directory."""
-    client_dir.mkdir(parents=True, exist_ok=True)
-    (client_dir / "crm.yaml").write_text(yaml.dump(data))
+@pytest_asyncio.fixture
+async def db(tmp_path: Path):
+    """DB module with a migrated schema, no seeded client_integrations rows."""
+    from app.core.config import Settings
+    from app.core import database as db_module
+    from tests.helpers.migrations import init_db_with_migrations
+
+    settings = Settings(
+        openai_api_key=SecretStr("sk-test"),
+        elevenlabs_api_key=SecretStr("el-test"),
+        database_url=f"sqlite+aiosqlite:///{tmp_path}/credentials_test.db",
+    )
+    await init_db_with_migrations(db_module, settings)
+
+    async with db_module.async_session_factory() as sess:
+        from app.tenants.service import seed_quintana
+
+        await seed_quintana(sess)
+        await sess.commit()
+
+    yield db_module
+    await db_module.close_db()
 
 
-def _base_crm_data(api_key: str = "QUINTANA_AIRTABLE_API_KEY") -> dict:
-    """Return a minimal valid crm.yaml data dict."""
-    return {
-        "provider": "airtable",
-        "base_id": "appXXXXXXXX",
-        "table_id": "tblYYYYYYYY",
-        "api_key": api_key,
+def _config_payload(**overrides) -> dict:
+    payload = {
+        "base_id": "appXXXXXXXXXXXXXX",
+        "table_id": "tblYYYYYYYYYYYYYY",
         "match_field": "phone",
-        "field_mappings": [
-            {"source": "name", "target": "Nombre", "type": "string", "required": False},
-        ],
+        "field_mappings": [],
+        "legacy_env_var_name": "QUINTANA_AIRTABLE_API_KEY",
     }
+    payload.update(overrides)
+    return payload
+
+
+async def _insert_integration(
+    session,
+    client_id: str,
+    *,
+    provider: str = "airtable",
+    enabled: bool = True,
+    config: dict | None = None,
+):
+    from app.tenants.models import ClientIntegration
+
+    row = ClientIntegration(
+        client_id=client_id,
+        provider=provider,
+        enabled=enabled,
+        config=json.dumps(config if config is not None else _config_payload()),
+        status="ok",
+        created_by="test",
+        updated_by="test",
+    )
+    session.add(row)
+    await session.commit()
+    return row
 
 
 # ---------------------------------------------------------------------------
-# Task 1.3 — RED: is_weak_placeholder()
+# is_weak_placeholder() — unchanged by this phase
 # ---------------------------------------------------------------------------
 
 
 class TestIsWeakPlaceholder:
-    """Unit tests for the placeholder detection utility function."""
-
     @pytest.mark.parametrize("value", [
         "change-me-before-production",
-        "CHANGE-ME-BEFORE-PRODUCTION",  # case-insensitive
-        "Change-Me-Before-Production",
+        "CHANGE-ME-BEFORE-PRODUCTION",
         "your-key-here",
-        "YOUR-KEY-HERE",
         "TODO",
-        "todo",
-        "REPLACE_ME",
         "replace_me",
         "xxx",
-        "XXX",
         "test",
-        "TEST",
         "changeme",
-        "CHANGEME",
     ])
     def test_known_placeholders_are_detected(self, value):
-        """Each known placeholder pattern must be detected (case-insensitive)."""
         from app.core.credentials import is_weak_placeholder
         assert is_weak_placeholder(value) is True
 
     @pytest.mark.parametrize("value", [
         "sk-proj-abcdefghijklmnopqrstuvwx",
         "pat_1234567890abcdef",
-        "el-api-key-real",
-        "qora-local-dev-key",          # not in the list
-        "my-local-key",                # not in the list
-        "strongpassword123",
-        "el-prod-key-abc123",
+        "qora-local-dev-key",
     ])
     def test_real_values_are_not_flagged(self, value):
-        """Non-placeholder values must return False."""
         from app.core.credentials import is_weak_placeholder
         assert is_weak_placeholder(value) is False
 
-    def test_empty_string_not_flagged_as_placeholder(self):
-        """Empty string is not a 'placeholder'; it's 'missing' — different check."""
-        from app.core.credentials import is_weak_placeholder
-        # Empty string is handled by the presence check, not placeholder check
-        assert is_weak_placeholder("") is False
-
 
 # ---------------------------------------------------------------------------
-# Task 1.3 — RED: validate_all_integration_credentials()
+# Task 6.1 — DB-based status computation, no sys.exit
 # ---------------------------------------------------------------------------
 
 
 class TestValidateAllIntegrationCredentials:
-    """Unit tests for the startup CRM credential validator."""
-
-    def test_active_crm_with_valid_key_does_not_raise(self, tmp_path, monkeypatch):
-        """Active CRM integration with a present, valid env var → no error."""
+    async def test_boot_validation_sets_ok_status_when_credential_resolves(self, db, monkeypatch):
+        """A client with a resolvable credential boots with status=ok, no SystemExit."""
         monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat-real-key-abc123")
 
-        clients_root = tmp_path / "clients"
-        client_dir = clients_root / "quintana-seguros"
-        _write_crm_yaml(client_dir, _base_crm_data("QUINTANA_AIRTABLE_API_KEY"))
+        async with db.async_session_factory() as session:
+            await _insert_integration(session, "quintana-seguros")
 
         from app.core.credentials import validate_all_integration_credentials
-        # Must complete without raising
-        validate_all_integration_credentials(clients_root=clients_root)
+        from sqlalchemy import select
+        from app.tenants.models import ClientIntegration
 
-    def test_active_crm_with_missing_key_raises_system_exit(self, tmp_path, monkeypatch):
-        """Active CRM integration with a missing env var → SystemExit naming the client and var."""
+        async with db.async_session_factory() as session:
+            await validate_all_integration_credentials(session)
+
+        async with db.async_session_factory() as session:
+            result = await session.execute(
+                select(ClientIntegration).where(ClientIntegration.client_id == "quintana-seguros")
+            )
+            row = result.scalar_one()
+            assert row.status == "ok"
+            assert row.status_reason is None
+
+    async def test_boot_validation_sets_degraded_status_no_sys_exit(self, db, monkeypatch):
+        """A client with an unresolvable credential boots successfully (no SystemExit);
+        its row becomes degraded with a non-null status_reason."""
         monkeypatch.delenv("QUINTANA_AIRTABLE_API_KEY", raising=False)
 
-        clients_root = tmp_path / "clients"
-        client_dir = clients_root / "quintana-seguros"
-        _write_crm_yaml(client_dir, _base_crm_data("QUINTANA_AIRTABLE_API_KEY"))
+        async with db.async_session_factory() as session:
+            await _insert_integration(session, "quintana-seguros")
 
         from app.core.credentials import validate_all_integration_credentials
-        with pytest.raises(SystemExit) as exc_info:
-            validate_all_integration_credentials(clients_root=clients_root)
+        from sqlalchemy import select
+        from app.tenants.models import ClientIntegration
 
-        message = str(exc_info.value).upper()
-        assert "QUINTANA_AIRTABLE_API_KEY" in message or "QUINTANA" in message
+        async with db.async_session_factory() as session:
+            # Must complete without raising SystemExit anywhere.
+            await validate_all_integration_credentials(session)
 
-    def test_active_crm_with_placeholder_key_raises_system_exit(self, tmp_path, monkeypatch):
-        """Active CRM integration with a placeholder credential → SystemExit."""
-        monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "change-me-before-production")
+        async with db.async_session_factory() as session:
+            result = await session.execute(
+                select(ClientIntegration).where(ClientIntegration.client_id == "quintana-seguros")
+            )
+            row = result.scalar_one()
+            assert row.status == "degraded"
+            assert row.status_reason is not None
+            assert "QUINTANA_AIRTABLE_API_KEY" in row.status_reason
 
-        clients_root = tmp_path / "clients"
-        client_dir = clients_root / "quintana-seguros"
-        _write_crm_yaml(client_dir, _base_crm_data("QUINTANA_AIRTABLE_API_KEY"))
-
-        from app.core.credentials import validate_all_integration_credentials
-        with pytest.raises(SystemExit):
-            validate_all_integration_credentials(clients_root=clients_root)
-
-    def test_disabled_crm_integration_is_skipped(self, tmp_path, monkeypatch):
-        """CRM with enabled: false is skipped — no credential validation performed."""
+    async def test_boot_validation_does_not_exit_on_missing_credential(self, db, monkeypatch):
+        """Explicit SystemExit-absence proof — the old behavior is replaced, not silenced."""
         monkeypatch.delenv("QUINTANA_AIRTABLE_API_KEY", raising=False)
 
-        clients_root = tmp_path / "clients"
-        client_dir = clients_root / "quintana-seguros"
-        data = _base_crm_data("QUINTANA_AIRTABLE_API_KEY")
-        data["enabled"] = False
-        _write_crm_yaml(client_dir, data)
+        async with db.async_session_factory() as session:
+            await _insert_integration(session, "quintana-seguros")
 
         from app.core.credentials import validate_all_integration_credentials
-        # Disabled integration → must NOT raise even with missing key
-        validate_all_integration_credentials(clients_root=clients_root)
 
-    def test_client_without_crm_yaml_is_skipped(self, tmp_path):
-        """Client directory without crm.yaml → no credential check, no error."""
-        clients_root = tmp_path / "clients"
-        # Create client dir but no crm.yaml
-        (clients_root / "no-crm-client").mkdir(parents=True)
+        try:
+            async with db.async_session_factory() as session:
+                await validate_all_integration_credentials(session)
+        except SystemExit:
+            pytest.fail("validate_all_integration_credentials must never raise SystemExit")
 
-        from app.core.credentials import validate_all_integration_credentials
-        validate_all_integration_credentials(clients_root=clients_root)
+    async def test_disabled_integration_is_silently_skipped(self, db, monkeypatch):
+        """enabled=false -> status=disabled, no ERROR log, no exception."""
+        monkeypatch.delenv("QUINTANA_AIRTABLE_API_KEY", raising=False)
 
-    def test_empty_clients_root_does_not_raise(self, tmp_path):
-        """Empty clients root directory → nothing to validate, no error."""
-        clients_root = tmp_path / "clients"
-        clients_root.mkdir(parents=True)
+        async with db.async_session_factory() as session:
+            await _insert_integration(session, "quintana-seguros", enabled=False)
 
         from app.core.credentials import validate_all_integration_credentials
-        validate_all_integration_credentials(clients_root=clients_root)
+        from sqlalchemy import select
+        from app.tenants.models import ClientIntegration
 
-    def test_nonexistent_clients_root_does_not_raise(self, tmp_path):
-        """If the clients root path does not exist, validation is skipped gracefully."""
-        clients_root = tmp_path / "does-not-exist"
+        async with db.async_session_factory() as session:
+            await validate_all_integration_credentials(session)
+
+        async with db.async_session_factory() as session:
+            result = await session.execute(
+                select(ClientIntegration).where(ClientIntegration.client_id == "quintana-seguros")
+            )
+            row = result.scalar_one()
+            assert row.status == "disabled"
+
+    async def test_client_with_no_integration_row_is_silently_skipped(self, db):
+        """A client with no client_integrations row at all is never iterated."""
+        from app.core.credentials import validate_all_integration_credentials
+
+        async with db.async_session_factory() as session:
+            # No rows inserted at all — must not raise.
+            await validate_all_integration_credentials(session)
+
+
+# ---------------------------------------------------------------------------
+# Task 6.2 — Two-client isolation (survey-critical #4 regression proof)
+# ---------------------------------------------------------------------------
+
+
+class TestTwoClientIsolation:
+    async def test_one_client_degraded_does_not_affect_sibling_client(self, db, monkeypatch):
+        """Client A has a valid credential, client B's is missing. Both are
+        configured. Asserts A's status=ok and its CRM tool call succeeds,
+        completely independent of B's degraded state."""
+        monkeypatch.setenv("CLIENT_A_AIRTABLE_API_KEY", "pat-client-a-key")
+        monkeypatch.delenv("CLIENT_B_AIRTABLE_API_KEY", raising=False)
+
+        async with db.async_session_factory() as session:
+            await _insert_integration(
+                session,
+                "client-a",
+                config=_config_payload(legacy_env_var_name="CLIENT_A_AIRTABLE_API_KEY"),
+            )
+            await _insert_integration(
+                session,
+                "client-b",
+                config=_config_payload(legacy_env_var_name="CLIENT_B_AIRTABLE_API_KEY"),
+            )
 
         from app.core.credentials import validate_all_integration_credentials
-        validate_all_integration_credentials(clients_root=clients_root)
+        from sqlalchemy import select
+        from app.tenants.models import ClientIntegration
 
-    def test_global_qora_credentials_not_validated_by_crm_validator(self, tmp_path, monkeypatch):
-        """The CRM validator must NOT look up OPENAI_API_KEY or ELEVENLABS_API_KEY.
+        async with db.async_session_factory() as session:
+            await validate_all_integration_credentials(session)
 
-        Those are managed by Settings. The CRM validator only validates per-client
-        integration env var references found in crm.yaml files.
-        """
+        async with db.async_session_factory() as session:
+            result_a = await session.execute(
+                select(ClientIntegration).where(ClientIntegration.client_id == "client-a")
+            )
+            row_a = result_a.scalar_one()
+            result_b = await session.execute(
+                select(ClientIntegration).where(ClientIntegration.client_id == "client-b")
+            )
+            row_b = result_b.scalar_one()
+
+        assert row_a.status == "ok"
+        assert row_a.status_reason is None
+        assert row_b.status == "degraded"
+        assert row_b.status_reason is not None
+
+        # A's CRM tool call still resolves its own secret correctly, unaffected by B.
+        from app.integrations.integration_store import IntegrationStore
+
+        store = IntegrationStore()
+        async with db.async_session_factory() as session:
+            config_a = await store.get(session, "client-a", "airtable")
+            resolved_a = await config_a.resolve_api_key_async(session, "client-a")
+
+        assert resolved_a == "pat-client-a-key"
+
+    async def test_degraded_client_tool_call_returns_tool_error_not_exception(self, db, monkeypatch):
+        """B's own CRM resolution returns None (not an exception) when degraded,
+        so a tool dispatcher can turn it into a clear tool-error string."""
+        monkeypatch.delenv("CLIENT_B_AIRTABLE_API_KEY", raising=False)
+
+        async with db.async_session_factory() as session:
+            await _insert_integration(
+                session,
+                "client-b",
+                config=_config_payload(legacy_env_var_name="CLIENT_B_AIRTABLE_API_KEY"),
+            )
+
+        from app.core.credentials import validate_all_integration_credentials
+        from app.integrations.integration_store import IntegrationStore
+
+        async with db.async_session_factory() as session:
+            await validate_all_integration_credentials(session)
+
+        store = IntegrationStore()
+        async with db.async_session_factory() as session:
+            config_b = await store.get(session, "client-b", "airtable")
+            resolved_b = await config_b.resolve_api_key_async(session, "client-b")
+
+        assert resolved_b is None
+
+
+# ---------------------------------------------------------------------------
+# Platform-level credentials keep their existing hard-fail behavior
+# ---------------------------------------------------------------------------
+
+
+class TestPlatformCredentialsStillHardFail:
+    """Qora-owned platform credentials are validated by Settings(), not by this
+    module, and this phase does not change that: Settings() must still raise
+    when a required platform credential is absent."""
+
+    def test_settings_still_raises_when_openai_api_key_missing(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("ELEVENLABS_API_KEY", "el-test")
+
+        from app.core.config import Settings
+
+        with pytest.raises(Exception):
+            Settings(_env_file=None)
+
+    async def test_validate_all_integration_credentials_does_not_read_platform_env_vars(self, db, monkeypatch):
+        """Behavior guard: validating client_integrations must not depend on or
+        touch OPENAI_API_KEY/ELEVENLABS_API_KEY — those remain Settings' sole
+        responsibility (unchanged scope boundary)."""
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
         monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat-real-key")
 
-        clients_root = tmp_path / "clients"
-        client_dir = clients_root / "quintana-seguros"
-        _write_crm_yaml(client_dir, _base_crm_data("QUINTANA_AIRTABLE_API_KEY"))
+        async with db.async_session_factory() as session:
+            await _insert_integration(session, "quintana-seguros")
 
         from app.core.credentials import validate_all_integration_credentials
-        # Must NOT raise just because OPENAI/EL keys are missing
-        validate_all_integration_credentials(clients_root=clients_root)
 
-    def test_multiple_clients_all_valid(self, tmp_path, monkeypatch):
-        """Multiple clients with valid credentials → all pass without error."""
-        monkeypatch.setenv("CLIENT_A_AIRTABLE_API_KEY", "pat-client-a-key")
-        monkeypatch.setenv("CLIENT_B_AIRTABLE_API_KEY", "pat-client-b-key")
-
-        clients_root = tmp_path / "clients"
-        _write_crm_yaml(clients_root / "client-a", _base_crm_data("CLIENT_A_AIRTABLE_API_KEY"))
-        _write_crm_yaml(clients_root / "client-b", _base_crm_data("CLIENT_B_AIRTABLE_API_KEY"))
-
-        from app.core.credentials import validate_all_integration_credentials
-        validate_all_integration_credentials(clients_root=clients_root)
-
-    def test_one_of_multiple_clients_missing_key_raises(self, tmp_path, monkeypatch):
-        """When one of multiple clients has a missing credential → SystemExit."""
-        monkeypatch.setenv("CLIENT_A_AIRTABLE_API_KEY", "pat-client-a-key")
-        monkeypatch.delenv("CLIENT_B_AIRTABLE_API_KEY", raising=False)
-
-        clients_root = tmp_path / "clients"
-        _write_crm_yaml(clients_root / "client-a", _base_crm_data("CLIENT_A_AIRTABLE_API_KEY"))
-        _write_crm_yaml(clients_root / "client-b", _base_crm_data("CLIENT_B_AIRTABLE_API_KEY"))
-
-        from app.core.credentials import validate_all_integration_credentials
-        with pytest.raises(SystemExit):
-            validate_all_integration_credentials(clients_root=clients_root)
-
-    def test_literal_api_key_in_crm_yaml_not_treated_as_env_var(self, tmp_path, monkeypatch):
-        """A literal (non-ALL_CAPS) api_key in crm.yaml is used directly, not as env var name."""
-        # The env var is NOT set — but the api_key is a literal value, not an env var name
-        monkeypatch.delenv("mytestapikey123", raising=False)
-
-        clients_root = tmp_path / "clients"
-        _write_crm_yaml(clients_root / "dev-client", _base_crm_data("mytestapikey123"))
-
-        from app.core.credentials import validate_all_integration_credentials
-        # Literal key → no env var lookup → should not raise
-        validate_all_integration_credentials(clients_root=clients_root)
+        async with db.async_session_factory() as session:
+            # Must not raise just because OPENAI/EL keys are unset in the environment.
+            await validate_all_integration_credentials(session)

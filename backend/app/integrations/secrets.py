@@ -17,8 +17,8 @@ from cryptography.fernet import InvalidToken
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.credentials import _looks_like_env_var_name
 from app.core.crypto import get_secret_crypto
-from app.integrations.crm_config import _looks_like_env_var_name
 from app.tenants.models import ClientSecret
 
 logger = logging.getLogger(__name__)

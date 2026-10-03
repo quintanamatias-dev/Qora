@@ -65,6 +65,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.access import require_client_access, require_superadmin
 from app.core.auth import CallerIdentity, require_api_key
+from app.core.credentials import _looks_like_env_var_name
 from app.core.crypto import get_secret_crypto
 from app.integrations.crm_config import CRMConfig, ConfigValidationError
 from app.integrations.integration_store import get_default_store, recompute_and_persist_status
@@ -202,7 +203,6 @@ class IntegrationStatusResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-_ENV_VAR_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+$")
 _AIRTABLE_PAT_PATTERN = re.compile(r"\b(?:pat|key)[A-Za-z0-9._-]{12,}\b")
 _REQUIRED_CORE_MAPPINGS = ("external_lead_id", "name", "phone", "email")
 # Custom field keys must be snake_case: they become tool-schema property names
@@ -220,8 +220,8 @@ def _invalid_custom_field_keys(field_definitions: list[dict[str, Any]]) -> list[
     return invalid
 
 
-def _looks_like_env_var_name(value: str) -> bool:
-    return bool(_ENV_VAR_NAME_PATTERN.match(value))
+# _looks_like_env_var_name: single shared definition in app.core.credentials
+# (client-integrations-secrets task 7.1), imported above.
 
 
 def _sanitize_secret_text(text: str, api_key: str | None) -> str:

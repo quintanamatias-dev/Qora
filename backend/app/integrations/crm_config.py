@@ -27,6 +27,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from app.core.credentials import _looks_like_env_var_name
+
 logger = logging.getLogger(__name__)
 
 # Custom field keys should be snake_case — they become tool-schema property names
@@ -51,16 +53,11 @@ class CredentialResolutionError(Exception):
 # ---------------------------------------------------------------------------
 # Heuristic: env var name vs literal value
 # ---------------------------------------------------------------------------
-
-# ALL_CAPS_UNDERSCORES pattern: ^[A-Z][A-Z0-9_]+$
-# e.g. QUINTANA_AIRTABLE_API_KEY → env var lookup
-# e.g. pat.abcdefghijklmnop → literal
-_ENV_VAR_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+$")
-
-
-def _looks_like_env_var_name(value: str) -> bool:
-    """Return True if the value matches the ALL_CAPS_UNDERSCORE env var name pattern."""
-    return bool(_ENV_VAR_NAME_PATTERN.match(value))
+#
+# ALL_CAPS_UNDERSCORES pattern (^[A-Z][A-Z0-9_]+$): e.g. QUINTANA_AIRTABLE_API_KEY
+# → env var lookup; e.g. pat.abcdefghijklmnop → literal. Single shared
+# definition lives in app.core.credentials (client-integrations-secrets
+# task 7.1); imported above as _looks_like_env_var_name.
 
 
 # ---------------------------------------------------------------------------
