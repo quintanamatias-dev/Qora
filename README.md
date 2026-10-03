@@ -257,6 +257,60 @@ Qora
 
 ---
 
+## Internal Tooling: Data MCP + Onboarding Harness
+
+Two additive, internal-only developer tools live in `backend/app/`:
+
+### Data MCP (`python -m app.mcp`)
+
+A read-only MCP server (stdio transport) exposing Qora's client/agent/lead/call data to AI callers (Claude Code, Codex, Qora's own agent runtime) without a human running queries. No write tools. Every tenant-data tool (`list_leads`, `get_lead`, `list_calls`, `get_call`) requires an explicit `client_id` — never defaults to a cross-tenant view. No tool output ever includes a secret-shaped field (API keys, ciphertext, tokens); this is enforced by a schema-inspection test, not a runtime filter.
+
+Run it from `backend/`:
+
+```bash
+DATABASE_URL=sqlite+aiosqlite:///./qora.db uv run python -m app.mcp
+```
+
+Register it in Claude Code or Codex as a stdio MCP server, e.g. in Claude Code's `mcp_servers` config:
+
+```json
+{
+  "qora-data": {
+    "command": "uv",
+    "args": ["run", "python", "-m", "app.mcp"],
+    "cwd": "/path/to/qora/backend",
+    "env": { "DATABASE_URL": "sqlite+aiosqlite:///./qora.db" }
+  }
+}
+```
+
+See `backend/app/mcp/` for the full tool list.
+
+### Onboarding Harness (`python -m app.onboarding` / `POST /api/v1/admin/onboarding`)
+
+Automates the DB-and-filesystem steps of `skills/qora-client-agent-setup/SKILL.md` (Phase 3-4: client/agent rows, analysis profile, CRM integration row) behind one declarative spec, shared by a CLI and a superadmin-gated admin endpoint so both entrypoints can never disagree. The genuinely-manual ElevenLabs-dashboard steps (Phase 1/5) are never automated — the harness prints them as a follow-up checklist instead.
+
+Guarantees: the spec schema has **no secret field anywhere** — a CRM credential, if needed, is set afterward via the existing write-only `PUT .../integrations/{provider}/secret` endpoint. Every run is idempotent per entity: re-running an identical spec reports `already_exists` instead of duplicating or erroring.
+
+```bash
+cd backend
+uv run python -m app.onboarding path/to/spec.yaml --dry-run   # validate only, writes nothing
+uv run python -m app.onboarding path/to/spec.yaml              # provision
+```
+
+Or via the admin API (superadmin only):
+
+```bash
+curl -X POST https://{host}/api/v1/admin/onboarding \
+  -H "Authorization: Bearer $QORA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"spec": { ... }, "dry_run": true}'
+```
+
+Spec shape and examples: `backend/app/onboarding/spec.py`.
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |

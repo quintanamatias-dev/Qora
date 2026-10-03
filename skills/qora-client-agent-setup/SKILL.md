@@ -89,6 +89,24 @@ Full reference: `docs/agent-setup-checklist.md`
 
 ### Phase 3 — Qora DB: Client + Agent Records (12 steps)
 
+**Primary path: the onboarding harness automates steps 17, 21-25.** Write a spec
+(see `backend/app/onboarding/spec.py`) and run:
+
+```bash
+cd backend
+uv run python -m app.onboarding path/to/spec.yaml --dry-run   # validate first
+uv run python -m app.onboarding path/to/spec.yaml              # provision
+```
+
+Or `POST /api/v1/admin/onboarding` (superadmin-gated) with the same spec shape
+via the API, for identical results. The harness is idempotent — re-running the
+same spec reports `already_exists` per entity instead of duplicating. Scheduler
+fields (18-20), TTS/voicemail fields (26-28) are not covered by the spec yet and
+still require the manual steps below or a direct PATCH.
+
+What the harness does under the hood (steps 17, 21-25), kept here as the manual
+fallback/reference:
+
 17. Create `Client` row: `id={client_id}`, `name`, `voice_id`, `is_active=True`
 18. Set scheduler/recontact fields if outbound: `scheduler_enabled=True`, `scheduler_max_attempts`, `scheduler_cooldown_minutes`, `scheduler_allowed_hours_start/end`, `scheduler_timezone`
 19. **C6**: Set `scheduler_backoff_multiplier` (float, default `1.0`). Use `1.0` for flat delay, higher values for escalating recontact delays. Example: Quintana uses `1.5`.
@@ -116,6 +134,10 @@ Full reference: `docs/agent-setup-checklist.md`
 | `voicemail_detection_enabled` | `True` | ElevenLabs voicemail tool enabled |
 
 ### Phase 4 — Filesystem Content (8 steps)
+
+The onboarding harness does not write filesystem files (system-prompt.md,
+registry.yaml, crm.yaml) — only DB rows. These steps remain manual until a
+future harness phase covers them.
 
 29. Create `backend/clients/{client_id}/` directory
 30. Create `backend/clients/{client_id}/agents/{agent_slug}/` directory
