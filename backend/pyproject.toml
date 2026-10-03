@@ -25,6 +25,7 @@ dependencies = [
     "alembic>=1.13.0",
     "sentry-sdk[fastapi]>=2.0",
     "cryptography>=50.0.2",
+    "mcp>=2.3.0",
 ]
 
 [project.optional-dependencies]
