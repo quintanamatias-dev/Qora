@@ -119,6 +119,30 @@ async def test_create_client_returns_201(clients_app: AsyncClient):
     assert "created_at" in data
 
 
+async def test_create_client_activates_empty_config_revision_1(clients_app: AsyncClient):
+    """agent-config-inheritance D11: a new client gets an empty, activated revision 1."""
+    response = await clients_app.post(
+        "/api/v1/clients",
+        json={
+            "client_id": "new-broker-revisions",
+            "name": "New Broker Revisions SA",
+            "agent_name": "Ana",
+            "voice_id": "abc123",
+        },
+    )
+    assert response.status_code == 201
+
+    revisions = await clients_app.get(
+        "/api/v1/clients/new-broker-revisions/revisions"
+    )
+    assert revisions.status_code == 200
+    body = revisions.json()
+    assert len(body) == 1
+    assert body[0]["revision_number"] == 1
+    assert body[0]["source"] == "api"
+    assert body[0]["config"] == {"schema_version": "v1"}
+
+
 async def test_create_client_default_agent_name(clients_app: AsyncClient):
     """POST /clients without agent_name uses default 'Jaumpablo'."""
     response = await clients_app.post(

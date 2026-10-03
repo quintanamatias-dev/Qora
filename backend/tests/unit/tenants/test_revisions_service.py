@@ -286,3 +286,137 @@ async def test_rollback_across_tenant_boundary_is_rejected(session: AsyncSession
         session, agent_b.client_id, agent_b.id, revision_a.id, created_by="tester"
     )
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# agent-config-inheritance Task 3.3 — client-level revisions (generalized helpers)
+# ---------------------------------------------------------------------------
+
+
+async def test_create_client_revision_is_insert_only_and_monotonic(session: AsyncSession):
+    from app.tenants.client_config_schema import ClientConfigV1
+    from app.tenants.models import Client, ClientConfigRevision
+    from app.tenants import revisions_service
+
+    await _seed_two_agents(session)
+    client = await session.get(Client, "quintana-seguros")
+    assert client is not None
+
+    starting_count = len(
+        (
+            await session.execute(
+                select(ClientConfigRevision).where(
+                    ClientConfigRevision.client_id == client.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    config = ClientConfigV1(language="es")
+    rev_a = await revisions_service.create_client_revision(
+        session, client=client, config=config, source="api", created_by="tester"
+    )
+    rev_b = await revisions_service.create_client_revision(
+        session, client=client, config=config, source="api", created_by="tester"
+    )
+
+    assert rev_a.revision_number == starting_count + 1
+    assert rev_b.revision_number == starting_count + 2
+    assert client.active_config_revision_id == rev_b.id
+
+    result = await session.execute(
+        select(ClientConfigRevision).where(ClientConfigRevision.client_id == client.id)
+    )
+    assert len(result.scalars().all()) == starting_count + 2
+
+
+async def test_create_client_revision_content_is_sparse(session: AsyncSession):
+    from app.tenants.client_config_schema import ClientConfigV1
+    from app.tenants.models import Client
+    from app.tenants import revisions_service
+
+    await _seed_two_agents(session)
+    client = await session.get(Client, "quintana-seguros")
+    assert client is not None
+
+    config = ClientConfigV1(language="es")
+    revision = await revisions_service.create_client_revision(
+        session, client=client, config=config, source="api", created_by="tester"
+    )
+
+    import json as _json
+
+    stored = _json.loads(revision.config)
+    assert stored == {"schema_version": "v1", "language": "es"}
+
+
+async def test_client_rollback_creates_new_revision_not_reactivation(session: AsyncSession):
+    from app.tenants.client_config_schema import ClientConfigV1
+    from app.tenants.models import Client
+    from app.tenants import revisions_service
+
+    await _seed_two_agents(session)
+    client = await session.get(Client, "quintana-seguros")
+    assert client is not None
+    client_id = client.id
+
+    revision_1 = await revisions_service.create_client_revision(
+        session,
+        client=client,
+        config=ClientConfigV1(language="es"),
+        source="api",
+        created_by="tester",
+    )
+    import json as _json
+
+    original_revision_1_config = _json.loads(revision_1.config)
+
+    config = ClientConfigV1(language="en")
+    await revisions_service.create_client_revision(
+        session, client=client, config=config, source="api", created_by="tester"
+    )
+    revision_3 = await revisions_service.create_client_revision(
+        session, client=client, config=config, source="api", created_by="tester"
+    )
+    assert client.active_config_revision_id == revision_3.id
+
+    new_revision = await revisions_service.rollback_client_revision(
+        session, client_id, revision_1.id, created_by="tester"
+    )
+    assert new_revision is not None
+    assert new_revision.id != revision_1.id
+    assert new_revision.revision_number == revision_3.revision_number + 1
+    assert new_revision.source == "rollback"
+    assert _json.loads(new_revision.config) == original_revision_1_config
+    assert client.active_config_revision_id == new_revision.id
+
+    # revision_1's row is untouched
+    untouched = await session.get(type(revision_1), revision_1.id)
+    assert _json.loads(untouched.config) == original_revision_1_config
+    assert untouched.revision_number == revision_1.revision_number
+    assert untouched.source == revision_1.source
+
+
+async def test_client_revision_of_another_client_is_not_readable(session: AsyncSession):
+    from app.tenants.client_config_schema import ClientConfigV1
+    from app.tenants.models import Client
+    from app.tenants import revisions_service
+
+    await _seed_two_agents(session)
+    client = await session.get(Client, "quintana-seguros")
+    assert client is not None
+
+    revision_a = await revisions_service.create_client_revision(
+        session,
+        client=client,
+        config=ClientConfigV1(language="es"),
+        source="api",
+        created_by="tester",
+    )
+
+    leaked = await revisions_service.get_client_revision(
+        session, "qora-demo", revision_a.id
+    )
+    assert leaked is None
