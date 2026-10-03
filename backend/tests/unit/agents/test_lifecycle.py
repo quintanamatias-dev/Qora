@@ -99,6 +99,7 @@ async def test_full_admin_lifecycle(lifecycle_app: AsyncClient):
             "slug": "second-lifecycle-agent",
             "name": "Second Lifecycle Agent",
             "voice_id": "voice-second",
+            "goal": "Book a demo call.",
         },
     )
     assert create_agent_resp.status_code == 201

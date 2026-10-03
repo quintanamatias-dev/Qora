@@ -30,8 +30,9 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.tenants.agent_config_schema import AgentConfigV1
+from app.tenants.agent_config_schema import AgentConfigV1, AgentConfigV2
 from app.tenants.client_config_schema import ClientConfigV1
+from app.tenants.field_policy import AGENT_REQUIRED_FIELDS, FIELD_POLICY
 from app.tenants.models import (
     Agent,
     AgentConfigRevision,
@@ -51,6 +52,21 @@ def _serialize_agent_config(config: AgentConfigV1) -> tuple[str, str]:
 def _serialize_client_config(config: ClientConfigV1) -> tuple[str, str]:
     sparse = config.model_dump(exclude_none=True)
     return json.dumps(sparse), config.schema_version
+
+
+def _serialize_agent_config_v2(config: AgentConfigV2) -> tuple[str, str]:
+    sparse = config.model_dump(exclude_none=True)
+    return json.dumps(sparse), config.schema_version
+
+
+def _agent_serializer_for(schema_version: str) -> tuple[type[BaseModel], Serializer]:
+    """Pick the (config_cls, serializer) pair matching a stored revision's
+    schema_version, so rollback can copy EITHER a V1 full-snapshot or a V2
+    sparse-override revision without guessing (design.md D18).
+    """
+    if schema_version == "v2":
+        return AgentConfigV2, _serialize_agent_config_v2
+    return AgentConfigV1, _serialize_agent_config
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +226,130 @@ async def _rollback_to_revision(
 # ---------------------------------------------------------------------------
 
 
+class AgentConfigWriteError(ValueError):
+    """Raised when an agent config write violates field-policy rules
+    (design.md D14/D18): a locked/client_only field present in the payload,
+    a brand-new agent missing an agent_required field, or an existing
+    agent's write removing a previously-set required field.
+    """
+
+    def __init__(self, message: str, *, fields: list[str]):
+        super().__init__(message)
+        self.fields = fields
+
+
+def _decode_agent_overrides(revision: AgentConfigRevision | None) -> dict[str, Any]:
+    """Build the sparse agent-overrides dict to merge the next patch over.
+
+    V1 active revision (or none): promote every non-None V1 value to an
+    explicit override, dropping any locked/client_only key (design.md D18's
+    V1-to-V2 promotion) — guarantees no behavior change on first V2 write.
+    V2 active revision: already sparse, decode as-is.
+    """
+    if revision is None:
+        return {}
+    data: dict[str, Any] = json.loads(revision.config)
+    data.pop("schema_version", None)
+    if revision.schema_version == "v2":
+        return {k: v for k, v in data.items() if v is not None}
+    return {
+        k: v
+        for k, v in data.items()
+        if v is not None and FIELD_POLICY.get(k) not in ("locked", "client_only")
+    }
+
+
+def validate_agent_config_write(
+    *,
+    previous_overrides: dict[str, Any],
+    patch: dict[str, Any],
+    is_new_agent: bool,
+) -> dict[str, Any]:
+    """Merge *patch* over *previous_overrides*, enforcing field-policy rules.
+
+    Grandfathering (design.md D18): an existing agent whose required field
+    was already missing before this write may keep omitting it — the merged
+    result simply stays missing, never force-filled or rejected for that
+    reason alone. Once a required field has a value, no write may null it
+    back out.
+    """
+    locked_in_patch = sorted(
+        k
+        for k, v in patch.items()
+        if v is not None and FIELD_POLICY.get(k) in ("locked", "client_only")
+    )
+    if locked_in_patch:
+        raise AgentConfigWriteError(
+            f"cannot set client/locked-level field(s) on an agent revision: {locked_in_patch}",
+            fields=locked_in_patch,
+        )
+
+    merged = dict(previous_overrides)
+    for key, value in patch.items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+
+    if is_new_agent:
+        missing = sorted(f for f in AGENT_REQUIRED_FIELDS if merged.get(f) is None)
+        if missing:
+            raise AgentConfigWriteError(
+                f"missing required field(s) for a new agent: {missing}", fields=missing
+            )
+        return merged
+
+    removed = sorted(
+        f
+        for f in AGENT_REQUIRED_FIELDS
+        if previous_overrides.get(f) is not None and merged.get(f) is None
+    )
+    if removed:
+        raise AgentConfigWriteError(
+            f"cannot remove previously-set required field(s): {removed}", fields=removed
+        )
+    return merged
+
+
+async def create_agent_config_revision(
+    session: AsyncSession,
+    *,
+    agent: Agent,
+    patch: dict[str, Any],
+    source: RevisionSource,
+    created_by: str,
+    note: str | None = None,
+    is_new_agent: bool = False,
+) -> AgentConfigRevision:
+    """Create + activate a new sparse AgentConfigV2 revision (design.md D18).
+
+    *patch* is the raw write payload (field -> value; an explicit null value
+    removes an existing override, i.e. "inherit again"). Validated against
+    FIELD_POLICY before persisting — raises AgentConfigWriteError on any
+    violation, and no row is created.
+    """
+    patch = {k: v for k, v in patch.items() if k != "schema_version"}
+    previous = await get_active_revision(session, agent.client_id, agent.id)
+    previous_overrides = _decode_agent_overrides(previous)
+    merged = validate_agent_config_write(
+        previous_overrides=previous_overrides, patch=patch, is_new_agent=is_new_agent
+    )
+    validated = AgentConfigV2(**merged)
+    config_json, schema_version = _serialize_agent_config_v2(validated)
+    return await _create_revision(
+        session,
+        model=AgentConfigRevision,
+        owner=agent,
+        owner_id_attr="agent_id",
+        active_pointer_attr="active_revision_id",
+        config_json=config_json,
+        schema_version=schema_version,
+        source=source,
+        created_by=created_by,
+        note=note,
+    )
+
+
 async def create_revision(
     session: AsyncSession,
     *,
@@ -304,6 +444,19 @@ async def rollback_to_revision(
     agent = await _get_agent_in_client(session, client_id, agent_id)
     if agent is None:
         return None
+    target = await _get_revision(
+        session,
+        model=AgentConfigRevision,
+        owner_id_attr="agent_id",
+        owner_id=agent.id,
+        revision_id=target_revision_id,
+    )
+    if target is None:
+        return None
+    # design.md D18: rollback preserves whichever schema_version the target
+    # revision was recorded in — rolling back to a V1 full snapshot stays V1,
+    # rolling back to a V2 sparse override set stays V2.
+    config_cls, serializer = _agent_serializer_for(target.schema_version)
     return await _rollback_to_revision(
         session,
         model=AgentConfigRevision,
@@ -311,8 +464,8 @@ async def rollback_to_revision(
         owner_id_attr="agent_id",
         active_pointer_attr="active_revision_id",
         target_revision_id=target_revision_id,
-        config_cls=AgentConfigV1,
-        serializer=_serialize_agent_config,
+        config_cls=config_cls,
+        serializer=serializer,
         created_by=created_by,
     )
 

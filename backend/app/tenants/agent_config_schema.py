@@ -14,9 +14,11 @@ AgentConfigV1 before a new revision is created.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, create_model
+
+from app.tenants.field_policy import FIELD_POLICY
 
 
 class AgentConfigV1(BaseModel):
@@ -79,3 +81,57 @@ class AgentConfigPatch(BaseModel):
     voicemail_detection_enabled: bool | None = None
     max_call_duration_seconds: int | None = Field(default=None, ge=30, le=7200)
     note: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# AgentConfigV2 — sparse agent overrides (design.md D12/D18).
+#
+# Only fields whose FIELD_POLICY is "agent_required" or "overridable" are
+# allowed — derived from the registry, never hand-listed, mirroring
+# client_config_schema.ClientConfigV1's approach. "locked" and "client_only"
+# fields are not defined here at all, so supplying one raises pydantic's
+# extra="forbid" error, same mechanism as an unregistered field name.
+# Every field defaults to None (not set, inherit).
+# ---------------------------------------------------------------------------
+
+_V2_ALLOWED_POLICIES = {"agent_required", "overridable"}
+
+ALLOWED_AGENT_OVERRIDE_FIELDS: frozenset[str] = frozenset(
+    name for name, policy in FIELD_POLICY.items() if policy in _V2_ALLOWED_POLICIES
+)
+
+
+def _v2_field_definitions() -> dict[str, tuple[Any, None]]:
+    """Build create_model field definitions for every allowed field, reusing
+    AgentConfigV1's annotation + constraints (ge/le, etc.) but making every
+    field Optional with a None default (sparse override semantics).
+    """
+    definitions: dict[str, tuple[Any, None]] = {}
+    for name, info in AgentConfigV1.model_fields.items():
+        if name not in ALLOWED_AGENT_OVERRIDE_FIELDS:
+            continue
+        annotation = info.annotation
+        is_already_optional = annotation is type(None) or (
+            hasattr(annotation, "__args__") and type(None) in annotation.__args__
+        )
+        optional_annotation = annotation if is_already_optional else Optional[annotation]
+        if info.metadata:
+            optional_annotation = Annotated[tuple([optional_annotation, *info.metadata])]
+        definitions[name] = (optional_annotation, None)
+    return definitions
+
+
+AgentConfigV2 = create_model(
+    "AgentConfigV2",
+    __config__=ConfigDict(extra="forbid"),
+    schema_version=(Literal["v2"], "v2"),
+    **_v2_field_definitions(),
+)
+
+
+AgentConfigV2Patch = create_model(
+    "AgentConfigV2Patch",
+    __config__=ConfigDict(extra="forbid"),
+    note=(Optional[str], None),
+    **_v2_field_definitions(),
+)

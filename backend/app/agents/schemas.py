@@ -97,6 +97,10 @@ class AgentCreate(BaseModel):
     slug: str
     name: str
     voice_id: str
+    # agent-config-inheritance D18/task 4.3: goal is agent_required for every
+    # BRAND-NEW agent (no grandfathering) — pre-existing agents created before
+    # this field existed remain grandfathered (see AgentResponse.config_incomplete).
+    goal: str
     system_prompt: str | None = None
     knowledge_base: str | None = None
     model: str = "gpt-4.1-mini"
@@ -254,6 +258,10 @@ class AgentResponse(BaseModel):
     max_call_duration_seconds: int | None = None
     # C2: ElevenLabs phone number resource ID
     elevenlabs_phone_number_id: str | None = None
+    # agent-config-inheritance D18/task 4.4: grandfathering visibility — true
+    # when the active revision is missing one or more agent_required fields.
+    config_incomplete: bool = False
+    missing_required_fields: list[str] = []
 
     model_config = {"from_attributes": True}
 

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pathlib import Path
 
 from app.tenants.agent_config_schema import AgentConfigV1
+from app.tenants.client_config_schema import ClientConfigV1
 from app.tenants.models import Agent, Client
 from app.tenants import revisions_service
 
@@ -38,6 +39,7 @@ async def _ensure_active_revision(
     source: revisions_service.RevisionSource = "import",
     created_by: str = "system",
     note: str | None = None,
+    goal: str | None = None,
 ) -> None:
     """Create + activate revision 1 for *agent* if it has none yet.
 
@@ -50,6 +52,10 @@ async def _ensure_active_revision(
     filesystem file nor a DB system_prompt yet — AgentConfigV1.system_prompt
     has no safe None default, and a newly-created agent may legitimately have
     no prompt until it is configured via PATCH.
+
+    goal has no Agent column (agent-config-inheritance D18): it only lives in
+    the revision itself, so callers that have a goal (the create-agent API
+    path) must pass it through explicitly; seeders leave it None (grandfathered).
     """
     if agent.active_revision_id is not None:
         return
@@ -57,7 +63,9 @@ async def _ensure_active_revision(
     system_prompt = _resolve_seed_system_prompt(
         agent.client_id, agent.slug, agent.system_prompt
     ) or ""
-    config = AgentConfigV1(**build_agent_config_v1_snapshot(agent, system_prompt))
+    snapshot = build_agent_config_v1_snapshot(agent, system_prompt)
+    snapshot["goal"] = goal
+    config = AgentConfigV1(**snapshot)
     await revisions_service.create_revision(
         session,
         agent=agent,
@@ -199,6 +207,18 @@ async def create_client(
         tools_enabled=tools_enabled,
         is_active=True,
         is_default=True,
+    )
+
+    # agent-config-inheritance D11/D18: every client must have an active config
+    # revision, mirroring the "every agent must have one" guarantee — moved here
+    # from the clients router so every caller (seeders, service) gets it.
+    await revisions_service.create_client_revision(
+        session,
+        client=client,
+        config=ClientConfigV1(),
+        source="api",
+        created_by="system",
+        note="initial revision created with the client",
     )
 
     return client
@@ -640,6 +660,7 @@ async def create_agent(
     soft_timeout_use_llm: bool | None = None,
     voicemail_detection_enabled: bool | None = None,
     max_call_duration_seconds: int | None = None,
+    goal: str | None = None,
 ) -> Agent:
     """Create and persist a new Agent record.
 
@@ -727,6 +748,7 @@ async def create_agent(
         source="api",
         created_by="system",
         note="initial revision created with the agent",
+        goal=goal,
     )
     return agent
 

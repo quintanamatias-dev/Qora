@@ -162,17 +162,9 @@ async def create_client(
             scheduler_timezone=payload.scheduler_timezone,
             scheduler_backoff_multiplier=payload.scheduler_backoff_multiplier,
         )
-        # agent-config-inheritance D11: every client must have an active
-        # config revision, mirroring 1a's "every agent must have one" guarantee.
-        # Empty on creation — no overrides yet, every field inherits the standard.
-        await revisions_service.create_client_revision(
-            session,
-            client=client,
-            config=ClientConfigV1(),
-            source="api",
-            created_by="system",
-            note="initial revision created with the client",
-        )
+        # agent-config-inheritance D11/D18: service.create_client() bootstraps
+        # the client's initial empty config revision — every caller (seeders,
+        # service, this router) gets it from one place.
         await session.commit()
     except IntegrityError:
         await session.rollback()

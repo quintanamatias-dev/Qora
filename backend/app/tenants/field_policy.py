@@ -45,3 +45,9 @@ FIELD_POLICY: dict[str, FieldPolicy] = {
     "max_call_duration_seconds_bounds": "locked",
     "post_call_webhook_secret_required": "locked",
 }
+
+# agent-config-inheritance Phase 4 (D18): every field whose policy requires an
+# explicit agent-level value — no default exists at any other level.
+AGENT_REQUIRED_FIELDS: tuple[str, ...] = tuple(
+    sorted(name for name, policy in FIELD_POLICY.items() if policy == "agent_required")
+)

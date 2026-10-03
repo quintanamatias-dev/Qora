@@ -16,7 +16,6 @@ import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.schemas import (
@@ -29,7 +28,10 @@ from app.agents.schemas import (
 from app.core.access import require_client_access, require_superadmin
 from app.core.auth import CallerIdentity
 from app.elevenlabs.service import ElevenLabsService, sync_to_elevenlabs
-from app.tenants.agent_config_schema import AgentConfigPatch, AgentConfigV1
+from app.tenants.agent_config_schema import AgentConfigV1, AgentConfigV2Patch
+from app.tenants.config_resolver import EffectiveConfig, resolve_effective_config
+from app.tenants.config_standard import AgentConfigStandard
+from app.tenants.field_policy import AGENT_REQUIRED_FIELDS
 from app.tenants.models import Agent, AgentConfigRevision, Client
 import app.tenants.service as tenant_service
 from app.tenants import revisions_service
@@ -113,7 +115,12 @@ def _tts_field(agent: Agent, field: str, default: float) -> float:
     return default if value is None else value
 
 
-def _agent_to_response(agent: Agent) -> AgentResponse:
+def _agent_to_response(
+    agent: Agent,
+    *,
+    config_incomplete: bool = False,
+    missing_required_fields: list[str] | None = None,
+) -> AgentResponse:
     """Map an Agent ORM object to an AgentResponse schema."""
     has_prompt = bool(agent.system_prompt and agent.system_prompt.strip())
     has_el_id = bool(getattr(agent, "elevenlabs_agent_id", None))
@@ -153,6 +160,8 @@ def _agent_to_response(agent: Agent) -> AgentResponse:
         # ElevenLabs agent config sync (sdd/elevenlabs-config)
         voicemail_detection_enabled=getattr(agent, "voicemail_detection_enabled", None),
         max_call_duration_seconds=getattr(agent, "max_call_duration_seconds", None),
+        config_incomplete=config_incomplete,
+        missing_required_fields=missing_required_fields or [],
     )
 
 
@@ -266,6 +275,75 @@ def _mirror_config_to_agent(agent: Agent, config: AgentConfigV1) -> None:
     agent.max_call_duration_seconds = config.max_call_duration_seconds
 
 
+async def _agent_completeness(
+    session: AsyncSession, agent: Agent
+) -> tuple[bool, list[str]]:
+    """design.md D18/task 4.4: grandfathering visibility — computed purely from
+    the agent's CURRENT active revision, with no distinction between a
+    legacy-grandfathered agent and a newly-bootstrapped one that has not yet
+    been configured.
+    """
+    active = await revisions_service.get_active_revision(
+        session, agent.client_id, agent.id
+    )
+    overrides: dict = {}
+    if active is not None:
+        overrides = json.loads(active.config)
+    missing = sorted(f for f in AGENT_REQUIRED_FIELDS if overrides.get(f) is None)
+    return (len(missing) > 0, missing)
+
+
+async def _resolve_effective_for_agent(
+    session: AsyncSession, agent: Agent
+) -> EffectiveConfig:
+    """design.md D13/D18: resolve the agent's effective config through the
+    same standard → client → agent chain used everywhere else, treating a
+    legacy V1 full-snapshot revision's present fields as agent-provenance
+    overrides (spec.md's "pre-existing V1 revision resolves without migration").
+    """
+    client_overrides: dict = {}
+    client_revision = await revisions_service.get_active_client_revision(
+        session, agent.client_id
+    )
+    if client_revision is not None:
+        client_overrides = json.loads(client_revision.config)
+        client_overrides.pop("schema_version", None)
+
+    agent_overrides: dict = {}
+    active = await revisions_service.get_active_revision(
+        session, agent.client_id, agent.id
+    )
+    if active is not None:
+        agent_overrides = json.loads(active.config)
+        agent_overrides.pop("schema_version", None)
+
+    return resolve_effective_config(AgentConfigStandard, client_overrides, agent_overrides)
+
+
+def _mirror_effective_config_to_agent(agent: Agent, effective: EffectiveConfig) -> None:
+    """TRANSITIONAL (design.md D18's decision #4): every agent revision write
+    still mirrors the EFFECTIVE values into the legacy Agent.* columns, so the
+    runtime (still reading columns until the Phase 5 cutover) behaves
+    identically regardless of which level a field's value came from.
+    """
+    fields = effective.fields
+    agent.system_prompt = fields["system_prompt"].value or ""
+    agent.voice_id = fields["voice_id"].value
+    agent.tts_model = fields["tts_model"].value
+    agent.tts_speed = fields["tts_speed"].value
+    agent.tts_stability = fields["tts_stability"].value
+    agent.tts_similarity_boost = fields["tts_similarity_boost"].value
+    agent.model = fields["model"].value
+    agent.temperature = fields["temperature"].value
+    agent.max_tokens = fields["max_tokens"].value
+    agent.tools_enabled = json.dumps(fields["tools_enabled"].value)
+    agent.soft_timeout_seconds = fields["soft_timeout_seconds"].value
+    agent.soft_timeout_message = fields["soft_timeout_message"].value
+    agent.soft_timeout_use_llm = fields["soft_timeout_use_llm"].value
+    agent.voicemail_detection_enabled = fields["voicemail_detection_enabled"].value
+    agent.max_call_duration_seconds = fields["max_call_duration_seconds"].value
+
+
 def _revision_to_response(revision: AgentConfigRevision) -> AgentConfigRevisionResponse:
     return AgentConfigRevisionResponse(
         id=revision.id,
@@ -322,7 +400,13 @@ async def list_agents(
     """
     await _require_client(session, client_id)
     agents = await tenant_service.list_agents_for_client(session, client_id)
-    return [_agent_to_response(a) for a in agents]
+    responses = []
+    for a in agents:
+        incomplete, missing = await _agent_completeness(session, a)
+        responses.append(
+            _agent_to_response(a, config_incomplete=incomplete, missing_required_fields=missing)
+        )
+    return responses
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +471,7 @@ async def create_agent(
             soft_timeout_use_llm=payload.soft_timeout_use_llm,
             voicemail_detection_enabled=payload.voicemail_detection_enabled,
             max_call_duration_seconds=payload.max_call_duration_seconds,
+            goal=payload.goal,
         )
     except ValueError as exc:
         msg = str(exc)
@@ -409,7 +494,8 @@ async def create_agent(
         settings = request.app.state.settings
         asyncio.create_task(sync_to_elevenlabs(agent_id=agent.id, settings=settings))
 
-    return _agent_to_response(agent)
+    incomplete, missing = await _agent_completeness(session, agent)
+    return _agent_to_response(agent, config_incomplete=incomplete, missing_required_fields=missing)
 
 
 # ---------------------------------------------------------------------------
@@ -494,7 +580,8 @@ async def get_agent(
             status_code=404,
             detail={"error": "agent not found", "agent_id": agent_id},
         )
-    return _agent_to_response(agent)
+    incomplete, missing = await _agent_completeness(session, agent)
+    return _agent_to_response(agent, config_incomplete=incomplete, missing_required_fields=missing)
 
 
 # ---------------------------------------------------------------------------
@@ -565,7 +652,8 @@ async def update_agent(
         settings = request.app.state.settings
         asyncio.create_task(sync_to_elevenlabs(agent_id=agent.id, settings=settings))
 
-    return _agent_to_response(agent)
+    incomplete, missing = await _agent_completeness(session, agent)
+    return _agent_to_response(agent, config_incomplete=incomplete, missing_required_fields=missing)
 
 
 # ---------------------------------------------------------------------------
@@ -581,49 +669,48 @@ async def update_agent(
 async def patch_agent_config(
     client_id: str,
     agent_id: str,
-    payload: AgentConfigPatch,
+    payload: AgentConfigV2Patch,
     request: Request,
     caller: CallerIdentity = Depends(require_client_access),
     session: AsyncSession = Depends(get_db_session),
 ) -> AgentConfigRevisionResponse:
-    """Partial config update merged over the active revision, then validated
-    as a full AgentConfigV1 before a new revision is created and activated.
+    """Sparse override write (design.md D18): the patch is merged over the
+    agent's current sparse overrides (promoting a V1 active revision to V2
+    overrides on first write) and validated against FIELD_POLICY before a new
+    AgentConfigV2 revision is created and activated. A null value removes an
+    existing override (inherit again).
 
     Returns:
         200: The newly-activated AgentConfigRevisionResponse.
         404: If client or agent does not exist.
-        422: If the merged config fails AgentConfigV1 validation.
+        422: If the write sets a locked/client_only field, or removes a
+             previously-set agent_required field.
     """
     await _require_client(session, client_id)
     agent = await _require_agent(session, client_id, agent_id)
 
-    active = await revisions_service.get_active_revision(session, client_id, agent_id)
-    base_config = json.loads(active.config) if active is not None else (
-        _agent_config_snapshot(agent).model_dump()
-    )
-
     patch_data = payload.model_dump(exclude_unset=True, exclude={"note"})
-    merged = {**base_config, **patch_data}
     try:
-        validated = AgentConfigV1(**merged)
-    except ValidationError as exc:
+        revision = await revisions_service.create_agent_config_revision(
+            session,
+            agent=agent,
+            patch=patch_data,
+            source="api",
+            created_by=caller.email or "api",
+            note=payload.note,
+        )
+    except revisions_service.AgentConfigWriteError as exc:
         raise HTTPException(
             status_code=422,
-            detail={"error": "invalid_config", "detail": str(exc)},
+            detail={"error": "invalid_config", "fields": exc.fields, "detail": str(exc)},
         ) from exc
 
-    revision = await revisions_service.create_revision(
-        session,
-        agent=agent,
-        config=validated,
-        source="api",
-        created_by=caller.email or "api",
-        note=payload.note,
-    )
-
-    # TRANSITIONAL (design.md D6/D7): legacy Agent.* columns still drive runtime
-    # until Phase 3/4, so every revision write must also update them.
-    _mirror_config_to_agent(agent, validated)
+    # TRANSITIONAL (design.md D18 decision #4): every agent revision write
+    # still mirrors the EFFECTIVE values into the legacy Agent.* columns, so
+    # the runtime (still reading columns until the Phase 5 cutover) behaves
+    # identically regardless of which level a field's value came from.
+    effective = await _resolve_effective_for_agent(session, agent)
+    _mirror_effective_config_to_agent(agent, effective)
 
     await session.commit()
     await session.refresh(agent)
@@ -731,10 +818,11 @@ async def rollback_agent_config(
             detail={"error": "revision not found", "revision_id": revision_id},
         )
 
-    validated = AgentConfigV1.model_validate_json(new_revision.config)
-    # TRANSITIONAL (design.md D6/D7): legacy Agent.* columns still drive runtime
-    # until Phase 3/4, so rollback must also update them.
-    _mirror_config_to_agent(agent, validated)
+    # TRANSITIONAL (design.md D18 decision #4): rollback preserves whichever
+    # schema_version the target revision was recorded in (V1 full snapshot or
+    # V2 sparse overrides); mirror the resolved EFFECTIVE values either way.
+    effective = await _resolve_effective_for_agent(session, agent)
+    _mirror_effective_config_to_agent(agent, effective)
 
     await session.commit()
     await session.refresh(agent)
@@ -792,4 +880,5 @@ async def deactivate_agent(
 
     await session.commit()
     await session.refresh(agent)
-    return _agent_to_response(agent)
+    incomplete, missing = await _agent_completeness(session, agent)
+    return _agent_to_response(agent, config_incomplete=incomplete, missing_required_fields=missing)

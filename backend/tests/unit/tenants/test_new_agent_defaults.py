@@ -57,7 +57,7 @@ def test_agent_create_schema_defaults_match_production_standard():
     """AgentCreate's model/tts_model defaults match the production standard."""
     from app.agents.schemas import AgentCreate
 
-    agent = AgentCreate(slug="main-agent", name="Main Agent", voice_id="voice-123")
+    agent = AgentCreate(goal="Book a demo call.", slug="main-agent", name="Main Agent", voice_id="voice-123")
 
     assert agent.model == "gpt-4.1-mini"
     assert agent.tts_model == "eleven_v4_turbo"
