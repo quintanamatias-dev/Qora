@@ -1,12 +1,12 @@
 """Full lifecycle integration test for Client + Agent Admin CRUD.
 
-Task 4.2: End-to-end flow:
+Task 4.2 (updated for agent-routing D3 — make-default removed): End-to-end flow:
   1. Create a new client
   2. Verify default agent is auto-created
   3. Create a second agent
-  4. Make the second agent the default
-  5. Deactivate the old (first) default agent
-  6. Verify final state: second agent is active+default; first is inactive
+  4. Deactivate the first agent (allowed — 2 active agents exist)
+  5. Verify final state: second agent remains active; first is inactive
+  6. Deactivating the last remaining active agent is blocked (409)
 
 This test exercises the complete happy path through the actual HTTP API
 using an isolated in-memory SQLite DB.
@@ -114,18 +114,8 @@ async def test_full_admin_lifecycle(lifecycle_app: AsyncClient):
     assert len(agents_resp2.json()) == 2
 
     # ----------------------------------------------------------------
-    # Step 4: Make the second agent the default
-    # ----------------------------------------------------------------
-    make_default_resp = await lifecycle_app.post(
-        f"{base_url}/clients/lifecycle-broker/agents/{second_agent_id}/make-default"
-    )
-    assert make_default_resp.status_code == 200
-    new_default = make_default_resp.json()
-    assert new_default["is_default"] is True
-    assert new_default["agent_id"] == second_agent_id
-
-    # ----------------------------------------------------------------
-    # Step 5: Deactivate the old (first) default agent
+    # Step 4: Deactivate the first agent — allowed, 2 active agents exist
+    # (agent-routing D3: the guard counts active agents, not is_default)
     # ----------------------------------------------------------------
     deactivate_resp = await lifecycle_app.post(
         f"{base_url}/clients/lifecycle-broker/agents/{first_agent_id}/deactivate"
@@ -136,24 +126,24 @@ async def test_full_admin_lifecycle(lifecycle_app: AsyncClient):
     assert deactivated["agent_id"] == first_agent_id
 
     # ----------------------------------------------------------------
-    # Step 6: Verify final state
+    # Step 5: Verify final state — only the second agent is active
     # ----------------------------------------------------------------
-    # Only active agents in default list
     final_resp = await lifecycle_app.get(f"{base_url}/clients/lifecycle-broker/agents")
     assert final_resp.status_code == 200
     final_agents = final_resp.json()
 
-    # Only the second agent is active
     assert len(final_agents) == 1
     assert final_agents[0]["agent_id"] == second_agent_id
-    assert final_agents[0]["is_default"] is True
     assert final_agents[0]["is_active"] is True
 
     # ----------------------------------------------------------------
-    # Bonus: confirm old default cannot be made default (inactive guard)
+    # Step 6: the client's last remaining active agent cannot be deactivated
     # ----------------------------------------------------------------
-    inactive_make_default_resp = await lifecycle_app.post(
-        f"{base_url}/clients/lifecycle-broker/agents/{first_agent_id}/make-default"
+    last_agent_deactivate_resp = await lifecycle_app.post(
+        f"{base_url}/clients/lifecycle-broker/agents/{second_agent_id}/deactivate"
     )
-    assert inactive_make_default_resp.status_code == 409
-    assert "inactive" in inactive_make_default_resp.json()["detail"]["error"]
+    assert last_agent_deactivate_resp.status_code == 409
+    assert (
+        "cannot_deactivate_last_active_agent"
+        in last_agent_deactivate_resp.json()["detail"]["detail"]
+    )

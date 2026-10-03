@@ -390,8 +390,11 @@ async def test_tech_retry_returns_none_when_client_not_found(persistence_db):
 
     assert sc is None, "Missing client must yield None, not raise"
     events = [e.get("event") for e in cap]
-    assert "tech_retry_client_not_found" in events, (
-        f"Expected tech_retry_client_not_found warning, got events: {events}"
+    # agent-routing D2: a client with zero active agents (including a nonexistent
+    # client) now fails closed at agent resolution, before the client lookup is
+    # even reached — same None-without-raise contract, different (earlier) log event.
+    assert "tech_retry_skipped_agent_resolution_failed" in events, (
+        f"Expected tech_retry_skipped_agent_resolution_failed warning, got events: {events}"
     )
 
 

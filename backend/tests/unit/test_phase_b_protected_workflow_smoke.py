@@ -159,7 +159,7 @@ async def smoke_stamped_db(tmp_path: Path):
     # Phase B10 (background_jobs) added 20260624_0002 as the new head.
     # PR3 transcript finalization fields: 20260625_0003
     # C2 outbound telephony: 20260702_0004
-    _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013"}
+    _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017"}
     assert row[0] in _KNOWN_REVISIONS, (
         f"Expected a known Qora revision as head, got {row[0]!r}. "
         f"Known revisions: {_KNOWN_REVISIONS}"
@@ -202,12 +202,12 @@ async def test_smoke_area1_agent_context_assembly(smoke_db):
     db_module, settings = smoke_db
 
     async with db_module.async_session_factory() as sess:
-        from app.tenants.service import get_client, get_default_agent
+        from app.tenants.service import get_client, resolve_single_active_agent
         from app.leads.service import get_lead
         from app.voice.context import build_voice_context
 
         client = await get_client(sess, "quintana-seguros")
-        agent = await get_default_agent(sess, "quintana-seguros")
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
         lead = await get_lead(sess, "lead-quintana-001")
 
         assert client is not None, "Client 'quintana-seguros' must exist in migrated DB"
@@ -239,11 +239,11 @@ async def test_smoke_area1_agent_context_has_model_and_tokens(smoke_db):
     db_module, settings = smoke_db
 
     async with db_module.async_session_factory() as sess:
-        from app.tenants.service import get_client, get_default_agent
+        from app.tenants.service import get_client, resolve_single_active_agent
         from app.voice.context import build_voice_context
 
         client = await get_client(sess, "quintana-seguros")
-        agent = await get_default_agent(sess, "quintana-seguros")
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
 
         ctx = await build_voice_context(agent=agent, lead=None, db=sess, client=client)
 
@@ -822,12 +822,12 @@ async def test_stamped_db_area1_agent_context_assembly(smoke_stamped_db):
     db_module, settings = smoke_stamped_db
 
     async with db_module.async_session_factory() as sess:
-        from app.tenants.service import get_client, get_default_agent
+        from app.tenants.service import get_client, resolve_single_active_agent
         from app.leads.service import get_lead
         from app.voice.context import build_voice_context
 
         client = await get_client(sess, "quintana-seguros")
-        agent = await get_default_agent(sess, "quintana-seguros")
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
         lead = await get_lead(sess, "lead-quintana-001")
 
         assert client is not None, "Client must exist in stamped DB"

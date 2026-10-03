@@ -6,7 +6,6 @@ Endpoints:
     GET    /api/v1/clients/{client_id}/agents/{agent_id}                    — Get single agent (200 / 404)
     PATCH  /api/v1/clients/{client_id}/agents/{agent_id}                    — Partial update (200 / 404)
     POST   /api/v1/clients/{client_id}/agents/{agent_id}/deactivate         — Soft delete (200 / 404 / 409)
-    POST   /api/v1/clients/{client_id}/agents/{agent_id}/make-default       — Atomic default swap (200 / 404 / 409)
     POST   /api/v1/clients/{client_id}/agents/{agent_id}/sync-elevenlabs    — Manual EL re-sync (200 / 404)
 """
 
@@ -17,13 +16,23 @@ import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.schemas import AgentCreate, AgentResponse, AgentUpdate, SyncStatusResponse
+from app.agents.schemas import (
+    AgentConfigRevisionResponse,
+    AgentCreate,
+    AgentResponse,
+    AgentUpdate,
+    SyncStatusResponse,
+)
 from app.core.access import require_client_access, require_superadmin
-from app.elevenlabs.service import sync_to_elevenlabs
-from app.tenants.models import Agent, Client
+from app.core.auth import CallerIdentity
+from app.elevenlabs.service import ElevenLabsService, sync_to_elevenlabs
+from app.tenants.agent_config_schema import AgentConfigPatch, AgentConfigV1
+from app.tenants.models import Agent, AgentConfigRevision, Client
 import app.tenants.service as tenant_service
+from app.tenants import revisions_service
 
 router = APIRouter(
     prefix="/clients/{client_id}/agents",
@@ -208,6 +217,93 @@ async def _require_client(session: AsyncSession, client_id: str) -> None:
         )
 
 
+async def _require_agent(session: AsyncSession, client_id: str, agent_id: str) -> Agent:
+    """Fetch an agent scoped to client_id, or raise 404."""
+    agent = await tenant_service.get_agent(session, agent_id)
+    if agent is None or agent.client_id != client_id:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "agent not found", "agent_id": agent_id},
+        )
+    return agent
+
+
+def _agent_config_snapshot(agent: Agent) -> AgentConfigV1:
+    """Build a validated AgentConfigV1 from an Agent's current columns.
+
+    Used as the merge base when no active revision exists yet, and to build
+    the config mirrored into a new revision after the legacy PATCH updates
+    Agent.* columns directly. system_prompt is coerced to "" when NULL —
+    AgentConfigV1 requires a str, but legacy agents may not have one set yet.
+    """
+    snapshot = tenant_service.build_agent_config_v1_snapshot(agent, agent.system_prompt)
+    snapshot["system_prompt"] = snapshot["system_prompt"] or ""
+    return AgentConfigV1(**snapshot)
+
+
+def _mirror_config_to_agent(agent: Agent, config: AgentConfigV1) -> None:
+    """Write an activated revision's config onto the legacy Agent.* columns.
+
+    TRANSITIONAL (design.md D6/D7): runtime still reads Agent.* columns until
+    the Phase 3/4 cutover moves it to read the active revision directly.
+    Fields with no Agent column (goal, first_message, language, turn_eagerness)
+    are not mirrored — they have nowhere to live until Phase 1b/3.
+    """
+    agent.system_prompt = config.system_prompt
+    agent.voice_id = config.voice_id
+    agent.tts_model = config.tts_model
+    agent.tts_speed = config.tts_speed
+    agent.tts_stability = config.tts_stability
+    agent.tts_similarity_boost = config.tts_similarity_boost
+    agent.model = config.model
+    agent.temperature = config.temperature
+    agent.max_tokens = config.max_tokens
+    agent.tools_enabled = json.dumps(config.tools_enabled)
+    agent.soft_timeout_seconds = config.soft_timeout_seconds
+    agent.soft_timeout_message = config.soft_timeout_message
+    agent.soft_timeout_use_llm = config.soft_timeout_use_llm
+    agent.voicemail_detection_enabled = config.voicemail_detection_enabled
+    agent.max_call_duration_seconds = config.max_call_duration_seconds
+
+
+def _revision_to_response(revision: AgentConfigRevision) -> AgentConfigRevisionResponse:
+    return AgentConfigRevisionResponse(
+        id=revision.id,
+        agent_id=revision.agent_id,
+        revision_number=revision.revision_number,
+        config=json.loads(revision.config),
+        schema_version=revision.schema_version,
+        source=revision.source,
+        created_by=revision.created_by,
+        created_at=revision.created_at,
+        note=revision.note,
+        elevenlabs_sync_status=revision.elevenlabs_sync_status,
+    )
+
+
+async def _sync_revision_to_elevenlabs(
+    session: AsyncSession, request: Request, agent: Agent, revision: AgentConfigRevision
+) -> None:
+    """Run the existing agent-scoped EL sync and record the outcome on *revision*.
+
+    Reuses ElevenLabsService.sync_agent_config unchanged (design.md D7). Mirrors
+    the outcome onto Agent.elevenlabs_sync_status / elevenlabs_last_synced_at
+    exactly like the existing manual sync-elevenlabs endpoint, so legacy readers
+    of those columns keep working during the transition.
+    """
+    settings = request.app.state.settings
+    service = ElevenLabsService(settings=settings)
+    result = await service.sync_agent_config(agent)
+
+    revision.elevenlabs_sync_status = result.outcome
+    if result.outcome == "synced":
+        agent.elevenlabs_sync_status = "synced"
+        agent.elevenlabs_last_synced_at = datetime.now(tz=timezone.utc)
+    elif result.outcome in ("drift", "error"):
+        agent.elevenlabs_sync_status = result.outcome
+    # "skipped" — no Agent column update, matches existing sync-elevenlabs endpoint behavior.
+
+
 # ---------------------------------------------------------------------------
 # GET /api/v1/clients/{client_id}/agents/
 # ---------------------------------------------------------------------------
@@ -279,7 +375,6 @@ async def create_agent(
             max_tokens=payload.max_tokens,
             tools_enabled=json.dumps(payload.tools_enabled),
             is_active=True,
-            is_default=payload.is_default,
             elevenlabs_agent_id=payload.elevenlabs_agent_id,
             elevenlabs_phone_number_id=payload.elevenlabs_phone_number_id,
             tts_speed=payload.tts_speed,
@@ -413,9 +508,16 @@ async def update_agent(
     agent_id: str,
     payload: AgentUpdate,
     request: Request,
+    caller: CallerIdentity = Depends(require_client_access),
     session: AsyncSession = Depends(get_db_session),
 ) -> AgentResponse:
     """Partially update an agent. Only provided fields are updated.
+
+    TRANSITIONAL (design.md D7's "route config fields through revisions" item):
+    a successful update also creates a new AgentConfigRevision (source="api")
+    snapshotting the agent's post-update columns, so the revision history never
+    misses a change made through this legacy column-editing endpoint. This does
+    not change this endpoint's request/response contract.
 
     Returns:
         200: Updated AgentResponse.
@@ -444,6 +546,17 @@ async def update_agent(
             detail={"error": "agent not found", "agent_id": agent_id},
         )
 
+    if changed_fields:
+        config = _agent_config_snapshot(agent)
+        await revisions_service.create_revision(
+            session,
+            agent=agent,
+            config=config,
+            source="api",
+            created_by=caller.email or "api",
+            note="legacy PATCH /agents/{agent_id}",
+        )
+
     await session.commit()
     await session.refresh(agent)
 
@@ -453,6 +566,185 @@ async def update_agent(
         asyncio.create_task(sync_to_elevenlabs(agent_id=agent.id, settings=settings))
 
     return _agent_to_response(agent)
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/v1/clients/{client_id}/agents/{agent_id}/config
+# ---------------------------------------------------------------------------
+
+
+@router.patch(
+    "/{agent_id}/config",
+    response_model=AgentConfigRevisionResponse,
+    dependencies=[Depends(require_superadmin)],
+)
+async def patch_agent_config(
+    client_id: str,
+    agent_id: str,
+    payload: AgentConfigPatch,
+    request: Request,
+    caller: CallerIdentity = Depends(require_client_access),
+    session: AsyncSession = Depends(get_db_session),
+) -> AgentConfigRevisionResponse:
+    """Partial config update merged over the active revision, then validated
+    as a full AgentConfigV1 before a new revision is created and activated.
+
+    Returns:
+        200: The newly-activated AgentConfigRevisionResponse.
+        404: If client or agent does not exist.
+        422: If the merged config fails AgentConfigV1 validation.
+    """
+    await _require_client(session, client_id)
+    agent = await _require_agent(session, client_id, agent_id)
+
+    active = await revisions_service.get_active_revision(session, client_id, agent_id)
+    base_config = json.loads(active.config) if active is not None else (
+        _agent_config_snapshot(agent).model_dump()
+    )
+
+    patch_data = payload.model_dump(exclude_unset=True, exclude={"note"})
+    merged = {**base_config, **patch_data}
+    try:
+        validated = AgentConfigV1(**merged)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "invalid_config", "detail": str(exc)},
+        ) from exc
+
+    revision = await revisions_service.create_revision(
+        session,
+        agent=agent,
+        config=validated,
+        source="api",
+        created_by=caller.email or "api",
+        note=payload.note,
+    )
+
+    # TRANSITIONAL (design.md D6/D7): legacy Agent.* columns still drive runtime
+    # until Phase 3/4, so every revision write must also update them.
+    _mirror_config_to_agent(agent, validated)
+
+    await session.commit()
+    await session.refresh(agent)
+    await session.refresh(revision)
+
+    await _sync_revision_to_elevenlabs(session, request, agent, revision)
+    await session.commit()
+    await session.refresh(revision)
+
+    return _revision_to_response(revision)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/clients/{client_id}/agents/{agent_id}/revisions
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{agent_id}/revisions", response_model=list[AgentConfigRevisionResponse])
+async def list_agent_revisions(
+    client_id: str,
+    agent_id: str,
+    session: AsyncSession = Depends(get_db_session),
+) -> list[AgentConfigRevisionResponse]:
+    """Return every revision for an agent, newest first.
+
+    Returns:
+        200: List of AgentConfigRevisionResponse.
+        404: If client or agent does not exist.
+    """
+    await _require_client(session, client_id)
+    await _require_agent(session, client_id, agent_id)
+
+    revisions = await revisions_service.list_revisions(session, client_id, agent_id)
+    return [_revision_to_response(r) for r in revisions]
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/clients/{client_id}/agents/{agent_id}/revisions/{revision_id}
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{agent_id}/revisions/{revision_id}", response_model=AgentConfigRevisionResponse
+)
+async def get_agent_revision(
+    client_id: str,
+    agent_id: str,
+    revision_id: str,
+    session: AsyncSession = Depends(get_db_session),
+) -> AgentConfigRevisionResponse:
+    """Return a single revision by id, scoped to this agent and client.
+
+    Returns:
+        200: AgentConfigRevisionResponse.
+        404: If client, agent, or revision does not exist (or belongs to
+             another agent/client — identical response, no probing signal).
+    """
+    await _require_client(session, client_id)
+    await _require_agent(session, client_id, agent_id)
+
+    revision = await revisions_service.get_revision(session, client_id, agent_id, revision_id)
+    if revision is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "revision not found", "revision_id": revision_id},
+        )
+    return _revision_to_response(revision)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/clients/{client_id}/agents/{agent_id}/revisions/{revision_id}/rollback
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{agent_id}/revisions/{revision_id}/rollback",
+    response_model=AgentConfigRevisionResponse,
+    dependencies=[Depends(require_superadmin)],
+)
+async def rollback_agent_config(
+    client_id: str,
+    agent_id: str,
+    revision_id: str,
+    request: Request,
+    caller: CallerIdentity = Depends(require_client_access),
+    session: AsyncSession = Depends(get_db_session),
+) -> AgentConfigRevisionResponse:
+    """Roll back to a prior revision: creates a NEW revision (source="rollback")
+    copying the target's config, then activates it. The target row is never
+    reactivated or mutated.
+
+    Returns:
+        200: The newly-created rollback AgentConfigRevisionResponse.
+        404: If client, agent, or target revision does not exist.
+    """
+    await _require_client(session, client_id)
+    agent = await _require_agent(session, client_id, agent_id)
+
+    new_revision = await revisions_service.rollback_to_revision(
+        session, client_id, agent_id, revision_id, created_by=caller.email or "api"
+    )
+    if new_revision is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "revision not found", "revision_id": revision_id},
+        )
+
+    validated = AgentConfigV1.model_validate_json(new_revision.config)
+    # TRANSITIONAL (design.md D6/D7): legacy Agent.* columns still drive runtime
+    # until Phase 3/4, so rollback must also update them.
+    _mirror_config_to_agent(agent, validated)
+
+    await session.commit()
+    await session.refresh(agent)
+    await session.refresh(new_revision)
+
+    await _sync_revision_to_elevenlabs(session, request, agent, new_revision)
+    await session.commit()
+    await session.refresh(new_revision)
+
+    return _revision_to_response(new_revision)
 
 
 # ---------------------------------------------------------------------------
@@ -487,58 +779,10 @@ async def deactivate_agent(
         agent = await tenant_service.deactivate_agent(session, agent_id, client_id)
     except ValueError as exc:
         msg = str(exc)
-        if "cannot_deactivate_sole_default_agent" in msg:
+        if "cannot_deactivate_last_active_agent" in msg:
             raise HTTPException(
                 status_code=409,
-                detail={"error": "cannot deactivate sole default agent", "detail": msg},
-            ) from exc
-        # Unexpected ValueError — return 500, not a misleading 404
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "internal error", "detail": msg},
-        ) from exc
-
-    await session.commit()
-    await session.refresh(agent)
-    return _agent_to_response(agent)
-
-
-# ---------------------------------------------------------------------------
-# POST /api/v1/clients/{client_id}/agents/{agent_id}/make-default
-# ---------------------------------------------------------------------------
-
-
-@router.post("/{agent_id}/make-default", response_model=AgentResponse, dependencies=[Depends(require_superadmin)])
-async def make_default_agent(
-    client_id: str,
-    agent_id: str,
-    session: AsyncSession = Depends(get_db_session),
-) -> AgentResponse:
-    """Atomically swap the default agent for a client.
-
-    Returns:
-        200: AgentResponse with is_default=True.
-        404: If agent does not exist.
-        409: If agent is inactive (cannot be made default).
-    """
-    await _require_client(session, client_id)
-
-    # Explicit existence check so 404 is reserved for "not found" only
-    _agent_check = await tenant_service.get_agent(session, agent_id)
-    if _agent_check is None or _agent_check.client_id != client_id:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "agent not found", "agent_id": agent_id},
-        )
-
-    try:
-        agent = await tenant_service.set_default_agent(session, client_id, agent_id)
-    except ValueError as exc:
-        msg = str(exc)
-        if "cannot_set_inactive_agent_as_default" in msg:
-            raise HTTPException(
-                status_code=409,
-                detail={"error": "cannot set inactive agent as default", "detail": msg},
+                detail={"error": "cannot deactivate last active agent", "detail": msg},
             ) from exc
         # Unexpected ValueError — return 500, not a misleading 404
         raise HTTPException(

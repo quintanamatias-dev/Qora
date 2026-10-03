@@ -42,6 +42,7 @@ async def two_tenant_app(tmp_path: Path):
     async with db_module.async_session_factory() as sess:
         from app.tenants.models import Client
         from app.leads.service import create_lead
+        from app.tenants.service import create_agent
 
         alpha = Client(
             id="alpha-client",
@@ -62,6 +63,15 @@ async def two_tenant_app(tmp_path: Path):
         sess.add(alpha)
         sess.add(beta)
         await sess.flush()
+        # agent-routing D2: fail-closed resolution requires a resolvable active
+        # agent. Client() constructed directly (not via create_client) does not
+        # auto-bootstrap one, unlike production clients.
+        await create_agent(
+            sess, client_id="alpha-client", slug="agent-alpha", name="AgentAlpha", voice_id="v-alpha"
+        )
+        await create_agent(
+            sess, client_id="beta-client", slug="agent-beta", name="AgentBeta", voice_id="v-beta"
+        )
 
         await create_lead(
             sess,
@@ -127,6 +137,11 @@ async def hours_app(tmp_path: Path):
         )
         sess.add(c)
         await sess.flush()
+        from app.tenants.service import create_agent
+
+        await create_agent(
+            sess, client_id="hours-client", slug="agent-h", name="AgentH", voice_id="v-h"
+        )
         await create_lead(
             sess,
             client_id="hours-client",
@@ -185,6 +200,11 @@ async def followup_app(tmp_path: Path):
         )
         sess.add(c)
         await sess.flush()
+        from app.tenants.service import create_agent
+
+        await create_agent(
+            sess, client_id="fu-client", slug="agent-fu", name="AgentFU", voice_id="v-fu"
+        )
         await create_lead(
             sess,
             client_id="fu-client",

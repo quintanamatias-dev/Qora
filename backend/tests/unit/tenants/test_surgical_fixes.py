@@ -3,7 +3,7 @@
 Covers:
 - CRITICAL 1: ValueError uncaught when no default agent — webhook must return graceful SSE
 - CRITICAL 1b: create_client() / seed_client() bootstraps a default agent
-- WARNING 3: get_default_agent() filters inactive agents (is_active=True)
+- WARNING 3: resolve_single_active_agent() filters inactive agents (is_active=True)
 - WARNING 6: schedule_followup parses naive datetime AFTER client_id is resolved
 """
 
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import pytest_asyncio
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,13 +42,17 @@ async def session(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# WARNING 3: get_default_agent() must filter by is_active=True
+# WARNING 3: resolve_single_active_agent() must filter by is_active=True
 # ---------------------------------------------------------------------------
 
 
-async def test_get_default_agent_ignores_inactive_agent(session: AsyncSession):
-    """get_default_agent() must NOT return an inactive default agent."""
-    from app.tenants.service import create_client, get_default_agent
+async def test_resolve_single_active_agent_raises_when_only_agent_is_inactive(
+    session: AsyncSession,
+):
+    """resolve_single_active_agent() must NOT return an inactive agent — it raises
+    NoActiveAgentError once the client's only agent is deactivated.
+    """
+    from app.tenants.service import create_client, resolve_single_active_agent, NoActiveAgentError
     from app.tenants.models import Agent
     from sqlalchemy import update
 
@@ -59,8 +64,7 @@ async def test_get_default_agent_ignores_inactive_agent(session: AsyncSession):
         voice_id="v-inactive",
     )
 
-    # The auto-created default agent is active — deactivate it to simulate an inactive default
-    active = await get_default_agent(session, "broker-inactive-agent")
+    active = await resolve_single_active_agent(session, "broker-inactive-agent")
     assert active is not None, "create_client must bootstrap a default agent first"
 
     await session.execute(
@@ -68,44 +72,8 @@ async def test_get_default_agent_ignores_inactive_agent(session: AsyncSession):
     )
     await session.flush()
 
-    # get_default_agent should return None because the only default is now inactive
-    result = await get_default_agent(session, "broker-inactive-agent")
-    assert result is None, (
-        "get_default_agent() must return None when the only default agent is inactive. "
-        f"Got: {result}"
-    )
-
-
-async def test_get_default_agent_returns_active_default_among_inactive(
-    session: AsyncSession,
-):
-    """get_default_agent() returns the active default, not inactive ones."""
-    from app.tenants.service import create_client, get_default_agent
-    from app.tenants.models import Agent
-    from sqlalchemy import update
-
-    await create_client(
-        session,
-        id="broker-mixed-active",
-        name="Test SA",
-        agent_name="Agent",
-        voice_id="v-mixed",
-    )
-
-    # The auto-created default is active — deactivate it directly to test the query filter
-    active_agent = await get_default_agent(session, "broker-mixed-active")
-    assert active_agent is not None
-
-    await session.execute(
-        update(Agent).where(Agent.id == active_agent.id).values(is_active=False)
-    )
-    await session.flush()
-
-    # Now there's a default agent that's inactive — result must be None
-    result = await get_default_agent(session, "broker-mixed-active")
-    assert (
-        result is None
-    ), "After deactivating the default agent, get_default_agent() must return None"
+    with pytest.raises(NoActiveAgentError):
+        await resolve_single_active_agent(session, "broker-inactive-agent")
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +131,7 @@ async def test_schedule_followup_naive_datetime_uses_client_tz_even_when_client_
 
 async def test_create_client_bootstraps_default_agent(session: AsyncSession):
     """create_client() must automatically create a default Agent for the new client."""
-    from app.tenants.service import create_client, get_default_agent
+    from app.tenants.service import create_client, resolve_single_active_agent
 
     await create_client(
         session,
@@ -174,7 +142,7 @@ async def test_create_client_bootstraps_default_agent(session: AsyncSession):
     )
 
     # A default agent must have been automatically created
-    agent = await get_default_agent(session, "new-broker-auto-agent")
+    agent = await resolve_single_active_agent(session, "new-broker-auto-agent")
     assert agent is not None, (
         "create_client() must bootstrap a default Agent automatically. "
         "No default agent found."
@@ -187,7 +155,7 @@ async def test_create_client_bootstraps_default_agent(session: AsyncSession):
 
 async def test_create_client_default_agent_has_correct_config(session: AsyncSession):
     """The auto-created default agent inherits model/temperature/max_tokens from client args."""
-    from app.tenants.service import create_client, get_default_agent
+    from app.tenants.service import create_client, resolve_single_active_agent
 
     await create_client(
         session,
@@ -200,7 +168,7 @@ async def test_create_client_default_agent_has_correct_config(session: AsyncSess
         max_tokens=200,
     )
 
-    agent = await get_default_agent(session, "config-test-broker")
+    agent = await resolve_single_active_agent(session, "config-test-broker")
     assert agent is not None
     assert agent.model == "gpt-4o-mini"
     assert agent.temperature == 0.5

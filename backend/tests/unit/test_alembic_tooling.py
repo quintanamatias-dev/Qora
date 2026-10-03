@@ -777,7 +777,7 @@ class TestRealMigrationExecution:
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
         # PR3 transcript finalization fields: 20260625_0003
         # C2 outbound telephony: 20260702_0004
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013"}
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"alembic_version should contain a known Qora revision. "
             f"Got: {versions}. Known: {_KNOWN_REVISIONS}"
@@ -961,7 +961,7 @@ class TestRealMigrationExecution:
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
         # PR3 transcript finalization fields: 20260625_0003
         # C2 outbound telephony: 20260702_0004
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013"}
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"Stamp head did not record a known Qora revision. Got: {versions}. "
             f"Known revisions: {_KNOWN_REVISIONS}"
@@ -2193,3 +2193,292 @@ class TestBaselineColumnContract:
         assert not upgrade_called, (
             "run_migrations called upgrade on a stub-column DB."
         )
+
+
+# ===========================================================================
+# agent-config-revisions-routing — Task 1.2: schema migration
+# ===========================================================================
+
+
+def _make_agent_config_revisions_alembic_config(db_path: Path):
+    """Build an Alembic Config pointing at a temporary DB (same pattern as
+    TestRealMigrationExecution._make_alembic_config)."""
+    from alembic.config import Config
+
+    cfg = Config(str(ALEMBIC_INI))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_path}")
+    cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    return cfg
+
+
+class TestAgentConfigRevisionsSchemaMigration:
+    """Task 1.2: agent_config_revisions table + agents.active_revision_id."""
+
+    def test_agent_config_revisions_schema_migration_creates_table(self, tmp_path):
+        """alembic upgrade head creates agent_config_revisions + agents.active_revision_id.
+
+        GIVEN a fresh SQLite DB
+        WHEN alembic upgrade head runs through the new revision
+        THEN agent_config_revisions exists with the columns the model declares
+        AND agents.active_revision_id exists as a nullable column
+        """
+        import sqlite3
+        from alembic import command
+
+        db_file = tmp_path / "agent_config_revisions_schema.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "head")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cur.fetchall()}
+        assert "agent_config_revisions" in tables
+
+        cur.execute("PRAGMA table_info(agent_config_revisions)")
+        columns = {row[1] for row in cur.fetchall()}
+        expected = {
+            "id",
+            "agent_id",
+            "revision_number",
+            "config",
+            "schema_version",
+            "source",
+            "created_by",
+            "created_at",
+            "note",
+        }
+        assert expected.issubset(columns), f"Missing columns: {expected - columns}"
+
+        cur.execute("PRAGMA table_info(agents)")
+        agents_columns = {row[1]: row for row in cur.fetchall()}
+        assert "active_revision_id" in agents_columns
+        # PRAGMA table_info: (cid, name, type, notnull, dflt_value, pk)
+        assert agents_columns["active_revision_id"][3] == 0, (
+            "agents.active_revision_id must be nullable"
+        )
+        conn.close()
+
+    def test_agent_config_revisions_schema_migration_downgrade(self, tmp_path):
+        """alembic downgrade -1 removes agent_config_revisions + active_revision_id."""
+        import sqlite3
+        from alembic import command
+
+        db_file = tmp_path / "agent_config_revisions_downgrade.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "20261002_0014")
+        command.downgrade(cfg, "-1")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cur.fetchall()}
+        assert "agent_config_revisions" not in tables
+
+        cur.execute("PRAGMA table_info(agents)")
+        agents_columns = {row[1] for row in cur.fetchall()}
+        assert "active_revision_id" not in agents_columns
+        conn.close()
+
+
+class TestCallSessionAgentConfigRevisionMigration:
+    """Phase 5 D4: call_sessions.agent_config_revision_id."""
+
+    def test_call_session_agent_config_revision_migration_adds_column(self, tmp_path):
+        """alembic upgrade head adds call_sessions.agent_config_revision_id (nullable)."""
+        import sqlite3
+        from alembic import command
+
+        db_file = tmp_path / "call_session_agent_config_revision.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "head")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(call_sessions)")
+        columns = {row[1]: row for row in cur.fetchall()}
+        assert "agent_config_revision_id" in columns
+        # PRAGMA table_info: (cid, name, type, notnull, dflt_value, pk)
+        assert columns["agent_config_revision_id"][3] == 0, (
+            "call_sessions.agent_config_revision_id must be nullable"
+        )
+        conn.close()
+
+    def test_call_session_agent_config_revision_migration_downgrade(self, tmp_path):
+        """alembic downgrade -1 removes call_sessions.agent_config_revision_id."""
+        import sqlite3
+        from alembic import command
+
+        db_file = tmp_path / "call_session_agent_config_revision_downgrade.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "-1")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(call_sessions)")
+        columns = {row[1] for row in cur.fetchall()}
+        assert "agent_config_revision_id" not in columns
+        conn.close()
+
+
+# ===========================================================================
+# agent-config-revisions-routing — Task 1.4: one-time import migration
+# ===========================================================================
+
+
+class TestImportAgentConfigRevisionMigration:
+    """Task 1.4: one source=import revision per agent, filesystem wins."""
+
+    def _seed_agents(self, db_file: Path) -> None:
+        """Insert a Client + two Agents directly via the ORM (test setup only —
+        the migration itself never imports app modules; this helper may).
+        """
+        import asyncio
+        import json as _json
+
+        async def _seed() -> None:
+            from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+            from sqlalchemy.orm import sessionmaker
+            from app.tenants.models import Client, Agent
+
+            engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
+            session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+            async with session_factory() as session:
+                session.add(
+                    Client(
+                        id="quintana-seguros",
+                        name="Quintana Seguros",
+                        agent_name="Jaumpablo",
+                        voice_id="v1",
+                    )
+                )
+                # Has a real filesystem system-prompt.md — file must win over this
+                # deliberately stale DB value.
+                session.add(
+                    Agent(
+                        id="agent-file-1",
+                        client_id="quintana-seguros",
+                        slug="jaumpablo",
+                        name="Jaumpablo",
+                        voice_id="v1",
+                        system_prompt="DB STALE PROMPT",
+                        model="gpt-4o",
+                        tts_model="eleven_flash_v2_5",
+                        tools_enabled=_json.dumps(["get_lead_details"]),
+                    )
+                )
+                # No matching filesystem file for this slug — DB column must win.
+                session.add(
+                    Agent(
+                        id="agent-no-file-1",
+                        client_id="quintana-seguros",
+                        slug="no-file-agent",
+                        name="NoFile",
+                        voice_id="v2",
+                        system_prompt="DB PROMPT WINS",
+                        model="gpt-4o",
+                        tts_model="eleven_flash_v2_5",
+                        tools_enabled=_json.dumps(["get_lead_details"]),
+                    )
+                )
+                await session.commit()
+            await engine.dispose()
+
+        asyncio.run(_seed())
+
+    def test_import_migration_creates_revision_1_per_agent(self, tmp_path):
+        """Each agent gets exactly one active, source=import revision.
+
+        GIVEN two agents: one with a real filesystem system-prompt.md, one without
+        WHEN the import migration runs
+        THEN each agent has exactly one agent_config_revisions row (source=import)
+        AND the filesystem-backed agent's system_prompt is the FILE content
+        AND the no-file agent's system_prompt is its Agent.system_prompt column
+        AND both agents' active_revision_id points at their new revision
+        """
+        import json as _json
+        import sqlite3
+        from alembic import command
+
+        db_file = tmp_path / "import_migration.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "20261002_0014")  # schema only, no import yet
+
+        self._seed_agents(db_file)
+
+        command.upgrade(cfg, "head")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, agent_id, revision_number, config, source FROM agent_config_revisions"
+        )
+        rows = cur.fetchall()
+        by_agent = {r[1]: r for r in rows}
+
+        assert len(rows) == 2, f"expected exactly 2 import revisions, got {rows}"
+        assert by_agent["agent-file-1"][4] == "import"
+        assert by_agent["agent-file-1"][2] == 1
+
+        expected_file_prompt = (
+            BACKEND_DIR / "clients" / "quintana-seguros" / "agents" / "jaumpablo" / "system-prompt.md"
+        ).read_text(encoding="utf-8")
+        config_file = _json.loads(by_agent["agent-file-1"][3])
+        assert config_file["system_prompt"] == expected_file_prompt
+        assert config_file["system_prompt"] != "DB STALE PROMPT"
+        assert config_file["schema_version"] == "v1"
+        assert config_file["voice_id"] == "v1"
+
+        config_no_file = _json.loads(by_agent["agent-no-file-1"][3])
+        assert config_no_file["system_prompt"] == "DB PROMPT WINS"
+
+        cur.execute("SELECT id, active_revision_id FROM agents")
+        active_by_agent = dict(cur.fetchall())
+        assert active_by_agent["agent-file-1"] == by_agent["agent-file-1"][0]
+        assert active_by_agent["agent-no-file-1"] == by_agent["agent-no-file-1"][0]
+        conn.close()
+
+    def test_import_migration_is_idempotent_on_rerun(self, tmp_path):
+        """Re-running the import migration's upgrade() does not duplicate revisions.
+
+        GIVEN the import migration has already run once for an agent
+        WHEN its upgrade() function is invoked again against the same DB
+        THEN no second import revision is created for that agent
+        """
+        import sqlite3
+        from alembic import command
+
+        db_file = tmp_path / "import_migration_idempotent.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "20261002_0014")
+        self._seed_agents(db_file)
+        command.upgrade(cfg, "head")
+
+        import importlib.util
+
+        module_path = VERSIONS_DIR / "20261002_0015_import_agent_config_revision_1.py"
+        spec = importlib.util.spec_from_file_location("import_rev1_rerun", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        from alembic.runtime.migration import MigrationContext
+        from alembic.operations import Operations
+        from sqlalchemy import create_engine
+
+        sync_engine = create_engine(f"sqlite:///{db_file}")
+        with sync_engine.connect() as connection:
+            context = MigrationContext.configure(connection)
+            with context.begin_transaction():
+                operations = Operations(context)
+                with Operations.context(operations):
+                    module.upgrade()
+        sync_engine.dispose()
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM agent_config_revisions")
+        count = cur.fetchone()[0]
+        conn.close()
+        assert count == 2, f"expected re-run to stay idempotent (2 rows), got {count}"

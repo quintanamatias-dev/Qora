@@ -4,8 +4,8 @@ Covers:
 - Agent model defaults (slug, name, voice_id, model, temperature, max_tokens, tools_enabled)
 - Duplicate is_default=True for same client raises validation error
 - get_agent(session, agent_id) returns the matching Agent
-- get_default_agent(session, client_id) returns the is_default=True agent
-- get_default_agent returns None when no default exists
+- resolve_single_active_agent(session, client_id) returns the sole active agent
+- resolve_single_active_agent raises when no active agent exists
 - seed_quintana creates default Agent alongside Client
 """
 
@@ -114,7 +114,7 @@ async def test_create_agent_with_defaults(session: AsyncSession):
     assert agent.slug == "default-agent"
     assert agent.name == "Default Agent"
     assert agent.voice_id == "voice-xyz"
-    assert agent.model == "gpt-4o"
+    assert agent.model == "gpt-4.1-mini"
     assert agent.temperature == 0.7
     assert agent.max_tokens == 300
     assert agent.is_active is True
@@ -125,12 +125,12 @@ async def test_create_agent_with_defaults(session: AsyncSession):
 
 async def test_create_agent_as_default(session: AsyncSession):
     """create_client() auto-creates a default agent; the agent has is_default=True."""
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
 
     await _make_client(session, "broker-default-flag")
 
     # create_client() now auto-bootstraps the default agent
-    agent = await get_default_agent(session, "broker-default-flag")
+    agent = await resolve_single_active_agent(session, "broker-default-flag")
     assert agent is not None
     assert agent.is_default is True
 
@@ -158,18 +158,57 @@ async def test_duplicate_default_raises(session: AsyncSession):
         )
 
 
+async def test_create_agent_activates_revision_1(session: AsyncSession):
+    """Phase 3 invariant: create_agent() creates + activates revision 1 for every
+    new agent, even when system_prompt is None (coerced to '' in the snapshot),
+    so every agent has a non-null active_revision_id at creation time.
+    """
+    from app.tenants.models import AgentConfigRevision
+    from app.tenants.service import create_agent
+
+    client = await _make_client(session, "broker-revision-check")
+
+    agent = await create_agent(
+        session,
+        client_id=client.id,
+        slug="revision-agent",
+        name="Revision Agent",
+        voice_id="voice-rev",
+    )
+
+    assert agent.active_revision_id is not None
+    revision = await session.get(AgentConfigRevision, agent.active_revision_id)
+    assert revision is not None
+    assert revision.revision_number == 1
+    assert revision.source == "api"
+    assert revision.created_by == "system"
+
+
+async def test_create_client_bootstrapped_agent_has_active_revision(session: AsyncSession):
+    """create_client() auto-creates a default Agent that also has an active revision
+    (create_client delegates to create_agent internally).
+    """
+    from app.tenants.service import resolve_single_active_agent
+
+    await _make_client(session, "broker-client-revision-check")
+
+    agent = await resolve_single_active_agent(session, "broker-client-revision-check")
+    assert agent is not None
+    assert agent.active_revision_id is not None
+
+
 async def test_two_clients_can_each_have_default(session: AsyncSession):
     """Two different clients may each have their own is_default=True agent.
 
     create_client() auto-bootstraps a default agent per client.
     """
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
 
     await _make_client(session, "broker-alpha")
     await _make_client(session, "broker-beta")
 
-    agent_a = await get_default_agent(session, "broker-alpha")
-    agent_b = await get_default_agent(session, "broker-beta")
+    agent_a = await resolve_single_active_agent(session, "broker-alpha")
+    agent_b = await resolve_single_active_agent(session, "broker-beta")
 
     assert agent_a is not None
     assert agent_b is not None
@@ -212,22 +251,17 @@ async def test_get_agent_returns_none_for_missing(session: AsyncSession):
     assert result is None
 
 
-async def test_get_default_agent_returns_default(session: AsyncSession):
-    """get_default_agent(session, client_id) returns the is_default=True agent.
-
-    create_client() auto-creates the default agent. Additional non-default agents
-    must not interfere with get_default_agent().
+async def test_resolve_single_active_agent_ignores_non_default_agents(session: AsyncSession):
+    """resolve_single_active_agent() never reads is_default (agent-routing D2/D3)
+    — it raises AmbiguousAgentError once a second active agent exists, rather
+    than silently preferring the is_default=True one. resolve_single_active_agent() and
+    its is_default-based lookup are removed entirely.
     """
-    from app.tenants.service import create_agent, get_default_agent
+    from app.tenants.service import create_agent, resolve_single_active_agent, AmbiguousAgentError
 
     await _make_client(session, "broker-dflt")
 
-    # Auto-created default agent exists — fetch it
-    auto_default = await get_default_agent(session, "broker-dflt")
-    assert auto_default is not None
-
-    # Add a non-default agent — must not change the result
-    non_default = await create_agent(
+    await create_agent(
         session,
         client_id="broker-dflt",
         slug="non-default",
@@ -236,54 +270,16 @@ async def test_get_default_agent_returns_default(session: AsyncSession):
         is_default=False,
     )
 
-    result = await get_default_agent(session, "broker-dflt")
-    assert result is not None
-    assert result.id == auto_default.id
-    assert result.is_default is True
-    # Make sure the non-default was NOT returned
-    assert result.id != non_default.id
+    with pytest.raises(AmbiguousAgentError):
+        await resolve_single_active_agent(session, "broker-dflt")
 
 
-async def test_get_default_agent_returns_none_when_no_default(session: AsyncSession):
-    """get_default_agent() returns None when no active agent has is_default=True.
+async def test_resolve_single_active_agent_raises_for_unknown_client(session: AsyncSession):
+    """resolve_single_active_agent() raises NoActiveAgentError for a client_id with no agents."""
+    from app.tenants.service import resolve_single_active_agent, NoActiveAgentError
 
-    We deactivate the auto-created default agent then add only a non-default one
-    to confirm the query returns None.
-    """
-    from app.tenants.service import create_agent, get_default_agent
-    from app.tenants.models import Agent
-    from sqlalchemy import update
-
-    await _make_client(session, "broker-no-default")
-
-    # Deactivate the auto-created default agent (simulate it being disabled)
-    auto_default = await get_default_agent(session, "broker-no-default")
-    assert auto_default is not None
-    await session.execute(
-        update(Agent).where(Agent.id == auto_default.id).values(is_active=False)
-    )
-    await session.flush()
-
-    # Add a non-default agent — should not affect the result
-    await create_agent(
-        session,
-        client_id="broker-no-default",
-        slug="just-an-agent",
-        name="Just An Agent",
-        voice_id="v-1",
-        is_default=False,
-    )
-
-    result = await get_default_agent(session, "broker-no-default")
-    assert result is None
-
-
-async def test_get_default_agent_returns_none_for_unknown_client(session: AsyncSession):
-    """get_default_agent() returns None for a client_id with no agents."""
-    from app.tenants.service import get_default_agent
-
-    result = await get_default_agent(session, "ghost-client")
-    assert result is None
+    with pytest.raises(NoActiveAgentError):
+        await resolve_single_active_agent(session, "ghost-client")
 
 
 # ---------------------------------------------------------------------------
@@ -293,11 +289,11 @@ async def test_get_default_agent_returns_none_for_unknown_client(session: AsyncS
 
 async def test_seed_quintana_creates_default_agent(session: AsyncSession):
     """seed_quintana() creates a Client AND a default Agent for that client."""
-    from app.tenants.service import seed_quintana, get_default_agent
+    from app.tenants.service import seed_quintana, resolve_single_active_agent
 
     await seed_quintana(session)
 
-    agent = await get_default_agent(session, "quintana-seguros")
+    agent = await resolve_single_active_agent(session, "quintana-seguros")
     assert agent is not None
     assert agent.is_default is True
     assert agent.client_id == "quintana-seguros"
@@ -336,11 +332,11 @@ async def test_seed_quintana_sets_system_prompt_and_knowledge(session: AsyncSess
     Spec scenario: Quintana default agent has no prompt or knowledge.
     After seed_quintana() runs, both fields must be non-empty strings (DB source of truth).
     """
-    from app.tenants.service import seed_quintana, get_default_agent
+    from app.tenants.service import seed_quintana, resolve_single_active_agent
 
     await seed_quintana(session)
 
-    agent = await get_default_agent(session, "quintana-seguros")
+    agent = await resolve_single_active_agent(session, "quintana-seguros")
     assert agent is not None
     assert agent.system_prompt is not None
     assert len(agent.system_prompt) > 0, "system_prompt must be non-empty after seed"
@@ -354,11 +350,11 @@ async def test_seed_quintana_does_not_overwrite_existing_prompt(session: AsyncSe
     Spec scenario: Quintana default agent already has non-empty DB config.
     The existing system_prompt and knowledge_base must remain unchanged after re-seed.
     """
-    from app.tenants.service import seed_quintana, get_default_agent
+    from app.tenants.service import seed_quintana, resolve_single_active_agent
 
     # First seed — populates the fields
     await seed_quintana(session)
-    agent = await get_default_agent(session, "quintana-seguros")
+    agent = await resolve_single_active_agent(session, "quintana-seguros")
     assert agent is not None
 
     # Simulate an admin UI edit: overwrite with custom values
@@ -370,7 +366,7 @@ async def test_seed_quintana_does_not_overwrite_existing_prompt(session: AsyncSe
 
     # Second seed — must NOT overwrite the custom values
     await seed_quintana(session)
-    agent_after = await get_default_agent(session, "quintana-seguros")
+    agent_after = await resolve_single_active_agent(session, "quintana-seguros")
     assert agent_after is not None
     assert (
         agent_after.system_prompt == custom_prompt
@@ -386,11 +382,11 @@ async def test_seed_quintana_populates_partial_missing_knowledge(session: AsyncS
     Spec scenario: Quintana default agent has partial config (only prompt set).
     system_prompt remains unchanged; empty knowledge_base gets populated.
     """
-    from app.tenants.service import seed_quintana, get_default_agent
+    from app.tenants.service import seed_quintana, resolve_single_active_agent
 
     # First seed — populates both fields
     await seed_quintana(session)
-    agent = await get_default_agent(session, "quintana-seguros")
+    agent = await resolve_single_active_agent(session, "quintana-seguros")
     assert agent is not None
 
     # Simulate a partial state: keep system_prompt, clear knowledge_base
@@ -400,7 +396,7 @@ async def test_seed_quintana_populates_partial_missing_knowledge(session: AsyncS
 
     # Second seed — must preserve system_prompt and repopulate knowledge_base
     await seed_quintana(session)
-    agent_after = await get_default_agent(session, "quintana-seguros")
+    agent_after = await resolve_single_active_agent(session, "quintana-seguros")
     assert agent_after is not None
     assert (
         agent_after.system_prompt == original_prompt
@@ -419,11 +415,11 @@ async def test_seed_quintana_treats_empty_string_prompt_as_missing(
     Spec scenario: Quintana default agent has system_prompt='' and knowledge_base=''.
     Empty-string fields MUST be treated as missing — both get populated on re-seed.
     """
-    from app.tenants.service import seed_quintana, get_default_agent
+    from app.tenants.service import seed_quintana, resolve_single_active_agent
 
     # First seed — creates the client + agent with populated fields
     await seed_quintana(session)
-    agent = await get_default_agent(session, "quintana-seguros")
+    agent = await resolve_single_active_agent(session, "quintana-seguros")
     assert agent is not None
 
     # Simulate empty-string state (e.g., admin cleared the fields to "")
@@ -433,7 +429,7 @@ async def test_seed_quintana_treats_empty_string_prompt_as_missing(
 
     # Second seed — empty strings must be treated as missing and populated
     await seed_quintana(session)
-    agent_after = await get_default_agent(session, "quintana-seguros")
+    agent_after = await resolve_single_active_agent(session, "quintana-seguros")
     assert agent_after is not None
     assert (
         len(agent_after.system_prompt) > 0
@@ -451,11 +447,11 @@ async def test_seed_quintana_treats_empty_string_knowledge_as_missing(
     Spec scenario: Quintana default agent has a custom system_prompt but knowledge_base=''.
     The empty knowledge_base MUST be populated; the custom prompt must NOT be overwritten.
     """
-    from app.tenants.service import seed_quintana, get_default_agent
+    from app.tenants.service import seed_quintana, resolve_single_active_agent
 
     # First seed — creates the client + agent with populated fields
     await seed_quintana(session)
-    agent = await get_default_agent(session, "quintana-seguros")
+    agent = await resolve_single_active_agent(session, "quintana-seguros")
     assert agent is not None
 
     # Simulate partial state: custom non-empty prompt, but knowledge cleared to ""
@@ -466,7 +462,7 @@ async def test_seed_quintana_treats_empty_string_knowledge_as_missing(
 
     # Second seed — must preserve prompt and repopulate empty-string knowledge
     await seed_quintana(session)
-    agent_after = await get_default_agent(session, "quintana-seguros")
+    agent_after = await resolve_single_active_agent(session, "quintana-seguros")
     assert agent_after is not None
     assert (
         agent_after.system_prompt == custom_prompt

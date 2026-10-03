@@ -497,7 +497,7 @@ async def test_followup_tool_to_scheduler_to_call_completion(tick_db):
     from app.scheduler.models import ScheduledCall
     from app.scheduler.service import run_scheduler_cycle
     from app.tenants.models import Client
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
     from app.tools.schedule_followup import schedule_followup
     from sqlalchemy import select
 
@@ -512,7 +512,7 @@ async def test_followup_tool_to_scheduler_to_call_completion(tick_db):
     async with tick_db.async_session_factory() as sess:
         client = await sess.get(Client, "quintana-seguros")
         client.scheduler_enabled = True
-        agent = await get_default_agent(sess, client.id)
+        agent = await resolve_single_active_agent(sess, client.id)
         agent.elevenlabs_agent_id = "el-followup-agent"
         agent.elevenlabs_phone_number_id = "el-followup-phone"
         await transition_lead_status(sess, "tick-lead-001", "called")
@@ -1143,12 +1143,12 @@ async def test_scheduler_cycle_rejects_cross_client_targets_before_provider_or_s
     from app.scheduler.models import ScheduledCall
     from app.scheduler.service import create_scheduled_call, run_scheduler_cycle
     from app.tenants.models import Agent, Client
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
     from sqlalchemy import select
 
     due = datetime.now(timezone.utc) - timedelta(minutes=1)
     async with tick_db.async_session_factory() as sess:
-        default_agent = await get_default_agent(sess, "quintana-seguros")
+        default_agent = await resolve_single_active_agent(sess, "quintana-seguros")
         default_agent.elevenlabs_agent_id = "el-quintana-agent"
         default_agent.elevenlabs_phone_number_id = "el-quintana-phone"
         sess.add(Client(id="other-client", name="Other Client", voice_id="other-voice"))
@@ -1218,14 +1218,14 @@ async def test_dial_outbound_rejects_cross_client_objects_before_flag_check(tick
     from app.leads.service import get_lead
     from app.outbound.service import dial_outbound_call
     from app.tenants.models import Agent, Client
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
     from sqlalchemy import select
 
     settings = _auto_dialer_settings("sqlite+aiosqlite:///unused", enable_auto_dialer=False)
     async with tick_db.async_session_factory() as sess:
         client = await sess.get(Client, "quintana-seguros")
         lead = await get_lead(sess, "tick-lead-001")
-        agent = await get_default_agent(sess, client.id)
+        agent = await resolve_single_active_agent(sess, client.id)
         foreign_client = Client(
             id="direct-other-client", name="Direct Other", voice_id="other-voice"
         )
@@ -1256,7 +1256,7 @@ async def test_scheduler_cycle_retries_transient_provider_failure_at_due_time(ti
     from app.elevenlabs.service import ElevenLabsService
     from app.scheduler.models import ScheduledCall
     from app.scheduler.service import create_scheduled_call, run_scheduler_cycle
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
     from sqlalchemy import select
 
     clock = [datetime(2026, 7, 20, 17, 0, tzinfo=timezone.utc)]
@@ -1267,7 +1267,7 @@ async def test_scheduler_cycle_retries_transient_provider_failure_at_due_time(ti
             return clock[0].astimezone(tz) if tz else clock[0].replace(tzinfo=None)
 
     async with tick_db.async_session_factory() as sess:
-        agent = await get_default_agent(sess, "quintana-seguros")
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
         agent.elevenlabs_agent_id = "el-quintana-agent"
         agent.elevenlabs_phone_number_id = "el-quintana-phone"
         agent_id = agent.id

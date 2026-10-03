@@ -12,7 +12,14 @@ import { ApiError } from './client'
 import { fetchMetrics, fetchCallSessions, fetchTranscript, fetchCallAnalysis } from './calls'
 import { fetchLeads, fetchLead, fetchLeadContextPreview, fetchLeadDimensionRollups } from './leads'
 import { fetchClient, fetchClients, createClient, updateClient, deactivateClient } from './clients'
-import { fetchAgents, createAgent, updateAgent, deactivateAgent, makeAgentDefault } from './agents'
+import {
+  fetchAgents,
+  createAgent,
+  updateAgent,
+  deactivateAgent,
+  fetchAgentRevisions,
+  rollbackAgentRevision,
+} from './agents'
 import {
   fetchAnalyticsOverview,
   fetchAnalyticsServiceIssues,
@@ -39,6 +46,7 @@ import type {
   SessionTranscript,
   Client,
   Agent,
+  AgentConfigRevision,
   CreateClientPayload,
   UpdateClientPayload,
   CreateAgentPayload,
@@ -333,14 +341,31 @@ export function useDeactivateAgent(clientId: string) {
 }
 
 /**
- * useMakeAgentDefault — sets agent as default, invalidates ['agents', clientId] on success
+ * useAgentRevisions — fetches config revision history for an agent, newest first
+ * queryKey: ['agent-revisions', clientId, agentId]
+ *
+ * list_revisions always activates on write (create/rollback), so the first
+ * entry (highest revision_number) is always the active revision.
  */
-export function useMakeAgentDefault(clientId: string) {
+export function useAgentRevisions(clientId: string, agentId: string) {
+  return useQuery<AgentConfigRevision[]>({
+    queryKey: ['agent-revisions', clientId, agentId],
+    queryFn: () => fetchAgentRevisions(clientId, agentId),
+    enabled: Boolean(clientId) && Boolean(agentId),
+  })
+}
+
+/**
+ * useRollbackAgentRevision — rolls back to a prior revision, invalidates
+ * ['agents', clientId] and ['agent-revisions', clientId, agentId] on success
+ */
+export function useRollbackAgentRevision(clientId: string, agentId: string) {
   const queryClient = useQueryClient()
-  return useMutation<Agent, Error, string>({
-    mutationFn: (agentId) => makeAgentDefault(clientId, agentId),
+  return useMutation<AgentConfigRevision, Error, string>({
+    mutationFn: (revisionId) => rollbackAgentRevision(clientId, agentId, revisionId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agents', clientId] })
+      queryClient.invalidateQueries({ queryKey: ['agent-revisions', clientId, agentId] })
     },
   })
 }

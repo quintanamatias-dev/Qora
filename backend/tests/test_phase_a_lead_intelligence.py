@@ -332,7 +332,7 @@ async def test_context_preview_structure(db_session):
     db_session.add(lead)
     await db_session.commit()
 
-    result = await get_lead_context_preview(lead_id=lead_id, session=db_session, caller=CallerIdentity(api_key_hash="test"))
+    result = await get_lead_context_preview(lead_id=lead_id, agent_id=None, session=db_session, caller=CallerIdentity(api_key_hash="test"))
 
     # Must have all required keys
     assert "lead_id" in result
@@ -379,7 +379,7 @@ async def test_context_preview_no_agent_returns_error(db_session):
     db_session.add(lead)
     await db_session.commit()
 
-    result = await get_lead_context_preview(lead_id=lead_id, session=db_session, caller=CallerIdentity(api_key_hash="test"))
+    result = await get_lead_context_preview(lead_id=lead_id, agent_id=None, session=db_session, caller=CallerIdentity(api_key_hash="test"))
 
     # Should not raise — should return graceful error
     assert result["error"] is not None
@@ -397,7 +397,7 @@ async def test_context_preview_no_agent_returns_error(db_session):
 # Runtime-parity tests — preview must match build_voice_context() output
 #
 # These tests prove the preview is derived from the SAME runtime assembly path
-# the agent uses (get_default_agent + build_voice_context). The literal,
+# the agent uses (resolve_single_active_agent + build_voice_context). The literal,
 # non-system-prompt context fields are compared field-by-field against a direct
 # build_voice_context() call, so the preview cannot silently diverge.
 # ---------------------------------------------------------------------------
@@ -450,21 +450,21 @@ async def test_context_preview_matches_runtime_assembly(db_session, seeded_quint
     """Preview literal fields equal build_voice_context() output for the same lead."""
     from app.leads.router import get_lead_context_preview
     from app.leads.service import get_lead
-    from app.tenants.service import get_client, get_default_agent
+    from app.tenants.service import get_client, resolve_single_active_agent
     from app.voice.context import build_voice_context
 
     lead_id = seeded_quintana_lead
 
     # Runtime path — exactly what the agent receives.
     lead = await get_lead(db_session, lead_id)
-    agent = await get_default_agent(db_session, "quintana-seguros")
+    agent = await resolve_single_active_agent(db_session, "quintana-seguros")
     client = await get_client(db_session, "quintana-seguros")
     assert agent is not None
     assert client is not None
 
     ctx = await build_voice_context(agent=agent, lead=lead, db=db_session, client=client)
 
-    result = await get_lead_context_preview(lead_id=lead_id, session=db_session, caller=CallerIdentity(api_key_hash="test"))
+    result = await get_lead_context_preview(lead_id=lead_id, agent_id=None, session=db_session, caller=CallerIdentity(api_key_hash="test"))
 
     assert result["error"] is None
 
@@ -495,16 +495,16 @@ async def test_context_preview_matches_runtime_assembly(db_session, seeded_quint
 async def test_context_preview_redacts_system_prompt_content(db_session, seeded_quintana_lead):
     """Preview indicates system prompt presence but never returns its content."""
     from app.leads.router import get_lead_context_preview
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
 
     lead_id = seeded_quintana_lead
 
-    agent = await get_default_agent(db_session, "quintana-seguros")
+    agent = await resolve_single_active_agent(db_session, "quintana-seguros")
     assert agent is not None
     system_prompt = agent.system_prompt
     assert system_prompt  # quintana agent has a real prompt
 
-    result = await get_lead_context_preview(lead_id=lead_id, session=db_session, caller=CallerIdentity(api_key_hash="test"))
+    result = await get_lead_context_preview(lead_id=lead_id, agent_id=None, session=db_session, caller=CallerIdentity(api_key_hash="test"))
 
     # Presence is signalled but the prompt text appears nowhere in the response.
     assert result["system_prompt_present"] is True
@@ -519,17 +519,75 @@ async def test_context_preview_misc_notes_match_runtime(db_session, seeded_quint
     """misc_notes block is the literal runtime value (faithful, not reformatted)."""
     from app.leads.router import get_lead_context_preview
     from app.leads.service import get_lead
-    from app.tenants.service import get_client, get_default_agent
+    from app.tenants.service import get_client, resolve_single_active_agent
     from app.voice.context import build_voice_context
 
     lead_id = seeded_quintana_lead
     lead = await get_lead(db_session, lead_id)
-    agent = await get_default_agent(db_session, "quintana-seguros")
+    agent = await resolve_single_active_agent(db_session, "quintana-seguros")
     client = await get_client(db_session, "quintana-seguros")
 
     ctx = await build_voice_context(agent=agent, lead=lead, db=db_session, client=client)
-    result = await get_lead_context_preview(lead_id=lead_id, session=db_session, caller=CallerIdentity(api_key_hash="test"))
+    result = await get_lead_context_preview(lead_id=lead_id, agent_id=None, session=db_session, caller=CallerIdentity(api_key_hash="test"))
 
     # The seeded misc_note must round-trip identically through both paths.
     assert "Prefiere ser contactado por la tarde." in result["misc_notes"]
     assert result["misc_notes"] == (ctx.misc_notes or "")
+
+
+@pytest.mark.asyncio
+async def test_context_preview_ambiguous_client_without_agent_id_sets_error(
+    db_session, seeded_quintana_lead
+):
+    """agent-routing D2: a client with 2+ active agents and no agent_id param
+    surfaces an explicit error — never a silent pick of either agent.
+    """
+    from app.leads.router import get_lead_context_preview
+    from app.tenants.service import create_agent
+
+    lead_id = seeded_quintana_lead
+
+    await create_agent(
+        db_session,
+        client_id="quintana-seguros",
+        slug="second-preview-agent",
+        name="Second",
+        voice_id="v-second",
+    )
+    await db_session.commit()
+
+    result = await get_lead_context_preview(
+        lead_id=lead_id, agent_id=None, session=db_session, caller=CallerIdentity(api_key_hash="test")
+    )
+
+    assert result["error"] is not None
+    assert "agent_id" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_context_preview_explicit_agent_id_resolves_ambiguous_client(
+    db_session, seeded_quintana_lead
+):
+    """An explicit agent_id disambiguates a multi-agent client and succeeds."""
+    from app.leads.router import get_lead_context_preview
+    from app.tenants.service import create_agent
+
+    lead_id = seeded_quintana_lead
+
+    second_agent = await create_agent(
+        db_session,
+        client_id="quintana-seguros",
+        slug="explicit-preview-agent",
+        name="Explicit",
+        voice_id="v-explicit",
+    )
+    await db_session.commit()
+
+    result = await get_lead_context_preview(
+        lead_id=lead_id,
+        agent_id=second_agent.id,
+        session=db_session,
+        caller=CallerIdentity(api_key_hash="test"),
+    )
+
+    assert result["error"] is None

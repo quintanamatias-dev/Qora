@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,7 +29,13 @@ from app.core.config import Settings
 from app.core.logging import get_logger
 from app.leads.service import get_lead
 from app.outbound.service import dial_outbound_call
-from app.tenants.service import get_client, get_default_agent
+from app.tenants.service import (
+    AmbiguousAgentError,
+    NoActiveAgentError,
+    get_agent_for_client,
+    get_client,
+    resolve_single_active_agent,
+)
 
 logger = get_logger(__name__)
 
@@ -146,6 +152,13 @@ class CallTriggerResponse(BaseModel):
 async def trigger_outbound_call(
     client_id: str,
     lead_id: str,
+    agent_id: str | None = Query(
+        default=None,
+        description=(
+            "Explicit agent to dial with. Required only when the client has "
+            "more than one active agent (agent-routing D2 fail-closed resolution)."
+        ),
+    ),
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> CallTriggerResponse:
@@ -160,7 +173,9 @@ async def trigger_outbound_call(
       3. Lead exists + belongs to client: 404 if not found
       4. Phone E.164 validation: 422 if invalid
       5. Concurrent call guard: 409 if active session
-      6. Agent resolved: 404 if no default agent configured
+      6. Agent resolved: explicit agent_id when given (404 if it does not belong
+         to client_id); otherwise the client's sole active agent (agent-routing
+         D2) — 404 if none, 409 if ambiguous (2+ active agents, agent_id required)
 
     All real telephony is delegated to dial_outbound_call().
     """
@@ -233,17 +248,33 @@ async def trigger_outbound_call(
 
     # ------------------------------------------------------------------
     # Guard 5 + 6: Concurrent call guard + agent resolution (inside dial_outbound_call)
-    # Resolve default agent here so we can 404 before creating any CallSession
+    # Resolve the agent here so we can 4xx before creating any CallSession.
+    # agent-routing D1/D2: explicit agent_id when given, never is_default;
+    # fail-closed to the sole active agent otherwise.
     # ------------------------------------------------------------------
-    agent = await get_default_agent(db, client_id)
-    if agent is None:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"No default agent configured for client '{client_id}'. "
-                "Create and configure an agent with elevenlabs_phone_number_id before dialing."
-            ),
-        )
+    if agent_id is not None:
+        agent = await get_agent_for_client(db, client_id, agent_id)
+        if agent is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Agent '{agent_id}' not found for client '{client_id}'.",
+            )
+    else:
+        try:
+            agent = await resolve_single_active_agent(db, client_id)
+        except NoActiveAgentError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No active agent configured for client '{client_id}'. "
+                    "Create and configure an agent with elevenlabs_phone_number_id before dialing."
+                ),
+            ) from exc
+        except AmbiguousAgentError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=str(exc),
+            ) from exc
 
     # ------------------------------------------------------------------
     # Guard 6a: Concurrent call guard (409 before any DB write)

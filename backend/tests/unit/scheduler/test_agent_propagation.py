@@ -75,10 +75,10 @@ async def sched_agent_db(tmp_path: Path):
 async def test_create_scheduled_call_with_agent_id(sched_agent_db):
     """create_scheduled_call() stores the provided agent_id."""
     from app.scheduler.service import create_scheduled_call
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
 
     async with sched_agent_db.async_session_factory() as sess:
-        agent = await get_default_agent(sess, "quintana-seguros")
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
         agent_id = agent.id
 
     now = datetime.now(timezone.utc) + timedelta(hours=1)
@@ -104,11 +104,11 @@ async def test_auto_schedule_propagates_agent_id_from_session(sched_agent_db):
     """auto_schedule() propagates agent_id from a source CallSession."""
     from app.calls.service import create_session
     from app.scheduler.service import auto_schedule
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
 
-    # Get the default agent
+    # Get the sole active agent
     async with sched_agent_db.async_session_factory() as sess:
-        agent = await get_default_agent(sess, "quintana-seguros")
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
         agent_id = agent.id
 
     # Create a session with the agent
@@ -140,14 +140,16 @@ async def test_auto_schedule_propagates_agent_id_from_session(sched_agent_db):
 async def test_auto_schedule_falls_back_to_default_agent_when_no_session_agent(
     sched_agent_db,
 ):
-    """auto_schedule() falls back to client's default agent when session has no agent_id."""
+    """auto_schedule() falls back to the client's sole active agent (agent-routing
+    D2 fail-closed resolution, never is_default) when the session has no agent_id.
+    """
     from app.calls.service import create_session
     from app.scheduler.service import auto_schedule
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
 
-    # Get the default agent
+    # Get the sole active agent
     async with sched_agent_db.async_session_factory() as sess:
-        agent = await get_default_agent(sess, "quintana-seguros")
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
         default_agent_id = agent.id
 
     # Create a session WITHOUT agent_id (backward compat path)
@@ -173,5 +175,50 @@ async def test_auto_schedule_falls_back_to_default_agent_when_no_session_agent(
         await sess.commit()
 
     assert sc is not None
-    # Should fall back to the client's default agent
+    # Should fall back to the client's sole active agent
     assert sc.agent_id == default_agent_id
+
+
+async def test_auto_schedule_skips_when_ambiguous_and_no_session_agent(sched_agent_db):
+    """auto_schedule() skips (returns None) — never silently picks — when the
+    session has no agent_id and the client has 2+ active agents (agent-routing D2).
+    """
+    from app.calls.service import create_session
+    from app.scheduler.service import auto_schedule
+    from app.tenants.service import create_agent
+
+    # Create the session FIRST, while the client still has exactly one active
+    # agent, so create_session's own fail-closed resolution succeeds.
+    async with sched_agent_db.async_session_factory() as sess:
+        cs = await create_session(
+            sess,
+            client_id="quintana-seguros",
+            lead_id="sched-agent-lead-001",
+            agent_id=None,
+        )
+        cs.agent_id = None  # force the backward-compat no-agent case
+        session_id = cs.id
+        await sess.commit()
+
+    # Now make the client ambiguous (2 active agents) before auto_schedule runs.
+    async with sched_agent_db.async_session_factory() as sess:
+        await create_agent(
+            sess,
+            client_id="quintana-seguros",
+            slug="second-sched-agent",
+            name="Second",
+            voice_id="v-second",
+        )
+        await sess.commit()
+
+    async with sched_agent_db.async_session_factory() as sess:
+        sc = await auto_schedule(
+            db=sess,
+            session_id=session_id,
+            lead_id="sched-agent-lead-001",
+            client_id="quintana-seguros",
+            facts={"next_action_suggested": "call_again"},
+        )
+        await sess.commit()
+
+    assert sc is None

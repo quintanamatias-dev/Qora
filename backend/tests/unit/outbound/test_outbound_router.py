@@ -198,7 +198,7 @@ class TestOutboundCallEndpointConcurrentSession:
 
         with patch("app.outbound.router.get_client", new_callable=AsyncMock) as mock_client, \
              patch("app.outbound.router.get_lead", new_callable=AsyncMock) as mock_lead, \
-             patch("app.outbound.router.get_default_agent", new_callable=AsyncMock) as mock_agent:
+             patch("app.outbound.router.resolve_single_active_agent", new_callable=AsyncMock) as mock_agent:
 
             mock_client.return_value = MagicMock(id="client-a", name="Test Client")
             lead = MagicMock()
@@ -238,7 +238,7 @@ class TestOutboundCallEndpointSuccess:
 
         with patch("app.outbound.router.get_client", new_callable=AsyncMock) as mock_client, \
              patch("app.outbound.router.get_lead", new_callable=AsyncMock) as mock_lead, \
-             patch("app.outbound.router.get_default_agent", new_callable=AsyncMock) as mock_agent, \
+             patch("app.outbound.router.resolve_single_active_agent", new_callable=AsyncMock) as mock_agent, \
              patch("app.outbound.router.dial_outbound_call", new_callable=AsyncMock) as mock_dial:
 
             from app.outbound.service import DialResult
@@ -280,7 +280,7 @@ class TestOutboundCallEndpointSuccess:
 
         with patch("app.outbound.router.get_client", new_callable=AsyncMock) as mock_client, \
              patch("app.outbound.router.get_lead", new_callable=AsyncMock) as mock_lead, \
-             patch("app.outbound.router.get_default_agent", new_callable=AsyncMock) as mock_agent, \
+             patch("app.outbound.router.resolve_single_active_agent", new_callable=AsyncMock) as mock_agent, \
              patch("app.outbound.router.dial_outbound_call", new_callable=AsyncMock) as mock_dial, \
              patch(
                   "app.outbound.service.ElevenLabsService",
@@ -320,7 +320,7 @@ class TestOutboundCallEndpointPlanGate:
 
         with patch("app.outbound.router.get_client", new_callable=AsyncMock) as mock_client, \
              patch("app.outbound.router.get_lead", new_callable=AsyncMock) as mock_lead, \
-             patch("app.outbound.router.get_default_agent", new_callable=AsyncMock) as mock_agent, \
+             patch("app.outbound.router.resolve_single_active_agent", new_callable=AsyncMock) as mock_agent, \
              patch("app.outbound.router.dial_outbound_call", new_callable=AsyncMock) as mock_dial:
             mock_dial.return_value = dial_result
             mock_client.return_value = MagicMock(id="client-a")
@@ -346,3 +346,119 @@ class TestOutboundCallEndpointPlanGate:
         )
         assert response.status_code == 429
         assert response.json()["detail"]["error"] == "plan_limit_reached"
+
+
+# ---------------------------------------------------------------------------
+# Explicit agent_id (agent-routing D2) — fail-closed resolution
+# ---------------------------------------------------------------------------
+
+
+class TestOutboundCallEndpointExplicitAgentId:
+    """agent-routing: explicit agent_id is required only when the client is
+    ambiguous (2+ active agents). A single-active-agent client keeps working
+    without the param (D2 fail-closed — friendlier than an unconditional
+    required param, still never silently guesses for an ambiguous client).
+    """
+
+    def test_ambiguous_client_without_agent_id_returns_409(self):
+        """GIVEN a client with 2+ active agents and no agent_id query param
+        WHEN POST /clients/{client_id}/leads/{lead_id}/call is called
+        THEN HTTP 409 is returned — never a silent pick.
+        """
+        from app.tenants.service import AmbiguousAgentError
+
+        app, _, _ = _build_app(enable_outbound=True)
+        client_http = TestClient(app, raise_server_exceptions=False)
+
+        with patch("app.outbound.router.get_client", new_callable=AsyncMock) as mock_client, \
+             patch("app.outbound.router.get_lead", new_callable=AsyncMock) as mock_lead, \
+             patch(
+                 "app.outbound.router.resolve_single_active_agent",
+                 new_callable=AsyncMock,
+                 side_effect=AmbiguousAgentError("ambiguous_agent: client has 2 active agents"),
+             ):
+            mock_client.return_value = MagicMock(id="client-a")
+            lead = MagicMock(id="lead-001", client_id="client-a", phone="+5491155550101")
+            mock_lead.return_value = lead
+
+            response = client_http.post("/clients/client-a/leads/lead-001/call")
+
+        assert response.status_code == 409
+
+    def test_no_active_agent_returns_404(self):
+        """GIVEN a client with zero active agents and no agent_id query param
+        WHEN POST /clients/{client_id}/leads/{lead_id}/call is called
+        THEN HTTP 404 is returned.
+        """
+        from app.tenants.service import NoActiveAgentError
+
+        app, _, _ = _build_app(enable_outbound=True)
+        client_http = TestClient(app, raise_server_exceptions=False)
+
+        with patch("app.outbound.router.get_client", new_callable=AsyncMock) as mock_client, \
+             patch("app.outbound.router.get_lead", new_callable=AsyncMock) as mock_lead, \
+             patch(
+                 "app.outbound.router.resolve_single_active_agent",
+                 new_callable=AsyncMock,
+                 side_effect=NoActiveAgentError("no_active_agent: client has zero active agents"),
+             ):
+            mock_client.return_value = MagicMock(id="client-a")
+            lead = MagicMock(id="lead-001", client_id="client-a", phone="+5491155550101")
+            mock_lead.return_value = lead
+
+            response = client_http.post("/clients/client-a/leads/lead-001/call")
+
+        assert response.status_code == 404
+
+    def test_explicit_agent_id_resolves_for_ambiguous_client(self):
+        """GIVEN a client with 2+ active agents and an explicit agent_id query param
+        WHEN POST /clients/{client_id}/leads/{lead_id}/call?agent_id=... is called
+        THEN the request succeeds using that agent — resolve_single_active_agent is never called.
+        """
+        app, _, _ = _build_app(enable_outbound=True)
+        client_http = TestClient(app, raise_server_exceptions=False)
+
+        with patch("app.outbound.router.get_client", new_callable=AsyncMock) as mock_client, \
+             patch("app.outbound.router.get_lead", new_callable=AsyncMock) as mock_lead, \
+             patch("app.outbound.router.get_agent_for_client", new_callable=AsyncMock) as mock_get_agent, \
+             patch("app.outbound.router.resolve_single_active_agent", new_callable=AsyncMock) as mock_resolve, \
+             patch("app.outbound.router.dial_outbound_call", new_callable=AsyncMock) as mock_dial:
+
+            from app.outbound.service import DialResult
+
+            mock_dial.return_value = DialResult(status="dialing", call_session_id="sess-explicit")
+            mock_client.return_value = MagicMock(id="client-a")
+            lead = MagicMock(id="lead-001", client_id="client-a", phone="+5491155550101")
+            mock_lead.return_value = lead
+            mock_get_agent.return_value = MagicMock(id="agent-explicit")
+
+            response = client_http.post(
+                "/clients/client-a/leads/lead-001/call", params={"agent_id": "agent-explicit"}
+            )
+
+        assert response.status_code == 200
+        mock_get_agent.assert_called_once()
+        mock_resolve.assert_not_called()
+
+    def test_explicit_agent_id_not_belonging_to_client_returns_404(self):
+        """GIVEN an agent_id that does not belong to client_id
+        WHEN POST /clients/{client_id}/leads/{lead_id}/call?agent_id=... is called
+        THEN HTTP 404 is returned (tenant isolation).
+        """
+        app, _, _ = _build_app(enable_outbound=True)
+        client_http = TestClient(app, raise_server_exceptions=False)
+
+        with patch("app.outbound.router.get_client", new_callable=AsyncMock) as mock_client, \
+             patch("app.outbound.router.get_lead", new_callable=AsyncMock) as mock_lead, \
+             patch("app.outbound.router.get_agent_for_client", new_callable=AsyncMock) as mock_get_agent:
+
+            mock_client.return_value = MagicMock(id="client-a")
+            lead = MagicMock(id="lead-001", client_id="client-a", phone="+5491155550101")
+            mock_lead.return_value = lead
+            mock_get_agent.return_value = None
+
+            response = client_http.post(
+                "/clients/client-a/leads/lead-001/call", params={"agent_id": "other-clients-agent"}
+            )
+
+        assert response.status_code == 404

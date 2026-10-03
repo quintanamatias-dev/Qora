@@ -190,10 +190,11 @@ class PromptLoader:
     ) -> str | None:
         """Return the canonical filesystem prompt for one agent, if present.
 
-        Runtime agent prompts live at
-        ``clients/{client_id}/agents/{agent_slug}/system-prompt.md``.
-        This file is the source of truth when it exists; DB prompts are only a
-        legacy fallback for agents not yet migrated to the filesystem layout.
+        This is a historical/import helper only (design.md D6): still used by
+        the one-time import migration and by seeders (via
+        app.tenants.service._resolve_seed_system_prompt) to seed revision 1.
+        Runtime rendering no longer calls this directly — see
+        get_effective_system_prompt_template().
         """
         prompt_path = (
             self.clients_dir / client_id / "agents" / agent_slug / "system-prompt.md"
@@ -201,6 +202,54 @@ class PromptLoader:
         if await asyncio.to_thread(prompt_path.exists):
             return await asyncio.to_thread(prompt_path.read_text, encoding="utf-8")
         return None
+
+    async def get_effective_system_prompt_template(
+        self, agent: "Agent", db: "AsyncSession | None" = None
+    ) -> str | None:
+        """Return the raw (unsubstituted) system prompt template render_for_agent
+        uses as its top-priority tier for *agent* (design.md D6).
+
+        Priority:
+        1. agent's active revision config.system_prompt — requires a real
+           Agent ORM instance (not a test double) plus a DB session. Self-heals
+           via app.tenants.service._ensure_active_revision when
+           agent.active_revision_id is None, logging
+           agent_config_revision_missing_backfilled (never silently falls
+           through to the file without persisting a revision).
+        2. filesystem clients/{client_id}/agents/{agent_slug}/system-prompt.md
+           (unchanged fallback — used when db is unavailable or agent is a
+           non-ORM test double, e.g. most unit tests in this file).
+        3. None — render_for_agent falls further back to agent.system_prompt /
+           the client-level template.
+        """
+        from app.tenants.models import Agent as AgentModel
+
+        if db is not None and isinstance(agent, AgentModel):
+            if agent.active_revision_id is None:
+                from app.tenants.service import _ensure_active_revision
+
+                await _ensure_active_revision(db, agent)
+                _structlog.warning(
+                    "agent_config_revision_missing_backfilled",
+                    agent_id=agent.id,
+                    client_id=agent.client_id,
+                )
+
+            if agent.active_revision_id is not None:
+                from app.tenants.agent_config_schema import AgentConfigV1
+                from app.tenants.models import AgentConfigRevision
+
+                revision = await db.get(AgentConfigRevision, agent.active_revision_id)
+                if revision is not None:
+                    config = AgentConfigV1.model_validate_json(revision.config)
+                    if config.system_prompt:
+                        return config.system_prompt
+
+        client_id = getattr(agent, "client_id", None) or "unknown"
+        agent_slug = getattr(agent, "slug", None)
+        if not isinstance(agent_slug, str) or not agent_slug.strip():
+            agent_slug = str(getattr(agent, "name", "agent")).lower().replace(" ", "-")
+        return await self.load_agent_system_prompt(client_id, agent_slug)
 
     async def load_knowledge(self, client_id: str) -> str | None:
         """Return the knowledge base for *client_id*, or ``None``.
@@ -229,10 +278,14 @@ class PromptLoader:
     ) -> str:
         """Render the system prompt using Agent as the primary config source.
 
-        Priority order:
-        1. filesystem clients/{client_id}/agents/{agent_slug}/system-prompt.md
-        2. agent.system_prompt (legacy DB fallback)
-        3. filesystem clients/{client_id}/prompt.md or JAUMPABLO_PROMPT_TEMPLATE
+        Priority order (design.md D6 — runtime no longer reads the filesystem
+        system-prompt.md directly; see get_effective_system_prompt_template()):
+        1. agent's active revision config.system_prompt (self-healed if missing)
+        2. filesystem clients/{client_id}/agents/{agent_slug}/system-prompt.md
+           (only reached when db is None or agent is not a real Agent ORM
+           instance, e.g. most unit tests passing a mock Agent)
+        3. agent.system_prompt (legacy DB fallback)
+        4. filesystem clients/{client_id}/prompt.md or JAUMPABLO_PROMPT_TEMPLATE
            (legacy client fallback, uses agent.name for {{agent_name}})
 
         Knowledge base:
@@ -258,20 +311,19 @@ class PromptLoader:
 
         agent_system_prompt = getattr(agent, "system_prompt", None)
         client_id = getattr(agent, "client_id", None) or "unknown"
-        agent_slug = getattr(agent, "slug", None)
-        if not isinstance(agent_slug, str) or not agent_slug.strip():
-            agent_slug = str(getattr(agent, "name", "agent")).lower().replace(" ", "-")
-        file_system_prompt = await self.load_agent_system_prompt(client_id, agent_slug)
+        effective_prompt_template = await self.get_effective_system_prompt_template(
+            agent, db
+        )
 
         # ------------------------------------------------------------------
         # Build prompt body
         # ------------------------------------------------------------------
-        if file_system_prompt:
-            # Filesystem prompt is the source of truth — render as a {{variable}}
-            # template so call_history, confirmed_facts, lead_name, etc. are
-            # substituted.
+        if effective_prompt_template:
+            # Active revision (or, absent one, the filesystem file) is the
+            # source of truth — render as a {{variable}} template so
+            # call_history, confirmed_facts, lead_name, etc. are substituted.
             prompt_body = await self._render_template(
-                file_system_prompt,
+                effective_prompt_template,
                 _AgentClientAdapter(agent, client),
                 lead,
                 call_count,

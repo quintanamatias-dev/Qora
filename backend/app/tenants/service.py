@@ -9,7 +9,102 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from pathlib import Path
+
+from app.tenants.agent_config_schema import AgentConfigV1
 from app.tenants.models import Agent, Client
+from app.tenants import revisions_service
+
+# backend/app/tenants/service.py -> parents[2] == backend/
+_SEED_CLIENTS_DIR = Path(__file__).resolve().parents[2] / "clients"
+
+
+def _resolve_seed_system_prompt(
+    client_id: str, agent_slug: str, db_system_prompt: str | None
+) -> str | None:
+    """Filesystem system-prompt.md wins over the DB column (design.md D6),
+    matching the priority app.prompts.loader.PromptLoader currently uses.
+    """
+    prompt_path = _SEED_CLIENTS_DIR / client_id / "agents" / agent_slug / "system-prompt.md"
+    if prompt_path.exists():
+        return prompt_path.read_text(encoding="utf-8")
+    return db_system_prompt
+
+
+async def _ensure_active_revision(
+    session: AsyncSession,
+    agent: Agent,
+    *,
+    source: revisions_service.RevisionSource = "import",
+    created_by: str = "system",
+    note: str | None = None,
+) -> None:
+    """Create + activate revision 1 for *agent* if it has none yet.
+
+    Idempotent: a no-op when agent.active_revision_id is already set.
+    Defaults (source='import', note='seeded revision 1 ...') preserve the
+    seeder call sites (seed_quintana/seed_qora_demo); create_agent() overrides
+    source/note since a freshly-created agent is an API write, not an import.
+
+    system_prompt falls back to '' (not None) when the agent has neither a
+    filesystem file nor a DB system_prompt yet — AgentConfigV1.system_prompt
+    has no safe None default, and a newly-created agent may legitimately have
+    no prompt until it is configured via PATCH.
+    """
+    if agent.active_revision_id is not None:
+        return
+
+    system_prompt = _resolve_seed_system_prompt(
+        agent.client_id, agent.slug, agent.system_prompt
+    ) or ""
+    config = AgentConfigV1(**build_agent_config_v1_snapshot(agent, system_prompt))
+    await revisions_service.create_revision(
+        session,
+        agent=agent,
+        config=config,
+        source=source,
+        created_by=created_by,
+        note=note or "seeded revision 1 (seed_quintana/seed_qora_demo)",
+    )
+
+
+def build_agent_config_v1_snapshot(agent: Agent, system_prompt: str | None) -> dict:
+    """Build the AgentConfigV1-shaped dict snapshot for one Agent (design.md D5).
+
+    Reusable by both the one-time import's equivalent inline logic (which does
+    NOT call this — see the import migration's own docstring on why) and by
+    Phase 2's write path once AgentConfigV1 the Pydantic schema exists.
+
+    Fields with no Agent column source today (goal, first_message, language,
+    turn_eagerness) are None.
+    """
+    try:
+        tools_enabled = json.loads(agent.tools_enabled) if agent.tools_enabled else []
+    except (TypeError, ValueError):
+        tools_enabled = []
+
+    return {
+        "schema_version": "v1",
+        "system_prompt": system_prompt,
+        "goal": None,
+        "voice_id": agent.voice_id,
+        "tts_model": agent.tts_model,
+        "tts_speed": agent.tts_speed,
+        "tts_stability": agent.tts_stability,
+        "tts_similarity_boost": agent.tts_similarity_boost,
+        "model": agent.model,
+        "temperature": agent.temperature,
+        "max_tokens": agent.max_tokens,
+        "tools_enabled": tools_enabled,
+        "first_message": None,
+        "language": None,
+        "turn_eagerness": None,
+        "soft_timeout_seconds": agent.soft_timeout_seconds,
+        "soft_timeout_message": agent.soft_timeout_message,
+        "soft_timeout_use_llm": agent.soft_timeout_use_llm,
+        "voicemail_detection_enabled": agent.voicemail_detection_enabled,
+        "max_call_duration_seconds": agent.max_call_duration_seconds,
+    }
 
 
 async def create_client(
@@ -21,7 +116,7 @@ async def create_client(
     voice_id: str,
     system_prompt_override: str | None = None,
     knowledge_base: str | None = None,
-    model: str = "gpt-4o",
+    model: str = "gpt-4.1-mini",
     temperature: float = 0.7,
     max_tokens: int = 300,
     tools_enabled: str = '["get_lead_details","capture_data","mark_not_interested","schedule_followup"]',
@@ -342,7 +437,7 @@ async def seed_quintana(session: AsyncSession) -> None:
     existing = await get_client(session, "quintana-seguros")
     if existing is not None:
         # AD-2: One-time migration guard — populate agent fields only when missing or blank
-        agent = await get_default_agent(session, "quintana-seguros")
+        agent = await _resolve_single_active_agent_or_none(session, "quintana-seguros")
         if agent is not None:
             updated = False
             if not agent.system_prompt:
@@ -365,6 +460,8 @@ async def seed_quintana(session: AsyncSession) -> None:
                 updated = True
             if updated:
                 await session.flush()
+            # Task 1.5: backfill revision 1 for agents seeded before this change.
+            await _ensure_active_revision(session, agent)
         return  # Already seeded — skip client creation
 
     await create_client(
@@ -382,6 +479,9 @@ async def seed_quintana(session: AsyncSession) -> None:
     )
     # Note: create_client() auto-creates the default Agent — no separate create_agent() needed.
     # tool_config column not set — capture_data schema is generated from crm.yaml at runtime.
+    agent = await _resolve_single_active_agent_or_none(session, "quintana-seguros")
+    if agent is not None:
+        await _ensure_active_revision(session, agent)
 
 
 _QORA_EXPLAINER_SYSTEM_PROMPT = """\
@@ -457,7 +557,7 @@ async def seed_qora_demo(session: AsyncSession) -> None:
         # system_prompt (passed via system_prompt_override → system_prompt on Agent).
 
         # Always set elevenlabs_agent_id, TTS values, and EL config on the newly seeded agent.
-        agent = await get_default_agent(session, "qora-demo")
+        agent = await _resolve_single_active_agent_or_none(session, "qora-demo")
         if agent is not None:
             agent.elevenlabs_agent_id = el_agent_id
             agent.tts_speed = _QORA_DEMO_TTS_SPEED
@@ -467,10 +567,11 @@ async def seed_qora_demo(session: AsyncSession) -> None:
             agent.voicemail_detection_enabled = True
             agent.max_call_duration_seconds = 120
             await session.flush()
+            await _ensure_active_revision(session, agent)
     else:
         # AD-2: Idempotent corrections — update elevenlabs_agent_id and system_prompt
         # if they are missing or stale (e.g. old Quintana agent ID, stale system_prompt).
-        agent = await get_default_agent(session, "qora-demo")
+        agent = await _resolve_single_active_agent_or_none(session, "qora-demo")
         if agent is not None:
             updated = False
             if agent.elevenlabs_agent_id != el_agent_id:
@@ -489,6 +590,8 @@ async def seed_qora_demo(session: AsyncSession) -> None:
                 updated = True
             if updated:
                 await session.flush()
+            # Task 1.5: backfill revision 1 for agents seeded before this change.
+            await _ensure_active_revision(session, agent)
 
     # Idempotently seed the demo lead for qora-demo.
     # Jorge is a broker/sales manager evaluating Qora as a potential customer.
@@ -519,7 +622,7 @@ async def create_agent(
     voice_id: str,
     system_prompt: str | None = None,
     knowledge_base: str | None = None,
-    model: str = "gpt-4o",
+    model: str = "gpt-4.1-mini",
     temperature: float = 0.7,
     max_tokens: int = 300,
     tools_enabled: str = '["get_lead_details","capture_data","mark_not_interested","schedule_followup"]',
@@ -530,7 +633,7 @@ async def create_agent(
     tts_speed: float = 0.95,
     tts_stability: float = 0.4,
     tts_similarity_boost: float = 0.75,
-    tts_model: str = "eleven_flash_v2_5",
+    tts_model: str = "eleven_v4_turbo",
     tool_config: str | None = None,
     soft_timeout_seconds: float | None = None,
     soft_timeout_message: str | None = None,
@@ -557,7 +660,14 @@ async def create_agent(
         ValueError: If is_default=True and another default already exists for this client.
     """
     if is_default:
-        existing_default = await get_default_agent(session, client_id)
+        existing_default_result = await session.execute(
+            select(Agent).where(
+                Agent.client_id == client_id,
+                Agent.is_default == True,  # noqa: E712
+                Agent.is_active == True,  # noqa: E712
+            )
+        )
+        existing_default = existing_default_result.scalar_one_or_none()
         if existing_default is not None:
             raise ValueError(
                 f"Client {client_id!r} already has a default agent: {existing_default.id!r}. "
@@ -606,6 +716,18 @@ async def create_agent(
     )
     session.add(agent)
     await session.flush()
+
+    # agent-config-revisions-routing (D4): every agent must have an active
+    # revision. source='api' distinguishes an API-created agent from a
+    # source='import' bulk migration row; created_by='system' because no
+    # principal is threaded through this call today.
+    await _ensure_active_revision(
+        session,
+        agent,
+        source="api",
+        created_by="system",
+        note="initial revision created with the agent",
+    )
     return agent
 
 
@@ -619,17 +741,94 @@ async def get_agent(session: AsyncSession, agent_id: str) -> Agent | None:
     return result.scalar_one_or_none()
 
 
-async def get_default_agent(session: AsyncSession, client_id: str) -> Agent | None:
-    """Fetch the default Agent for a client.
+class AgentResolutionError(Exception):
+    """Base error for fail-closed agent resolution (agent-routing spec D2/D3).
+
+    Never raised by anything that consults is_default — that flag no longer
+    gates reachability.
+    """
+
+
+class NoActiveAgentError(AgentResolutionError):
+    """Raised when a client has zero active agents."""
+
+
+class AmbiguousAgentError(AgentResolutionError):
+    """Raised when a client has more than one active agent and no agent_id
+    was given to disambiguate.
+    """
+
+
+async def resolve_single_active_agent(session: AsyncSession, client_id: str) -> Agent:
+    """Fail-closed agent resolution for agent_id-less call sites (agent-routing D2).
+
+    Succeeds only when client_id has exactly one active agent. Never reads
+    is_default — a client with two active agents is ambiguous even if neither
+    (or one) is flagged is_default.
+
+    Args:
+        session: Active async DB session.
+        client_id: The client whose active agent is being resolved.
 
     Returns:
-        The active Agent with is_default=True for the given client_id, or None.
-        Deactivated agents are excluded even if they have is_default=True.
+        The sole active Agent for client_id.
+
+    Raises:
+        NoActiveAgentError: client_id has zero active agents.
+        AmbiguousAgentError: client_id has more than one active agent.
     """
     result = await session.execute(
         select(Agent).where(
             Agent.client_id == client_id,
-            Agent.is_default == True,  # noqa: E712
+            Agent.is_active == True,  # noqa: E712
+        )
+    )
+    active_agents = list(result.scalars().all())
+    if len(active_agents) == 0:
+        raise NoActiveAgentError(
+            f"no_active_agent: client {client_id!r} has zero active agents."
+        )
+    if len(active_agents) > 1:
+        raise AmbiguousAgentError(
+            f"ambiguous_agent: client {client_id!r} has {len(active_agents)} active "
+            "agents; an explicit agent_id is required."
+        )
+    return active_agents[0]
+
+
+async def _resolve_single_active_agent_or_none(session: AsyncSession, client_id: str) -> Agent | None:
+    """Seed-time convenience: resolve_single_active_agent(), None on failure.
+
+    Seeders run at every startup and must degrade gracefully (skip, not crash)
+    when agent resolution is ambiguous or empty — mirrors the prior
+    the now-removed default-agent-lookup's None-on-miss contract, without reading is_default.
+    """
+    try:
+        return await resolve_single_active_agent(session, client_id)
+    except AgentResolutionError:
+        return None
+
+
+async def get_agent_for_client(
+    session: AsyncSession, client_id: str, agent_id: str
+) -> Agent | None:
+    """Fetch an active Agent by id, scoped to client_id (tenant isolation).
+
+    Returns None when the agent does not exist, is inactive, or belongs to a
+    different client — callers must never fall back to a guessed agent on None.
+
+    Args:
+        session: Active async DB session.
+        client_id: The client the agent must belong to.
+        agent_id: The Agent UUID to fetch.
+
+    Returns:
+        The matching active Agent, or None.
+    """
+    result = await session.execute(
+        select(Agent).where(
+            Agent.id == agent_id,
+            Agent.client_id == client_id,
             Agent.is_active == True,  # noqa: E712
         )
     )
@@ -714,8 +913,10 @@ async def deactivate_agent(
 ) -> Agent:
     """Soft-delete an agent by setting is_active=False.
 
-    GUARD: Raises ValueError if the agent is the sole active default agent for
-    its client. A client must always have at least one active default agent.
+    GUARD (agent-routing spec D3): raises ValueError if the agent is the
+    client's last remaining active agent, counted by active-agent count —
+    never by is_default. A client must always have at least one active agent
+    reachable, regardless of which (if any) agent is flagged is_default.
 
     Args:
         session: Active async DB session.
@@ -726,7 +927,7 @@ async def deactivate_agent(
         The updated Agent with is_active=False.
 
     Raises:
-        ValueError: If agent not found, or if it is the sole active default.
+        ValueError: If agent not found, or if it is the client's last active agent.
     """
     result = await session.execute(
         select(Agent).where(
@@ -738,77 +939,20 @@ async def deactivate_agent(
     if agent is None:
         raise ValueError(f"Agent {agent_id!r} not found for client {client_id!r}.")
 
-    # Sole-default guard: if this agent is the ONLY active default, block deactivation
-    if agent.is_default and agent.is_active:
-        active_defaults_result = await session.execute(
+    if agent.is_active:
+        active_agents_result = await session.execute(
             select(Agent).where(
                 Agent.client_id == client_id,
-                Agent.is_default == True,  # noqa: E712
                 Agent.is_active == True,  # noqa: E712
             )
         )
-        active_defaults = list(active_defaults_result.scalars().all())
-        if len(active_defaults) <= 1:
+        active_agents = list(active_agents_result.scalars().all())
+        if len(active_agents) <= 1:
             raise ValueError(
-                f"cannot_deactivate_sole_default_agent: agent {agent_id!r} is the "
-                f"only active default for client {client_id!r}."
+                f"cannot_deactivate_last_active_agent: agent {agent_id!r} is the "
+                f"only active agent for client {client_id!r}."
             )
 
     agent.is_active = False
-    await session.flush()
-    return agent
-
-
-async def set_default_agent(
-    session: AsyncSession,
-    client_id: str,
-    agent_id: str,
-) -> Agent:
-    """Atomically swap the default agent for a client.
-
-    Unsets is_default on all other agents for the client, then sets is_default
-    on the target agent. Both writes happen in a single flush (same transaction).
-
-    Args:
-        session: Active async DB session.
-        client_id: The owning client.
-        agent_id: UUID of the agent to make default.
-
-    Returns:
-        The updated Agent with is_default=True.
-
-    Raises:
-        ValueError: If agent not found or agent is inactive.
-    """
-    from sqlalchemy import update as sa_update
-
-    # Fetch the target agent with client isolation
-    result = await session.execute(
-        select(Agent).where(
-            Agent.id == agent_id,
-            Agent.client_id == client_id,
-        )
-    )
-    agent = result.scalar_one_or_none()
-    if agent is None:
-        raise ValueError(f"Agent {agent_id!r} not found for client {client_id!r}.")
-
-    if not agent.is_active:
-        raise ValueError(
-            f"cannot_set_inactive_agent_as_default: agent {agent_id!r} is inactive."
-        )
-
-    # Unset all other defaults for this client in one UPDATE
-    await session.execute(
-        sa_update(Agent)
-        .where(
-            Agent.client_id == client_id,
-            Agent.id != agent_id,
-        )
-        .values(is_default=False)
-    )
-
-    # Set this agent as default
-    agent.is_default = True
     await session.flush()
     return agent

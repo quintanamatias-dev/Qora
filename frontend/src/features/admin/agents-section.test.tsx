@@ -15,7 +15,19 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
+import { http, HttpResponse } from 'msw'
+import { server } from '../../../tests/mocks/server'
 import { AgentsSection } from './agents-section'
+import type { AgentConfigRevision } from '@/api/types'
+
+beforeEach(() => {
+  // Default: no revisions yet — avoids noisy MSW "unmatched request" warnings
+  // from tests outside the revisions-panel describe block below, which open
+  // the same edit panel without caring about revision history.
+  server.use(
+    http.get('/api/v1/clients/:clientId/agents/:agentId/revisions', () => HttpResponse.json([])),
+  )
+})
 
 function renderAgentsSection(clientId = 'demo-client') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -167,5 +179,164 @@ describe('AgentsSection copy URL button', () => {
     expect(writeTextMock).toHaveBeenCalledWith(
       '/api/v1/voice/demo-client/custom-llm/chat/completions',
     )
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Default-agent removal (agent-config-revisions-routing Phase 6.1)
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('AgentsSection default-agent removal', () => {
+  it('does not render a "Default" badge or button anywhere in the agents table', async () => {
+    renderAgentsSection('demo-client')
+    await waitFor(() => {
+      expect(screen.queryByTestId('agents-loading')).not.toBeInTheDocument()
+    })
+    expect(screen.queryByText('Default')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /default/i })).not.toBeInTheDocument()
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Config revisions panel + rollback (agent-config-revisions-routing Phase 6.2)
+// ──────────────────────────────────────────────────────────────────────────────
+
+const revisionsFixture: AgentConfigRevision[] = [
+  {
+    id: 'rev-2',
+    agent_id: 'agent-001',
+    revision_number: 2,
+    config: { system_prompt: 'v2 prompt' },
+    schema_version: 'v1',
+    source: 'api',
+    created_by: 'admin@qora.ai',
+    created_at: '2026-01-20T00:00:00Z',
+    note: 'Updated prompt',
+    elevenlabs_sync_status: 'synced',
+  },
+  {
+    id: 'rev-1',
+    agent_id: 'agent-001',
+    revision_number: 1,
+    config: { system_prompt: 'v1 prompt' },
+    schema_version: 'v1',
+    source: 'import',
+    created_by: 'system',
+    created_at: '2026-01-01T00:00:00Z',
+    note: null,
+    elevenlabs_sync_status: 'synced',
+  },
+]
+
+async function openFirstAgentEditPanel() {
+  renderAgentsSection('demo-client')
+  await waitFor(() => {
+    expect(screen.queryByTestId('agents-loading')).not.toBeInTheDocument()
+  })
+  const editButtons = screen.getAllByRole('button', { name: /edit/i })
+  await userEvent.click(editButtons[0])
+}
+
+describe('AgentsSection revisions panel', () => {
+  let revisionsState: AgentConfigRevision[]
+
+  beforeEach(() => {
+    revisionsState = revisionsFixture.map((r) => ({ ...r }))
+    server.use(
+      http.get(
+        '/api/v1/clients/:clientId/agents/:agentId/revisions',
+        () => HttpResponse.json(revisionsState),
+      ),
+    )
+  })
+
+  it('shows the active revision number and its ElevenLabs sync status', async () => {
+    await openFirstAgentEditPanel()
+    await waitFor(() => {
+      expect(screen.getByText(/active: revision 2/i)).toBeInTheDocument()
+    })
+    expect(screen.getAllByText(/synced/i).length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('lists past revisions with source, created_by, created_at and note', async () => {
+    await openFirstAgentEditPanel()
+    await waitFor(() => {
+      expect(screen.getByTestId('revisions-history')).toBeInTheDocument()
+    })
+    const historyText = screen.getByTestId('revisions-history').textContent ?? ''
+    expect(historyText).toContain('Revision 1')
+    expect(historyText).toContain('import')
+    expect(historyText).toContain('system')
+  })
+
+  it('shows a "Roll back" button only for the non-active revision', async () => {
+    await openFirstAgentEditPanel()
+    await waitFor(() => {
+      expect(screen.getByTestId('revisions-history')).toBeInTheDocument()
+    })
+    const rollbackButtons = screen.getAllByRole('button', { name: /roll back/i })
+    expect(rollbackButtons).toHaveLength(1)
+  })
+
+  it('requires a confirm step before calling the rollback endpoint', async () => {
+    let rollbackCalled = false
+    server.use(
+      http.post(
+        '/api/v1/clients/:clientId/agents/:agentId/revisions/:revisionId/rollback',
+        () => {
+          rollbackCalled = true
+          return HttpResponse.json({ ...revisionsFixture[1], revision_number: 3, source: 'rollback' })
+        },
+      ),
+    )
+    await openFirstAgentEditPanel()
+    await waitFor(() => {
+      expect(screen.getByTestId('revisions-history')).toBeInTheDocument()
+    })
+
+    await userEvent.click(screen.getByRole('button', { name: /roll back/i }))
+    // Confirm step: rollback must NOT fire until explicitly confirmed.
+    expect(rollbackCalled).toBe(false)
+    expect(screen.getByRole('button', { name: /confirm rollback/i })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /confirm rollback/i }))
+    await waitFor(() => {
+      expect(rollbackCalled).toBe(true)
+    })
+  })
+
+  it('refreshes the active revision after a successful rollback', async () => {
+    server.use(
+      http.post(
+        '/api/v1/clients/:clientId/agents/:agentId/revisions/:revisionId/rollback',
+        () => {
+          const newRevision: AgentConfigRevision = {
+            id: 'rev-3',
+            agent_id: 'agent-001',
+            revision_number: 3,
+            config: { system_prompt: 'v1 prompt' },
+            schema_version: 'v1',
+            source: 'rollback',
+            created_by: 'admin@qora.ai',
+            created_at: '2026-01-21T00:00:00Z',
+            note: 'rollback to revision 1',
+            elevenlabs_sync_status: 'synced',
+          }
+          revisionsState = [newRevision, ...revisionsState]
+          return HttpResponse.json(newRevision)
+        },
+      ),
+    )
+    await openFirstAgentEditPanel()
+    await waitFor(() => {
+      expect(screen.getByTestId('revisions-history')).toBeInTheDocument()
+    })
+
+    await userEvent.click(screen.getByRole('button', { name: /roll back/i }))
+    await userEvent.click(screen.getByRole('button', { name: /confirm rollback/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/active: revision 3/i)).toBeInTheDocument()
+    })
   })
 })

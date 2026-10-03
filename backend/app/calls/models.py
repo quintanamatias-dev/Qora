@@ -74,6 +74,11 @@ class CallSession(Base):
     agent_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("agents.id"), nullable=True, default=None
     )
+    # agent-config-revisions-routing D4: the agent's active_revision_id at session
+    # creation time. NULL for pre-migration sessions and agents with no active revision.
+    agent_config_revision_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("agent_config_revisions.id"), nullable=True, default=None
+    )
     # PR 3: transcript finalization audit — stamped by transcript_flush_handler
     # after the call ends. NULL means not yet finalized (call still live or handler pending).
     # Operators and B9 can inspect these to confirm off-call durability ran.

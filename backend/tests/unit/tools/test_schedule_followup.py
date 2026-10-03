@@ -405,7 +405,7 @@ def test_parse_followup_date_naive_no_seconds_uses_client_tz():
 async def test_schedule_followup_passes_agent_id_when_source_session_has_agent(db):
     """schedule_followup passes agent_id from the source session to ScheduledCall."""
     from app.scheduler.service import list_queue
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
     from app.calls.service import create_session
     from app.leads.service import transition_lead_status
     from sqlalchemy import select as _select
@@ -413,7 +413,7 @@ async def test_schedule_followup_passes_agent_id_when_source_session_has_agent(d
 
     # Get the default agent
     async with db.async_session_factory() as sess:
-        agent = await get_default_agent(sess, "quintana-seguros")
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
         agent_id = agent.id
 
     # Enable scheduler for quintana
@@ -469,14 +469,14 @@ async def test_schedule_followup_passes_agent_id_when_source_session_has_agent(d
 async def test_schedule_followup_resolves_default_agent_when_no_source_session(db):
     """schedule_followup resolves default agent when no source_session_id is provided."""
     from app.scheduler.service import list_queue
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
     from app.leads.service import transition_lead_status
     from sqlalchemy import select as _select
     from app.leads.models import Lead as _Lead
 
     # Get the default agent
     async with db.async_session_factory() as sess:
-        agent = await get_default_agent(sess, "quintana-seguros")
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
         agent_id = agent.id
 
     # Enable scheduler for quintana (allow all hours)

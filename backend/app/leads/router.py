@@ -753,6 +753,13 @@ def _tool_names_from_definitions(tools: "list[dict] | None") -> list[str] | None
 @router.get("/{lead_id}/context-preview")
 async def get_lead_context_preview(
     lead_id: str,
+    agent_id: str | None = Query(
+        default=None,
+        description=(
+            "Explicit agent to preview. Required only when the client has more "
+            "than one active agent (agent-routing D2 fail-closed resolution)."
+        ),
+    ),
     session: AsyncSession = Depends(get_db_session),
     caller: CallerIdentity = Depends(require_api_key),
 ):
@@ -761,7 +768,8 @@ async def get_lead_context_preview(
     Shows the exact non-system-prompt context the agent will receive on next call.
 
     Source of truth: this endpoint builds the preview from the SAME runtime path
-    the voice agent uses — get_default_agent() + build_voice_context(). The literal
+    the voice agent uses — explicit agent resolution (never is_default) +
+    build_voice_context(). The literal
     context blocks (lead_profile, misc_notes, skills_index, tools, model config) are
     read directly off the resulting VoiceSessionContext so the preview cannot diverge
     from what the agent actually receives. Only the system prompt is redacted — its
@@ -809,14 +817,38 @@ async def get_lead_context_preview(
     agent_error: str | None = None
 
     try:
-        from app.tenants.service import get_client, get_default_agent
+        from app.tenants.service import (
+            AmbiguousAgentError,
+            NoActiveAgentError,
+            get_agent_for_client,
+            get_client,
+            resolve_single_active_agent,
+        )
         from app.voice.context import build_voice_context
 
-        agent = await get_default_agent(session, lead.client_id)
+        # agent-routing D1/D2: explicit agent_id when given, never is_default;
+        # fail-closed to the sole active agent only when the client is unambiguous.
+        agent = None
+        if agent_id is not None:
+            agent = await get_agent_for_client(session, lead.client_id, agent_id)
+            if agent is None:
+                agent_error = (
+                    f"Agent '{agent_id}' not found for this client — context preview unavailable"
+                )
+        else:
+            try:
+                agent = await resolve_single_active_agent(session, lead.client_id)
+            except NoActiveAgentError:
+                agent_error = "No active agent found for this client — context preview unavailable"
+            except AmbiguousAgentError:
+                agent_error = (
+                    "Client has more than one active agent — pass an explicit "
+                    "agent_id query param to select one"
+                )
         client = await get_client(session, lead.client_id)
 
         if agent is None:
-            agent_error = "No active agent found for this client — context preview unavailable"
+            pass
         elif client is None:
             agent_error = "Client not found — context preview unavailable"
         else:

@@ -5,7 +5,7 @@
  */
 
 import { apiFetch } from './client'
-import type { Agent, CreateAgentPayload, UpdateAgentPayload } from './types'
+import type { Agent, AgentConfigRevision, CreateAgentPayload, UpdateAgentPayload } from './types'
 
 /**
  * GET /api/v1/clients/:clientId/agents
@@ -56,12 +56,29 @@ export async function deactivateAgent(clientId: string, agentId: string): Promis
 }
 
 /**
- * POST /api/v1/clients/:clientId/agents/:agentId/make-default
- * Sets an agent as the default.
+ * GET /api/v1/clients/:clientId/agents/:agentId/revisions
+ * Returns all config revisions for an agent, newest first.
  */
-export async function makeAgentDefault(clientId: string, agentId: string): Promise<Agent> {
-  return apiFetch<Agent>(
-    `/api/v1/clients/${encodeURIComponent(clientId)}/agents/${encodeURIComponent(agentId)}/make-default`,
+export async function fetchAgentRevisions(
+  clientId: string,
+  agentId: string,
+): Promise<AgentConfigRevision[]> {
+  return apiFetch<AgentConfigRevision[]>(
+    `/api/v1/clients/${encodeURIComponent(clientId)}/agents/${encodeURIComponent(agentId)}/revisions`,
+  )
+}
+
+/**
+ * POST /api/v1/clients/:clientId/agents/:agentId/revisions/:revisionId/rollback
+ * Creates and activates a new revision copying the target revision's config.
+ */
+export async function rollbackAgentRevision(
+  clientId: string,
+  agentId: string,
+  revisionId: string,
+): Promise<AgentConfigRevision> {
+  return apiFetch<AgentConfigRevision>(
+    `/api/v1/clients/${encodeURIComponent(clientId)}/agents/${encodeURIComponent(agentId)}/revisions/${encodeURIComponent(revisionId)}/rollback`,
     { method: 'POST' },
   )
 }
