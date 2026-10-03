@@ -135,27 +135,28 @@ async def test_create_agent_as_default(session: AsyncSession):
     assert agent.is_default is True
 
 
-async def test_duplicate_default_raises(session: AsyncSession):
-    """Creating a second is_default=True agent for the same client raises ValueError.
+async def test_duplicate_default_no_longer_raises(session: AsyncSession):
+    """Creating a second is_default=True agent for the same client no longer
+    raises (elevenlabs-reconciler Phase 6, design.md R-D3): resolve_single_active_agent()
+    never reads is_default, so the write-time uniqueness check is dead-weight cleanup.
 
-    create_client() auto-creates the first default agent; attempting to create
-    a second one must raise ValueError.
+    create_client() auto-creates the first default agent; a second one with
+    is_default=True must succeed too.
     """
     from app.tenants.service import create_agent
 
     await _make_client(session, "broker-dup-test")
     # _make_client → create_client already created a default agent
 
-    # Attempt to add a second default — must raise
-    with pytest.raises(ValueError, match="default"):
-        await create_agent(
-            session,
-            client_id="broker-dup-test",
-            slug="agent-two",
-            name="Agent Two",
-            voice_id="voice-2",
-            is_default=True,
-        )
+    second = await create_agent(
+        session,
+        client_id="broker-dup-test",
+        slug="agent-two",
+        name="Agent Two",
+        voice_id="voice-2",
+        is_default=True,
+    )
+    assert second.is_default is True
 
 
 async def test_create_agent_activates_revision_1(session: AsyncSession):

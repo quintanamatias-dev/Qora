@@ -152,10 +152,10 @@ async def test_list_agents_returns_200_with_default_agent(agents_app: AsyncClien
     assert len(data) == 1
     agent = data[0]
     assert agent["client_id"] == "test-client"
-    assert agent["is_default"] is True
     assert agent["is_active"] is True
     assert "agent_id" in agent
     assert "slug" in agent
+    assert "is_default" not in agent
 
 
 async def test_list_agents_client_not_found_returns_404(
@@ -183,7 +183,7 @@ async def test_create_agent_returns_201(agents_app: AsyncClient):
     assert data["voice_id"] == "voice-abc123"
     assert data["client_id"] == "test-client"
     assert data["is_active"] is True
-    assert data["is_default"] is False
+    assert "is_default" not in data
     assert "agent_id" in data
     assert "created_at" in data
 

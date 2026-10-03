@@ -6,11 +6,60 @@ SyncResult: represents the outcome of a sync attempt.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, model_validator
+from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.core.database import Base
+
+
+def _uuid4() -> str:
+    return str(uuid.uuid4())
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class ElevenLabsReconciliationReport(Base):
+    """Latest fetch-only drift-check result for one ElevenLabs-linked agent.
+
+    One row per agent_id (UniqueConstraint), upserted by run_reconciliation_once.
+    Never written by the explicit sync path — see design.md R-D1: this table is
+    deliberately separate from Agent.elevenlabs_sync_status, which records the
+    outcome of the last operator-triggered save, not a periodic background check.
+
+    Spec: openspec/changes/elevenlabs-reconciler/design.md — Interfaces/Contracts.
+    """
+
+    __tablename__ = "elevenlabs_reconciliation_reports"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid4)
+    agent_id: Mapped[str] = mapped_column(
+        String, ForeignKey("agents.id"), nullable=False, index=True
+    )
+    client_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    drift_fields: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    status_reason: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    checked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+    __table_args__ = (
+        UniqueConstraint("agent_id", name="uq_elevenlabs_reconciliation_reports_agent_id"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<ElevenLabsReconciliationReport agent_id={self.agent_id!r} "
+            f"status={self.status!r}>"
+        )
 
 
 class SoftTimeoutConfig(BaseModel):

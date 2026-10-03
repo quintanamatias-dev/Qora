@@ -1202,22 +1202,20 @@ async def _process_custom_llm_request(
                 #
                 # Phase 7 prompt resolution priority:
                 # 1. agent.system_prompt (DB) via render_for_agent()
-                # 2. client.system_prompt_override (legacy, kept for backward compat)
-                # 3. Filesystem prompt.md / JAUMPABLO template
+                # 2. Filesystem prompt.md / JAUMPABLO template
                 #
-                # Use explicit None check so empty string override ("") is respected.
+                # elevenlabs-reconciler Phase 5 (R-D3): the agent is None branch no
+                # longer reads the DEPRECATED Client.system_prompt_override column —
+                # every live call has an explicit agent since 1a's migration. The
+                # generic filesystem render() fallback is kept (it reads no
+                # DEPRECATED column) so an agent-less client still renders safely.
                 try:
                     if agent is not None:
                         system_content = await PromptLoader().render_for_agent(
                             agent, lead, db=db, client=client_orm
                         )
                     else:
-                        # No Agent yet (pre-migration path) — fall back to client-based rendering
-                        system_content = (
-                            client_orm.system_prompt_override
-                            if client_orm.system_prompt_override is not None
-                            else await PromptLoader().render(client_orm, lead, db=db)
-                        )
+                        system_content = await PromptLoader().render(client_orm, lead, db=db)
                 except Exception as exc:  # noqa: BLE001 - final context fallback must stream safely
                     structlog.get_logger().warning(
                         "voice_context_per_turn_fallback_render_failed",
@@ -1231,10 +1229,10 @@ async def _process_custom_llm_request(
                     _context_render_failed = True
                     system_content = SAFE_CONTEXT_RENDER_FAILURE_PROMPT
 
-                # Parse tools from agent config (Phase 7) or client config (legacy)
-                _tools_enabled_str = (
-                    agent.tools_enabled if agent is not None else client_orm.tools_enabled
-                )
+                # Parse tools from agent config (Phase 7). elevenlabs-reconciler
+                # Phase 5 (R-D3): the agent is None branch no longer reads the
+                # DEPRECATED Client.tools_enabled column — fail closed to no tools.
+                _tools_enabled_str = agent.tools_enabled if agent is not None else None
                 if _tools_enabled_str:
                     try:
                         from app.agents.schemas import strip_deprecated_tools as _strip_deprecated
@@ -1324,11 +1322,11 @@ async def _process_custom_llm_request(
             _agent_has_template_vars = prompt_uses_lead_placeholders(
                 _effective_prompt_template
             )
+        # elevenlabs-reconciler Phase 5 (R-D3): the legacy agent-is-None branch
+        # reading Client.system_prompt_override is removed — only an Agent with a
+        # static (non-templated) system_prompt counts as a static prompt now.
         _has_static_prompt = (
-            # Legacy client.system_prompt_override (no Agent)
-            (agent is None and client_orm is not None and client_orm.system_prompt_override is not None)
-            # Agent with static system_prompt (no {{variable}} placeholders)
-            or (agent is not None and agent.system_prompt and not _agent_has_template_vars)
+            agent is not None and agent.system_prompt and not _agent_has_template_vars
         )
         if _has_static_prompt and lead is not None and not _context_render_failed:
             # dynamic-lead-fields WU-7: read car/insurance data from lead_custom_fields,

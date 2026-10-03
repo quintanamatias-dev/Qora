@@ -179,6 +179,13 @@ async def lifespan(app: FastAPI):
 
     scheduler_task = asyncio.create_task(scheduler_tick())
 
+    # 7b. Start ElevenLabs reconciler tick (elevenlabs-reconciler, R-D1).
+    # Fetch-only, report-only periodic drift check. 0 disables the loop
+    # (reconciler_tick still runs but never ticks a pass) — see reconciler.py.
+    from app.elevenlabs.reconciler import reconciler_tick
+
+    elevenlabs_reconciler_task = asyncio.create_task(reconciler_tick(settings))
+
     # 8. Start outbound telephony reconciliation sweep (C2)
     # Transitions stale dialing/ringing/in_call sessions older than 30 min
     # to stale_in_call (no webhook evidence) or completed (webhook evidence).
@@ -217,6 +224,7 @@ async def lifespan(app: FastAPI):
     cleanup_task.cancel()
     sweeper_task.cancel()
     scheduler_task.cancel()
+    elevenlabs_reconciler_task.cancel()
     if outbound_sweeper_task is not None:
         outbound_sweeper_task.cancel()
     try:
@@ -229,6 +237,10 @@ async def lifespan(app: FastAPI):
         pass
     try:
         await scheduler_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await elevenlabs_reconciler_task
     except asyncio.CancelledError:
         pass
     if outbound_sweeper_task is not None:
@@ -292,6 +304,7 @@ from app.entitlements.router import router as entitlements_router  # noqa: E402
 from app.auth.router import router as auth_router  # noqa: E402
 from app.auth.access_router import router as auth_access_router  # noqa: E402
 from app.admin.standards_router import router as admin_standards_router  # noqa: E402
+from app.admin.elevenlabs_reconciliation_router import router as admin_elevenlabs_reconciliation_router  # noqa: E402
 from app.skills.router import router as skills_router  # noqa: E402
 from app.onboarding.router import router as onboarding_router  # noqa: E402
 
@@ -313,6 +326,7 @@ api_v1_router.include_router(entitlements_router)  # /api/v1/clients/{id}/entitl
 api_v1_router.include_router(auth_router)  # /api/v1/auth — WorkOS AuthKit login
 api_v1_router.include_router(auth_access_router)  # /api/v1/clients/{id}/access — superadmin org/invite API
 api_v1_router.include_router(admin_standards_router)  # /api/v1/admin/standards/resync — platform-wide superadmin
+api_v1_router.include_router(admin_elevenlabs_reconciliation_router)  # /api/v1/admin/elevenlabs/reconciliation — fetch-only drift reports
 api_v1_router.include_router(skills_router)  # /api/v1/clients/{client_id}/skill(-package)s — Phase 4 API
 api_v1_router.include_router(onboarding_router)  # /api/v1/admin/onboarding — onboarding harness
 
