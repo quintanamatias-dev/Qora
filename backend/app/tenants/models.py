@@ -14,6 +14,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -226,6 +227,91 @@ class ClientConfigRevision(Base):
             f"<ClientConfigRevision id={self.id!r} client_id={self.client_id!r} "
             f"revision_number={self.revision_number!r} source={self.source!r}>"
         )
+
+
+class ClientIntegration(Base):
+    """Per-client, non-secret CRM integration config (client-integrations-secrets, P3-D1).
+
+    Mutated in place — no revision history (design.md P3-D1 rationale: config
+    edits are rare, low-blast-radius single-value changes). status/status_reason
+    are computed by boot validation and recomputed on every config/secret write.
+    No secret value is ever stored in `config` — see ClientSecret below.
+    """
+
+    __tablename__ = "client_integrations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid4)
+    client_id: Mapped[str] = mapped_column(
+        String, ForeignKey("clients.id"), nullable=False, index=True
+    )
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # JSON (stored as Text): base_id, table_id, match_field, field_mappings,
+    # custom_fields, quote_ready_fields, status_mapping, import_status_mapping,
+    # legacy_env_var_name — non-secret fields only.
+    config: Mapped[str] = mapped_column(Text, nullable=False)
+    # One of "ok" | "degraded" | "disabled".
+    status: Mapped[str] = mapped_column(String, nullable=False, default="ok")
+    status_reason: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    created_by: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_by: Mapped[str] = mapped_column(String, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("client_id", "provider", name="uq_client_integrations_client_provider"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<ClientIntegration id={self.id!r} client_id={self.client_id!r} "
+            f"provider={self.provider!r} status={self.status!r}>"
+        )
+
+
+class ClientSecret(Base):
+    """Encrypted per-client secret (client-integrations-secrets, P3-D2).
+
+    ciphertext is produced by app.core.crypto.SecretCrypto — never a plaintext
+    value. Mutated in place — no revision history (design.md P3-D1).
+    """
+
+    __tablename__ = "client_secrets"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid4)
+    client_id: Mapped[str] = mapped_column(
+        String, ForeignKey("clients.id"), nullable=False, index=True
+    )
+    integration_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("client_integrations.id"), nullable=True, default=None
+    )
+    # e.g. "airtable_api_key".
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    # Fingerprint of the master key that encrypted this row (rotation auditing).
+    key_id: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    created_by: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_by: Mapped[str] = mapped_column(String, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("client_id", "name", name="uq_client_secrets_client_name"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<ClientSecret id={self.id!r} client_id={self.client_id!r} name={self.name!r}>"
 
 
 class Client(Base):

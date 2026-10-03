@@ -777,7 +777,7 @@ class TestRealMigrationExecution:
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
         # PR3 transcript finalization fields: 20260625_0003
         # C2 outbound telephony: 20260702_0004
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020"}
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020", "20261003_0021", "20261003_0022"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"alembic_version should contain a known Qora revision. "
             f"Got: {versions}. Known: {_KNOWN_REVISIONS}"
@@ -961,7 +961,7 @@ class TestRealMigrationExecution:
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
         # PR3 transcript finalization fields: 20260625_0003
         # C2 outbound telephony: 20260702_0004
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020"}
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020", "20261003_0021", "20261003_0022"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"Stamp head did not record a known Qora revision. Got: {versions}. "
             f"Known revisions: {_KNOWN_REVISIONS}"
@@ -2850,3 +2850,299 @@ class TestDeleteQoraDemoTenantMigration:
         assert all(count == 0 for count in demo_counts.values()), (
             "downgrade must not resurrect any deleted qora-demo row"
         )
+
+
+# ===========================================================================
+# client-integrations-secrets — Task 2.2: client_integrations/client_secrets schema
+# ===========================================================================
+
+
+class TestClientIntegrationsSecretsSchemaMigration:
+    """20261003_0021: client_integrations + client_secrets tables."""
+
+    def test_client_integrations_secrets_schema_migration_creates_tables(self, tmp_path):
+        """alembic upgrade head creates both tables with expected columns + unique constraints."""
+        import sqlite3
+        from alembic import command
+
+        db_file = tmp_path / "client_integrations_secrets_schema.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "head")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cur.fetchall()}
+        assert "client_integrations" in tables
+        assert "client_secrets" in tables
+
+        cur.execute("PRAGMA table_info(client_integrations)")
+        integration_columns = {row[1] for row in cur.fetchall()}
+        expected_integration = {
+            "id",
+            "client_id",
+            "provider",
+            "enabled",
+            "config",
+            "status",
+            "status_reason",
+            "last_checked_at",
+            "created_at",
+            "created_by",
+            "updated_at",
+            "updated_by",
+        }
+        assert expected_integration.issubset(integration_columns), (
+            f"Missing columns: {expected_integration - integration_columns}"
+        )
+
+        cur.execute("PRAGMA index_list(client_integrations)")
+        integration_indexes = cur.fetchall()
+        assert any(row[2] == 1 for row in integration_indexes), (
+            "client_integrations must have a unique index (client_id, provider)"
+        )
+
+        cur.execute("PRAGMA table_info(client_secrets)")
+        secret_columns = {row[1] for row in cur.fetchall()}
+        expected_secret = {
+            "id",
+            "client_id",
+            "integration_id",
+            "name",
+            "ciphertext",
+            "key_id",
+            "created_at",
+            "created_by",
+            "updated_at",
+            "updated_by",
+        }
+        assert expected_secret.issubset(secret_columns), (
+            f"Missing columns: {expected_secret - secret_columns}"
+        )
+
+        cur.execute("PRAGMA index_list(client_secrets)")
+        secret_indexes = cur.fetchall()
+        assert any(row[2] == 1 for row in secret_indexes), (
+            "client_secrets must have a unique index (client_id, name)"
+        )
+        conn.close()
+
+    def test_client_integrations_secrets_schema_migration_downgrade(self, tmp_path):
+        """Downgrading past 20261003_0021 drops both tables. Targets that revision
+        explicitly (not "head"/"-1") because 20261003_0022 (the crm.yaml import
+        migration) became the new head afterwards — "-1" from head now only
+        undoes 0022, not this schema migration."""
+        import sqlite3
+        from alembic import command
+
+        db_file = tmp_path / "client_integrations_secrets_downgrade.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "20261003_0020")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cur.fetchall()}
+        assert "client_integrations" not in tables
+        assert "client_secrets" not in tables
+        conn.close()
+
+
+# ===========================================================================
+# client-integrations-secrets — Task 2.3: one-time crm.yaml import migration
+# ===========================================================================
+
+
+class TestImportCrmYamlIntegrationsMigration:
+    """20261003_0022: import every backend/clients/*/crm.yaml's non-secret fields."""
+
+    _FIXTURE_YAML = """\
+api_key_env: FIXTURE_AIRTABLE_API_KEY
+base_id: appFixtureBase123
+provider: airtable
+table_id: tblFixtureTable123
+match_field: lead_id
+field_mappings:
+- source: name
+  target: Nombre Completo
+  type: string
+custom_fields:
+- field_key: car_make
+  field_type: string
+  label: Car Make
+  required: true
+quote_ready_fields:
+- car_make
+status_mapping:
+  new: Nuevo!
+import_status_mapping:
+  Nuevo!: new
+"""
+
+    def _run_import_upgrade(self, db_file: Path, tmp_clients_root: Path) -> None:
+        """Run the import migration's upgrade() directly against a monkeypatched
+        clients root (same importlib pattern as the agent-config-revisions-routing
+        import migration's idempotent-rerun test) so the fixture crm.yaml is used
+        instead of the real backend/clients directory.
+        """
+        import importlib.util
+
+        from alembic import command
+        from alembic.operations import Operations
+        from alembic.runtime.migration import MigrationContext
+        from sqlalchemy import create_engine
+
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "20261003_0021")
+
+        module_path = VERSIONS_DIR / "20261003_0022_import_crm_yaml_integrations.py"
+        spec = importlib.util.spec_from_file_location("import_crm_yaml_fixture", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module._CLIENTS_ROOT = tmp_clients_root
+
+        sync_engine = create_engine(f"sqlite:///{db_file}")
+        with sync_engine.connect() as connection:
+            context = MigrationContext.configure(connection)
+            with context.begin_transaction():
+                operations = Operations(context)
+                with Operations.context(operations):
+                    module.upgrade()
+            connection.commit()
+        sync_engine.dispose()
+
+    def test_import_crm_yaml_migration_creates_integration_row_from_fixture(self, tmp_path):
+        """A fixture crm.yaml is imported into a matching client_integrations row,
+        with zero client_secrets rows created."""
+        import sqlite3
+
+        db_file = tmp_path / "import_crm_yaml.db"
+        clients_root = tmp_path / "clients"
+        client_dir = clients_root / "fixture-client"
+        client_dir.mkdir(parents=True)
+        (client_dir / "crm.yaml").write_text(self._FIXTURE_YAML, encoding="utf-8")
+
+        conn = sqlite3.connect(str(db_file))
+        # schema is created by command.upgrade in _run_import_upgrade below, so seed
+        # the client row AFTER the schema migration but before the import migration.
+        conn.close()
+
+        from alembic import command
+
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "20261003_0021")
+
+        conn = sqlite3.connect(str(db_file))
+        conn.execute(
+            "INSERT INTO clients (id, name, voice_id, is_active, created_at) "
+            "VALUES ('fixture-client', 'Fixture Client', 'v1', 1, '2026-10-03T00:00:00+00:00')"
+        )
+        conn.commit()
+        conn.close()
+
+        self._run_import_upgrade(db_file, clients_root)
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT provider, config, enabled FROM client_integrations WHERE client_id = ?",
+            ("fixture-client",),
+        )
+        row = cur.fetchone()
+        assert row is not None, "expected a client_integrations row for fixture-client"
+        provider, config_json, enabled = row
+        assert provider == "airtable"
+        assert bool(enabled) is True
+
+        import json as _json
+
+        config = _json.loads(config_json)
+        assert config["base_id"] == "appFixtureBase123"
+        assert config["table_id"] == "tblFixtureTable123"
+        assert config["match_field"] == "lead_id"
+        assert config["field_mappings"] == [
+            {"source": "name", "target": "Nombre Completo", "type": "string"}
+        ]
+        assert config["custom_fields"] == [
+            {
+                "field_key": "car_make",
+                "field_type": "string",
+                "label": "Car Make",
+                "required": True,
+            }
+        ]
+        assert config["quote_ready_fields"] == ["car_make"]
+        assert config["status_mapping"] == {"new": "Nuevo!"}
+        assert config["import_status_mapping"] == {"Nuevo!": "new"}
+        assert config["legacy_env_var_name"] == "FIXTURE_AIRTABLE_API_KEY"
+
+        cur.execute("SELECT COUNT(*) FROM client_secrets WHERE client_id = ?", ("fixture-client",))
+        assert cur.fetchone()[0] == 0, "import migration must never create a client_secrets row"
+        conn.close()
+
+    def test_import_crm_yaml_migration_skips_client_with_no_yaml(self, tmp_path):
+        """A client directory with no crm.yaml gets no client_integrations row."""
+        import sqlite3
+
+        db_file = tmp_path / "import_crm_yaml_no_file.db"
+        clients_root = tmp_path / "clients"
+        (clients_root / "no-crm-client").mkdir(parents=True)
+
+        from alembic import command
+
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "20261003_0021")
+
+        conn = sqlite3.connect(str(db_file))
+        conn.execute(
+            "INSERT INTO clients (id, name, voice_id, is_active, created_at) "
+            "VALUES ('no-crm-client', 'No CRM Client', 'v1', 1, '2026-10-03T00:00:00+00:00')"
+        )
+        conn.commit()
+        conn.close()
+
+        self._run_import_upgrade(db_file, clients_root)
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM client_integrations WHERE client_id = 'no-crm-client'"
+        )
+        assert cur.fetchone()[0] == 0
+        conn.close()
+
+    def test_import_crm_yaml_migration_is_idempotent_on_rerun(self, tmp_path):
+        """Re-running the import migration's upgrade() does not duplicate the row."""
+        import sqlite3
+
+        db_file = tmp_path / "import_crm_yaml_idempotent.db"
+        clients_root = tmp_path / "clients"
+        client_dir = clients_root / "fixture-client"
+        client_dir.mkdir(parents=True)
+        (client_dir / "crm.yaml").write_text(self._FIXTURE_YAML, encoding="utf-8")
+
+        from alembic import command
+
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "20261003_0021")
+
+        conn = sqlite3.connect(str(db_file))
+        conn.execute(
+            "INSERT INTO clients (id, name, voice_id, is_active, created_at) "
+            "VALUES ('fixture-client', 'Fixture Client', 'v1', 1, '2026-10-03T00:00:00+00:00')"
+        )
+        conn.commit()
+        conn.close()
+
+        self._run_import_upgrade(db_file, clients_root)
+        self._run_import_upgrade(db_file, clients_root)
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM client_integrations WHERE client_id = 'fixture-client'"
+        )
+        count = cur.fetchone()[0]
+        conn.close()
+        assert count == 1, f"expected re-run to stay idempotent (1 row), got {count}"

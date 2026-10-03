@@ -1,0 +1,21 @@
+# Configuration Phase 3 — Client Integrations and Encrypted Secrets
+
+Goal: implement `openspec/changes/client-integrations-secrets`. The CRM config and per-client API keys move to the DB (secrets encrypted), so panel edits survive deploys and one misconfigured client cannot bring the platform down (survey critical defects #3 and #4).
+
+Branch `feat/config-phase3` from `main` `e828fe0`. Overnight autonomous run (the user is asleep): the user reviews in the morning. Not deployed.
+
+## Tasks
+
+- [x] 1. Phases 1 + 2: `cryptography` dependency, `QORA_SECRETS_MASTER_KEY` setting, `SecretCrypto`; `client_integrations` / `client_secrets` models, schema migration 0021, crm.yaml import migration 0022.
+- [ ] 2. Phase 3: `IntegrationStore` with cache, and secret resolution in DB → env → missing order.
+- [ ] 3. Phase 4: cut every reader over to the store (import, sync, tools, voice hot path, summarizer) plus the static-import guard.
+- [ ] 4. Phase 5: router writes to the DB; write-only secret, status and import-from-env endpoints.
+- [ ] 5. Phase 6 + 7.1: boot validation gives a per-client degraded status instead of `sys.exit`; two-client isolation proof; deduplicate the env-name regex.
+- [ ] 6. Full suites green; production rollout notes.
+
+Deferred on purpose: task 7.2 (delete `backend/clients/*/crm.yaml`). Migration 0022 reads those files at deploy time, so they can only be deleted in a release AFTER production has run 0022.
+
+## Evidence
+
+- Design commit `0b90845` (proposal, design P3-D1..D7, tasks, 2 specs). Parent decisions: per-client degraded status supersedes the phase-b hard-fail (the survey explicitly asks for it); no revisions for secrets; Fernet/MultiFernet master key from env with fallback to the legacy env var while the key is absent.
+- Task 1: `cryptography` added; `qora_secrets_master_key` (SecretStr); `core/crypto.py` SecretCrypto (MultiFernet, key_id); `ClientIntegration` / `ClientSecret` models; migrations 0021 (schema) and 0022 (crm.yaml import: non-secret config plus `legacy_env_var_name`, no secret values, idempotent, no app.* imports). RED observed (the 2.2 RED was captured by temporarily renaming the file, disclosed). Real-data copy: the quintana-seguros airtable row was imported with `legacy_env_var_name=QUINTANA_AIRTABLE_API_KEY` and 0 secrets. Worker full suite: 3873 passed.
