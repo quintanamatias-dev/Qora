@@ -30,6 +30,17 @@ Branch `feat/config-phase1a`, stacked on `design/config-phase1`. The user asked 
 
 - Task 8 (verifier): backend 3859 passed; Alembic upgrade from empty to 0017, downgrade to 0013 and upgrade again all OK; frontend 885 passed, lint and tsc clean; grep for default-agent symbols returns 0 matches. Parent ran the migrations on a copy of the local `qora.db` with real data: all 3 agents got revision 1, and the imported prompts match the files exactly (leads-agent 14782 chars, jaumpablo 5583).
 
+## 1:1 cleanup (2026-10-03, user-approved)
+
+The ElevenLabs activity data showed the agent used in tests is `leads-agent` ("Juanma", 113 local calls), not `jaumpablo` (0 calls ever). Done:
+
+- Phone +17862978421 (`phnum_4801…`) reassigned from the local test agent `agent_8201…` to Quintana prod `agent_3001…`.
+- Prod `jaumpablo` deactivated through the API (reversible). Quintana now has ONE active agent, so the legacy client route keeps working even before the re-sync: the "ship everything together" constraint is gone (the re-sync is still part of the rollout).
+- `agent_8201…` renamed "Pruebas locales (ngrok) - no usar en prod" and kept (it has the test history).
+- Deleted unused ElevenLabs agents `agent_9401…` ("Qora", last used 2026-05) and `agent_9901…` ("Mi agente").
+- Local DB: qora-explainer no longer points at `agent_8201…` (backup in /tmp/qora.db.bak-*).
+- Final map: leads-agent ↔ agent_3001 (prod, with phone); qora-explainer ↔ agent_4701 (prod); agent_8201 local only.
+
 ## Production rollout (task 8, waits for the user)
 
 Everything ships in ONE release (see the rollout constraint above):
