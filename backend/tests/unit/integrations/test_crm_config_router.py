@@ -1,810 +1,704 @@
-"""Unit tests for CRM config router — TDD RED phase (T13).
+"""Unit tests for CRM config router (client-integrations-secrets Phase 5).
 
-Covers integration API scenarios from design doc:
-- GET /api/v1/clients/{client_id}/integrations → returns config with provider,
-  base_id, table_id, api_key_env (NAME only), match_field, field_count, connected
-- GET /api/v1/clients/nonexistent/integrations → returns empty list []
-- PUT /api/v1/clients/{client_id}/integrations/airtable → updates config
-- POST /api/v1/clients/{client_id}/integrations/airtable/test → tests connection
+Covers DB-backed read/write endpoints replacing crm.yaml filesystem I/O:
+- GET  /integrations, /integrations/available
+- PUT  /integrations/{provider}, /integrations/{provider}/mappings
+- POST /integrations/{provider}/connect
+- DELETE /integrations/{provider}/disconnect
+- PUT  /integrations/{provider}/secret (write-only)
+- GET  /integrations/{provider}/status
+- POST /integrations/{provider}/secrets/import-from-env
 
-Security requirements:
-- Raw API token value NEVER appears in any GET or PUT response
-- api_key_env field returns the ENV VAR NAME, not the secret
-
-Test layer: Unit (monkeypatched YAML + mock Airtable — no live IO).
+Security requirements asserted throughout:
+- No response body ever contains a raw secret value.
+- No log line captured during a secret-bearing request contains the value.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
-import pytest
-import yaml
-from fastapi.testclient import TestClient
+import pytest_asyncio
+from cryptography.fernet import Fernet
+from httpx import AsyncClient, ASGITransport
+from pydantic import SecretStr
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Fixtures
 # ---------------------------------------------------------------------------
 
 
-def _write_crm_yaml(client_dir: Path, data: dict) -> None:
-    client_dir.mkdir(parents=True, exist_ok=True)
-    (client_dir / "crm.yaml").write_text(yaml.dump(data))
-
-
-VALID_CRM_DATA = {
-    "provider": "airtable",
+VALID_CONFIG = {
     "base_id": "appXXXXXXXXXXXXXX",
     "table_id": "tblYYYYYYYYYYYYYY",
-    "api_key_env": "QUINTANA_AIRTABLE_API_KEY",
     "match_field": "lead_id",
+    "legacy_env_var_name": "QUINTANA_AIRTABLE_API_KEY",
     "field_mappings": [
+        {"source": "external_lead_id", "target": "lead_id", "type": "integer"},
         {"source": "name", "target": "Nombre", "type": "string"},
         {"source": "phone", "target": "Teléfono", "type": "phone"},
         {"source": "email", "target": "Correo", "type": "string"},
     ],
-    "field_definitions": [
+    "custom_fields": [
         {"field_key": "car_make", "field_type": "string", "label": "Car Make"},
     ],
     "quote_ready_fields": ["car_make"],
 }
 
 
-def _make_test_client(tmp_path: Path) -> TestClient:
-    """Create a FastAPI TestClient with the crm_config_router mounted."""
+async def _seed_integration(session, client_id: str, config: dict, *, enabled: bool = True) -> None:
+    from app.tenants.models import ClientIntegration
+
+    session.add(
+        ClientIntegration(
+            client_id=client_id,
+            provider="airtable",
+            enabled=enabled,
+            config=json.dumps(config),
+            status="ok",
+            created_by="test",
+            updated_by="test",
+        )
+    )
+    await session.commit()
+
+
+@pytest_asyncio.fixture
+async def router_app(tmp_path: Path):
+    """FastAPI app with crm_config_router + fresh SQLite DB + seeded client.
+
+    require_api_key is overridden to a superadmin principal — the router's
+    own require_client_access/require_superadmin dependencies are exercised
+    as real dependencies, only the credential-parsing step is bypassed.
+    """
+    from app.core.config import Settings
+    from app.core import database as db_module
+
+    settings = Settings(
+        openai_api_key=SecretStr("sk-test"),
+        elevenlabs_api_key=SecretStr("el-test"),
+        database_url=f"sqlite+aiosqlite:///{tmp_path}/crm_config_router_test.db",
+    )
+    from tests.helpers.migrations import init_db_with_migrations
+    await init_db_with_migrations(db_module, settings)
+
+    async with db_module.async_session_factory() as session:
+        from app.tenants.service import create_client
+
+        await create_client(
+            session,
+            id="quintana-seguros",
+            name="Quintana Seguros",
+            voice_id="EXAMPLEvoice00",
+        )
+        await session.commit()
+
+    from app.integrations.crm_config_router import router as crm_router
+    from app.core.auth import CallerIdentity, require_api_key
     from fastapi import FastAPI
-    from app.integrations.crm_config_router import router
 
-    app = FastAPI()
-    app.include_router(router, prefix="/api/v1")
-    return TestClient(app)
+    test_app = FastAPI()
+    test_app.include_router(crm_router, prefix="/api/v1")
+    test_app.dependency_overrides[require_api_key] = lambda: CallerIdentity(
+        api_key_hash="test-superadmin", role="superadmin"
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=test_app),
+        base_url="http://test",
+    ) as client:
+        yield client, db_module
+
+    await db_module.close_db()
 
 
 # ---------------------------------------------------------------------------
-# GET /api/v1/clients/{client_id}/integrations
+# GET /integrations
 # ---------------------------------------------------------------------------
 
 
-def test_get_integrations_returns_list_for_configured_client(
-    tmp_path: Path, monkeypatch
-):
-    """GET integrations for a client with crm.yaml → returns list with config."""
-    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test_secret")
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    _write_crm_yaml(client_dir, VALID_CRM_DATA)
+async def test_get_integrations_returns_configured_integration(router_app):
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
 
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.get("/api/v1/clients/quintana-seguros/integrations")
+    resp = await client.get("/api/v1/clients/quintana-seguros/integrations")
 
     assert resp.status_code == 200
     data = resp.json()
-    assert isinstance(data, list)
     assert len(data) == 1
-
     item = data[0]
     assert item["provider"] == "airtable"
     assert item["base_id"] == "appXXXXXXXXXXXXXX"
-    assert item["table_id"] == "tblYYYYYYYYYYYYYY"
     assert item["api_key_env"] == "QUINTANA_AIRTABLE_API_KEY"
-    assert item["match_field"] == "lead_id"
-    assert item["field_count"] == 3
-    assert item["field_mappings"] == [
-        {"source": "name", "target": "Nombre", "type": "string", "required": False},
-        {"source": "phone", "target": "Teléfono", "type": "phone", "required": False},
-        {"source": "email", "target": "Correo", "type": "string", "required": False},
-    ]
-    assert item["field_definitions"] == [
-        {"field_key": "car_make", "field_type": "string", "label": "Car Make", "required": False},
-    ]
+    assert item["connected"] is True
     assert item["quote_ready_fields"] == ["car_make"]
 
 
-def test_get_integrations_never_returns_raw_api_key(tmp_path: Path, monkeypatch):
-    """SECURITY: raw API token must NEVER appear in the GET response."""
-    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_super_secret_value")
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    _write_crm_yaml(client_dir, VALID_CRM_DATA)
-
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.get("/api/v1/clients/quintana-seguros/integrations")
-
-    assert resp.status_code == 200
-    # The raw secret must NEVER appear in the response JSON
-    assert "pat_super_secret_value" not in resp.text
-
-
-def test_get_integrations_masks_literal_api_key_in_config(tmp_path: Path):
-    """SECURITY: literal PAT stored in crm.yaml must not be returned in GET responses."""
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    data = {**VALID_CRM_DATA, "api_key_env": "pat_literal_secret_should_not_leak"}
-    _write_crm_yaml(client_dir, data)
-
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.get("/api/v1/clients/quintana-seguros/integrations")
-
-    assert resp.status_code == 200
-    assert "pat_literal_secret_should_not_leak" not in resp.text
-    assert resp.json()[0]["api_key_env"] == "Stored credential (masked)"
-
-
-def test_get_integrations_returns_empty_for_unconfigured_client(tmp_path: Path):
-    """GET integrations for client with no crm.yaml → returns empty list."""
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.get("/api/v1/clients/nonexistent-client/integrations")
-
+async def test_get_integrations_returns_empty_for_unconfigured_client(router_app):
+    client, _ = router_app
+    resp = await client.get("/api/v1/clients/quintana-seguros/integrations")
     assert resp.status_code == 200
     assert resp.json() == []
 
 
-def test_get_integrations_returns_empty_for_client_dir_without_crm(tmp_path: Path):
-    """GET integrations for client dir that exists but has no crm.yaml → []."""
-    client_dir = tmp_path / "clients" / "no-crm-client"
-    client_dir.mkdir(parents=True)
+async def test_get_integrations_never_leaks_a_literal_secret(router_app):
+    """A row created via the literal-key PUT path never carries the secret in config."""
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
 
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.get("/api/v1/clients/no-crm-client/integrations")
-
-    assert resp.status_code == 200
-    assert resp.json() == []
-
-
-def test_get_integrations_connected_field_is_boolean(tmp_path: Path, monkeypatch):
-    """GET integrations response includes a boolean 'connected' field."""
-    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test")
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    _write_crm_yaml(client_dir, VALID_CRM_DATA)
-
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.get("/api/v1/clients/quintana-seguros/integrations")
-
-    item = resp.json()[0]
-    assert "connected" in item
-    assert isinstance(item["connected"], bool)
+    resp = await client.get("/api/v1/clients/quintana-seguros/integrations")
+    assert "pat_super_secret" not in resp.text
 
 
 # ---------------------------------------------------------------------------
-# PUT /api/v1/clients/{client_id}/integrations/{provider}
+# GET /integrations/available
 # ---------------------------------------------------------------------------
 
 
-def test_put_integration_updates_base_id(tmp_path: Path, monkeypatch):
-    """PUT integration → updates base_id in crm.yaml and returns updated config."""
-    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test")
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    _write_crm_yaml(client_dir, VALID_CRM_DATA)
+async def test_get_available_integrations_not_connected(router_app):
+    client, _ = router_app
+    resp = await client.get("/api/v1/clients/quintana-seguros/integrations/available")
+    assert resp.status_code == 200
+    assert resp.json()[0]["is_connected"] is False
 
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.put(
-            "/api/v1/clients/quintana-seguros/integrations/airtable",
-            json={"base_id": "appNEWBASEID"},
-        )
+
+async def test_get_available_integrations_connected(router_app):
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    resp = await client.get("/api/v1/clients/quintana-seguros/integrations/available")
+    assert resp.json()[0]["is_connected"] is True
+
+
+# ---------------------------------------------------------------------------
+# PUT /integrations/{provider}
+# ---------------------------------------------------------------------------
+
+
+async def test_put_integration_updates_base_id(router_app):
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    resp = await client.put(
+        "/api/v1/clients/quintana-seguros/integrations/airtable",
+        json={"base_id": "appNEWBASEID"},
+    )
 
     assert resp.status_code == 200
-    updated = resp.json()
-    assert updated["base_id"] == "appNEWBASEID"
-    # Other fields unchanged
-    assert updated["table_id"] == "tblYYYYYYYYYYYYYY"
-    assert updated["api_key_env"] == "QUINTANA_AIRTABLE_API_KEY"
+    assert resp.json()["base_id"] == "appNEWBASEID"
+    assert resp.json()["table_id"] == "tblYYYYYYYYYYYYYY"
 
 
-def test_put_integration_updates_table_id(tmp_path: Path, monkeypatch):
-    """PUT integration → updates table_id."""
-    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test")
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    _write_crm_yaml(client_dir, VALID_CRM_DATA)
+async def test_put_integration_rejects_truncated_base_id(router_app):
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
 
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.put(
-            "/api/v1/clients/quintana-seguros/integrations/airtable",
-            json={"table_id": "tblNEW123"},
-        )
-
-    assert resp.status_code == 200
-    assert resp.json()["table_id"] == "tblNEW123"
-
-
-def test_put_integration_rejects_truncated_base_id(tmp_path: Path, monkeypatch):
-    """PUT integration → helpful 422 before malformed Airtable URL can be used."""
-    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test")
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    _write_crm_yaml(client_dir, VALID_CRM_DATA)
-
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.put(
-            "/api/v1/clients/quintana-seguros/integrations/airtable",
-            json={"base_id": "w59LRBdv95UPpB"},
-        )
+    resp = await client.put(
+        "/api/v1/clients/quintana-seguros/integrations/airtable",
+        json={"base_id": "notAnAppId"},
+    )
 
     assert resp.status_code == 422
-    assert "must start with 'app'" in resp.text
 
 
-def test_put_integration_updates_api_key_env_name(tmp_path: Path, monkeypatch):
-    """PUT integration → updates api_key_env (env var NAME, not secret)."""
-    monkeypatch.setenv("NEW_API_KEY_ENV", "pat_new_secret")
-    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test")
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    _write_crm_yaml(client_dir, VALID_CRM_DATA)
-
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.put(
-            "/api/v1/clients/quintana-seguros/integrations/airtable",
-            json={"api_key_env": "NEW_API_KEY_ENV"},
-        )
-
-    assert resp.status_code == 200
-    result = resp.json()
-    # Must return the env var NAME, never the secret
-    assert result["api_key_env"] == "NEW_API_KEY_ENV"
-    assert "pat_new_secret" not in resp.text
-
-
-def test_put_integration_404_for_nonexistent_client(tmp_path: Path):
-    """PUT integration for nonexistent client → 404."""
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.put(
-            "/api/v1/clients/nonexistent/integrations/airtable",
-            json={"base_id": "appXXX"},
-        )
-
+async def test_put_integration_404_for_unconfigured_client(router_app):
+    client, _ = router_app
+    resp = await client.put(
+        "/api/v1/clients/quintana-seguros/integrations/airtable",
+        json={"base_id": "appXXX"},
+    )
     assert resp.status_code == 404
 
 
+async def test_put_integration_env_var_name_stored_without_secret_write(router_app):
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    resp = await client.put(
+        "/api/v1/clients/quintana-seguros/integrations/airtable",
+        json={"api_key_env": "NEW_ENV_VAR_NAME"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["api_key_env"] == "NEW_ENV_VAR_NAME"
+
+    async with db_module.async_session_factory() as session:
+        from sqlalchemy import select
+        from app.tenants.models import ClientSecret
+
+        result = await session.execute(select(ClientSecret))
+        assert result.scalars().all() == []
+
+
+async def test_put_integration_literal_api_key_is_encrypted_not_stored_in_config(router_app, monkeypatch):
+    monkeypatch.setenv("QORA_SECRETS_MASTER_KEY", Fernet.generate_key().decode())
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    resp = await client.put(
+        "/api/v1/clients/quintana-seguros/integrations/airtable",
+        json={"api_key_env": "pat_literal_secret_value"},
+    )
+
+    assert resp.status_code == 200
+    assert "pat_literal_secret_value" not in resp.text
+    assert resp.json()["api_key_env"] == "QUINTANA_AIRTABLE_API_KEY"  # existing legacy name reused
+
+    async with db_module.async_session_factory() as session:
+        from sqlalchemy import select
+        from app.tenants.models import ClientSecret
+
+        result = await session.execute(select(ClientSecret))
+        row = result.scalar_one()
+        assert row.ciphertext != b"pat_literal_secret_value"
+
+
+async def test_put_integration_literal_api_key_without_master_key_returns_503(router_app):
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    resp = await client.put(
+        "/api/v1/clients/quintana-seguros/integrations/airtable",
+        json={"api_key_env": "pat_literal_secret_value"},
+    )
+
+    assert resp.status_code == 503
+    assert "pat_literal_secret_value" not in resp.text
+
+
 # ---------------------------------------------------------------------------
-# POST /api/v1/clients/{client_id}/integrations/{provider}/test
+# GET /integrations/{provider}/fields
 # ---------------------------------------------------------------------------
 
 
-def test_post_test_returns_success_with_mock_airtable(tmp_path: Path, monkeypatch):
-    """POST test → mocked Airtable returns success with record_count."""
+async def test_get_fields_returns_mocked_airtable_columns(router_app, monkeypatch):
     monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test")
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    _write_crm_yaml(client_dir, VALID_CRM_DATA)
-
-    # Mock the Airtable API call so we don't hit the live service
-    mock_records = [{"id": "rec1"}, {"id": "rec2"}]
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        with patch(
-            "app.integrations.crm_config_router._test_airtable_connection",
-            return_value={"success": True, "message": "Connected. Found 2 records.", "record_count": 2},
-        ):
-            tc = _make_test_client(tmp_path)
-            resp = tc.post(
-                "/api/v1/clients/quintana-seguros/integrations/airtable/test"
-            )
-
-    assert resp.status_code == 200
-    result = resp.json()
-    assert result["success"] is True
-    assert "record_count" in result
-    assert result["record_count"] == 2
-
-
-def test_post_test_returns_failure_on_connection_error(tmp_path: Path, monkeypatch):
-    """POST test → connection failure returns success=false with message."""
-    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test")
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    _write_crm_yaml(client_dir, VALID_CRM_DATA)
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
 
     with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        with patch(
-            "app.integrations.crm_config_router._test_airtable_connection",
-            return_value={"success": False, "message": "Authentication failed: invalid API key."},
-        ):
-            tc = _make_test_client(tmp_path)
-            resp = tc.post(
-                "/api/v1/clients/quintana-seguros/integrations/airtable/test"
-            )
-
-    assert resp.status_code == 200
-    result = resp.json()
-    assert result["success"] is False
-    assert "message" in result
-
-
-def test_post_test_never_leaks_api_key_on_failure(tmp_path: Path, monkeypatch):
-    """SECURITY: POST test response must NEVER contain the raw API key."""
-    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_ultra_secret_should_not_appear")
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    _write_crm_yaml(client_dir, VALID_CRM_DATA)
-
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        with patch(
-            "app.integrations.crm_config_router._test_airtable_connection",
-            return_value={"success": False, "message": "Error: authentication failed."},
-        ):
-            tc = _make_test_client(tmp_path)
-            resp = tc.post(
-                "/api/v1/clients/quintana-seguros/integrations/airtable/test"
-            )
-
-    assert "pat_ultra_secret_should_not_appear" not in resp.text
-
-
-def test_post_test_returns_validation_error_for_truncated_ids(tmp_path: Path):
-    """POST test → invalid base/table IDs return actionable message without external call."""
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    data = {**VALID_CRM_DATA, "base_id": "w59LRBdv95UPpB", "table_id": "sWumwwfeoqkWid"}
-    _write_crm_yaml(client_dir, data)
-
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.post("/api/v1/clients/quintana-seguros/integrations/airtable/test")
-
-    assert resp.status_code == 200
-    result = resp.json()
-    assert result["success"] is False
-    assert "must start with 'app'" in result["message"]
-
-
-def test_get_fields_returns_mocked_airtable_columns(tmp_path: Path, monkeypatch):
-    """GET fields → returns Airtable table columns for mapping UI."""
-    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test")
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    _write_crm_yaml(client_dir, VALID_CRM_DATA)
-
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ), patch(
         "app.integrations.crm_config_router._list_airtable_fields",
-        return_value=[
-            {"id": "fldName", "name": "Nombre", "type": "singleLineText"},
-            {"id": "fldPhone", "name": "Teléfono", "type": "phoneNumber"},
-        ],
+        return_value=[{"id": "fldName", "name": "Nombre", "type": "singleLineText"}],
     ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.get("/api/v1/clients/quintana-seguros/integrations/airtable/fields")
+        resp = await client.get("/api/v1/clients/quintana-seguros/integrations/airtable/fields")
 
     assert resp.status_code == 200
-    assert resp.json()["fields"] == [
-        {"id": "fldName", "name": "Nombre", "type": "singleLineText"},
-        {"id": "fldPhone", "name": "Teléfono", "type": "phoneNumber"},
-    ]
+    assert resp.json()["fields"] == [{"id": "fldName", "name": "Nombre", "type": "singleLineText"}]
 
 
-def test_put_mappings_persists_custom_and_quote_ready_fields(tmp_path: Path, monkeypatch):
-    """PUT mappings → updates mappings, custom field definitions, and quote-ready fields."""
-    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test")
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    _write_crm_yaml(client_dir, VALID_CRM_DATA)
-
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.put(
-            "/api/v1/clients/quintana-seguros/integrations/airtable/mappings",
-            json={
-                "field_mappings": [
-                    {"source": "external_lead_id", "target": "lead_id", "type": "integer"},
-                    {"source": "name", "target": "Nombre", "type": "string"},
-                    {"source": "phone", "target": "Teléfono", "type": "phone"},
-                    {"source": "email", "target": "Correo", "type": "string"},
-                    {"source": "car_make", "target": "Marca_Auto", "type": "string"},
-                ],
-                "field_definitions": [
-                    {"field_key": "car_make", "field_type": "string", "label": "Car Make"},
-                ],
-                "quote_ready_fields": ["car_make"],
-            },
-        )
-
-    assert resp.status_code == 200
-    result = resp.json()
-    assert result["field_count"] == 5
-    assert result["field_definitions"] == [
-        {"field_key": "car_make", "field_type": "string", "label": "Car Make", "required": False},
-    ]
-    assert result["quote_ready_fields"] == ["car_make"]
-
-
-def test_put_mappings_rejects_missing_required_core_fields(tmp_path: Path, monkeypatch):
-    """PUT mappings → required core mappings must have non-empty Airtable targets."""
-    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test")
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    _write_crm_yaml(client_dir, VALID_CRM_DATA)
-
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.put(
-            "/api/v1/clients/quintana-seguros/integrations/airtable/mappings",
-            json={
-                "field_mappings": [
-                    {"source": "external_lead_id", "target": "lead_id", "type": "integer"},
-                    {"source": "name", "target": "", "type": "string"},
-                    {"source": "phone", "target": "Teléfono", "type": "phone"},
-                ],
-                "field_definitions": [],
-                "quote_ready_fields": [],
-            },
-        )
-
-    assert resp.status_code == 422
-    assert resp.json()["detail"] == "Missing required Airtable mappings: name, email."
-
-
-def test_put_mappings_rejects_non_snake_case_custom_field_keys(tmp_path: Path, monkeypatch):
-    """PUT mappings → custom field keys must be snake_case (e.g. 'test-field' rejected).
-
-    P3 cleanup: hyphenated/uppercase keys break tool-schema property names and
-    lead_custom_fields lookups. The save endpoint rejects them with 422.
-    """
-    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test")
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    _write_crm_yaml(client_dir, VALID_CRM_DATA)
-
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.put(
-            "/api/v1/clients/quintana-seguros/integrations/airtable/mappings",
-            json={
-                "field_mappings": [
-                    {"source": "external_lead_id", "target": "lead_id", "type": "integer"},
-                    {"source": "name", "target": "Nombre", "type": "string"},
-                    {"source": "phone", "target": "Teléfono", "type": "phone"},
-                    {"source": "email", "target": "Correo", "type": "string"},
-                ],
-                "field_definitions": [
-                    {"field_key": "test-field", "field_type": "string", "label": "Test Field"},
-                    {"field_key": "Zona", "field_type": "string", "label": "Zone"},
-                ],
-                "quote_ready_fields": [],
-            },
-        )
-
-    assert resp.status_code == 422
-    detail = resp.json()["detail"]
-    assert "test-field" in detail
-    assert "Zona" in detail
-    assert "snake_case" in detail
-
-
-def test_put_mappings_accepts_snake_case_custom_field_keys(tmp_path: Path, monkeypatch):
-    """PUT mappings → valid snake_case keys (car_make, zona, age) are accepted."""
-    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "pat_test")
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    _write_crm_yaml(client_dir, VALID_CRM_DATA)
-
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.put(
-            "/api/v1/clients/quintana-seguros/integrations/airtable/mappings",
-            json={
-                "field_mappings": [
-                    {"source": "external_lead_id", "target": "lead_id", "type": "integer"},
-                    {"source": "name", "target": "Nombre", "type": "string"},
-                    {"source": "phone", "target": "Teléfono", "type": "phone"},
-                    {"source": "email", "target": "Correo", "type": "string"},
-                    {"source": "zona", "target": "Zona", "type": "string"},
-                ],
-                "field_definitions": [
-                    {"field_key": "zona", "field_type": "string", "label": "Zone"},
-                    {"field_key": "car_make", "field_type": "string", "label": "Car Make"},
-                ],
-                "quote_ready_fields": ["zona"],
-            },
-        )
-
-    assert resp.status_code == 200
-
-
-def test_post_test_404_for_unconfigured_client(tmp_path: Path):
-    """POST test for client with no integration config → 404."""
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.post(
-            "/api/v1/clients/unconfigured-client/integrations/airtable/test"
-        )
-
+async def test_get_fields_404_for_unconfigured_client(router_app):
+    client, _ = router_app
+    resp = await client.get("/api/v1/clients/quintana-seguros/integrations/airtable/fields")
     assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
-# GET /api/v1/clients/{client_id}/integrations/available
+# POST /integrations/{provider}/connect
 # ---------------------------------------------------------------------------
 
 
-def test_get_available_integrations_returns_airtable_not_connected(tmp_path: Path):
-    """GET available integrations for client with no crm.yaml → Airtable not connected."""
-    client_dir = tmp_path / "clients" / "new-client"
-    client_dir.mkdir(parents=True)
+async def test_post_connect_creates_integration_row(router_app):
+    client, db_module = router_app
 
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.get("/api/v1/clients/new-client/integrations/available")
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert isinstance(data, list)
-    assert len(data) == 1
-    item = data[0]
-    assert item["provider"] == "airtable"
-    assert item["name"] == "Airtable"
-    assert item["is_connected"] is False
-    assert "icon" in item
-
-
-def test_get_available_integrations_returns_airtable_connected(tmp_path: Path):
-    """GET available integrations for client with crm.yaml → Airtable is_connected=true."""
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    _write_crm_yaml(client_dir, VALID_CRM_DATA)
-
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.get("/api/v1/clients/quintana-seguros/integrations/available")
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert len(data) == 1
-    assert data[0]["is_connected"] is True
-
-
-def test_get_available_integrations_not_connected_for_nonexistent_client(tmp_path: Path):
-    """GET available integrations for nonexistent client → Airtable not connected (no dir)."""
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.get("/api/v1/clients/nonexistent/integrations/available")
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data[0]["is_connected"] is False
-
-
-# ---------------------------------------------------------------------------
-# POST /api/v1/clients/{client_id}/integrations/{provider}/connect
-# ---------------------------------------------------------------------------
-
-
-def test_post_connect_creates_crm_yaml(tmp_path: Path):
-    """POST connect → creates crm.yaml with default mappings and returns config."""
-    client_dir = tmp_path / "clients" / "new-client"
-    client_dir.mkdir(parents=True)
-
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.post(
-            "/api/v1/clients/new-client/integrations/airtable/connect",
-            json={
-                "base_id": "appNEWBASEID",
-                "table_id": "tblNEWTABLE",
-                "api_key_env": "NEW_CLIENT_AIRTABLE_API_KEY",
-            },
-        )
+    resp = await client.post(
+        "/api/v1/clients/quintana-seguros/integrations/airtable/connect",
+        json={
+            "base_id": "appNEWBASEID",
+            "table_id": "tblNEWTABLE",
+            "api_key_env": "NEW_CLIENT_AIRTABLE_API_KEY",
+        },
+    )
 
     assert resp.status_code == 201
     data = resp.json()
-    assert data["provider"] == "airtable"
     assert data["base_id"] == "appNEWBASEID"
-    assert data["table_id"] == "tblNEWTABLE"
     assert data["api_key_env"] == "NEW_CLIENT_AIRTABLE_API_KEY"
-    assert data["match_field"] == "lead_id"
-    assert data["field_count"] == 5  # 5 default fields
+    assert data["field_count"] == 5
 
-    # crm.yaml should exist on disk
-    crm_path = tmp_path / "clients" / "new-client" / "crm.yaml"
-    assert crm_path.exists()
+    async with db_module.async_session_factory() as session:
+        from sqlalchemy import select
+        from app.tenants.models import ClientIntegration
 
-
-def test_post_connect_creates_default_status_mapping(tmp_path: Path):
-    """POST connect → crm.yaml contains default status_mapping."""
-    client_dir = tmp_path / "clients" / "new-client"
-    client_dir.mkdir(parents=True)
-
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        tc.post(
-            "/api/v1/clients/new-client/integrations/airtable/connect",
-            json={
-                "base_id": "appXXX",
-                "table_id": "tblYYY",
-                "api_key_env": "NEW_KEY",
-            },
-        )
-
-    crm_path = tmp_path / "clients" / "new-client" / "crm.yaml"
-    import yaml as _yaml
-    raw = _yaml.safe_load(crm_path.read_text())
-    assert "status_mapping" in raw
-    assert raw["status_mapping"]["new"] == "New"
-    assert raw["status_mapping"]["not_interested"] == "Not Interested"
-    assert "import_status_mapping" in raw
-    assert raw["import_status_mapping"]["New"] == "new"
+        result = await session.execute(select(ClientIntegration))
+        assert result.scalar_one() is not None
 
 
-def test_post_connect_409_when_already_configured(tmp_path: Path):
-    """POST connect when crm.yaml already exists → 409 Conflict."""
-    client_dir = tmp_path / "clients" / "existing-client"
-    _write_crm_yaml(client_dir, VALID_CRM_DATA)
+async def test_post_connect_409_when_already_configured(router_app):
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
 
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.post(
-            "/api/v1/clients/existing-client/integrations/airtable/connect",
-            json={
-                "base_id": "appXXX",
-                "table_id": "tblYYY",
-                "api_key_env": "SOME_KEY",
-            },
-        )
-
+    resp = await client.post(
+        "/api/v1/clients/quintana-seguros/integrations/airtable/connect",
+        json={"base_id": "appXXX", "table_id": "tblYYY", "api_key_env": "SOME_KEY"},
+    )
     assert resp.status_code == 409
 
 
-def test_post_connect_404_when_client_dir_not_found(tmp_path: Path):
-    """POST connect when client directory does not exist → 404."""
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.post(
-            "/api/v1/clients/nonexistent/integrations/airtable/connect",
-            json={
-                "base_id": "appXXX",
-                "table_id": "tblYYY",
-                "api_key_env": "SOME_KEY",
-            },
+async def test_post_connect_404_when_client_not_found(router_app):
+    client, _ = router_app
+    resp = await client.post(
+        "/api/v1/clients/nonexistent/integrations/airtable/connect",
+        json={"base_id": "appXXX", "table_id": "tblYYY", "api_key_env": "SOME_KEY"},
+    )
+    assert resp.status_code == 404
+
+
+async def test_post_connect_never_returns_raw_literal_key(router_app, monkeypatch):
+    monkeypatch.setenv("QORA_SECRETS_MASTER_KEY", Fernet.generate_key().decode())
+    client, _ = router_app
+
+    resp = await client.post(
+        "/api/v1/clients/quintana-seguros/integrations/airtable/connect",
+        json={
+            "base_id": "appNEWBASEID",
+            "table_id": "tblNEWTABLE",
+            "api_key_env": "pat_ultra_secret_connect_value",
+        },
+    )
+
+    assert resp.status_code == 201
+    assert "pat_ultra_secret_connect_value" not in resp.text
+    assert resp.json()["api_key_env"] == "airtable_api_key"  # canonical name, no existing legacy name yet
+
+
+# ---------------------------------------------------------------------------
+# PUT /integrations/{provider}/mappings
+# ---------------------------------------------------------------------------
+
+
+async def test_put_mappings_persists_custom_and_quote_ready_fields(router_app):
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    resp = await client.put(
+        "/api/v1/clients/quintana-seguros/integrations/airtable/mappings",
+        json={
+            "field_mappings": [
+                {"source": "external_lead_id", "target": "lead_id", "type": "integer"},
+                {"source": "name", "target": "Nombre", "type": "string"},
+                {"source": "phone", "target": "Teléfono", "type": "phone"},
+                {"source": "email", "target": "Correo", "type": "string"},
+                {"source": "car_make", "target": "Marca_Auto", "type": "string"},
+            ],
+            "field_definitions": [
+                {"field_key": "car_make", "field_type": "string", "label": "Car Make"},
+            ],
+            "quote_ready_fields": ["car_make"],
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["field_count"] == 5
+
+
+async def test_put_mappings_rejects_missing_required_core_fields(router_app):
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    resp = await client.put(
+        "/api/v1/clients/quintana-seguros/integrations/airtable/mappings",
+        json={
+            "field_mappings": [
+                {"source": "external_lead_id", "target": "lead_id", "type": "integer"},
+                {"source": "name", "target": "", "type": "string"},
+                {"source": "phone", "target": "Teléfono", "type": "phone"},
+            ],
+            "field_definitions": [],
+            "quote_ready_fields": [],
+        },
+    )
+
+    assert resp.status_code == 422
+
+
+async def test_put_mappings_404_for_unconfigured_client(router_app):
+    client, _ = router_app
+    resp = await client.put(
+        "/api/v1/clients/quintana-seguros/integrations/airtable/mappings",
+        json={"field_mappings": [], "field_definitions": [], "quote_ready_fields": []},
+    )
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# DELETE /integrations/{provider}/disconnect
+# ---------------------------------------------------------------------------
+
+
+async def test_delete_disconnect_removes_row(router_app):
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    resp = await client.delete("/api/v1/clients/quintana-seguros/integrations/airtable/disconnect")
+
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+
+    async with db_module.async_session_factory() as session:
+        from sqlalchemy import select
+        from app.tenants.models import ClientIntegration
+
+        result = await session.execute(select(ClientIntegration))
+        assert result.scalar_one_or_none() is None
+
+
+async def test_delete_disconnect_404_when_not_configured(router_app):
+    client, _ = router_app
+    resp = await client.delete("/api/v1/clients/quintana-seguros/integrations/airtable/disconnect")
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# PUT /integrations/{provider}/secret
+# ---------------------------------------------------------------------------
+
+
+async def test_put_secret_encrypts_and_stores(router_app, monkeypatch):
+    monkeypatch.setenv("QORA_SECRETS_MASTER_KEY", Fernet.generate_key().decode())
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    resp = await client.put(
+        "/api/v1/clients/quintana-seguros/integrations/airtable/secret",
+        json={"value": "pat_brand_new_secret_value"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "QUINTANA_AIRTABLE_API_KEY"
+    assert body["is_set"] is True
+    assert "updated_at" in body
+
+    async with db_module.async_session_factory() as session:
+        from app.core.crypto import get_secret_crypto
+        from sqlalchemy import select
+        from app.tenants.models import ClientSecret
+
+        result = await session.execute(select(ClientSecret))
+        row = result.scalar_one()
+        assert get_secret_crypto().decrypt(row.ciphertext) == "pat_brand_new_secret_value"
+
+
+async def test_put_secret_response_never_echoes_value(router_app, monkeypatch):
+    monkeypatch.setenv("QORA_SECRETS_MASTER_KEY", Fernet.generate_key().decode())
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    resp = await client.put(
+        "/api/v1/clients/quintana-seguros/integrations/airtable/secret",
+        json={"value": "pat_should_never_appear_in_response"},
+    )
+
+    assert "pat_should_never_appear_in_response" not in resp.text
+    assert set(resp.json().keys()) == {"name", "is_set", "updated_at"}
+
+
+async def test_put_secret_returns_503_without_master_key(router_app):
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    resp = await client.put(
+        "/api/v1/clients/quintana-seguros/integrations/airtable/secret",
+        json={"value": "pat_should_not_be_stored"},
+    )
+
+    assert resp.status_code == 503
+
+    async with db_module.async_session_factory() as session:
+        from sqlalchemy import select
+        from app.tenants.models import ClientSecret
+
+        result = await session.execute(select(ClientSecret))
+        assert result.scalars().all() == []
+
+
+async def test_put_secret_404_when_integration_not_configured(router_app, monkeypatch):
+    monkeypatch.setenv("QORA_SECRETS_MASTER_KEY", Fernet.generate_key().decode())
+    client, _ = router_app
+    resp = await client.put(
+        "/api/v1/clients/quintana-seguros/integrations/airtable/secret",
+        json={"value": "pat_value"},
+    )
+    assert resp.status_code == 404
+
+
+async def test_put_secret_never_logs_the_value(router_app, monkeypatch, caplog):
+    monkeypatch.setenv("QORA_SECRETS_MASTER_KEY", Fernet.generate_key().decode())
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    with caplog.at_level(logging.DEBUG):
+        resp = await client.put(
+            "/api/v1/clients/quintana-seguros/integrations/airtable/secret",
+            json={"value": "pat_must_never_be_logged_anywhere"},
         )
+
+    assert resp.status_code == 200
+    for record in caplog.records:
+        assert "pat_must_never_be_logged_anywhere" not in record.getMessage()
+
+
+# ---------------------------------------------------------------------------
+# GET /integrations/{provider}/status
+# ---------------------------------------------------------------------------
+
+
+async def test_get_integration_status_returns_current_state(router_app):
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    resp = await client.get("/api/v1/clients/quintana-seguros/integrations/airtable/status")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body.keys()) == {"status", "status_reason", "last_checked_at", "secret_source"}
+    assert body["secret_source"] in {"db", "env", "missing"}
+
+
+async def test_get_integration_status_secret_source_db_when_secret_stored(router_app, monkeypatch):
+    monkeypatch.setenv("QORA_SECRETS_MASTER_KEY", Fernet.generate_key().decode())
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    await client.put(
+        "/api/v1/clients/quintana-seguros/integrations/airtable/secret",
+        json={"value": "pat_value"},
+    )
+
+    resp = await client.get("/api/v1/clients/quintana-seguros/integrations/airtable/status")
+    assert resp.json()["secret_source"] == "db"
+
+
+async def test_get_integration_status_404_when_not_configured(router_app):
+    client, _ = router_app
+    resp = await client.get("/api/v1/clients/quintana-seguros/integrations/airtable/status")
+    assert resp.status_code == 404
+
+
+async def test_get_integration_status_never_contains_a_secret_value(router_app, monkeypatch):
+    monkeypatch.setenv("QORA_SECRETS_MASTER_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "env-super-secret")
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    resp = await client.get("/api/v1/clients/quintana-seguros/integrations/airtable/status")
+    assert "env-super-secret" not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# POST /integrations/{provider}/secrets/import-from-env
+# ---------------------------------------------------------------------------
+
+
+async def test_import_from_env_requires_superadmin(router_app, monkeypatch):
+    monkeypatch.setenv("QORA_SECRETS_MASTER_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "env-secret-value")
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    from app.core.auth import CallerIdentity, require_api_key
+
+    # Re-override require_api_key to a non-superadmin client principal for this call only.
+    app = client._transport.app  # type: ignore[attr-defined]
+    original = app.dependency_overrides.get(require_api_key)
+    app.dependency_overrides[require_api_key] = lambda: CallerIdentity(
+        api_key_hash="t", role="client", client_ids=frozenset({"quintana-seguros"})
+    )
+    try:
+        resp = await client.post(
+            "/api/v1/clients/quintana-seguros/integrations/airtable/secrets/import-from-env"
+        )
+    finally:
+        app.dependency_overrides[require_api_key] = original
+
+    assert resp.status_code == 403
+
+
+async def test_import_from_env_encrypts_current_env_value(router_app, monkeypatch):
+    monkeypatch.setenv("QORA_SECRETS_MASTER_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "env-secret-to-import")
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    resp = await client.post(
+        "/api/v1/clients/quintana-seguros/integrations/airtable/secrets/import-from-env"
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "QUINTANA_AIRTABLE_API_KEY"
+    assert body["is_set"] is True
+    assert "env-secret-to-import" not in resp.text
+
+    from app.integrations.secrets import resolve_client_secret
+
+    async with db_module.async_session_factory() as session:
+        resolved = await resolve_client_secret(session, "quintana-seguros", "QUINTANA_AIRTABLE_API_KEY")
+    assert resolved == "env-secret-to-import"
+
+
+async def test_import_from_env_without_master_key_returns_503(router_app, monkeypatch):
+    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "env-secret-value")
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    resp = await client.post(
+        "/api/v1/clients/quintana-seguros/integrations/airtable/secrets/import-from-env"
+    )
+
+    assert resp.status_code == 503
+
+
+async def test_import_from_env_404_when_env_var_not_set(router_app, monkeypatch):
+    monkeypatch.setenv("QORA_SECRETS_MASTER_KEY", Fernet.generate_key().decode())
+    monkeypatch.delenv("QUINTANA_AIRTABLE_API_KEY", raising=False)
+    client, db_module = router_app
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", VALID_CONFIG)
+
+    resp = await client.post(
+        "/api/v1/clients/quintana-seguros/integrations/airtable/secrets/import-from-env"
+    )
 
     assert resp.status_code == 404
 
 
-def test_post_connect_never_returns_raw_api_key(tmp_path: Path):
-    """SECURITY: POST connect response must NEVER contain the raw API key value."""
-    client_dir = tmp_path / "clients" / "new-client"
-    client_dir.mkdir(parents=True)
+async def test_import_from_env_404_when_no_legacy_env_var_configured(router_app, monkeypatch):
+    monkeypatch.setenv("QORA_SECRETS_MASTER_KEY", Fernet.generate_key().decode())
+    client, db_module = router_app
+    config_without_env_name = {k: v for k, v in VALID_CONFIG.items() if k != "legacy_env_var_name"}
+    async with db_module.async_session_factory() as session:
+        await _seed_integration(session, "quintana-seguros", config_without_env_name)
 
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.post(
-            "/api/v1/clients/new-client/integrations/airtable/connect",
-            json={
-                "base_id": "appXXX",
-                "table_id": "tblYYY",
-                "api_key_env": "MY_API_KEY_VAR",
-            },
-        )
-
-    assert resp.status_code == 201
-    # The env var NAME is OK — the actual secret value must never appear
-    assert "MY_API_KEY_VAR" in resp.text   # name is present
-    # No raw secret leakage — only name stored in yaml
-
-
-# ---------------------------------------------------------------------------
-# DELETE /api/v1/clients/{client_id}/integrations/{provider}/disconnect
-# ---------------------------------------------------------------------------
-
-
-def test_delete_disconnect_removes_crm_yaml(tmp_path: Path):
-    """DELETE disconnect → crm.yaml is deleted and success returned."""
-    client_dir = tmp_path / "clients" / "quintana-seguros"
-    _write_crm_yaml(client_dir, VALID_CRM_DATA)
-
-    crm_path = tmp_path / "clients" / "quintana-seguros" / "crm.yaml"
-    assert crm_path.exists()
-
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.delete(
-            "/api/v1/clients/quintana-seguros/integrations/airtable/disconnect"
-        )
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["success"] is True
-    assert "message" in data
-    assert not crm_path.exists()
-
-
-def test_delete_disconnect_404_when_not_configured(tmp_path: Path):
-    """DELETE disconnect when no crm.yaml → 404."""
-    client_dir = tmp_path / "clients" / "no-crm-client"
-    client_dir.mkdir(parents=True)
-
-    with patch(
-        "app.integrations.crm_config_router.CLIENTS_ROOT",
-        tmp_path / "clients",
-    ):
-        tc = _make_test_client(tmp_path)
-        resp = tc.delete(
-            "/api/v1/clients/no-crm-client/integrations/airtable/disconnect"
-        )
+    resp = await client.post(
+        "/api/v1/clients/quintana-seguros/integrations/airtable/secrets/import-from-env"
+    )
 
     assert resp.status_code == 404

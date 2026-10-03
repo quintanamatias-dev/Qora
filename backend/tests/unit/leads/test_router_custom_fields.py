@@ -65,6 +65,12 @@ async def custom_fields_client(tmp_path: Path):
     ) as client:
         yield client
 
+    # Lead detail/list endpoints read quote_fields metadata via the process-
+    # wide IntegrationStore cache keyed only by client_id; invalidate so this
+    # fixture's "quintana-seguros" entry never leaks into another test file.
+    from app.integrations.integration_store import get_default_store
+
+    get_default_store().invalidate("quintana-seguros")
     await db_module.close_db()
 
 
@@ -126,6 +132,9 @@ async def lead_with_custom_fields_client(tmp_path: Path):
     ) as client:
         yield client
 
+    from app.integrations.integration_store import get_default_store
+
+    get_default_store().invalidate("quintana-seguros")
     await db_module.close_db()
 
 

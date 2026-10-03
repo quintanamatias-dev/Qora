@@ -386,3 +386,90 @@ async def test_resolve_client_secret_skips_db_when_master_key_absent(db, monkeyp
 
     assert resolved == "env-value"
     assert len(calls) == 0
+
+
+# ---------------------------------------------------------------------------
+# recompute_and_persist_status — Phase 5 write-path status computation
+# ---------------------------------------------------------------------------
+
+
+async def test_recompute_and_persist_status_ok_when_secret_resolves(db, monkeypatch):
+    from cryptography.fernet import Fernet
+
+    from app.integrations.integration_store import recompute_and_persist_status
+
+    monkeypatch.setenv("QORA_SECRETS_MASTER_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("QUINTANA_AIRTABLE_API_KEY", "env-value")
+
+    async with db.async_session_factory() as session:
+        await _insert_integration(session, "quintana-seguros")
+
+    async with db.async_session_factory() as session:
+        status, reason = await recompute_and_persist_status(session, "quintana-seguros", "airtable")
+        await session.commit()
+
+    assert status == "ok"
+    assert reason is None
+
+
+async def test_recompute_and_persist_status_degraded_when_unresolvable(db):
+    from app.integrations.integration_store import recompute_and_persist_status
+
+    async with db.async_session_factory() as session:
+        await _insert_integration(
+            session,
+            "quintana-seguros",
+            config=_config_payload(legacy_env_var_name="TOTALLY_UNSET_ENV_VAR"),
+        )
+
+    async with db.async_session_factory() as session:
+        status, reason = await recompute_and_persist_status(session, "quintana-seguros", "airtable")
+        await session.commit()
+
+    assert status == "degraded"
+    assert reason is not None
+    assert "TOTALLY_UNSET_ENV_VAR" in reason
+
+
+async def test_recompute_and_persist_status_disabled_when_integration_disabled(db):
+    from app.integrations.integration_store import recompute_and_persist_status
+
+    async with db.async_session_factory() as session:
+        await _insert_integration(session, "quintana-seguros", enabled=False)
+
+    async with db.async_session_factory() as session:
+        status, reason = await recompute_and_persist_status(session, "quintana-seguros", "airtable")
+        await session.commit()
+
+    assert status == "disabled"
+
+
+async def test_recompute_and_persist_status_persists_to_row(db):
+    from sqlalchemy import select
+
+    from app.integrations.integration_store import recompute_and_persist_status
+    from app.tenants.models import ClientIntegration
+
+    async with db.async_session_factory() as session:
+        await _insert_integration(
+            session,
+            "quintana-seguros",
+            config=_config_payload(legacy_env_var_name="TOTALLY_UNSET_ENV_VAR"),
+        )
+
+    async with db.async_session_factory() as session:
+        await recompute_and_persist_status(session, "quintana-seguros", "airtable")
+        await session.commit()
+
+    async with db.async_session_factory() as session:
+        result = await session.execute(
+            select(ClientIntegration).where(
+                ClientIntegration.client_id == "quintana-seguros",
+                ClientIntegration.provider == "airtable",
+            )
+        )
+        row = result.scalar_one()
+        assert row.status == "degraded"
+        assert row.status_reason is not None
+        assert row.last_checked_at is not None
+

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from datetime import datetime, timezone
 
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -120,6 +121,55 @@ class IntegrationStore:
                 f"Invalid client_integrations config for client {client_id!r} "
                 f"provider {provider!r}: {exc}"
             ) from exc
+
+
+async def recompute_and_persist_status(
+    session: AsyncSession, client_id: str, provider: str = "airtable"
+) -> tuple[str, str | None]:
+    """Compute and persist a client_integrations row's status (design.md's
+    BOOT VALIDATION data flow, reused by every write-path endpoint).
+
+    "disabled" when the row's enabled flag is False; otherwise "ok" when the
+    integration's credential resolves (CRMConfig.resolve_api_key_async),
+    "degraded" with a status_reason naming the unresolved credential when it
+    does not. Returns (status, status_reason) for the caller to echo back
+    without a second DB read; the row itself is updated in-place but NOT
+    committed -- the caller's existing transaction controls the commit.
+    """
+    result = await session.execute(
+        select(ClientIntegration).where(
+            ClientIntegration.client_id == client_id,
+            ClientIntegration.provider == provider,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        return "disabled", None
+
+    now = datetime.now(timezone.utc)
+
+    if not row.enabled:
+        row.status = "disabled"
+        row.status_reason = None
+        row.last_checked_at = now
+        return row.status, row.status_reason
+
+    payload = json.loads(row.config)
+    payload.setdefault("provider", row.provider)
+    payload.setdefault("enabled", row.enabled)
+    config = CRMConfig.model_validate(payload)
+
+    resolved = await config.resolve_api_key_async(session, client_id)
+    if resolved is not None:
+        row.status = "ok"
+        row.status_reason = None
+    else:
+        credential_name = config.legacy_env_var_name or "api_key"
+        row.status = "degraded"
+        row.status_reason = f"Credential '{credential_name}' could not be resolved"
+    row.last_checked_at = now
+
+    return row.status, row.status_reason
 
 
 _default_store: IntegrationStore | None = None

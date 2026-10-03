@@ -61,6 +61,14 @@ async def leads_client(tmp_path: Path):
     ) as client:
         yield client
 
+    # The lead detail endpoint reads quote_fields metadata via the process-wide
+    # IntegrationStore singleton, keyed only by client_id. This fixture never
+    # seeds a client_integrations row, so it caches a negative (None) result
+    # for "quintana-seguros" that must not leak into other test files reusing
+    # the same client id against their own DB (e.g. tests/unit/voice/test_context.py).
+    from app.integrations.integration_store import get_default_store
+
+    get_default_store().invalidate("quintana-seguros")
     await db_module.close_db()
 
 
@@ -138,6 +146,84 @@ async def test_get_lead_by_id_returns_correct_record(leads_client: AsyncClient):
         f"car_make must be in custom_fields. Got custom_fields={cf}"
     )
     assert cf.get("car_model") == "Corolla"
+
+
+async def test_get_lead_by_id_quote_fields_read_via_integration_store(tmp_path: Path):
+    """client-integrations-secrets Phase 5: lead detail reads quote_ready_fields
+    through IntegrationStore (client_integrations row), not CRMConfigLoader/crm.yaml.
+    """
+    import json
+
+    from app.core.config import Settings
+    from app.core import database as db_module
+
+    settings = Settings(
+        openai_api_key=SecretStr("sk-test"),
+        elevenlabs_api_key=SecretStr("el-test"),
+        database_url=f"sqlite+aiosqlite:///{tmp_path}/leads_crm_cutover_test.db",
+    )
+    from tests.helpers.migrations import init_db_with_migrations as _init_db_with_migrations
+    await _init_db_with_migrations(db_module, settings)
+
+    from app.tenants.models import ClientIntegration
+
+    async with db_module.async_session_factory() as sess:
+        from app.tenants.service import seed_quintana
+        from app.leads.service import seed_leads
+
+        await seed_quintana(sess)
+        await seed_leads(sess)
+        sess.add(
+            ClientIntegration(
+                client_id="quintana-seguros",
+                provider="airtable",
+                enabled=True,
+                config=json.dumps(
+                    {
+                        "base_id": "appXXXXXXXXXXXXXX",
+                        "table_id": "tblYYYYYYYYYYYYYY",
+                        "match_field": "phone",
+                        "quote_ready_fields": ["car_make"],
+                        "custom_fields": [
+                            {"field_key": "car_make", "field_type": "string", "label": "Car Make"}
+                        ],
+                        "legacy_env_var_name": "QUINTANA_AIRTABLE_API_KEY",
+                    }
+                ),
+                status="ok",
+                created_by="test",
+                updated_by="test",
+            )
+        )
+        await sess.commit()
+
+    from app.integrations.integration_store import get_default_store
+
+    # The process-wide IntegrationStore cache is shared across tests that
+    # reuse the "quintana-seguros" client id against different DBs; always
+    # invalidate before and after so this test neither reads a stale entry
+    # left by another test nor leaks one forward.
+    get_default_store().invalidate("quintana-seguros")
+
+    from app.leads.router import router as leads_router
+    from fastapi import FastAPI
+
+    test_app = FastAPI()
+    test_app.include_router(leads_router, prefix="/api/v1")
+
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=test_app),
+            base_url="http://test",
+        ) as client:
+            response = await client.get("/api/v1/leads/lead-quintana-001")
+    finally:
+        get_default_store().invalidate("quintana-seguros")
+        await db_module.close_db()
+
+    assert response.status_code == 200
+    quote_fields = response.json()["quote_fields"]
+    assert any(f["field_key"] == "car_make" and f["in_quote_ready_fields"] for f in quote_fields)
 
 
 async def test_get_lead_by_id_not_found(leads_client: AsyncClient):
@@ -819,6 +905,11 @@ async def enriched_leads_client(tmp_path: Path):
     ) as client:
         yield client
 
+    # See leads_client's teardown comment above: lead detail reads quote_fields
+    # via the process-wide IntegrationStore cache keyed only by client_id.
+    from app.integrations.integration_store import get_default_store
+
+    get_default_store().invalidate("quintana-seguros")
     await db_module.close_db()
 
 

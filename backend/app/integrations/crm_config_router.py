@@ -1,55 +1,74 @@
-"""CRM integration config API router — reads/writes crm.yaml per client.
+"""CRM integration config API router — reads/writes client_integrations/client_secrets.
 
 Provides:
 - GET  /api/v1/clients/{client_id}/integrations
   Returns the client's configured integrations (currently Airtable if present).
-  SECURITY: api_key_env is always the env var NAME, never the actual secret.
+  SECURITY: api_key_env is always a NAME (env var name or a canonical secret
+  name), never the actual secret.
 
 - GET  /api/v1/clients/{client_id}/integrations/available
   Returns all supported providers with their connection status.
 
 - PUT  /api/v1/clients/{client_id}/integrations/{provider}
-  Updates specific fields in crm.yaml (base_id, table_id, api_key_env, match_field).
+  Updates specific fields in the client_integrations row.
   Returns the updated config.
 
 - POST /api/v1/clients/{client_id}/integrations/{provider}/connect
-  Creates a new crm.yaml for the client with default field/status mappings.
-  Returns 409 if crm.yaml already exists.
+  Creates a new client_integrations row with default field/status mappings.
+  Returns 409 if one already exists.
 
 - POST /api/v1/clients/{client_id}/integrations/{provider}/test
   Attempts a 1-record read from the configured Airtable base.
   Returns { success, message, record_count? }.
   SECURITY: never includes the raw API key in the response.
 
-- DELETE /api/v1/clients/{client_id}/integrations/{provider}/disconnect
-  Removes crm.yaml for the client (disconnects the integration).
+- PUT  /api/v1/clients/{client_id}/integrations/{provider}/secret
+  Write-only secret upload: body {value}, response {name, is_set, updated_at}.
+  SECURITY: the submitted value is never echoed back. 503 when
+  QORA_SECRETS_MASTER_KEY is not configured.
 
-Design decisions:
-- Uses existing CRMConfig model from crm_config.py (no schema migration).
-- CLIENTS_ROOT can be patched in tests for isolation.
-- _test_airtable_connection is a separate function for testability via monkeypatching.
+- GET  /api/v1/clients/{client_id}/integrations/{provider}/status
+  Returns {status, status_reason, last_checked_at, secret_source}.
+
+- POST /api/v1/clients/{client_id}/integrations/{provider}/secrets/import-from-env
+  Superadmin-only: copies the integration's legacy env var value into
+  client_secrets, encrypted.
+
+- DELETE /api/v1/clients/{client_id}/integrations/{provider}/disconnect
+  Removes the client_integrations row (disconnects the integration).
+
+Design decisions (client-integrations-secrets, design.md P3-D6/P3-D7):
+- Uses existing CRMConfig model from crm_config.py (no new Pydantic shapes).
+- A submitted api_key_env value that matches the ALL_CAPS env-var-name
+  pattern is stored as-is (legacy env fallback, no secret write). Any other
+  value is treated as a literal secret: encrypted into client_secrets under
+  the integration's existing legacy_env_var_name, or the canonical name
+  f"{provider}_api_key" when none is set yet — this is the single naming
+  convention PUT .../secret and the import-from-env endpoint also use, so
+  resolve_client_secret always finds whichever name is currently active.
+- Every write calls IntegrationStore.invalidate(client_id) and recomputes
+  the row's status via recompute_and_persist_status.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
-from pathlib import Path
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Literal
 
-import yaml
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.access import require_client_access, require_superadmin
-from app.integrations.crm_config import CRMConfig, CRMConfigLoader, ConfigValidationError
-
-# ---------------------------------------------------------------------------
-# Configuration — clients root (patchable for tests)
-# ---------------------------------------------------------------------------
-
-# Default: backend/clients/ relative to this file's location
-CLIENTS_ROOT: Path = Path(__file__).resolve().parent.parent.parent / "clients"
+from app.core.auth import CallerIdentity, require_api_key
+from app.core.crypto import get_secret_crypto
+from app.integrations.crm_config import CRMConfig, ConfigValidationError
+from app.integrations.integration_store import get_default_store, recompute_and_persist_status
+from app.tenants.models import Client, ClientIntegration, ClientSecret
 
 router = APIRouter(
     prefix="/clients",
@@ -59,17 +78,33 @@ router = APIRouter(
 
 
 # ---------------------------------------------------------------------------
+# DB session dependency
+# ---------------------------------------------------------------------------
+
+
+async def get_db_session() -> AsyncSession:
+    """FastAPI dependency that yields an async DB session."""
+    from app.core.database import async_session_factory
+
+    if async_session_factory is None:
+        raise RuntimeError("Database not initialized.")
+
+    async with async_session_factory() as session:
+        yield session
+
+
+# ---------------------------------------------------------------------------
 # Response schemas
 # ---------------------------------------------------------------------------
 
 
 class IntegrationConfigResponse(BaseModel):
-    """JSON-safe integration config — api_key_env is always the env var NAME."""
+    """JSON-safe integration config — api_key_env is always a NAME."""
 
     provider: str
     base_id: str
     table_id: str
-    api_key_env: str       # SECURITY: env var name or masked literal credential
+    api_key_env: str       # SECURITY: env var name or canonical secret name, never a secret value
     match_field: str
     field_count: int
     connected: bool
@@ -92,11 +127,11 @@ class UpdateIntegrationPayload(BaseModel):
 
 
 class ConnectIntegrationPayload(BaseModel):
-    """Payload for POST /integrations/{provider}/connect — creates a new crm.yaml."""
+    """Payload for POST /integrations/{provider}/connect — creates a new row."""
 
     base_id: str
     table_id: str
-    api_key_env: str  # Name of the env var (e.g., "ACME_AIRTABLE_API_KEY")
+    api_key_env: str  # Env var name, or a literal secret value to encrypt
 
 
 class AirtableFieldResponse(BaseModel):
@@ -139,6 +174,29 @@ class AvailableIntegration(BaseModel):
     icon: str
 
 
+class PutSecretPayload(BaseModel):
+    """Write-only payload for PUT /integrations/{provider}/secret."""
+
+    value: str
+
+
+class SecretResponse(BaseModel):
+    """SECURITY: never includes the secret value — name, is_set, updated_at only."""
+
+    name: str
+    is_set: bool
+    updated_at: datetime
+
+
+class IntegrationStatusResponse(BaseModel):
+    """Status without any secret value (client-integrations-secrets P3-D7)."""
+
+    status: str
+    status_reason: str | None = None
+    last_checked_at: datetime | None = None
+    secret_source: Literal["db", "env", "missing"]
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -166,24 +224,11 @@ def _looks_like_env_var_name(value: str) -> bool:
     return bool(_ENV_VAR_NAME_PATTERN.match(value))
 
 
-def _safe_credential_label(value: str) -> str:
-    """Return a display-safe credential label without exposing literal tokens."""
-    if _looks_like_env_var_name(value):
-        return value
-    return "Stored credential (masked)"
-
-
-def _sanitize_secret_text(text: str, config: CRMConfig) -> str:
-    """Strip known Airtable token shapes from user-facing error text."""
+def _sanitize_secret_text(text: str, api_key: str | None) -> str:
+    """Strip known Airtable token shapes and the resolved secret from error text."""
     cleaned = _AIRTABLE_PAT_PATTERN.sub("[REDACTED]", text)
-    if config.api_key and not _looks_like_env_var_name(config.api_key):
-        cleaned = cleaned.replace(config.api_key, "[REDACTED]")
-    try:
-        actual_key = os.environ.get(config.api_key_env, "")
-        if actual_key:
-            cleaned = cleaned.replace(actual_key, "[REDACTED]")
-    except Exception:
-        pass
+    if api_key:
+        cleaned = cleaned.replace(api_key, "[REDACTED]")
     return cleaned
 
 
@@ -204,32 +249,134 @@ def _validate_airtable_ids(base_id: str, table_id: str) -> str | None:
     )
 
 
-def _load_config_or_none(client_id: str) -> CRMConfig | None:
-    """Load crm.yaml for client_id, returning None if not found or invalid."""
-    try:
-        return CRMConfigLoader.load(client_id, clients_root=CLIENTS_ROOT)
-    except ConfigValidationError:
-        return None
+async def _get_integration_row(
+    session: AsyncSession, client_id: str, provider: str
+) -> ClientIntegration | None:
+    result = await session.execute(
+        select(ClientIntegration).where(
+            ClientIntegration.client_id == client_id,
+            ClientIntegration.provider == provider,
+        )
+    )
+    return result.scalar_one_or_none()
 
 
-def _config_to_response(config: CRMConfig) -> IntegrationConfigResponse:
+def _config_from_row(row: ClientIntegration) -> CRMConfig:
+    payload = json.loads(row.config)
+    payload.setdefault("provider", row.provider)
+    payload.setdefault("enabled", row.enabled)
+    return CRMConfig.model_validate(payload)
+
+
+def _caller_label(caller: CallerIdentity) -> str:
+    return caller.email or caller.api_key_hash
+
+
+async def _upsert_secret_row(
+    session: AsyncSession,
+    client_id: str,
+    name: str,
+    plaintext: str,
+    caller: CallerIdentity,
+    crypto,
+) -> ClientSecret:
+    """Encrypt plaintext and UPSERT the (client_id, name) client_secrets row.
+
+    SECURITY: plaintext is never logged and never returned — callers build
+    the response from (name, True, row.updated_at) only.
+    """
+    result = await session.execute(
+        select(ClientSecret).where(ClientSecret.client_id == client_id, ClientSecret.name == name)
+    )
+    row = result.scalar_one_or_none()
+    ciphertext, key_id = crypto.encrypt(plaintext)
+    updated_by = _caller_label(caller)
+
+    if row is None:
+        row = ClientSecret(
+            client_id=client_id,
+            name=name,
+            ciphertext=ciphertext,
+            key_id=key_id,
+            created_by=updated_by,
+            updated_by=updated_by,
+        )
+        session.add(row)
+    else:
+        row.ciphertext = ciphertext
+        row.key_id = key_id
+        row.updated_at = datetime.now(timezone.utc)
+        row.updated_by = updated_by
+
+    await session.flush()
+    return row
+
+
+async def _store_literal_secret_and_get_name(
+    session: AsyncSession,
+    client_id: str,
+    provider: str,
+    literal_value: str,
+    existing_legacy_name: str | None,
+    caller: CallerIdentity,
+) -> str:
+    """Encrypt a literal api_key submitted via the config PUT/connect payload.
+
+    Returns the secret's name (to store as legacy_env_var_name). Raises 503
+    when no master key is configured — nothing is ever stored unencrypted.
+    """
+    crypto = get_secret_crypto()
+    if crypto is None:
+        raise HTTPException(
+            status_code=503,
+            detail="QORA_SECRETS_MASTER_KEY is not configured; cannot store secret values.",
+        )
+    secret_name = existing_legacy_name or f"{provider}_api_key"
+    await _upsert_secret_row(session, client_id, secret_name, literal_value, caller, crypto)
+    return secret_name
+
+
+def _upsert_integration_row(
+    row: ClientIntegration | None,
+    session: AsyncSession,
+    client_id: str,
+    provider: str,
+    config_dict: dict[str, Any],
+    caller: CallerIdentity,
+) -> ClientIntegration:
+    """Mutate an existing row in place, or create a new one. Caller commits."""
+    updated_by = _caller_label(caller)
+    config_json = json.dumps(config_dict)
+
+    if row is None:
+        row = ClientIntegration(
+            client_id=client_id,
+            provider=provider,
+            enabled=True,
+            config=config_json,
+            status="ok",
+            created_by=updated_by,
+            updated_by=updated_by,
+        )
+        session.add(row)
+    else:
+        row.config = config_json
+        row.updated_at = datetime.now(timezone.utc)
+        row.updated_by = updated_by
+    return row
+
+
+def _config_to_response(config: CRMConfig, connected: bool) -> IntegrationConfigResponse:
     """Convert CRMConfig to IntegrationConfigResponse.
 
-    SECURITY: api_key_env is the env var NAME. resolve_api_key() is NOT called.
-    The 'connected' field checks whether the env var is set (not that the key is valid).
+    SECURITY: api_key_env is always a NAME (legacy_env_var_name) — DB-backed
+    configs never carry a literal api_key, so there is nothing to mask here.
     """
-    env_var_name = config.api_key_env
-    connected = (
-        bool(env_var_name)
-        if not _looks_like_env_var_name(env_var_name)
-        else bool(os.environ.get(env_var_name))
-    )
-
     return IntegrationConfigResponse(
         provider=config.provider,
         base_id=config.base_id,
         table_id=config.table_id,
-        api_key_env=_safe_credential_label(env_var_name),
+        api_key_env=config.legacy_env_var_name or "",
         match_field=config.match_field,
         field_count=len(config.field_mappings),
         connected=connected,
@@ -243,7 +390,7 @@ def _config_to_response(config: CRMConfig) -> IntegrationConfigResponse:
     )
 
 
-def _test_airtable_connection(config: CRMConfig) -> dict[str, Any]:
+def _test_airtable_connection(config: CRMConfig, api_key: str) -> dict[str, Any]:
     """Test Airtable connectivity with a minimal 1-record fetch.
 
     This function is a standalone helper so tests can monkeypatch it.
@@ -253,11 +400,6 @@ def _test_airtable_connection(config: CRMConfig) -> dict[str, Any]:
     validation_error = _validate_airtable_ids(config.base_id, config.table_id)
     if validation_error:
         return {"success": False, "message": validation_error}
-
-    try:
-        api_key = config.resolve_api_key()
-    except Exception as e:
-        return {"success": False, "message": f"Credential error: {e}"}
 
     try:
         # Import pyairtable lazily — only needed for this function
@@ -278,7 +420,7 @@ def _test_airtable_connection(config: CRMConfig) -> dict[str, Any]:
             "message": "pyairtable is not installed. Cannot test connection.",
         }
     except Exception as e:
-        error_str = _sanitize_secret_text(str(e), config)
+        error_str = _sanitize_secret_text(str(e), api_key)
         if "404" in error_str or "NOT_FOUND" in error_str.upper():
             error_str = (
                 f"Airtable could not find base '{config.base_id}' and table '{config.table_id}'. "
@@ -288,16 +430,11 @@ def _test_airtable_connection(config: CRMConfig) -> dict[str, Any]:
         return {"success": False, "message": f"Connection failed: {error_str}"}
 
 
-def _list_airtable_fields(config: CRMConfig) -> list[dict[str, Any]]:
+def _list_airtable_fields(config: CRMConfig, api_key: str) -> list[dict[str, Any]]:
     """Fetch Airtable table fields via pyairtable schema APIs."""
     validation_error = _validate_airtable_ids(config.base_id, config.table_id)
     if validation_error:
         raise HTTPException(status_code=422, detail=validation_error)
-
-    try:
-        api_key = config.resolve_api_key()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Credential error: {e}") from e
 
     try:
         from pyairtable import Api  # type: ignore[import-untyped]
@@ -324,7 +461,7 @@ def _list_airtable_fields(config: CRMConfig) -> list[dict[str, Any]]:
     except HTTPException:
         raise
     except Exception as e:
-        detail = _sanitize_secret_text(str(e), config)
+        detail = _sanitize_secret_text(str(e), api_key)
         raise HTTPException(status_code=502, detail=f"Unable to fetch Airtable fields: {detail}") from e
 
     raise HTTPException(
@@ -344,6 +481,13 @@ def _missing_required_core_mappings(field_mappings: list[dict[str, Any]]) -> lis
     return [field for field in _REQUIRED_CORE_MAPPINGS if not mapped_sources.get(field)]
 
 
+async def _recompute_status_or_422(session: AsyncSession, client_id: str, provider: str) -> None:
+    try:
+        await recompute_and_persist_status(session, client_id, provider)
+    except (ConfigValidationError, ValidationError, ValueError) as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -355,17 +499,26 @@ def _missing_required_core_mappings(field_mappings: list[dict[str, Any]]) -> lis
     summary="Get integration configs for a client",
     description=(
         "Returns the client's configured integrations as a list. "
-        "Currently supports Airtable (crm.yaml). "
-        "Returns empty list if no crm.yaml is found. "
-        "SECURITY: api_key_env returns the env var NAME, never the actual secret."
+        "Currently supports Airtable. Returns empty list if none configured. "
+        "SECURITY: api_key_env returns a NAME, never the actual secret."
     ),
 )
-async def get_integrations(client_id: str) -> list[IntegrationConfigResponse]:
+async def get_integrations(
+    client_id: str, session: AsyncSession = Depends(get_db_session)
+) -> list[IntegrationConfigResponse]:
     """GET /api/v1/clients/{client_id}/integrations"""
-    config = _load_config_or_none(client_id)
-    if config is None:
-        return []
-    return [_config_to_response(config)]
+    result = await session.execute(
+        select(ClientIntegration).where(ClientIntegration.client_id == client_id)
+    )
+    rows = result.scalars().all()
+    responses: list[IntegrationConfigResponse] = []
+    for row in rows:
+        try:
+            config = _config_from_row(row)
+        except (ConfigValidationError, ValidationError, ValueError):
+            continue
+        responses.append(_config_to_response(config, row.status == "ok"))
+    return responses
 
 
 @router.get(
@@ -374,27 +527,21 @@ async def get_integrations(client_id: str) -> list[IntegrationConfigResponse]:
     summary="Get available integrations for a client",
     description=(
         "Returns all supported integration providers with their connection status. "
-        "Currently only Airtable is supported. "
-        "is_connected=true when crm.yaml exists with provider=airtable."
+        "Currently only Airtable is supported."
     ),
 )
-async def get_available_integrations(client_id: str) -> list[AvailableIntegration]:
+async def get_available_integrations(
+    client_id: str, session: AsyncSession = Depends(get_db_session)
+) -> list[AvailableIntegration]:
     """GET /api/v1/clients/{client_id}/integrations/available"""
-    crm_path = CLIENTS_ROOT / client_id / "crm.yaml"
-    is_connected = False
-    if crm_path.exists():
-        try:
-            raw = yaml.safe_load(crm_path.read_text()) or {}
-            is_connected = raw.get("provider") == "airtable"
-        except Exception:
-            is_connected = False
+    row = await _get_integration_row(session, client_id, "airtable")
 
     return [
         AvailableIntegration(
             provider="airtable",
             name="Airtable",
             description="Sync leads with your Airtable base",
-            is_connected=is_connected,
+            is_connected=row is not None,
             icon="/images/integrations/airtable-icon.webp",
         )
     ]
@@ -406,27 +553,26 @@ async def get_available_integrations(client_id: str) -> list[AvailableIntegratio
     response_model=IntegrationConfigResponse,
     summary="Update integration config for a client",
     description=(
-        "Updates specific fields in the client's crm.yaml. "
-        "Returns the updated config. "
-        "SECURITY: api_key_env always stores the env var NAME, never the secret."
+        "Updates specific fields in the client's client_integrations row. "
+        "SECURITY: a literal api_key_env value is encrypted into client_secrets, "
+        "never stored in the config column; an env-var-name value is stored as-is."
     ),
 )
 async def update_integration(
     client_id: str,
     provider: str,
     payload: UpdateIntegrationPayload,
+    session: AsyncSession = Depends(get_db_session),
+    caller: CallerIdentity = Depends(require_api_key),
 ) -> IntegrationConfigResponse:
     """PUT /api/v1/clients/{client_id}/integrations/{provider}"""
-    crm_path = CLIENTS_ROOT / client_id / "crm.yaml"
-
-    if not crm_path.exists():
+    row = await _get_integration_row(session, client_id, provider)
+    if row is None:
         raise HTTPException(status_code=404, detail=f"No integration config found for client '{client_id}'")
 
-    # Load the raw YAML dict (preserve all fields, including field_mappings)
-    raw: dict = yaml.safe_load(crm_path.read_text()) or {}
+    raw: dict = json.loads(row.config)
 
-    # Apply partial updates
-    update_data = payload.model_dump(exclude_none=True)
+    update_data = payload.model_dump(exclude_none=True, exclude={"api_key_env"})
     next_base_id = update_data.get("base_id", raw.get("base_id", ""))
     next_table_id = update_data.get("table_id", raw.get("table_id", ""))
     if "base_id" in update_data or "table_id" in update_data:
@@ -435,19 +581,24 @@ async def update_integration(
             raise HTTPException(status_code=422, detail=validation_error)
     raw.update(update_data)
 
-    # Write back to YAML
-    crm_path.write_text(yaml.dump(raw, allow_unicode=True, default_flow_style=False))
+    if payload.api_key_env is not None:
+        if _looks_like_env_var_name(payload.api_key_env):
+            raw["legacy_env_var_name"] = payload.api_key_env
+        else:
+            raw["legacy_env_var_name"] = await _store_literal_secret_and_get_name(
+                session, client_id, provider, payload.api_key_env, raw.get("legacy_env_var_name"), caller
+            )
 
-    # Reload and validate the config
-    try:
-        config = await CRMConfigLoader.load_async(client_id, clients_root=CLIENTS_ROOT)
-    except ConfigValidationError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
+    row.config = json.dumps(raw)
+    row.updated_at = datetime.now(timezone.utc)
+    row.updated_by = _caller_label(caller)
 
-    if config is None:
-        raise HTTPException(status_code=500, detail="Failed to reload integration config after update")
+    get_default_store().invalidate(client_id)
+    await _recompute_status_or_422(session, client_id, provider)
+    await session.commit()
 
-    return _config_to_response(config)
+    config = _config_from_row(row)
+    return _config_to_response(config, row.status == "ok")
 
 
 @router.post(
@@ -458,29 +609,38 @@ async def update_integration(
     description=(
         "Attempts to connect to the configured CRM (e.g. Airtable) "
         "by fetching a single record. "
-        "Returns success/failure with a user-safe message and optional record_count. "
         "SECURITY: never returns the raw API key value in any response."
     ),
 )
 async def test_integration(
     client_id: str,
     provider: str,
+    session: AsyncSession = Depends(get_db_session),
 ) -> IntegrationTestResult:
     """POST /api/v1/clients/{client_id}/integrations/{provider}/test"""
-    config = _load_config_or_none(client_id)
-    if config is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No integration config found for client '{client_id}'",
-        )
+    row = await _get_integration_row(session, client_id, provider)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No integration config found for client '{client_id}'")
 
+    config = _config_from_row(row)
     if config.provider != provider:
         raise HTTPException(
             status_code=404,
             detail=f"Provider '{provider}' not configured for client '{client_id}'",
         )
 
-    result = _test_airtable_connection(config)
+    try:
+        api_key = await config.resolve_api_key_async(session, client_id)
+    except Exception as e:
+        return IntegrationTestResult(success=False, message=f"Credential error: {e}")
+
+    if api_key is None:
+        return IntegrationTestResult(
+            success=False,
+            message="Credential could not be resolved. Check the configured secret or environment variable.",
+        )
+
+    result = _test_airtable_connection(config, api_key)
     return IntegrationTestResult(**result)
 
 
@@ -489,14 +649,27 @@ async def test_integration(
     response_model=AirtableFieldsResponse,
     summary="List Airtable table fields for mapping",
 )
-async def get_integration_fields(client_id: str, provider: str) -> AirtableFieldsResponse:
+async def get_integration_fields(
+    client_id: str, provider: str, session: AsyncSession = Depends(get_db_session)
+) -> AirtableFieldsResponse:
     """GET /api/v1/clients/{client_id}/integrations/{provider}/fields"""
-    config = _load_config_or_none(client_id)
-    if config is None:
+    row = await _get_integration_row(session, client_id, provider)
+    if row is None:
         raise HTTPException(status_code=404, detail=f"No integration config found for client '{client_id}'")
+    config = _config_from_row(row)
     if config.provider != provider:
         raise HTTPException(status_code=404, detail=f"Provider '{provider}' not configured for client '{client_id}'")
-    return AirtableFieldsResponse(fields=[AirtableFieldResponse(**field) for field in _list_airtable_fields(config)])
+
+    try:
+        api_key = await config.resolve_api_key_async(session, client_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Credential error: {e}") from e
+    if api_key is None:
+        raise HTTPException(status_code=400, detail="Credential could not be resolved.")
+
+    return AirtableFieldsResponse(
+        fields=[AirtableFieldResponse(**field) for field in _list_airtable_fields(config, api_key)]
+    )
 
 
 @router.put(
@@ -509,15 +682,13 @@ async def save_integration_mappings(
     client_id: str,
     provider: str,
     payload: SaveMappingsPayload,
+    session: AsyncSession = Depends(get_db_session),
+    caller: CallerIdentity = Depends(require_api_key),
 ) -> IntegrationConfigResponse:
     """PUT /api/v1/clients/{client_id}/integrations/{provider}/mappings"""
-    crm_path = CLIENTS_ROOT / client_id / "crm.yaml"
-    if not crm_path.exists():
+    row = await _get_integration_row(session, client_id, provider)
+    if row is None:
         raise HTTPException(status_code=404, detail=f"No integration config found for client '{client_id}'")
-
-    raw: dict = yaml.safe_load(crm_path.read_text()) or {}
-    if raw.get("provider") != provider:
-        raise HTTPException(status_code=404, detail=f"Provider '{provider}' not configured for client '{client_id}'")
 
     missing_required = _missing_required_core_mappings(payload.field_mappings)
     if missing_required:
@@ -537,19 +708,22 @@ async def save_integration_mappings(
             ),
         )
 
+    raw: dict = json.loads(row.config)
     raw["field_mappings"] = payload.field_mappings
     raw["custom_fields"] = payload.field_definitions
     raw.pop("field_definitions", None)
     raw["quote_ready_fields"] = payload.quote_ready_fields
-    crm_path.write_text(yaml.dump(raw, allow_unicode=True, default_flow_style=False))
 
-    try:
-        config = await CRMConfigLoader.load_async(client_id, clients_root=CLIENTS_ROOT)
-    except ConfigValidationError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
-    if config is None:
-        raise HTTPException(status_code=500, detail="Failed to reload integration config after mapping update")
-    return _config_to_response(config)
+    row.config = json.dumps(raw)
+    row.updated_at = datetime.now(timezone.utc)
+    row.updated_by = _caller_label(caller)
+
+    get_default_store().invalidate(client_id)
+    await _recompute_status_or_422(session, client_id, provider)
+    await session.commit()
+
+    config = _config_from_row(row)
+    return _config_to_response(config, row.status == "ok")
 
 
 @router.post(
@@ -559,27 +733,27 @@ async def save_integration_mappings(
     status_code=201,
     summary="Connect a new integration for a client",
     description=(
-        "Creates a new crm.yaml for the client with default field and status mappings. "
-        "Returns 404 if the client directory does not exist. "
-        "Returns 409 if crm.yaml already exists (use PUT to update). "
-        "SECURITY: api_key_env stores only the env var NAME, never the secret."
+        "Creates a new client_integrations row with default field and status mappings. "
+        "Returns 404 if the client does not exist. "
+        "Returns 409 if already configured (use PUT to update). "
+        "SECURITY: a literal api_key_env value is encrypted into client_secrets, "
+        "never stored in the config column."
     ),
 )
 async def connect_integration(
     client_id: str,
     provider: str,
     payload: ConnectIntegrationPayload,
+    session: AsyncSession = Depends(get_db_session),
+    caller: CallerIdentity = Depends(require_api_key),
 ) -> IntegrationConfigResponse:
     """POST /api/v1/clients/{client_id}/integrations/{provider}/connect"""
-    client_dir = CLIENTS_ROOT / client_id
-    if not client_dir.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"Client directory not found for client '{client_id}'",
-        )
+    client_result = await session.execute(select(Client).where(Client.id == client_id))
+    if client_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail=f"Client '{client_id}' not found")
 
-    crm_path = client_dir / "crm.yaml"
-    if crm_path.exists():
+    existing = await _get_integration_row(session, client_id, provider)
+    if existing is not None:
         raise HTTPException(
             status_code=409,
             detail=(
@@ -592,11 +766,9 @@ async def connect_integration(
     if validation_error:
         raise HTTPException(status_code=422, detail=validation_error)
 
-    crm_data: dict = {
-        "provider": "airtable",
+    raw: dict = {
         "base_id": payload.base_id,
         "table_id": payload.table_id,
-        "api_key_env": payload.api_key_env,
         "match_field": "lead_id",
         "field_mappings": [
             {"source": "external_lead_id", "target": "lead_id", "type": "integer"},
@@ -623,17 +795,22 @@ async def connect_integration(
         },
     }
 
-    crm_path.write_text(yaml.dump(crm_data, allow_unicode=True, default_flow_style=False))
+    if _looks_like_env_var_name(payload.api_key_env):
+        raw["legacy_env_var_name"] = payload.api_key_env
+    else:
+        raw["legacy_env_var_name"] = await _store_literal_secret_and_get_name(
+            session, client_id, provider, payload.api_key_env, None, caller
+        )
 
-    try:
-        config = await CRMConfigLoader.load_async(client_id, clients_root=CLIENTS_ROOT)
-    except ConfigValidationError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
+    row = _upsert_integration_row(None, session, client_id, provider, raw, caller)
+    await session.flush()
 
-    if config is None:
-        raise HTTPException(status_code=500, detail="Failed to load integration config after creation")
+    get_default_store().invalidate(client_id)
+    await _recompute_status_or_422(session, client_id, provider)
+    await session.commit()
 
-    return _config_to_response(config)
+    config = _config_from_row(row)
+    return _config_to_response(config, row.status == "ok")
 
 
 @router.delete(
@@ -641,22 +818,161 @@ async def connect_integration(
     dependencies=[Depends(require_superadmin)],
     summary="Disconnect an integration for a client",
     description=(
-        "Deletes the crm.yaml for the client, removing the integration configuration. "
+        "Deletes the client_integrations row, removing the integration configuration. "
         "Returns 404 if no integration is configured for the client."
     ),
 )
 async def disconnect_integration(
     client_id: str,
     provider: str,
+    session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     """DELETE /api/v1/clients/{client_id}/integrations/{provider}/disconnect"""
-    crm_path = CLIENTS_ROOT / client_id / "crm.yaml"
+    row = await _get_integration_row(session, client_id, provider)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No integration config found for client '{client_id}'")
 
-    if not crm_path.exists():
+    await session.delete(row)
+    get_default_store().invalidate(client_id)
+    await session.commit()
+    return {"success": True, "message": "Integration disconnected"}
+
+
+@router.put(
+    "/{client_id}/integrations/{provider}/secret",
+    dependencies=[Depends(require_superadmin)],
+    response_model=SecretResponse,
+    summary="Set a client's integration secret value (write-only)",
+    description=(
+        "Encrypts and stores the submitted value in client_secrets. "
+        "SECURITY: the response never echoes the submitted value — only "
+        "name, is_set, and updated_at. Returns 503 if QORA_SECRETS_MASTER_KEY "
+        "is not configured."
+    ),
+)
+async def put_integration_secret(
+    client_id: str,
+    provider: str,
+    payload: PutSecretPayload,
+    session: AsyncSession = Depends(get_db_session),
+    caller: CallerIdentity = Depends(require_api_key),
+) -> SecretResponse:
+    """PUT /api/v1/clients/{client_id}/integrations/{provider}/secret"""
+    row = await _get_integration_row(session, client_id, provider)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No integration config found for client '{client_id}'")
+
+    crypto = get_secret_crypto()
+    if crypto is None:
         raise HTTPException(
-            status_code=404,
-            detail=f"No integration config found for client '{client_id}'",
+            status_code=503,
+            detail="QORA_SECRETS_MASTER_KEY is not configured; cannot store secret values.",
         )
 
-    crm_path.unlink()
-    return {"success": True, "message": "Integration disconnected"}
+    raw: dict = json.loads(row.config)
+    secret_name = raw.get("legacy_env_var_name") or f"{provider}_api_key"
+    secret_row = await _upsert_secret_row(session, client_id, secret_name, payload.value, caller, crypto)
+
+    if raw.get("legacy_env_var_name") != secret_name:
+        raw["legacy_env_var_name"] = secret_name
+        row.config = json.dumps(raw)
+        row.updated_at = datetime.now(timezone.utc)
+        row.updated_by = _caller_label(caller)
+
+    get_default_store().invalidate(client_id)
+    await _recompute_status_or_422(session, client_id, provider)
+    await session.commit()
+    await session.refresh(secret_row)
+
+    return SecretResponse(name=secret_name, is_set=True, updated_at=secret_row.updated_at)
+
+
+@router.get(
+    "/{client_id}/integrations/{provider}/status",
+    response_model=IntegrationStatusResponse,
+    summary="Get a client's integration status",
+    description=(
+        "Returns status, status_reason, last_checked_at, and secret_source "
+        "(db|env|missing) — never a secret value."
+    ),
+)
+async def get_integration_status(
+    client_id: str,
+    provider: str,
+    session: AsyncSession = Depends(get_db_session),
+) -> IntegrationStatusResponse:
+    """GET /api/v1/clients/{client_id}/integrations/{provider}/status"""
+    row = await _get_integration_row(session, client_id, provider)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No integration config found for client '{client_id}'")
+
+    raw: dict = json.loads(row.config)
+    secret_name = raw.get("legacy_env_var_name")
+
+    secret_source: Literal["db", "env", "missing"] = "missing"
+    if secret_name and get_secret_crypto() is not None:
+        secret_result = await session.execute(
+            select(ClientSecret).where(ClientSecret.client_id == client_id, ClientSecret.name == secret_name)
+        )
+        if secret_result.scalar_one_or_none() is not None:
+            secret_source = "db"
+    if secret_source == "missing" and secret_name and _looks_like_env_var_name(secret_name):
+        if os.environ.get(secret_name):
+            secret_source = "env"
+
+    return IntegrationStatusResponse(
+        status=row.status,
+        status_reason=row.status_reason,
+        last_checked_at=row.last_checked_at,
+        secret_source=secret_source,
+    )
+
+
+@router.post(
+    "/{client_id}/integrations/{provider}/secrets/import-from-env",
+    dependencies=[Depends(require_superadmin)],
+    response_model=SecretResponse,
+    summary="Import a legacy environment-variable secret into encrypted storage",
+    description=(
+        "Superadmin-only. Copies the integration's configured legacy environment "
+        "variable's current value into client_secrets, encrypted. Returns 503 "
+        "without a master key, 404 when no legacy env var is configured or set."
+    ),
+)
+async def import_secret_from_env(
+    client_id: str,
+    provider: str,
+    session: AsyncSession = Depends(get_db_session),
+    caller: CallerIdentity = Depends(require_api_key),
+) -> SecretResponse:
+    """POST /api/v1/clients/{client_id}/integrations/{provider}/secrets/import-from-env"""
+    row = await _get_integration_row(session, client_id, provider)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No integration config found for client '{client_id}'")
+
+    raw: dict = json.loads(row.config)
+    env_name = raw.get("legacy_env_var_name")
+    if not env_name or not _looks_like_env_var_name(env_name):
+        raise HTTPException(
+            status_code=404,
+            detail="No legacy environment variable is configured for this integration.",
+        )
+
+    crypto = get_secret_crypto()
+    if crypto is None:
+        raise HTTPException(
+            status_code=503,
+            detail="QORA_SECRETS_MASTER_KEY is not configured; cannot import secrets.",
+        )
+
+    value = os.environ.get(env_name)
+    if value is None:
+        raise HTTPException(status_code=404, detail=f"Environment variable '{env_name}' is not set.")
+
+    secret_row = await _upsert_secret_row(session, client_id, env_name, value, caller, crypto)
+    get_default_store().invalidate(client_id)
+    await _recompute_status_or_422(session, client_id, provider)
+    await session.commit()
+    await session.refresh(secret_row)
+
+    return SecretResponse(name=env_name, is_set=True, updated_at=secret_row.updated_at)
