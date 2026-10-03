@@ -155,7 +155,7 @@ Return:
 - `assets/registry-template.yaml` — registry format.
 - `assets/voice-prompting-checklist.md` — pre-deploy quality checklist.
 - `references/voice-prompting-guide.md` — dense reference: voice vs text, anti-patterns, disfluency, tool integration.
-- `backend/clients/qora-demo/agents/qora-explainer/system-prompt.md` — canonical example (production).
-- `backend/clients/qora-demo/agents/qora-explainer/skills/Qora-info.agent-skill.md` — canonical skill example.
-- `backend/clients/qora-demo/agents/qora-explainer/skills/registry.yaml` — canonical registry example.
+- `backend/clients/quintana-seguros/agents/leads-agent/system-prompt.md` — canonical example (production).
+- `backend/clients/quintana-seguros/agents/leads-agent/skills/auto-insurance-knowledge.agent-skill.md` — canonical skill example.
+- `backend/clients/quintana-seguros/agents/leads-agent/skills/registry.yaml` — canonical registry example.
 - `skills/qora-client-agent-setup/SKILL.md` — infrastructure complement to this skill.

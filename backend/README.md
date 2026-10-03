@@ -18,7 +18,6 @@ QORA connects ElevenLabs' voice agent directly to a Custom LLM webhook backed by
 - **Session-scoped voice auth** — `AuthorizedSession` cached in session store; demo sessions never get admin scope (Phase B6)
 - **Webhook shared-secret auth** — optional `X-Webhook-Secret` validation on ElevenLabs voice endpoints (Phase B7)
 - **Configurable CORS** — `QORA_ALLOWED_ORIGINS` restricts browser origins in production (Phase B7)
-- **Demo UI** — browser-based WebSocket demo at `/demo/`
 
 ## Architecture Overview
 
@@ -102,7 +101,6 @@ Browser (Demo UI)
    |----------|-------------|
    | `OPENAI_API_KEY` | OpenAI API key — used for GPT-4o |
    | `ELEVENLABS_API_KEY` | ElevenLabs API key |
-   | `ELEVENLABS_AGENT_ID` | Your ElevenLabs agent ID |
    | `DATABASE_URL` | SQLite path (default: `sqlite+aiosqlite:///./qora.db`) |
 
    **Authentication (Phase B5)**
@@ -111,8 +109,6 @@ Browser (Demo UI)
    |----------|---------|-------------|
    | `QORA_API_KEY` | — | Admin Bearer token. All admin routes return 401 without this. Generate: `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` |
    | `QORA_DOCS_ENABLED` | `true` | Set `false` to disable `/docs` and `/redoc` in production. |
-   | `QORA_DEMO_CLIENT_ID` | — | Demo tenant `client_id` — enables `/api/v1/demo/*` endpoints. |
-   | `QORA_DEMO_AGENT_ID` | — | Demo agent UUID. |
    | `QORA_WEBHOOK_SECRET` | — | Shared secret for `X-Webhook-Secret` header. Required when `QORA_WEBHOOK_AUTH_ENABLED=true`. |
    | `QORA_WEBHOOK_AUTH_ENABLED` | `false` | Enable webhook shared-secret validation. Startup fails if `true` without a secret. |
    | `QORA_ALLOWED_ORIGINS` | `*` | CORS allow-list. Comma-separated in production: `https://app.example.com,https://admin.example.com`. |
@@ -152,7 +148,6 @@ Browser (Demo UI)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/v1/voice/signed-url` | Generate ElevenLabs signed WebSocket URL |
 | POST | `/api/v1/voice/{client_id}/custom-llm/chat/completions` | Multi-tenant Custom LLM webhook |
 | POST | `/api/v1/voice/initiation` | ElevenLabs call initiation webhook (injects lead context) |
 | POST | `/api/v1/voice/webhook` | Legacy webhook path (deprecated) |
@@ -225,7 +220,6 @@ Browser (Demo UI)
 | GET | `/api/v1/health` | Health check (status + uptime) |
 | GET | `/docs` | Swagger UI |
 | GET | `/redoc` | ReDoc UI |
-| GET | `/demo/` | Browser voice call demo |
 
 ## ElevenLabs Agent Configuration
 
@@ -300,12 +294,6 @@ backend/
 │   └── static/
 │       └── index.html           # Browser demo UI
 ├── clients/
-│   ├── qora-demo/
-│   │   └── agents/qora-explainer/
-│   │       ├── system-prompt.md
-│   │       └── skills/
-│   │           ├── registry.yaml
-│   │           └── Qora-info.agent-skill.md
 │   └── quintana-seguros/
 │       └── agents/jaumpablo/
 │           └── skills/

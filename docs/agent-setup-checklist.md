@@ -70,11 +70,10 @@ Telnyx is invisible to Qora — it is ElevenLabs' SIP layer. Qora has zero Telny
 - [ ] **2.1** `OPENAI_API_KEY=sk-proj-...` — required at startup
 - [ ] **2.2** `ELEVENLABS_API_KEY=sk_...` — required at startup
 - [ ] **2.3** `QORA_API_KEY=...` — required for admin API access (generate with `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`)
-- [ ] **2.4** *(Demo client)* `QORA_DEMO_CLIENT_ID={client_id}` and `QORA_DEMO_AGENT_ID={agent_id}` if this is the public demo client
-- [ ] **2.5** *(Outbound)* `ENABLE_OUTBOUND_CALLS=true`
-- [ ] **2.6** *(Outbound)* `ELEVENLABS_PHONE_NUMBER_ID={pnum_...}` — from Phase 1 step 1.6
-- [ ] **2.7** *(Webhook auth)* `QORA_WEBHOOK_SECRET={generated}` then `QORA_WEBHOOK_AUTH_ENABLED=true` — startup fails if auth is enabled but secret is missing
-- [ ] **2.8** *(CRM)* Per-client API key, e.g. `QUINTANA_AIRTABLE_API_KEY=pat...`
+- [ ] **2.4** *(Outbound)* `ENABLE_OUTBOUND_CALLS=true`
+- [ ] **2.5** *(Outbound)* `ELEVENLABS_PHONE_NUMBER_ID={pnum_...}` — from Phase 1 step 1.6
+- [ ] **2.6** *(Webhook auth)* `QORA_WEBHOOK_SECRET={generated}` then `QORA_WEBHOOK_AUTH_ENABLED=true` — startup fails if auth is enabled but secret is missing
+- [ ] **2.7** *(CRM)* Per-client API key, e.g. `QUINTANA_AIRTABLE_API_KEY=pat...`
 
 Validate your `.env` before starting the backend:
 ```bash
@@ -118,7 +117,7 @@ python backend/scripts/check-secrets.py
 - [ ] **4.5** Write `skills/registry.yaml` — at minimum: `skills: []`
 - [ ] **4.6** *(Optional)* Write runtime knowledge files as `{capability}.agent-skill.md` inside `skills/`
 - [ ] **4.7** *(CRM)* Write `crm.yaml` — use `backend/clients/quintana-seguros/crm.yaml` as a template; fields: `provider`, `api_key_env`, `base_id`, `table_id`, `field_mappings`, `status_mapping`, `import_status_mapping`
-- [ ] **4.8** Seed at least one lead for demo/testing:
+- [ ] **4.8** Seed at least one lead for testing:
   ```bash
   # Via admin API
   POST /api/v1/leads  {"client_id": "{client_id}", "name": "...", "phone": "+549..."}
@@ -144,7 +143,7 @@ python backend/scripts/check-secrets.py
     -H "Content-Type: application/json" -d '{}'
   # Expected: 422 (missing `messages` field — route is alive and routing correctly)
   ```
-- [ ] **5.4** Browser demo: open demo UI, start a call, confirm backend logs show:
+- [ ] **5.4** Trigger a test conversation from the ElevenLabs dashboard, confirm backend logs show:
   ```
   POST /api/v1/voice/{client_id}/custom-llm/chat/completions 200
   ```

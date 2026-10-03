@@ -48,19 +48,13 @@ Missing or wrong secrets return `401`.
 
 > **Startup guard**: If `QORA_WEBHOOK_AUTH_ENABLED=true` but `QORA_WEBHOOK_SECRET` is absent or empty, the application **refuses to start** with a configuration error. This prevents silently open webhook surfaces.
 
-### Demo / public routes
-
-The `/api/v1/demo/*` routes are intentionally auth-exempt. They are scoped server-side to `QORA_DEMO_CLIENT_ID` and never expose admin keys or cross-tenant data. The demo flow is: browser calls `/demo/context` → `/demo/leads` → ElevenLabs WebSocket → `POST /demo/sessions/{id}/end`.
-
 ### Endpoint auth summary
 
 | Group | Auth required | Mechanism |
 |-------|--------------|-----------|
 | Admin routes (clients, agents, leads, calls, scheduler, analytics) | ✅ | `Authorization: Bearer <QORA_API_KEY>` |
 | Voice webhooks (initiation, custom-LLM, post-call) | Optional | `X-Webhook-Secret` (when `QORA_WEBHOOK_AUTH_ENABLED=true`) |
-| Demo routes (`/api/v1/demo/*`) | None | Public — scoped to demo client server-side |
 | Health check (`/api/v1/health`) | None | Public |
-| Signed URL (`/api/v1/voice/signed-url`) | ✅ | Superadmin Bearer key — generates ElevenLabs WebSocket URL |
 | Docs (`/docs`, `/redoc`) | None | Public in development; disabled in production |
 
 ### CORS
@@ -82,14 +76,13 @@ In production, always set an explicit allow-list to prevent unauthorized browser
 1. [All Endpoints — Quick Reference](#1-all-endpoints--quick-reference)
 2. [Meta](#2-meta)
 3. [Voice](#3-voice)
-4. [Demo](#4-demo)
-5. [Calls](#5-calls)
-6. [Analytics](#6-analytics)
-7. [Clients](#7-clients)
-8. [Agents](#8-agents)
-9. [Leads](#9-leads)
-10. [Scheduler](#10-scheduler)
-11. [Static Pages](#11-static-pages)
+4. [Calls](#4-calls)
+5. [Analytics](#5-analytics)
+6. [Clients](#6-clients)
+7. [Agents](#7-agents)
+8. [Leads](#8-leads)
+9. [Scheduler](#9-scheduler)
+10. [Static Pages](#10-static-pages)
 
 ---
 
@@ -99,18 +92,9 @@ In production, always set an explicit allow-list to prevent unauthorized browser
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| GET | `/api/v1/voice/signed-url` | Superadmin Bearer | Generate ElevenLabs signed WebSocket URL |
 | POST | `/api/v1/voice/{client_id}/custom-llm/chat/completions` | Webhook secret (optional) | Multi-tenant Custom LLM webhook (primary) |
 | POST | `/api/v1/voice/custom-llm` | Webhook secret (optional) | Legacy Custom LLM webhook (deprecated) |
 | POST | `/api/v1/voice/initiation` | Webhook secret (optional) | Call initiation webhook — injects lead context |
-
-### Demo
-
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| GET | `/api/v1/demo/context` | Public | Demo agent metadata (safe for browser) |
-| GET | `/api/v1/demo/leads` | Public | Leads scoped to the demo client |
-| POST | `/api/v1/demo/sessions/{id}/end` | Public | Close a demo call session (demo-scoped) |
 
 ### Calls
 
@@ -196,19 +180,6 @@ Returns service health status and uptime.
 
 ## 3. Voice (webhook secret optional)
 
-### `GET /api/v1/voice/signed-url`
-
-Generates an ElevenLabs signed WebSocket URL for the demo UI. Using a signed URL forces WebSocket transport (not WebRTC) regardless of ElevenLabs agent settings.
-
-**Response 200**:
-```json
-{
-  "signed_url": "wss://api.elevenlabs.io/v1/convai/conversation?agent_id=...&token=..."
-}
-```
-
----
-
 ### `POST /api/v1/voice/{client_id}/custom-llm/chat/completions`
 
 **Primary** Custom LLM webhook. ElevenLabs posts here on every conversational turn. Returns an OpenAI-compatible Server-Sent Events (SSE) stream.
@@ -290,59 +261,7 @@ ElevenLabs call initiation webhook. Called by ElevenLabs at the start of a new c
 
 ---
 
-## 4. Demo (public — no auth required)
-
-Demo endpoints are served by the `/api/v1/demo/` router. They are intentionally auth-exempt and safe to call from a browser. Identity is resolved server-side from `QORA_DEMO_CLIENT_ID` — the browser never sends or receives admin credentials.
-
-### `GET /api/v1/demo/context`
-
-Returns safe metadata for the demo flow — no secrets, no cross-tenant data.
-
-**Response 200**:
-```json
-{
-  "elevenlabs_agent_id": "agent_xxxx",
-  "client_name": "Acme Demo",
-  "agent_name": "Sofia",
-  "demo_client_id": "acme-demo"
-}
-```
-
-**Response 503**: `QORA_DEMO_CLIENT_ID` or `QORA_DEMO_AGENT_ID` not configured.
-
----
-
-### `GET /api/v1/demo/leads`
-
-Returns leads scoped to the demo client. Cross-tenant access is impossible — `client_id` comes from server config, not from user input.
-
-**Response 200**: Array of lead objects (id, name, status, phone, notes, client_id, custom_fields).
-
-**Response 503**: `QORA_DEMO_CLIENT_ID` not configured.
-
----
-
-### `POST /api/v1/demo/sessions/{session_id}/end`
-
-Close a demo call session. Scoped to the configured demo client — attempts to close sessions belonging to other tenants return `403`.
-
-**Request body**:
-```json
-{ "reason": "user_hangup", "conversation_id": null, "client_id": null, "lead_id": null }
-```
-
-**Response 200**:
-```json
-{ "id": "session-uuid", "status": "completed", "duration_seconds": 120.0, "closed_reason": "user_hangup" }
-```
-
-**Response 403**: Session belongs to a different tenant.
-
-**Response 404**: Session not found.
-
----
-
-## 5. Calls (Bearer auth required)
+## 4. Calls (Bearer auth required)
 
 ### `GET /api/v1/calls`
 
@@ -514,7 +433,7 @@ ElevenLabs post-call webhook. Called by ElevenLabs after every conversation ends
 
 ---
 
-## 6. Analytics (Bearer auth required)
+## 5. Analytics (Bearer auth required)
 
 All analytics endpoints share the same query parameters:
 
@@ -651,7 +570,7 @@ Returns per-agent call statistics for the period.
 
 ---
 
-## 7. Clients (Bearer auth required)
+## 6. Clients (Bearer auth required)
 
 ### `POST /api/v1/clients`
 
@@ -784,7 +703,7 @@ Read-only backward-compatibility alias for `GET /api/v1/clients/{client_id}`. Re
 
 ---
 
-## 8. Agents (Bearer auth required)
+## 7. Agents (Bearer auth required)
 
 All agent endpoints are nested under `/api/v1/clients/{client_id}/agents`.
 
@@ -913,7 +832,7 @@ Atomically swap the default agent. Sets `agent_id` as default, unsets all other 
 
 ---
 
-## 9. Leads (Bearer auth required)
+## 8. Leads (Bearer auth required)
 
 ### `GET /api/v1/leads`
 
@@ -1032,7 +951,7 @@ Get all call sessions for a lead, ordered by `started_at` DESC.
 
 ---
 
-## 10. Scheduler (Bearer auth required)
+## 9. Scheduler (Bearer auth required)
 
 All scheduler endpoints are also available under `/api/v1/clients/{client_id}/scheduled-calls` (alias path).
 
@@ -1151,11 +1070,10 @@ Mark a scheduled call as completed.
 
 ---
 
-## 11. Static Pages
+## 10. Static Pages
 
 | Path | Description |
 |------|-------------|
-| `GET /demo/` | Browser voice call demo (ElevenLabs WebSocket simulator) |
 | `GET /admin` | Redirects to frontend admin at `http://localhost:5173/admin` |
 | `GET /docs` | Swagger UI (interactive API documentation) |
 | `GET /redoc` | ReDoc (API documentation) |
