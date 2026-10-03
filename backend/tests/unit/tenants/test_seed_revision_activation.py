@@ -43,11 +43,11 @@ async def test_seed_quintana_creates_active_revision_for_every_agent(
 ):
     """seed_quintana() creates + activates a revision 1 for its seeded agent."""
     from app.tenants.models import AgentConfigRevision
-    from app.tenants.service import seed_quintana, get_default_agent
+    from app.tenants.service import seed_quintana, resolve_single_active_agent
 
     await seed_quintana(session)
 
-    agent = await get_default_agent(session, "quintana-seguros")
+    agent = await resolve_single_active_agent(session, "quintana-seguros")
     assert agent is not None
     assert agent.active_revision_id is not None
 
@@ -63,11 +63,11 @@ async def test_seed_qora_demo_creates_active_revision_for_every_agent(
     session: AsyncSession,
 ):
     """seed_qora_demo() creates + activates a revision 1 for qora-explainer."""
-    from app.tenants.service import seed_qora_demo, get_default_agent
+    from app.tenants.service import seed_qora_demo, resolve_single_active_agent
 
     await seed_qora_demo(session)
 
-    agent = await get_default_agent(session, "qora-demo")
+    agent = await resolve_single_active_agent(session, "qora-demo")
     assert agent is not None
     assert agent.active_revision_id is not None
 
@@ -75,12 +75,12 @@ async def test_seed_qora_demo_creates_active_revision_for_every_agent(
 async def test_seed_quintana_revision_activation_is_idempotent(session: AsyncSession):
     """Calling seed_quintana() twice does not create a second revision."""
     from app.tenants.models import AgentConfigRevision
-    from app.tenants.service import seed_quintana, get_default_agent
+    from app.tenants.service import seed_quintana, resolve_single_active_agent
 
     await seed_quintana(session)
     await seed_quintana(session)
 
-    agent = await get_default_agent(session, "quintana-seguros")
+    agent = await resolve_single_active_agent(session, "quintana-seguros")
     assert agent is not None
 
     result = await session.execute(

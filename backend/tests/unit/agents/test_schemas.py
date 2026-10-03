@@ -35,7 +35,6 @@ def test_agent_create_minimal_valid():
     assert agent.model == "gpt-4.1-mini"
     assert agent.temperature == 0.7
     assert agent.max_tokens == 300
-    assert agent.is_default is False
     assert agent.system_prompt is None
     assert agent.knowledge_base is None
     # tools_enabled default is a list with all registered tools
@@ -73,7 +72,6 @@ def test_agent_create_custom_values():
         system_prompt="You are helpful.",
         knowledge_base="kb-content",
         tools_enabled=["get_lead_details"],
-        is_default=True,
     )
 
     assert agent.model == "gpt-3.5-turbo"
@@ -81,7 +79,6 @@ def test_agent_create_custom_values():
     assert agent.max_tokens == 500
     assert agent.system_prompt == "You are helpful."
     assert agent.knowledge_base == "kb-content"
-    assert agent.is_default is True
 
 
 # ---------------------------------------------------------------------------

@@ -125,15 +125,19 @@ async def test_admin_create_agent_and_verify_list(admin_app: AsyncClient):
     assert "second-agent" in slugs
 
 
-async def test_admin_full_lifecycle_make_default_and_deactivate(admin_app: AsyncClient):
-    """Full lifecycle: create agent → make default → deactivate original → verify."""
+async def test_admin_full_lifecycle_deactivate_original_keeps_new_agent_active(
+    admin_app: AsyncClient,
+):
+    """Full lifecycle: create agent → deactivate original (2 active agents exist) → verify.
+
+    agent-routing D3: make-default is removed; deactivation is gated purely by
+    active-agent count, not is_default.
+    """
     base = "/api/v1/clients/lifecycle-client/agents"
 
-    # Get the default agent
     list_resp = await admin_app.get(base)
     agents = list_resp.json()
-    original_default = next(a for a in agents if a["is_default"])
-    original_id = original_default["agent_id"]
+    original_id = agents[0]["agent_id"]
 
     # Create a new agent
     create_resp = await admin_app.post(
@@ -147,19 +151,13 @@ async def test_admin_full_lifecycle_make_default_and_deactivate(admin_app: Async
     assert create_resp.status_code == 201
     new_agent_id = create_resp.json()["agent_id"]
 
-    # Make new agent the default
-    swap_resp = await admin_app.post(f"{base}/{new_agent_id}/make-default")
-    assert swap_resp.status_code == 200
-    assert swap_resp.json()["is_default"] is True
-
-    # Deactivate the original (no longer sole default)
+    # Deactivate the original — allowed, 2 active agents exist
     deact_resp = await admin_app.post(f"{base}/{original_id}/deactivate")
     assert deact_resp.status_code == 200
     assert deact_resp.json()["is_active"] is False
 
-    # Verify: only the new agent is the active default
+    # Verify: only the new agent remains active
     final_resp = await admin_app.get(base)
     active_agents = final_resp.json()
-    assert len(active_agents) == 1  # original deactivated, excluded from list
+    assert len(active_agents) == 1
     assert active_agents[0]["agent_id"] == new_agent_id
-    assert active_agents[0]["is_default"] is True

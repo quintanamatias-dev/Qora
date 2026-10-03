@@ -224,7 +224,7 @@ async def test_bootstrap_agent_name_with_special_chars_produces_valid_slug(
     Invalid chars must be stripped, not stored.
     """
     import re
-    from app.tenants.service import create_client, get_default_agent
+    from app.tenants.service import create_client, resolve_single_active_agent
 
     _SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
 
@@ -237,7 +237,7 @@ async def test_bootstrap_agent_name_with_special_chars_produces_valid_slug(
     )
     await db_session.flush()
 
-    agent = await get_default_agent(db_session, "special-chars-client")
+    agent = await resolve_single_active_agent(db_session, "special-chars-client")
     assert agent is not None
     assert _SLUG_RE.match(agent.slug) is not None, (
         f"Bootstrapped agent slug {agent.slug!r} does not match "
@@ -249,7 +249,7 @@ async def test_bootstrap_agent_name_with_special_chars_produces_valid_slug(
 # Triangulation: simple names still produce correct slugs
 async def test_bootstrap_simple_agent_name_produces_correct_slug(db_session):
     """create_client with agent_name='Jaumpablo' produces slug 'jaumpablo'."""
-    from app.tenants.service import create_client, get_default_agent
+    from app.tenants.service import create_client, resolve_single_active_agent
 
     await create_client(
         db_session,
@@ -260,7 +260,7 @@ async def test_bootstrap_simple_agent_name_produces_correct_slug(db_session):
     )
     await db_session.flush()
 
-    agent = await get_default_agent(db_session, "simple-slug-client")
+    agent = await resolve_single_active_agent(db_session, "simple-slug-client")
     assert agent is not None
     assert agent.slug == "jaumpablo"
 

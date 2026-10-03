@@ -437,7 +437,7 @@ async def seed_quintana(session: AsyncSession) -> None:
     existing = await get_client(session, "quintana-seguros")
     if existing is not None:
         # AD-2: One-time migration guard — populate agent fields only when missing or blank
-        agent = await get_default_agent(session, "quintana-seguros")
+        agent = await _resolve_single_active_agent_or_none(session, "quintana-seguros")
         if agent is not None:
             updated = False
             if not agent.system_prompt:
@@ -479,7 +479,7 @@ async def seed_quintana(session: AsyncSession) -> None:
     )
     # Note: create_client() auto-creates the default Agent — no separate create_agent() needed.
     # tool_config column not set — capture_data schema is generated from crm.yaml at runtime.
-    agent = await get_default_agent(session, "quintana-seguros")
+    agent = await _resolve_single_active_agent_or_none(session, "quintana-seguros")
     if agent is not None:
         await _ensure_active_revision(session, agent)
 
@@ -557,7 +557,7 @@ async def seed_qora_demo(session: AsyncSession) -> None:
         # system_prompt (passed via system_prompt_override → system_prompt on Agent).
 
         # Always set elevenlabs_agent_id, TTS values, and EL config on the newly seeded agent.
-        agent = await get_default_agent(session, "qora-demo")
+        agent = await _resolve_single_active_agent_or_none(session, "qora-demo")
         if agent is not None:
             agent.elevenlabs_agent_id = el_agent_id
             agent.tts_speed = _QORA_DEMO_TTS_SPEED
@@ -571,7 +571,7 @@ async def seed_qora_demo(session: AsyncSession) -> None:
     else:
         # AD-2: Idempotent corrections — update elevenlabs_agent_id and system_prompt
         # if they are missing or stale (e.g. old Quintana agent ID, stale system_prompt).
-        agent = await get_default_agent(session, "qora-demo")
+        agent = await _resolve_single_active_agent_or_none(session, "qora-demo")
         if agent is not None:
             updated = False
             if agent.elevenlabs_agent_id != el_agent_id:
@@ -660,7 +660,14 @@ async def create_agent(
         ValueError: If is_default=True and another default already exists for this client.
     """
     if is_default:
-        existing_default = await get_default_agent(session, client_id)
+        existing_default_result = await session.execute(
+            select(Agent).where(
+                Agent.client_id == client_id,
+                Agent.is_default == True,  # noqa: E712
+                Agent.is_active == True,  # noqa: E712
+            )
+        )
+        existing_default = existing_default_result.scalar_one_or_none()
         if existing_default is not None:
             raise ValueError(
                 f"Client {client_id!r} already has a default agent: {existing_default.id!r}. "
@@ -734,23 +741,6 @@ async def get_agent(session: AsyncSession, agent_id: str) -> Agent | None:
     return result.scalar_one_or_none()
 
 
-async def get_default_agent(session: AsyncSession, client_id: str) -> Agent | None:
-    """Fetch the default Agent for a client.
-
-    Returns:
-        The active Agent with is_default=True for the given client_id, or None.
-        Deactivated agents are excluded even if they have is_default=True.
-    """
-    result = await session.execute(
-        select(Agent).where(
-            Agent.client_id == client_id,
-            Agent.is_default == True,  # noqa: E712
-            Agent.is_active == True,  # noqa: E712
-        )
-    )
-    return result.scalar_one_or_none()
-
-
 class AgentResolutionError(Exception):
     """Base error for fail-closed agent resolution (agent-routing spec D2/D3).
 
@@ -804,6 +794,19 @@ async def resolve_single_active_agent(session: AsyncSession, client_id: str) -> 
             "agents; an explicit agent_id is required."
         )
     return active_agents[0]
+
+
+async def _resolve_single_active_agent_or_none(session: AsyncSession, client_id: str) -> Agent | None:
+    """Seed-time convenience: resolve_single_active_agent(), None on failure.
+
+    Seeders run at every startup and must degrade gracefully (skip, not crash)
+    when agent resolution is ambiguous or empty — mirrors the prior
+    the now-removed default-agent-lookup's None-on-miss contract, without reading is_default.
+    """
+    try:
+        return await resolve_single_active_agent(session, client_id)
+    except AgentResolutionError:
+        return None
 
 
 async def get_agent_for_client(
@@ -910,8 +913,10 @@ async def deactivate_agent(
 ) -> Agent:
     """Soft-delete an agent by setting is_active=False.
 
-    GUARD: Raises ValueError if the agent is the sole active default agent for
-    its client. A client must always have at least one active default agent.
+    GUARD (agent-routing spec D3): raises ValueError if the agent is the
+    client's last remaining active agent, counted by active-agent count —
+    never by is_default. A client must always have at least one active agent
+    reachable, regardless of which (if any) agent is flagged is_default.
 
     Args:
         session: Active async DB session.
@@ -922,7 +927,7 @@ async def deactivate_agent(
         The updated Agent with is_active=False.
 
     Raises:
-        ValueError: If agent not found, or if it is the sole active default.
+        ValueError: If agent not found, or if it is the client's last active agent.
     """
     result = await session.execute(
         select(Agent).where(
@@ -934,77 +939,20 @@ async def deactivate_agent(
     if agent is None:
         raise ValueError(f"Agent {agent_id!r} not found for client {client_id!r}.")
 
-    # Sole-default guard: if this agent is the ONLY active default, block deactivation
-    if agent.is_default and agent.is_active:
-        active_defaults_result = await session.execute(
+    if agent.is_active:
+        active_agents_result = await session.execute(
             select(Agent).where(
                 Agent.client_id == client_id,
-                Agent.is_default == True,  # noqa: E712
                 Agent.is_active == True,  # noqa: E712
             )
         )
-        active_defaults = list(active_defaults_result.scalars().all())
-        if len(active_defaults) <= 1:
+        active_agents = list(active_agents_result.scalars().all())
+        if len(active_agents) <= 1:
             raise ValueError(
-                f"cannot_deactivate_sole_default_agent: agent {agent_id!r} is the "
-                f"only active default for client {client_id!r}."
+                f"cannot_deactivate_last_active_agent: agent {agent_id!r} is the "
+                f"only active agent for client {client_id!r}."
             )
 
     agent.is_active = False
-    await session.flush()
-    return agent
-
-
-async def set_default_agent(
-    session: AsyncSession,
-    client_id: str,
-    agent_id: str,
-) -> Agent:
-    """Atomically swap the default agent for a client.
-
-    Unsets is_default on all other agents for the client, then sets is_default
-    on the target agent. Both writes happen in a single flush (same transaction).
-
-    Args:
-        session: Active async DB session.
-        client_id: The owning client.
-        agent_id: UUID of the agent to make default.
-
-    Returns:
-        The updated Agent with is_default=True.
-
-    Raises:
-        ValueError: If agent not found or agent is inactive.
-    """
-    from sqlalchemy import update as sa_update
-
-    # Fetch the target agent with client isolation
-    result = await session.execute(
-        select(Agent).where(
-            Agent.id == agent_id,
-            Agent.client_id == client_id,
-        )
-    )
-    agent = result.scalar_one_or_none()
-    if agent is None:
-        raise ValueError(f"Agent {agent_id!r} not found for client {client_id!r}.")
-
-    if not agent.is_active:
-        raise ValueError(
-            f"cannot_set_inactive_agent_as_default: agent {agent_id!r} is inactive."
-        )
-
-    # Unset all other defaults for this client in one UPDATE
-    await session.execute(
-        sa_update(Agent)
-        .where(
-            Agent.client_id == client_id,
-            Agent.id != agent_id,
-        )
-        .values(is_default=False)
-    )
-
-    # Set this agent as default
-    agent.is_default = True
     await session.flush()
     return agent

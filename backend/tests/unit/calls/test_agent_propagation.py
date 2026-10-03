@@ -62,10 +62,10 @@ async def seeded_db(tmp_path: Path):
 async def test_create_session_with_explicit_agent_id(seeded_db):
     """create_session() with explicit agent_id stores it on CallSession."""
     from app.calls.service import create_session
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
 
     async with seeded_db.async_session_factory() as sess:
-        agent = await get_default_agent(sess, "quintana-seguros")
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
         assert agent is not None, "seed_quintana must create a default agent"
         agent_id = agent.id
 
@@ -84,10 +84,10 @@ async def test_create_session_with_explicit_agent_id(seeded_db):
 async def test_create_session_without_agent_id_resolves_default(seeded_db):
     """create_session() without agent_id auto-resolves to the client's default agent."""
     from app.calls.service import create_session
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
 
     async with seeded_db.async_session_factory() as sess:
-        agent = await get_default_agent(sess, "quintana-seguros")
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
         expected_agent_id = agent.id
 
     async with seeded_db.async_session_factory() as sess:
@@ -123,7 +123,7 @@ async def test_create_session_no_active_agent_raises(tmp_path: Path):
     await _init_db_with_migrations(db_module, settings)
 
     async with db_module.async_session_factory() as sess:
-        from app.tenants.service import create_client, get_default_agent
+        from app.tenants.service import create_client, resolve_single_active_agent
         from app.leads.service import create_lead
         from app.tenants.models import Agent
 
@@ -143,7 +143,7 @@ async def test_create_session_no_active_agent_raises(tmp_path: Path):
         )
 
         # Deactivate the auto-created agent to simulate "zero active agents"
-        default_agent = await get_default_agent(sess, "no-agent-client")
+        default_agent = await resolve_single_active_agent(sess, "no-agent-client")
         assert default_agent is not None
         await sess.execute(
             update(Agent).where(Agent.id == default_agent.id).values(is_active=False)

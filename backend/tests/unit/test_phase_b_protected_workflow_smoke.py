@@ -202,12 +202,12 @@ async def test_smoke_area1_agent_context_assembly(smoke_db):
     db_module, settings = smoke_db
 
     async with db_module.async_session_factory() as sess:
-        from app.tenants.service import get_client, get_default_agent
+        from app.tenants.service import get_client, resolve_single_active_agent
         from app.leads.service import get_lead
         from app.voice.context import build_voice_context
 
         client = await get_client(sess, "quintana-seguros")
-        agent = await get_default_agent(sess, "quintana-seguros")
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
         lead = await get_lead(sess, "lead-quintana-001")
 
         assert client is not None, "Client 'quintana-seguros' must exist in migrated DB"
@@ -239,11 +239,11 @@ async def test_smoke_area1_agent_context_has_model_and_tokens(smoke_db):
     db_module, settings = smoke_db
 
     async with db_module.async_session_factory() as sess:
-        from app.tenants.service import get_client, get_default_agent
+        from app.tenants.service import get_client, resolve_single_active_agent
         from app.voice.context import build_voice_context
 
         client = await get_client(sess, "quintana-seguros")
-        agent = await get_default_agent(sess, "quintana-seguros")
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
 
         ctx = await build_voice_context(agent=agent, lead=None, db=sess, client=client)
 
@@ -822,12 +822,12 @@ async def test_stamped_db_area1_agent_context_assembly(smoke_stamped_db):
     db_module, settings = smoke_stamped_db
 
     async with db_module.async_session_factory() as sess:
-        from app.tenants.service import get_client, get_default_agent
+        from app.tenants.service import get_client, resolve_single_active_agent
         from app.leads.service import get_lead
         from app.voice.context import build_voice_context
 
         client = await get_client(sess, "quintana-seguros")
-        agent = await get_default_agent(sess, "quintana-seguros")
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
         lead = await get_lead(sess, "lead-quintana-001")
 
         assert client is not None, "Client must exist in stamped DB"

@@ -146,16 +146,35 @@ async def create_manual_scheduled_call(
             },
         )
 
-    # Resolve agent_id: use the client's default agent (manual calls have no source session)
-    from app.tenants.service import get_default_agent
+    # Resolve agent_id: manual calls have no source session, so fail-closed to
+    # the client's sole active agent (agent-routing D2, never is_default).
+    from app.tenants.service import (
+        AmbiguousAgentError,
+        NoActiveAgentError,
+        resolve_single_active_agent,
+    )
 
-    default_agent = await get_default_agent(session, client_id)
-    if default_agent is None:
+    try:
+        resolved_agent = await resolve_single_active_agent(session, client_id)
+        resolved_agent_id = resolved_agent.id
+    except NoActiveAgentError as exc:
         logger.warning(
-            "manual_scheduled_call_no_default_agent",
+            "manual_scheduled_call_no_active_agent",
             client_id=client_id,
         )
-    resolved_agent_id = default_agent.id if default_agent is not None else None
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "no active agent configured for this client", "detail": str(exc)},
+        ) from exc
+    except AmbiguousAgentError as exc:
+        logger.warning(
+            "manual_scheduled_call_ambiguous_agent",
+            client_id=client_id,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "client has more than one active agent", "detail": str(exc)},
+        ) from exc
 
     sc = await create_scheduled_call(
         session,

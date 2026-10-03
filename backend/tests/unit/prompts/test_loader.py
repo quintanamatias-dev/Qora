@@ -1523,7 +1523,7 @@ async def test_render_for_agent_reads_active_revision_system_prompt(
     from app.prompts.loader import PromptLoader
     from app.tenants import revisions_service
     from app.tenants.agent_config_schema import AgentConfigV1
-    from app.tenants.service import build_agent_config_v1_snapshot, get_default_agent
+    from app.tenants.service import build_agent_config_v1_snapshot, resolve_single_active_agent
 
     real_clients_dir = pathlib.Path(__file__).parent.parent.parent.parent / "clients"
     loader = PromptLoader(clients_dir=real_clients_dir)
@@ -1531,7 +1531,7 @@ async def test_render_for_agent_reads_active_revision_system_prompt(
 
     assert seeded_db_loader.async_session_factory is not None
     async with seeded_db_loader.async_session_factory() as sess:
-        agent = await get_default_agent(sess, "quintana-seguros")
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
         assert agent is not None
 
         revision_prompt = "REVISION PROMPT: hola {{lead_name}}, distinto del archivo."
@@ -1584,7 +1584,7 @@ async def test_render_for_agent_backfills_missing_active_revision_and_logs_warni
     assert db_module.async_session_factory is not None
     try:
         async with db_module.async_session_factory() as sess:
-            from app.tenants.service import create_client, get_default_agent
+            from app.tenants.service import create_client, resolve_single_active_agent
 
             await create_client(
                 sess,
@@ -1592,7 +1592,7 @@ async def test_render_for_agent_backfills_missing_active_revision_and_logs_warni
                 name="Backfill Client",
                 voice_id="voice-backfill",
             )
-            agent = await get_default_agent(sess, "backfill-client")
+            agent = await resolve_single_active_agent(sess, "backfill-client")
             assert agent is not None
             agent.system_prompt = "Legacy DB prompt for backfill test."
             agent.active_revision_id = None  # simulate a pre-existing agent with no revision

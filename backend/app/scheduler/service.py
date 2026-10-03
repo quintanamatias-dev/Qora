@@ -520,12 +520,23 @@ async def auto_schedule(
             resolved_agent_id = source_session.agent_id
 
     if resolved_agent_id is None:
-        # Fall back to client's default agent
-        from app.tenants.service import get_default_agent
+        # Fall back to the client's sole active agent (agent-routing D2 fail-closed
+        # resolution, never is_default). Ambiguous/no-active-agent clients skip
+        # scheduling rather than guess — logged, not raised, to keep the caller's
+        # loop alive.
+        from app.tenants.service import AgentResolutionError, resolve_single_active_agent
 
-        default_agent = await get_default_agent(db, client_id)
-        if default_agent is not None:
-            resolved_agent_id = default_agent.id
+        try:
+            resolved_agent = await resolve_single_active_agent(db, client_id)
+            resolved_agent_id = resolved_agent.id
+        except AgentResolutionError as exc:
+            logger.warning(
+                "auto_schedule_skipped_agent_resolution_failed",
+                client_id=client_id,
+                lead_id=lead_id,
+                error=str(exc),
+            )
+            return None
 
     # Calculate scheduled_at — check for next_action_at override from NextActionResult
     # qora-next-action: if next_action_result.next_action_at is set, use it directly
@@ -674,11 +685,19 @@ async def schedule_tech_retry(
             resolved_agent_id = source_session.agent_id
 
     if resolved_agent_id is None:
-        from app.tenants.service import get_default_agent
+        from app.tenants.service import AgentResolutionError, resolve_single_active_agent
 
-        default_agent = await get_default_agent(db, client_id)
-        if default_agent is not None:
-            resolved_agent_id = default_agent.id
+        try:
+            resolved_agent = await resolve_single_active_agent(db, client_id)
+            resolved_agent_id = resolved_agent.id
+        except AgentResolutionError as exc:
+            logger.warning(
+                "tech_retry_skipped_agent_resolution_failed",
+                client_id=client_id,
+                lead_id=lead_id,
+                error=str(exc),
+            )
+            return None
 
     # Decision 7 (C6b): clamp the candidate to the client's allowed-hours
     # window — reuses calculate_scheduled_at() (the same clamp auto_schedule
@@ -1018,7 +1037,7 @@ async def _dial_claimed_scheduled_call(
     """
     from app.leads.service import get_lead
     from app.tenants.models import Agent
-    from app.tenants.service import get_client, get_default_agent
+    from app.tenants.service import get_client, resolve_single_active_agent
     from app.outbound.service import dial_outbound_call
 
     logger.info(
@@ -1065,7 +1084,7 @@ async def _dial_claimed_scheduled_call(
         agent = (
             await db.get(Agent, sc.agent_id)
             if sc.agent_id
-            else await get_default_agent(db, sc.client_id)
+            else await resolve_single_active_agent(db, sc.client_id)
         )
         result = await dial_outbound_call(
             db,

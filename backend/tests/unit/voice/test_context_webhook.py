@@ -342,11 +342,11 @@ async def test_webhook_cached_context_content_matches_fresh_render(webhook_app_c
 
     # Get a fresh-rendered prompt
     async with db_module.async_session_factory() as db:
-        from app.tenants.service import get_client, get_default_agent
+        from app.tenants.service import get_client, resolve_single_active_agent
         from app.leads.service import get_lead
 
         client_orm = await get_client(db, "quintana-seguros")
-        agent_orm = await get_default_agent(db, "quintana-seguros")
+        agent_orm = await resolve_single_active_agent(db, "quintana-seguros")
         lead_orm = await get_lead(db, "lead-quintana-001")
 
         if agent_orm is not None and client_orm is not None:

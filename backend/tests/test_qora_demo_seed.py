@@ -69,7 +69,7 @@ class TestSeedQoraDemoUpsertStalePrompt:
                 return MagicMock()  # existing client
             return None
 
-        async def mock_get_default_agent(session, client_id):
+        async def mock_resolve_single_active_agent(session, client_id):
             if client_id == "qora-demo":
                 return mock_agent
             return None
@@ -78,7 +78,7 @@ class TestSeedQoraDemoUpsertStalePrompt:
             return [MagicMock()]  # has leads, skip seed
 
         with patch("app.tenants.service.get_client", side_effect=mock_get_client), \
-             patch("app.tenants.service.get_default_agent", side_effect=mock_get_default_agent), \
+             patch("app.tenants.service.resolve_single_active_agent", side_effect=mock_resolve_single_active_agent), \
              patch("app.leads.service.list_leads_for_client", side_effect=mock_list_leads):
             from app.tenants.service import seed_qora_demo
             await seed_qora_demo(mock_session)
@@ -100,14 +100,14 @@ class TestSeedQoraDemoUpsertStalePrompt:
         async def mock_get_client(session, client_id):
             return MagicMock() if client_id == "qora-demo" else None
 
-        async def mock_get_default_agent(session, client_id):
+        async def mock_resolve_single_active_agent(session, client_id):
             return mock_agent if client_id == "qora-demo" else None
 
         async def mock_list_leads(*args, **kwargs):
             return [MagicMock()]
 
         with patch("app.tenants.service.get_client", side_effect=mock_get_client), \
-             patch("app.tenants.service.get_default_agent", side_effect=mock_get_default_agent), \
+             patch("app.tenants.service.resolve_single_active_agent", side_effect=mock_resolve_single_active_agent), \
              patch("app.leads.service.list_leads_for_client", side_effect=mock_list_leads):
             from app.tenants.service import seed_qora_demo
             await seed_qora_demo(mock_session)
@@ -263,7 +263,7 @@ class TestQoraDemoTtsSeed:
         async def mock_get_client(session, client_id):
             return None  # No client exists yet
 
-        async def mock_get_default_agent(session, client_id):
+        async def mock_resolve_single_active_agent(session, client_id):
             return created_agent
 
         async def mock_create_client(*args, **kwargs):
@@ -273,7 +273,7 @@ class TestQoraDemoTtsSeed:
             return [MagicMock()]
 
         with patch("app.tenants.service.get_client", side_effect=mock_get_client), \
-             patch("app.tenants.service.get_default_agent", side_effect=mock_get_default_agent), \
+             patch("app.tenants.service.resolve_single_active_agent", side_effect=mock_resolve_single_active_agent), \
              patch("app.tenants.service.create_client", side_effect=mock_create_client), \
              patch("app.leads.service.list_leads_for_client", side_effect=mock_list_leads):
             from app.tenants.service import seed_qora_demo
@@ -302,14 +302,14 @@ class TestQoraDemoTtsSeed:
         async def mock_get_client(session, client_id):
             return MagicMock()  # client exists
 
-        async def mock_get_default_agent(session, client_id):
+        async def mock_resolve_single_active_agent(session, client_id):
             return mock_agent
 
         async def mock_list_leads(*args, **kwargs):
             return [MagicMock()]
 
         with patch("app.tenants.service.get_client", side_effect=mock_get_client), \
-             patch("app.tenants.service.get_default_agent", side_effect=mock_get_default_agent), \
+             patch("app.tenants.service.resolve_single_active_agent", side_effect=mock_resolve_single_active_agent), \
              patch("app.leads.service.list_leads_for_client", side_effect=mock_list_leads):
             from app.tenants.service import seed_qora_demo
             await seed_qora_demo(mock_session)

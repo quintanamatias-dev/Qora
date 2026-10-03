@@ -13,7 +13,7 @@ Tests cover Phase 3:
   Task 3.2:
   - PATCH /{agent_id} — partial update
   - POST  /{agent_id}/deactivate — soft delete
-  - POST  /{agent_id}/make-default — atomic default swap
+  - POST  /{agent_id}/make-default — removed (agent-routing D3)
   - 404 / 409 guard errors on each
 """
 
@@ -299,18 +299,19 @@ async def test_deactivate_agent_returns_200(agents_app: AsyncClient):
 
 
 async def test_deactivate_sole_default_agent_returns_409(agents_app: AsyncClient):
-    """POST /deactivate on the sole default agent returns 409 (guard error)."""
+    """POST /deactivate on the client's last active agent returns 409 (guard error).
+
+    agent-routing D3: the guard counts active agents, not is_default.
+    """
     list_resp = await agents_app.get(_BASE)
     assert list_resp.status_code == 200
     agents = list_resp.json()
-    default_agent = next(a for a in agents if a["is_default"])
-    agent_id = default_agent["agent_id"]
+    agent_id = agents[0]["agent_id"]
 
     resp = await agents_app.post(f"{_BASE}/{agent_id}/deactivate")
     assert resp.status_code == 409
     data = resp.json()
-    # Error must mention sole/default
-    assert "sole" in data["detail"]["error"] or "default" in data["detail"]["error"]
+    assert "last active agent" in data["detail"]["error"]
 
 
 async def test_deactivate_agent_not_found_returns_404(agents_app: AsyncClient):
@@ -322,53 +323,20 @@ async def test_deactivate_agent_not_found_returns_404(agents_app: AsyncClient):
 
 
 # ---------------------------------------------------------------------------
-# Task 3.2: POST /{agent_id}/make-default
+# agent-config-revisions-routing D3: make-default endpoint removed
 # ---------------------------------------------------------------------------
 
 
-async def test_make_default_swaps_correctly(agents_app: AsyncClient):
-    """POST /make-default swaps the default agent atomically."""
+async def test_make_default_route_no_longer_exists(agents_app: AsyncClient):
+    """POST /{agent_id}/make-default must 404/405 — is_default resolution semantics
+    are removed (agent-routing spec: Removal of Default-Agent Resolution Semantics).
+    """
     create_resp = await agents_app.post(_BASE, json=_VALID_AGENT_2)
     assert create_resp.status_code == 201
     new_agent_id = create_resp.json()["agent_id"]
 
     resp = await agents_app.post(f"{_BASE}/{new_agent_id}/make-default")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["is_default"] is True
-    assert data["agent_id"] == new_agent_id
-
-    # Verify exactly one default in the list
-    list_resp = await agents_app.get(_BASE)
-    agents_list = list_resp.json()
-    defaults = [a for a in agents_list if a["is_default"]]
-    assert len(defaults) == 1
-    assert defaults[0]["agent_id"] == new_agent_id
-
-
-async def test_make_default_inactive_agent_returns_409(agents_app: AsyncClient):
-    """POST /make-default on inactive agent returns 409."""
-    create_resp = await agents_app.post(_BASE, json=_VALID_AGENT)
-    assert create_resp.status_code == 201
-    agent_id = create_resp.json()["agent_id"]
-
-    # Deactivate it first
-    deact_resp = await agents_app.post(f"{_BASE}/{agent_id}/deactivate")
-    assert deact_resp.status_code == 200
-
-    # Attempt to make inactive agent the default
-    resp = await agents_app.post(f"{_BASE}/{agent_id}/make-default")
-    assert resp.status_code == 409
-    data = resp.json()
-    assert "inactive" in data["detail"]["error"]
-
-
-async def test_make_default_not_found_returns_404(agents_app: AsyncClient):
-    """POST /make-default on nonexistent agent returns 404."""
-    resp = await agents_app.post(
-        f"{_BASE}/00000000-0000-0000-0000-000000000000/make-default"
-    )
-    assert resp.status_code == 404
+    assert resp.status_code in (404, 405)
 
 
 # ---------------------------------------------------------------------------

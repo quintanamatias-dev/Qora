@@ -1,8 +1,8 @@
 """Unit tests for fail-closed agent resolution (design.md D2/D3, agent-routing spec).
 
 resolve_single_active_agent() and get_agent_for_client() replace is_default-based
-lookups on legacy/no-agent-id call sites without deleting get_default_agent yet
-(get_default_agent/set_default_agent removal is deferred to the end of Phase 4b).
+lookups on legacy/no-agent-id call sites without deleting resolve_single_active_agent yet
+(resolve_single_active_agent/set_default_agent removal is deferred to the end of Phase 4b).
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ async def test_resolve_single_active_agent_returns_the_only_active_agent(session
 async def test_resolve_single_active_agent_raises_when_zero_active_agents(session):
     from app.tenants.service import (
         create_client,
-        get_default_agent,
+        resolve_single_active_agent,
         resolve_single_active_agent,
         NoActiveAgentError,
     )
@@ -68,7 +68,7 @@ async def test_resolve_single_active_agent_raises_when_zero_active_agents(sessio
         agent_name="Ghost",
         voice_id="v-ghost",
     )
-    only_agent = await get_default_agent(session, client.id)
+    only_agent = await resolve_single_active_agent(session, client.id)
     await session.execute(
         update(Agent).where(Agent.id == only_agent.id).values(is_active=False)
     )
@@ -111,7 +111,7 @@ async def test_resolve_single_active_agent_never_consults_is_default(session):
     from app.tenants.service import (
         create_agent,
         create_client,
-        get_default_agent,
+        resolve_single_active_agent,
         resolve_single_active_agent,
         AmbiguousAgentError,
     )
@@ -125,7 +125,7 @@ async def test_resolve_single_active_agent_never_consults_is_default(session):
         agent_name="First",
         voice_id="v-first",
     )
-    first_agent = await get_default_agent(session, client.id)
+    first_agent = await resolve_single_active_agent(session, client.id)
     await session.execute(
         update(Agent).where(Agent.id == first_agent.id).values(is_default=False)
     )
@@ -144,7 +144,7 @@ async def test_resolve_single_active_agent_never_consults_is_default(session):
 
 
 async def test_get_agent_for_client_returns_active_agent_in_same_client(session):
-    from app.tenants.service import create_client, get_agent_for_client, get_default_agent
+    from app.tenants.service import create_client, get_agent_for_client, resolve_single_active_agent
 
     client = await create_client(
         session,
@@ -154,7 +154,7 @@ async def test_get_agent_for_client_returns_active_agent_in_same_client(session)
         voice_id="v-a",
     )
     await session.commit()
-    agent = await get_default_agent(session, client.id)
+    agent = await resolve_single_active_agent(session, client.id)
 
     fetched = await get_agent_for_client(session, "isolated-client-a", agent.id)
     assert fetched is not None
@@ -163,7 +163,7 @@ async def test_get_agent_for_client_returns_active_agent_in_same_client(session)
 
 async def test_get_agent_for_client_returns_none_for_cross_client_agent(session):
     """Tenant isolation: an agent_id belonging to another client is never returned."""
-    from app.tenants.service import create_client, get_agent_for_client, get_default_agent
+    from app.tenants.service import create_client, get_agent_for_client, resolve_single_active_agent
 
     client_a = await create_client(
         session,
@@ -180,7 +180,7 @@ async def test_get_agent_for_client_returns_none_for_cross_client_agent(session)
         voice_id="v-c",
     )
     await session.commit()
-    agent_b = await get_default_agent(session, client_a.id)
+    agent_b = await resolve_single_active_agent(session, client_a.id)
 
     # agent_b belongs to client_a ("isolated-client-b"); requesting it under
     # client_c must return None, not the agent.
@@ -189,7 +189,7 @@ async def test_get_agent_for_client_returns_none_for_cross_client_agent(session)
 
 
 async def test_get_agent_for_client_returns_none_for_inactive_agent(session):
-    from app.tenants.service import create_client, get_agent_for_client, get_default_agent
+    from app.tenants.service import create_client, get_agent_for_client, resolve_single_active_agent
     from app.tenants.models import Agent
     from sqlalchemy import update
 
@@ -201,7 +201,7 @@ async def test_get_agent_for_client_returns_none_for_inactive_agent(session):
         voice_id="v-gone",
     )
     await session.commit()
-    agent = await get_default_agent(session, client.id)
+    agent = await resolve_single_active_agent(session, client.id)
     await session.execute(
         update(Agent).where(Agent.id == agent.id).values(is_active=False)
     )

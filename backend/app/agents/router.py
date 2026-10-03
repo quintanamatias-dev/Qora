@@ -6,7 +6,6 @@ Endpoints:
     GET    /api/v1/clients/{client_id}/agents/{agent_id}                    — Get single agent (200 / 404)
     PATCH  /api/v1/clients/{client_id}/agents/{agent_id}                    — Partial update (200 / 404)
     POST   /api/v1/clients/{client_id}/agents/{agent_id}/deactivate         — Soft delete (200 / 404 / 409)
-    POST   /api/v1/clients/{client_id}/agents/{agent_id}/make-default       — Atomic default swap (200 / 404 / 409)
     POST   /api/v1/clients/{client_id}/agents/{agent_id}/sync-elevenlabs    — Manual EL re-sync (200 / 404)
 """
 
@@ -376,7 +375,6 @@ async def create_agent(
             max_tokens=payload.max_tokens,
             tools_enabled=json.dumps(payload.tools_enabled),
             is_active=True,
-            is_default=payload.is_default,
             elevenlabs_agent_id=payload.elevenlabs_agent_id,
             elevenlabs_phone_number_id=payload.elevenlabs_phone_number_id,
             tts_speed=payload.tts_speed,
@@ -781,58 +779,10 @@ async def deactivate_agent(
         agent = await tenant_service.deactivate_agent(session, agent_id, client_id)
     except ValueError as exc:
         msg = str(exc)
-        if "cannot_deactivate_sole_default_agent" in msg:
+        if "cannot_deactivate_last_active_agent" in msg:
             raise HTTPException(
                 status_code=409,
-                detail={"error": "cannot deactivate sole default agent", "detail": msg},
-            ) from exc
-        # Unexpected ValueError — return 500, not a misleading 404
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "internal error", "detail": msg},
-        ) from exc
-
-    await session.commit()
-    await session.refresh(agent)
-    return _agent_to_response(agent)
-
-
-# ---------------------------------------------------------------------------
-# POST /api/v1/clients/{client_id}/agents/{agent_id}/make-default
-# ---------------------------------------------------------------------------
-
-
-@router.post("/{agent_id}/make-default", response_model=AgentResponse, dependencies=[Depends(require_superadmin)])
-async def make_default_agent(
-    client_id: str,
-    agent_id: str,
-    session: AsyncSession = Depends(get_db_session),
-) -> AgentResponse:
-    """Atomically swap the default agent for a client.
-
-    Returns:
-        200: AgentResponse with is_default=True.
-        404: If agent does not exist.
-        409: If agent is inactive (cannot be made default).
-    """
-    await _require_client(session, client_id)
-
-    # Explicit existence check so 404 is reserved for "not found" only
-    _agent_check = await tenant_service.get_agent(session, agent_id)
-    if _agent_check is None or _agent_check.client_id != client_id:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "agent not found", "agent_id": agent_id},
-        )
-
-    try:
-        agent = await tenant_service.set_default_agent(session, client_id, agent_id)
-    except ValueError as exc:
-        msg = str(exc)
-        if "cannot_set_inactive_agent_as_default" in msg:
-            raise HTTPException(
-                status_code=409,
-                detail={"error": "cannot set inactive agent as default", "detail": msg},
+                detail={"error": "cannot deactivate last active agent", "detail": msg},
             ) from exc
         # Unexpected ValueError — return 500, not a misleading 404
         raise HTTPException(

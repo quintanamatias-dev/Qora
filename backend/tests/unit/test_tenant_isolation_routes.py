@@ -145,7 +145,6 @@ _SUPERADMIN_ONLY = [
     ("PATCH", f"/api/v1/clients/{OWN}/agents/some-agent"),
     ("POST", f"/api/v1/clients/{OWN}/agents/some-agent/sync-elevenlabs"),
     ("POST", f"/api/v1/clients/{OWN}/agents/some-agent/deactivate"),
-    ("POST", f"/api/v1/clients/{OWN}/agents/some-agent/make-default"),
     ("PUT", f"/api/v1/clients/{OWN}/integrations/airtable"),
     ("POST", f"/api/v1/clients/{OWN}/integrations/airtable/test"),
     ("PUT", f"/api/v1/clients/{OWN}/integrations/airtable/mappings"),

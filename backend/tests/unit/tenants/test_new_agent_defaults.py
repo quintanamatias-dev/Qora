@@ -38,7 +38,7 @@ async def session(tmp_path: Path):
 
 async def test_new_agent_defaults_match_production_standard(session: AsyncSession):
     """A new agent created without model/tts_model gets the production standard."""
-    from app.tenants.service import create_client, get_default_agent
+    from app.tenants.service import create_client, resolve_single_active_agent
 
     await create_client(
         session,
@@ -47,7 +47,7 @@ async def test_new_agent_defaults_match_production_standard(session: AsyncSessio
         voice_id="voice-xyz",
     )
 
-    agent = await get_default_agent(session, "defaults-check")
+    agent = await resolve_single_active_agent(session, "defaults-check")
     assert agent is not None
     assert agent.model == "gpt-4.1-mini"
     assert agent.tts_model == "eleven_v4_turbo"

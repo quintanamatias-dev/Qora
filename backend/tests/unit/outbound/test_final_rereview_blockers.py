@@ -353,7 +353,7 @@ class TestRouterScheduledCallOverlap409:
 
         with patch("app.outbound.router.get_client", new_callable=AsyncMock) as mock_client, \
              patch("app.outbound.router.get_lead", new_callable=AsyncMock) as mock_lead, \
-             patch("app.outbound.router.get_default_agent", new_callable=AsyncMock) as mock_agent, \
+             patch("app.outbound.router.resolve_single_active_agent", new_callable=AsyncMock) as mock_agent, \
              patch("app.outbound.router.dial_outbound_call", new_callable=AsyncMock) as mock_dial:
 
             mock_client.return_value = MagicMock(id="client-a")
@@ -421,7 +421,7 @@ class TestRouterScheduledCallOverlap409:
 
         with patch("app.outbound.router.get_client", new_callable=AsyncMock) as mock_client, \
              patch("app.outbound.router.get_lead", new_callable=AsyncMock) as mock_lead, \
-             patch("app.outbound.router.get_default_agent", new_callable=AsyncMock) as mock_agent, \
+             patch("app.outbound.router.resolve_single_active_agent", new_callable=AsyncMock) as mock_agent, \
              patch("app.outbound.router.dial_outbound_call", new_callable=AsyncMock) as mock_dial:
 
             mock_client.return_value = MagicMock(id="client-a")
@@ -490,7 +490,7 @@ class TestRouterScheduledCallOverlap409:
 
         with patch("app.outbound.router.get_client", new_callable=AsyncMock) as mock_client, \
              patch("app.outbound.router.get_lead", new_callable=AsyncMock) as mock_lead, \
-             patch("app.outbound.router.get_default_agent", new_callable=AsyncMock) as mock_agent, \
+             patch("app.outbound.router.resolve_single_active_agent", new_callable=AsyncMock) as mock_agent, \
              patch("app.outbound.router.dial_outbound_call", new_callable=AsyncMock) as mock_dial:
 
             mock_client.return_value = MagicMock(id="client-a")
@@ -556,7 +556,7 @@ class TestRouterScheduledCallOverlap409:
 
         with patch("app.outbound.router.get_client", new_callable=AsyncMock) as mock_client, \
              patch("app.outbound.router.get_lead", new_callable=AsyncMock) as mock_lead, \
-             patch("app.outbound.router.get_default_agent", new_callable=AsyncMock) as mock_agent, \
+             patch("app.outbound.router.resolve_single_active_agent", new_callable=AsyncMock) as mock_agent, \
              patch("app.outbound.router.dial_outbound_call", new_callable=AsyncMock) as mock_dial:
 
             mock_client.return_value = MagicMock(id="client-a")

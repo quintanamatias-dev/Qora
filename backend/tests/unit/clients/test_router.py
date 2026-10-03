@@ -546,10 +546,10 @@ async def test_create_client_bootstraps_default_agent(clients_app: AsyncClient):
 
     # Verify that a default Agent row was created in DB
     from app.core import database as db_module
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
 
     async with db_module.async_session_factory() as session:
-        default_agent = await get_default_agent(session, "agent-bootstrap-test")
+        default_agent = await resolve_single_active_agent(session, "agent-bootstrap-test")
         assert default_agent is not None, (
             "POST /clients must bootstrap a default Agent via service.create_client(). "
             "The current router constructs Client() directly, bypassing Agent bootstrap."

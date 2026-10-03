@@ -233,21 +233,17 @@ async def schedule_followup(
                             resolved_agent_id = src_session.agent_id
 
                     if resolved_agent_id is None:
-                        from app.tenants.service import (
-                            get_default_agent as _get_default_agent,
-                        )
+                        # agent-routing D2: fail-closed to the sole active agent
+                        # when the call has no active session to inherit from.
+                        # Propagates to the enclosing except Exception below on
+                        # ambiguous/no-active-agent clients, matching the
+                        # existing "log and skip scheduling" contract.
+                        from app.tenants.service import resolve_single_active_agent
 
-                        default_agent = await _get_default_agent(
+                        resolved_agent = await resolve_single_active_agent(
                             session, effective_client_id
                         )
-                        if default_agent is not None:
-                            resolved_agent_id = default_agent.id
-                        else:
-                            logger.warning(
-                                "schedule_followup_no_default_agent",
-                                client_id=effective_client_id,
-                                lead_id=lead_id,
-                            )
+                        resolved_agent_id = resolved_agent.id
 
                     # Clamp to allowed hours
                     scheduled_at = calculate_scheduled_at(

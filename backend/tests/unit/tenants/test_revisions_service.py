@@ -62,11 +62,11 @@ async def _seed_two_agents(session: AsyncSession):
 async def test_create_revision_is_insert_only_and_monotonic(session: AsyncSession):
     from app.tenants.agent_config_schema import AgentConfigV1
     from app.tenants.models import AgentConfigRevision
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
     from app.tenants import revisions_service
 
     await _seed_two_agents(session)
-    agent = await get_default_agent(session, "quintana-seguros")
+    agent = await resolve_single_active_agent(session, "quintana-seguros")
     assert agent is not None
 
     starting_count = len(
@@ -102,12 +102,12 @@ async def test_create_revision_monotonic_independent_across_agents(
     session: AsyncSession,
 ):
     from app.tenants.agent_config_schema import AgentConfigV1
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
     from app.tenants import revisions_service
 
     await _seed_two_agents(session)
-    agent_a = await get_default_agent(session, "quintana-seguros")
-    agent_b = await get_default_agent(session, "qora-demo")
+    agent_a = await resolve_single_active_agent(session, "quintana-seguros")
+    agent_b = await resolve_single_active_agent(session, "qora-demo")
     assert agent_a is not None and agent_b is not None
 
     config = AgentConfigV1(**_FULL_CONFIG)
@@ -124,11 +124,11 @@ async def test_create_revision_monotonic_independent_across_agents(
 
 async def test_rollback_creates_new_revision_not_reactivation(session: AsyncSession):
     from app.tenants.agent_config_schema import AgentConfigV1
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
     from app.tenants import revisions_service
 
     await _seed_two_agents(session)
-    agent = await get_default_agent(session, "quintana-seguros")
+    agent = await resolve_single_active_agent(session, "quintana-seguros")
     assert agent is not None
     client_id = agent.client_id
     agent_id = agent.id
@@ -167,11 +167,11 @@ async def test_rollback_creates_new_revision_not_reactivation(session: AsyncSess
 
 async def test_activate_revision_changes_only_the_pointer(session: AsyncSession):
     from app.tenants.agent_config_schema import AgentConfigV1
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
     from app.tenants import revisions_service
 
     await _seed_two_agents(session)
-    agent = await get_default_agent(session, "quintana-seguros")
+    agent = await resolve_single_active_agent(session, "quintana-seguros")
     assert agent is not None
     client_id, agent_id = agent.client_id, agent.id
 
@@ -199,11 +199,11 @@ async def test_activate_revision_changes_only_the_pointer(session: AsyncSession)
 
 async def test_list_revisions_returns_newest_first(session: AsyncSession):
     from app.tenants.agent_config_schema import AgentConfigV1
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
     from app.tenants import revisions_service
 
     await _seed_two_agents(session)
-    agent = await get_default_agent(session, "quintana-seguros")
+    agent = await resolve_single_active_agent(session, "quintana-seguros")
     assert agent is not None
     client_id, agent_id = agent.client_id, agent.id
 
@@ -227,12 +227,12 @@ async def test_list_revisions_returns_newest_first(session: AsyncSession):
 
 
 async def test_revision_of_another_agent_is_not_readable(session: AsyncSession):
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
     from app.tenants import revisions_service
 
     await _seed_two_agents(session)
-    agent_a = await get_default_agent(session, "quintana-seguros")
-    agent_b = await get_default_agent(session, "qora-demo")
+    agent_a = await resolve_single_active_agent(session, "quintana-seguros")
+    agent_b = await resolve_single_active_agent(session, "qora-demo")
     assert agent_a is not None and agent_b is not None
 
     revision_a = await revisions_service.get_active_revision(
@@ -248,12 +248,12 @@ async def test_revision_of_another_agent_is_not_readable(session: AsyncSession):
 
 
 async def test_revision_of_another_agent_is_not_activatable(session: AsyncSession):
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
     from app.tenants import revisions_service
 
     await _seed_two_agents(session)
-    agent_a = await get_default_agent(session, "quintana-seguros")
-    agent_b = await get_default_agent(session, "qora-demo")
+    agent_a = await resolve_single_active_agent(session, "quintana-seguros")
+    agent_b = await resolve_single_active_agent(session, "qora-demo")
     assert agent_a is not None and agent_b is not None
 
     revision_a = await revisions_service.get_active_revision(
@@ -269,12 +269,12 @@ async def test_revision_of_another_agent_is_not_activatable(session: AsyncSessio
 
 
 async def test_rollback_across_tenant_boundary_is_rejected(session: AsyncSession):
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
     from app.tenants import revisions_service
 
     await _seed_two_agents(session)
-    agent_a = await get_default_agent(session, "quintana-seguros")
-    agent_b = await get_default_agent(session, "qora-demo")
+    agent_a = await resolve_single_active_agent(session, "quintana-seguros")
+    agent_b = await resolve_single_active_agent(session, "qora-demo")
     assert agent_a is not None and agent_b is not None
 
     revision_a = await revisions_service.get_active_revision(

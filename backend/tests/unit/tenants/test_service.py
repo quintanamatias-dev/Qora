@@ -338,9 +338,9 @@ async def test_update_agent_changes_specified_fields(session: AsyncSession):
     await session.commit()
 
     # Get the agent that was bootstrapped
-    from app.tenants.service import get_default_agent
+    from app.tenants.service import resolve_single_active_agent
 
-    agent = await get_default_agent(session, "update-agent-test")
+    agent = await resolve_single_active_agent(session, "update-agent-test")
     assert agent is not None
 
     updated = await update_agent(
@@ -361,7 +361,7 @@ async def test_update_agent_changes_specified_fields(session: AsyncSession):
 
 async def test_update_agent_rejects_cross_client_lookup(session: AsyncSession):
     """update_agent() returns None when agent_id belongs to a different client."""
-    from app.tenants.service import create_client, get_default_agent, update_agent
+    from app.tenants.service import create_client, resolve_single_active_agent, update_agent
 
     await create_client(
         session,
@@ -379,7 +379,7 @@ async def test_update_agent_rejects_cross_client_lookup(session: AsyncSession):
     )
     await session.commit()
 
-    agent_x = await get_default_agent(session, "client-x")
+    agent_x = await resolve_single_active_agent(session, "client-x")
     assert agent_x is not None
 
     # Try to update agent from client-x using client-y's context
@@ -427,131 +427,74 @@ async def test_deactivate_non_default_agent_succeeds(session: AsyncSession):
     assert deactivated.id == second_agent.id
 
 
-async def test_deactivate_sole_active_default_raises_guard(session: AsyncSession):
-    """deactivate_agent() raises ValueError when agent is the sole active default."""
-    from app.tenants.service import create_client, get_default_agent, deactivate_agent
+async def test_deactivate_sole_active_agent_raises_guard_regardless_of_is_default(
+    session: AsyncSession,
+):
+    """deactivate_agent() raises ValueError when agent is the client's last
+    remaining active agent — counted by active-agent count, not is_default
+    (agent-routing spec D3: Deactivation guard no longer depends on is_default).
+    """
+    from app.tenants.service import create_client, resolve_single_active_agent, deactivate_agent
+    from app.tenants.models import Agent
+    from sqlalchemy import update
 
     await create_client(
         session,
-        id="sole-default-test",
+        id="sole-active-test",
         name="Sole",
         agent_name="OnlyAgent",
         voice_id="v1",
     )
     await session.commit()
 
-    sole_default = await get_default_agent(session, "sole-default-test")
-    assert sole_default is not None
+    sole_agent = await resolve_single_active_agent(session, "sole-active-test")
+    # Flip off is_default to prove the guard no longer reads that flag.
+    await session.execute(
+        update(Agent).where(Agent.id == sole_agent.id).values(is_default=False)
+    )
+    await session.commit()
 
-    with pytest.raises(ValueError, match="cannot_deactivate_sole_default_agent"):
+    with pytest.raises(ValueError, match="cannot_deactivate_last_active_agent"):
         await deactivate_agent(
-            session, agent_id=sole_default.id, client_id="sole-default-test"
+            session, agent_id=sole_agent.id, client_id="sole-active-test"
         )
 
 
-# ---------------------------------------------------------------------------
-# Phase 7 — Task 2.4: set_default_agent()
-# ---------------------------------------------------------------------------
-
-
-async def test_set_default_agent_swaps_atomically(session: AsyncSession):
-    """set_default_agent() unsets old default and sets new default in one operation."""
-    from app.tenants.service import (
-        create_client,
-        create_agent,
-        set_default_agent,
-        get_default_agent,
-    )
+async def test_deactivate_one_of_two_active_agents_succeeds_regardless_of_is_default(
+    session: AsyncSession,
+):
+    """A client with two active agents, neither is_default, may deactivate one."""
+    from app.tenants.service import create_client, create_agent, resolve_single_active_agent, deactivate_agent
+    from app.tenants.models import Agent
+    from sqlalchemy import update
 
     await create_client(
         session,
-        id="swap-test",
-        name="Swap",
-        agent_name="AgentA",
-        voice_id="va",
-    )
-    agent_b = await create_agent(
-        session,
-        client_id="swap-test",
-        slug="agent-b",
-        name="Agent B",
-        voice_id="vb",
-        is_active=True,
-        is_default=False,
-    )
-    await session.commit()
-
-    agent_a = await get_default_agent(session, "swap-test")
-    assert agent_a is not None
-    assert agent_a.is_default is True
-    assert agent_b.is_default is False
-
-    # Swap default to agent_b
-    result = await set_default_agent(
-        session, client_id="swap-test", agent_id=agent_b.id
-    )
-
-    assert result.id == agent_b.id
-    assert result.is_default is True
-
-    # agent_a must no longer be default
-    await session.refresh(agent_a)
-    assert agent_a.is_default is False
-
-
-async def test_set_default_agent_idempotent(session: AsyncSession):
-    """set_default_agent() is idempotent when agent is already the default."""
-    from app.tenants.service import create_client, get_default_agent, set_default_agent
-
-    await create_client(
-        session,
-        id="idempotent-default",
-        name="Idem",
-        agent_name="Agent",
+        id="two-active-test",
+        name="Two",
+        agent_name="First",
         voice_id="v1",
     )
-    await session.commit()
-
-    current_default = await get_default_agent(session, "idempotent-default")
-    assert current_default is not None
-
-    # Call again on already-default agent — should succeed without error
-    result = await set_default_agent(
-        session, client_id="idempotent-default", agent_id=current_default.id
+    first_agent = await resolve_single_active_agent(session, "two-active-test")
+    await session.execute(
+        update(Agent).where(Agent.id == first_agent.id).values(is_default=False)
     )
-    assert result.is_default is True
-    assert result.id == current_default.id
-
-
-async def test_set_default_agent_inactive_target_raises(session: AsyncSession):
-    """set_default_agent() raises ValueError when target agent is inactive."""
-    import pytest
-    from app.tenants.service import create_client, create_agent, set_default_agent
-
-    await create_client(
+    second_agent = await create_agent(
         session,
-        id="inactive-default-test",
-        name="InactDef",
-        agent_name="Active",
-        voice_id="v1",
-    )
-    inactive_agent = await create_agent(
-        session,
-        client_id="inactive-default-test",
-        slug="inactive-candidate",
-        name="Inactive Candidate",
+        client_id="two-active-test",
+        slug="second-agent",
+        name="Second",
         voice_id="v2",
-        is_active=False,
         is_default=False,
     )
     await session.commit()
 
-    with pytest.raises(ValueError, match="cannot_set_inactive_agent_as_default"):
-        await set_default_agent(
-            session,
-            client_id="inactive-default-test",
-            agent_id=inactive_agent.id,
-        )
+    deactivated = await deactivate_agent(
+        session, agent_id=first_agent.id, client_id="two-active-test"
+    )
+
+    assert deactivated.is_active is False
+    assert deactivated.id == first_agent.id
 
 
 # ---------------------------------------------------------------------------
