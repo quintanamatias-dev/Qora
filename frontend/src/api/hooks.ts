@@ -11,7 +11,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ApiError } from './client'
 import { fetchMetrics, fetchCallSessions, fetchTranscript, fetchCallAnalysis } from './calls'
 import { fetchLeads, fetchLead, fetchLeadContextPreview, fetchLeadDimensionRollups } from './leads'
-import { fetchClient, fetchClients, createClient, updateClient, deactivateClient } from './clients'
+import {
+  fetchClient,
+  fetchClients,
+  createClient,
+  updateClient,
+  deactivateClient,
+  fetchAnalysisProfile,
+} from './clients'
 import {
   fetchAgents,
   createAgent,
@@ -70,6 +77,7 @@ import type {
   SaveMappingsPayload,
   LeadContextPreview,
   DimensionRollups,
+  AnalysisProfileResponse,
   ClientEntitlements,
   FeatureKey,
   PlanCatalog,
@@ -185,6 +193,21 @@ export function useClient(clientId: string) {
     queryKey: ['client', clientId],
     queryFn: () => fetchClient(clientId),
     enabled: Boolean(clientId),
+  })
+}
+
+/**
+ * useAnalysisProfile — fetches the client's active analysis profile (product/
+ * need-tag label catalog). Long staleTime — this data changes rarely and is
+ * only used to resolve display labels, never for write decisions.
+ * queryKey: ['analysis-profile', clientId]
+ */
+export function useAnalysisProfile(clientId: string) {
+  return useQuery<AnalysisProfileResponse>({
+    queryKey: ['analysis-profile', clientId],
+    queryFn: () => fetchAnalysisProfile(clientId),
+    enabled: Boolean(clientId),
+    staleTime: 10 * 60_000,
   })
 }
 

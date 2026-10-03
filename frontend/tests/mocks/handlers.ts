@@ -504,6 +504,13 @@ export const handlers = [
   // ── Entitlements (multi-tenant-readiness) ───────────────────────────────────
   // Default: unrestricted pilot plan. Tests opt into restrictions via server.use().
   // NOTE: must come BEFORE /api/v1/clients/:clientId
+  // GET /api/v1/clients/:clientId/analysis-profile — no client has a configured
+  // profile in fixtures; 404 exercises the dimension-labels static-map fallback.
+  // NOTE: must come BEFORE /api/v1/clients/:clientId
+  http.get('/api/v1/clients/:clientId/analysis-profile', () => {
+    return HttpResponse.json({ detail: 'no active analysis profile' }, { status: 404 })
+  }),
+
   http.get('/api/v1/clients/:clientId/entitlements', ({ params }) => {
     return HttpResponse.json(makeEntitlements({ client_id: String(params.clientId) }))
   }),

@@ -30,6 +30,9 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analysis.profiles.schema import AnalysisProfileConfigV1
+from app.analysis.profiles.templates import generic as generic_profile_template
+from app.analysis.profiles.templates import insurance as insurance_profile_template
 from app.tenants.agent_config_schema import AgentConfigV1, AgentConfigV2
 from app.tenants.client_config_schema import ClientConfigV1
 from app.tenants.field_policy import AGENT_REQUIRED_FIELDS, FIELD_POLICY
@@ -37,6 +40,7 @@ from app.tenants.models import (
     Agent,
     AgentConfigRevision,
     Client,
+    ClientAnalysisProfileRevision,
     ClientConfigRevision,
 )
 
@@ -570,4 +574,148 @@ async def rollback_client_revision(
         config_cls=ClientConfigV1,
         serializer=_serialize_client_config,
         created_by=created_by,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Analysis-profile-level public functions (design.md P5-D2) — same generic
+# helpers, scoped by client_id only. config stores a FULL
+# AnalysisProfileConfigV1 snapshot (products + need_tags), not a sparse
+# override set — mirrors AgentConfigRevision's full-snapshot serializer
+# rather than ClientConfigV1's sparse one.
+# ---------------------------------------------------------------------------
+
+_ANALYSIS_PROFILE_TEMPLATES = {
+    "insurance": insurance_profile_template,
+    "generic": generic_profile_template,
+}
+
+
+def _serialize_analysis_profile_config(config: AnalysisProfileConfigV1) -> tuple[str, str]:
+    return config.model_dump_json(), str(config.schema_version)
+
+
+async def get_active_analysis_profile_revision(
+    session: AsyncSession, client_id: str
+) -> ClientAnalysisProfileRevision | None:
+    client = await session.get(Client, client_id)
+    if client is None or client.active_analysis_profile_revision_id is None:
+        return None
+    return await session.get(
+        ClientAnalysisProfileRevision, client.active_analysis_profile_revision_id
+    )
+
+
+async def resolve_client_catalog(
+    session: AsyncSession, client_id: str
+) -> AnalysisProfileConfigV1:
+    """Loads the client's active analysis profile revision; returns its
+    config. Every client has revision 1 seeded by migration 0023 (or by
+    create_client for a new client), so this never returns an unset result
+    for an existing client — a missing Client row, or a client with no
+    active revision for any other reason, falls back to the empty generic
+    config rather than raising.
+    """
+    revision = await get_active_analysis_profile_revision(session, client_id)
+    if revision is None:
+        return generic_profile_template.config
+    return AnalysisProfileConfigV1.model_validate_json(revision.config)
+
+
+async def create_analysis_profile_revision(
+    session: AsyncSession,
+    *,
+    client: Client,
+    config: AnalysisProfileConfigV1,
+    source: RevisionSource,
+    created_by: str,
+    note: str | None = None,
+) -> ClientAnalysisProfileRevision:
+    config_json, schema_version = _serialize_analysis_profile_config(config)
+    return await _create_revision(
+        session,
+        model=ClientAnalysisProfileRevision,
+        owner=client,
+        owner_id_attr="client_id",
+        active_pointer_attr="active_analysis_profile_revision_id",
+        config_json=config_json,
+        schema_version=schema_version,
+        source=source,
+        created_by=created_by,
+        note=note,
+    )
+
+
+async def get_analysis_profile_revision(
+    session: AsyncSession, client_id: str, revision_id: str
+) -> ClientAnalysisProfileRevision | None:
+    client = await session.get(Client, client_id)
+    if client is None:
+        return None
+    return await _get_revision(
+        session,
+        model=ClientAnalysisProfileRevision,
+        owner_id_attr="client_id",
+        owner_id=client.id,
+        revision_id=revision_id,
+    )
+
+
+async def list_analysis_profile_revisions(
+    session: AsyncSession, client_id: str
+) -> list[ClientAnalysisProfileRevision]:
+    client = await session.get(Client, client_id)
+    if client is None:
+        return []
+    return await _list_revisions(
+        session,
+        model=ClientAnalysisProfileRevision,
+        owner_id_attr="client_id",
+        owner_id=client.id,
+    )
+
+
+async def rollback_analysis_profile_revision(
+    session: AsyncSession,
+    *,
+    client_id: str,
+    target_revision_id: str,
+    created_by: str,
+) -> ClientAnalysisProfileRevision | None:
+    """Copy target_revision_id's config into a NEW revision (source=
+    "rollback"), then activate it. Never mutates or reactivates the old row.
+    Returns None when the client or the target revision (scoped to this
+    client) does not exist.
+    """
+    client = await session.get(Client, client_id)
+    if client is None:
+        return None
+    return await _rollback_to_revision(
+        session,
+        model=ClientAnalysisProfileRevision,
+        owner=client,
+        owner_id_attr="client_id",
+        active_pointer_attr="active_analysis_profile_revision_id",
+        target_revision_id=target_revision_id,
+        config_cls=AnalysisProfileConfigV1,
+        serializer=_serialize_analysis_profile_config,
+        created_by=created_by,
+    )
+
+
+async def apply_analysis_profile_template(
+    session: AsyncSession,
+    *,
+    client: Client,
+    vertical: Literal["insurance", "generic"],
+    created_by: str,
+) -> ClientAnalysisProfileRevision:
+    template = _ANALYSIS_PROFILE_TEMPLATES[vertical]
+    return await create_analysis_profile_revision(
+        session,
+        client=client,
+        config=template.config,
+        source="api",
+        created_by=created_by,
+        note=f"applied template: {vertical}",
     )

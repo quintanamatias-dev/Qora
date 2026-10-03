@@ -229,6 +229,51 @@ class ClientConfigRevision(Base):
         )
 
 
+class ClientAnalysisProfileRevision(Base):
+    """Immutable, versioned per-client analysis profile snapshot (design.md P5-D2).
+
+    Rows are insert-only: no UPDATE or DELETE path exists anywhere in the
+    service layer. revision_number is monotonically increasing per client_id,
+    starting at 1. config is a FULL AnalysisProfileConfigV1-shaped JSON
+    snapshot (products + need_tags) — not a sparse override set, since the
+    analysis profile has no "inherit from elsewhere" concept to be sparse
+    against (mirrors AgentConfigRevision's full-snapshot pattern).
+    """
+
+    __tablename__ = "client_analysis_profile_revisions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid4)
+    client_id: Mapped[str] = mapped_column(
+        String, ForeignKey("clients.id"), nullable=False, index=True
+    )
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    # AnalysisProfileConfigV1-shaped JSON payload, stored as TEXT (same
+    # pattern as AgentConfigRevision.config / ClientConfigRevision.config).
+    config: Mapped[str] = mapped_column(Text, nullable=False)
+    schema_version: Mapped[str] = mapped_column(String, nullable=False, default="1")
+    # One of: "import", "api", "rollback".
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    created_by: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    note: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "client_id",
+            "revision_number",
+            name="uq_client_analysis_profile_revisions_client_number",
+        ),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<ClientAnalysisProfileRevision id={self.id!r} client_id={self.client_id!r} "
+            f"revision_number={self.revision_number!r} source={self.source!r}>"
+        )
+
+
 class ClientIntegration(Base):
     """Per-client, non-secret CRM integration config (client-integrations-secrets, P3-D1).
 
@@ -446,6 +491,16 @@ class Client(Base):
     active_config_revision_id: Mapped[str | None] = mapped_column(
         String,
         ForeignKey("client_config_revisions.id"),
+        nullable=True,
+        default=None,
+    )
+
+    # analysis-profiles (design.md P5-D2): single pointer to this client's
+    # active ClientAnalysisProfileRevision. NULL until migration 0023 (or an
+    # explicit apply-template/PUT) activates one.
+    active_analysis_profile_revision_id: Mapped[str | None] = mapped_column(
+        String,
+        ForeignKey("client_analysis_profile_revisions.id"),
         nullable=True,
         default=None,
     )

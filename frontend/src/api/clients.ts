@@ -6,7 +6,7 @@
  */
 
 import { apiFetch } from './client'
-import type { Client, CreateClientPayload, UpdateClientPayload } from './types'
+import type { AnalysisProfileResponse, Client, CreateClientPayload, UpdateClientPayload } from './types'
 
 /**
  * GET /api/v1/clients
@@ -54,4 +54,14 @@ export async function deactivateClient(clientId: string): Promise<Client> {
   return apiFetch<Client>(`/api/v1/clients/${encodeURIComponent(clientId)}`, {
     method: 'DELETE',
   })
+}
+
+/**
+ * GET /api/v1/clients/:clientId/analysis-profile
+ * Returns the client's active analysis profile revision (product/need-tag catalog).
+ */
+export async function fetchAnalysisProfile(clientId: string): Promise<AnalysisProfileResponse> {
+  return apiFetch<AnalysisProfileResponse>(
+    `/api/v1/clients/${encodeURIComponent(clientId)}/analysis-profile`
+  )
 }

@@ -293,7 +293,7 @@ from app.auth.router import router as auth_router  # noqa: E402
 from app.auth.access_router import router as auth_access_router  # noqa: E402
 from app.admin.standards_router import router as admin_standards_router  # noqa: E402
 
-api_v1_router.include_router(clients_router)  # /api/v1/clients — full CRUD
+api_v1_router.include_router(clients_router)  # /api/v1/clients — full CRUD, incl. analysis-profile
 api_v1_router.include_router(
     agents_router
 )  # /api/v1/clients/{client_id}/agents — Phase 7

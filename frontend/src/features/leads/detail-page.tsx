@@ -24,6 +24,7 @@ import {
   useIntegrations,
   useLeadDimensionRollups,
   useFeature,
+  useAnalysisProfile,
 } from '@/api/hooks'
 import type {
   LeadStatus,
@@ -32,8 +33,9 @@ import type {
   DetectedInterestRollup,
   ServiceIssueRollup,
   CallSession,
+  AnalysisProfileResponse,
 } from '@/api/types'
-import { resolveLabel } from '@/config/dimension-labels'
+import { resolveLabel, getDimensionLabel } from '@/config/dimension-labels'
 import { parseUTC } from '@/lib/parse-utc'
 import { Icon } from '@/design/components'
 import { CallHistoryList } from './call-history-list'
@@ -289,7 +291,13 @@ function ProfileFactItem({ raw }: { raw: string }) {
   )
 }
 
-export function DetectedInterestsRanking({ interests }: { interests: DetectedInterestRollup[] }) {
+export function DetectedInterestsRanking({
+  interests,
+  profile,
+}: {
+  interests: DetectedInterestRollup[]
+  profile?: AnalysisProfileResponse | null
+}) {
   if (interests.length === 0) return <Empty message="No detected interests across calls yet." />
   return (
     <table className="tbl">
@@ -297,7 +305,7 @@ export function DetectedInterestsRanking({ interests }: { interests: DetectedInt
       <tbody>
         {interests.map((row) => (
           <tr key={row.interest} data-testid="interest-ranking-row">
-            <td>{resolveLabel(row.interest, 'es')}</td>
+            <td>{getDimensionLabel(row.category, row.interest, 'es', profile)}</td>
             <td className="r num">{row.count}</td>
             <td><span className="tag mono">{row.category}</span></td>
           </tr>
@@ -339,6 +347,7 @@ function MemoriaTab({ lead, clientId }: { lead: NonNullable<ReturnType<typeof us
     isFetching: rollupsFetching,
   } = useLeadDimensionRollups(clientId, lead.id, { refetchInterval: REALTIME_INTERVAL_MS })
   const rollupsLoading = !rollupsSuccess && !rollupsError && (rollupsPending || rollupsFetching)
+  const { data: analysisProfile } = useAnalysisProfile(clientId)
 
   return (
     <div className="stack">
@@ -393,7 +402,7 @@ function MemoriaTab({ lead, clientId }: { lead: NonNullable<ReturnType<typeof us
           <section className="card">
             <div className="card-h"><div><h3>Intereses detectados</h3></div></div>
             <div className="card-b">
-              <DetectedInterestsRanking interests={rollups?.detected_interests ?? []} />
+              <DetectedInterestsRanking interests={rollups?.detected_interests ?? []} profile={analysisProfile} />
             </div>
           </section>
           <section className="card">

@@ -11,8 +11,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useMetrics, useLeads, useLead, useLeadContextPreview, useCallSessions, useTranscript, useClient, useCallAnalysis } from './hooks'
-import type { CallMetricsResponse, Lead, CallSession, SessionTranscript, Client, LeadContextPreview } from './types'
+import { useMetrics, useLeads, useLead, useLeadContextPreview, useCallSessions, useTranscript, useClient, useCallAnalysis, useAnalysisProfile } from './hooks'
+import type { CallMetricsResponse, Lead, CallSession, SessionTranscript, Client, LeadContextPreview, AnalysisProfileResponse } from './types'
 import { ApiError } from './client'
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -35,6 +35,7 @@ vi.mock('./leads', () => ({
 
 vi.mock('./clients', () => ({
   fetchClient: vi.fn(),
+  fetchAnalysisProfile: vi.fn(),
 }))
 
 import * as callsApi from './calls'
@@ -326,6 +327,48 @@ describe('useClient', () => {
     render(<Wrapper><Comp /></Wrapper>)
     await waitFor(() => expect(screen.getByTestId('broker')).toHaveTextContent('Acme Broker'))
     expect(clientsApi.fetchClient).toHaveBeenCalledWith('acme-motors')
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────────
+// useAnalysisProfile — analysis-profiles Phase 5.1
+// ───────────────────────────────────────────────────────────────────────────────
+describe('useAnalysisProfile', () => {
+  const mockProfile: AnalysisProfileResponse = {
+    id: 'rev-1',
+    client_id: 'demo-client',
+    revision_number: 1,
+    vertical: 'insurance',
+    products: [{ id: 'auto_todo_riesgo', label_es: 'Auto Full', label_en: 'Full Auto', description: null }],
+    need_tags: [],
+    source: 'template',
+    created_by: 'system',
+    created_at: '2026-01-01T00:00:00Z',
+    note: null,
+  }
+
+  it('returns the active analysis profile from fetchAnalysisProfile', async () => {
+    vi.mocked(clientsApi.fetchAnalysisProfile).mockResolvedValue(mockProfile)
+
+    function Comp() {
+      const { data, isLoading } = useAnalysisProfile('demo-client')
+      if (isLoading) return <span>loading</span>
+      return <span data-testid="vertical">{data?.vertical}</span>
+    }
+
+    render(<Wrapper><Comp /></Wrapper>)
+    await waitFor(() => expect(screen.getByTestId('vertical')).toHaveTextContent('insurance'))
+    expect(clientsApi.fetchAnalysisProfile).toHaveBeenCalledWith('demo-client')
+  })
+
+  it('is disabled when clientId is empty', () => {
+    function Comp() {
+      const { isLoading, fetchStatus } = useAnalysisProfile('')
+      return <span data-testid="status">{isLoading ? 'loading' : fetchStatus}</span>
+    }
+
+    render(<Wrapper><Comp /></Wrapper>)
+    expect(clientsApi.fetchAnalysisProfile).not.toHaveBeenCalled()
   })
 })
 

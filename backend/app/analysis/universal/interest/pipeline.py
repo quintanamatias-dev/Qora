@@ -13,6 +13,12 @@ defaults so that monitoring queries can differentiate:
 Error propagation:
     Agent 1 fails → BOTH results are error dicts; Agent 2 does NOT run
     Agent 2 fails → Agent 1 result is preserved; level_result is error dict
+
+Empty-catalog skip (design.md P5-D5):
+    When the resolved catalog has no products configured, NEITHER agent is
+    called — an LLM given zero valid products has no possible correct
+    non-empty output, so the call is pure latency/cost with a deterministic
+    result. This is a normal empty result, not an error marker.
 """
 
 from __future__ import annotations
@@ -21,6 +27,8 @@ import logging
 
 from openai import AsyncOpenAI
 
+from app.analysis.profiles.schema import AnalysisProfileConfigV1
+from app.analysis.profiles.templates import insurance as _insurance_template
 from app.analysis.universal.interest.interest_level import (
     InterestLevelResult,
     analyze as interest_level_analyze,
@@ -29,6 +37,8 @@ from app.analysis.universal.interest.interests import (
     InterestsAxis,
     analyze as interests_analyze,
 )
+
+_DEFAULT_CATALOG: AnalysisProfileConfigV1 = _insurance_template.config
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +82,7 @@ async def run_interest_pipeline(
     *,
     previous_score: int | None = None,
     language: str = "Spanish",
+    catalog: AnalysisProfileConfigV1 | None = None,
 ) -> tuple[InterestsAxis | dict, InterestLevelResult | dict]:
     """Run the 2-phase interest pipeline.
 
@@ -85,17 +96,38 @@ async def run_interest_pipeline(
         language: Output language for human-readable text fields (evidence,
             reason, signals). Canonical codes (product IDs, level, confidence)
             stay in English.
+        catalog: Resolved client analysis profile catalog. Defaults to the
+            ``insurance`` template when omitted. When ``catalog.products`` is
+            empty, neither agent is called (P5-D5) and a normal empty result
+            is returned immediately.
 
     Returns:
         ``(interests_result, level_result)`` where either element can be
         an error dict (has ``"error"`` key) if the corresponding agent failed.
     """
+    if catalog is None:
+        catalog = _DEFAULT_CATALOG
+
+    if not catalog.products:
+        return (
+            InterestsAxis(items=[]),
+            InterestLevelResult.model_construct(
+                per_product=[],
+                general_score=0,
+                level="very_low",
+                reason="No products configured for this client's analysis profile.",
+                positive_signals=[],
+                negative_signals=[],
+                confidence="low",
+            ),
+        )
+
     # ------------------------------------------------------------------
     # Phase 1 — Agent 1
     # ------------------------------------------------------------------
     try:
         interests_result: InterestsAxis | dict = await interests_analyze(
-            transcript, client, language=language
+            transcript, client, language=language, catalog=catalog
         )
     except Exception as exc:  # noqa: BLE001
         logger.error("interest_pipeline_agent1_failed: %s", exc, exc_info=True)

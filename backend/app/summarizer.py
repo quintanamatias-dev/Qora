@@ -440,7 +440,16 @@ async def _run_summarizer(session_id: str, db: AsyncSession, *, durable: bool = 
 
     # qora-next-action: build ClientRules from Client config
     # qora-analysis-locale: also read analysis_language for locale-aware analysis
+    # analysis-profiles: resolve the client's analysis profile catalog once per
+    # analysis (design.md P5-D5/P5-D6), snapshotting both the resolved catalog
+    # (plain data, passed into the interest pipeline) and the active revision id
+    # (stamped on the written CallAnalysis row) as plain local vars so they
+    # survive past the db.rollback() below.
     analysis_language: str = "Spanish"  # safe default for all existing clients
+    from app.analysis.profiles.templates import generic as _generic_profile_template
+
+    catalog = _generic_profile_template.config
+    analysis_profile_revision_id: str | None = None
     if cs.client_id:
         from app.tenants.models import Client as _Client
 
@@ -463,6 +472,13 @@ async def _run_summarizer(session_id: str, db: AsyncSession, *, durable: bool = 
             # (e.g. old DB without migration applied yet — graceful degradation).
             analysis_language = (
                 getattr(client_row, "analysis_language", "Spanish") or "Spanish"
+            )
+
+            from app.tenants.revisions_service import resolve_client_catalog
+
+            catalog = await resolve_client_catalog(db, cs.client_id)
+            analysis_profile_revision_id = getattr(
+                client_row, "active_analysis_profile_revision_id", None
             )
 
     # C6: Capture telephony_status BEFORE the rollback below expires cs attributes.
@@ -492,6 +508,7 @@ async def _run_summarizer(session_id: str, db: AsyncSession, *, durable: bool = 
             analysis_language=analysis_language,
             session_id=session_id,
             telephony_status=_cs_telephony_status,  # C6: pass for voicemail rule
+            catalog=catalog,
         )
     except Exception as gpt_exc:
         error_msg = str(gpt_exc)
@@ -515,7 +532,12 @@ async def _run_summarizer(session_id: str, db: AsyncSession, *, durable: bool = 
                 }
                 # ★ NEW: Write CallAnalysis failure marker (analysis v2 — same savepoint)
                 await _upsert_call_analysis_failed(
-                    db, _session_id, _lead_id, _client_id, error_msg
+                    db,
+                    _session_id,
+                    _lead_id,
+                    _client_id,
+                    error_msg,
+                    analysis_profile_revision_id=analysis_profile_revision_id,
                 )
             # Durably commit the failure marker BEFORE the potential re-raise below.
             # The begin_nested() savepoint alone is not durable: on the durable path
@@ -576,7 +598,15 @@ async def _run_summarizer(session_id: str, db: AsyncSession, *, durable: bool = 
         cs.extracted_facts = facts
 
         # ★ NEW: Dual-write to CallAnalysis (analysis v2 — same savepoint, atomic)
-        await _upsert_call_analysis(db, cs.id, _lead_id, _client_id, summary, facts)
+        await _upsert_call_analysis(
+            db,
+            cs.id,
+            _lead_id,
+            _client_id,
+            summary,
+            facts,
+            analysis_profile_revision_id=analysis_profile_revision_id,
+        )
 
         # Auto-schedule follow-up call if eligible (Phase 6)
         if _lead_id and _client_id:
@@ -660,6 +690,7 @@ async def _call_gpt_summarize(
     analysis_language: str = "Spanish",
     session_id: str | None = None,
     telephony_status: "str | None" = None,
+    catalog: "Any | None" = None,
 ) -> tuple[str, dict[str, Any]]:
     """Run 6 universal dimensions, the 2-phase interest pipeline, profile facts pipeline,
     misc notes pipeline, data corrections pipeline, and post-analysis next_action pipeline.
@@ -724,6 +755,7 @@ async def _call_gpt_summarize(
                 client,
                 previous_score=previous_interest_level,
                 language=analysis_language,
+                catalog=catalog,
             ),
             run_profile_facts_pipeline(
                 transcript_text,
@@ -765,6 +797,7 @@ async def _call_gpt_summarize(
                 client,
                 previous_score=previous_interest_level,
                 language=analysis_language,
+                catalog=catalog,
             ),
             return_exceptions=True,
         )
@@ -1592,6 +1625,7 @@ async def _upsert_call_analysis(
     client_id: str,
     summary: str,
     facts: dict[str, Any],
+    analysis_profile_revision_id: str | None = None,
 ) -> None:
     """Insert or update a CallAnalysis row for the given session_id.
 
@@ -1623,6 +1657,7 @@ async def _upsert_call_analysis(
     # Set or update all fields
     ca.lead_id = lead_id
     ca.client_id = client_id
+    ca.analysis_profile_revision_id = analysis_profile_revision_id
     ca.summary = summary
     ca.interest_level = facts.get("interest_level")
     ca.classification = _str_or_none(call_outcome.get("classification"))
@@ -1723,6 +1758,7 @@ async def _upsert_call_analysis_failed(
     lead_id: str | None,
     client_id: str,
     error_msg: str,
+    analysis_profile_revision_id: str | None = None,
 ) -> None:
     """Insert or update a CallAnalysis failure marker row.
 
@@ -1744,6 +1780,7 @@ async def _upsert_call_analysis_failed(
 
     ca.lead_id = lead_id
     ca.client_id = client_id
+    ca.analysis_profile_revision_id = analysis_profile_revision_id
     ca.analysis_status = "failed"
     ca.analysis_error = error_msg
 
