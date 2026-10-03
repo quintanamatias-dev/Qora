@@ -777,7 +777,7 @@ class TestRealMigrationExecution:
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
         # PR3 transcript finalization fields: 20260625_0003
         # C2 outbound telephony: 20260702_0004
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019"}
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"alembic_version should contain a known Qora revision. "
             f"Got: {versions}. Known: {_KNOWN_REVISIONS}"
@@ -961,7 +961,7 @@ class TestRealMigrationExecution:
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
         # PR3 transcript finalization fields: 20260625_0003
         # C2 outbound telephony: 20260702_0004
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019"}
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"Stamp head did not record a known Qora revision. Got: {versions}. "
             f"Known revisions: {_KNOWN_REVISIONS}"
@@ -2597,3 +2597,256 @@ class TestImportAgentConfigRevisionMigration:
         count = cur.fetchone()[0]
         conn.close()
         assert count == 2, f"expected re-run to stay idempotent (2 rows), got {count}"
+
+
+# ===========================================================================
+# chore/remove-qora-demo — Task: hard-delete every qora-demo tenant row
+# ===========================================================================
+
+
+class TestDeleteQoraDemoTenantMigration:
+    """20261003_0020: hard-delete client_id='qora-demo' and every dependent row."""
+
+    _TABLES = (
+        "transcript_turns",
+        "call_analyses",
+        "lead_profile_facts",
+        "lead_interest_history",
+        "lead_custom_fields",
+        "scheduled_calls",
+        "call_sessions",
+        "leads",
+        "agent_config_revisions",
+        "agents",
+        "client_config_revisions",
+        "clients",
+    )
+
+    def _seed_tenant(self, db_file: Path, client_id: str) -> None:
+        """Insert one full row set (client + agent + revisions + lead + call
+        session + every dependent table) for a single tenant, directly via
+        raw SQL (same rationale as _seed_agents above: the live ORM models
+        may have gained columns that do not exist at this pinned revision).
+        """
+        import sqlite3
+
+        agent_id = f"{client_id}-agent-1"
+        lead_id = f"{client_id}-lead-1"
+        session_id = f"{client_id}-session-1"
+        agent_rev_id = f"{client_id}-agent-rev-1"
+        client_rev_id = f"{client_id}-client-rev-1"
+        now = "2026-10-03T00:00:00+00:00"
+
+        conn = sqlite3.connect(str(db_file))
+        conn.execute(
+            "INSERT INTO clients (id, name, voice_id, is_active, created_at) "
+            "VALUES (?, ?, 'v1', 1, ?)",
+            (client_id, f"{client_id} name", now),
+        )
+        conn.execute(
+            "INSERT INTO agents (id, client_id, slug, name, voice_id, created_at) "
+            "VALUES (?, ?, 'agent-1', 'Agent', 'v1', ?)",
+            (agent_id, client_id, now),
+        )
+        conn.execute(
+            "INSERT INTO agent_config_revisions "
+            "(id, agent_id, revision_number, config, schema_version, source, created_by, created_at) "
+            "VALUES (?, ?, 1, '{}', 'v1', 'import', 'system', ?)",
+            (agent_rev_id, agent_id, now),
+        )
+        conn.execute(
+            "UPDATE agents SET active_revision_id = ? WHERE id = ?",
+            (agent_rev_id, agent_id),
+        )
+        conn.execute(
+            "INSERT INTO client_config_revisions "
+            "(id, client_id, revision_number, config, schema_version, source, created_by, created_at) "
+            "VALUES (?, ?, 1, '{}', 'v1', 'import', 'system', ?)",
+            (client_rev_id, client_id, now),
+        )
+        conn.execute(
+            "UPDATE clients SET active_config_revision_id = ? WHERE id = ?",
+            (client_rev_id, client_id),
+        )
+        conn.execute(
+            "INSERT INTO leads (id, client_id, name, phone, status, created_at, updated_at) "
+            "VALUES (?, ?, 'Lead', '555-0100', 'new', ?, ?)",
+            (lead_id, client_id, now, now),
+        )
+        conn.execute(
+            "INSERT INTO call_sessions (id, client_id, lead_id, agent_id, status, started_at, created_at) "
+            "VALUES (?, ?, ?, ?, 'completed', ?, ?)",
+            (session_id, client_id, lead_id, agent_id, now, now),
+        )
+        conn.execute(
+            "INSERT INTO transcript_turns (id, session_id, role, content, timestamp) "
+            "VALUES (?, ?, 'user', 'hi', ?)",
+            (f"{client_id}-turn-1", session_id, now),
+        )
+        conn.execute(
+            "INSERT INTO call_analyses (id, session_id, lead_id, client_id, analyzed_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (f"{client_id}-analysis-1", session_id, lead_id, client_id, now),
+        )
+        conn.execute(
+            "INSERT INTO lead_profile_facts (id, lead_id, fact_key, fact_value, source_call_id, recorded_at) "
+            "VALUES (?, ?, 'car_make', 'Toyota', ?, ?)",
+            (f"{client_id}-fact-1", lead_id, session_id, now),
+        )
+        conn.execute(
+            "INSERT INTO lead_interest_history (id, lead_id, interest_level, source_call_id, recorded_at) "
+            "VALUES (?, ?, 50, ?, ?)",
+            (f"{client_id}-interest-1", lead_id, session_id, now),
+        )
+        conn.execute(
+            "INSERT INTO lead_custom_fields (id, lead_id, client_id, field_key, field_value, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'zona', 'CABA', ?, ?)",
+            (f"{client_id}-custom-1", lead_id, client_id, now, now),
+        )
+        conn.execute(
+            "INSERT INTO scheduled_calls (id, client_id, lead_id, scheduled_at, trigger_reason, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, 'follow_up', ?, ?)",
+            (f"{client_id}-scheduled-1", client_id, lead_id, now, now, now),
+        )
+        conn.commit()
+        conn.close()
+
+    def _counts_by_client(self, db_file: Path, client_id: str) -> dict[str, int]:
+        import sqlite3
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        counts: dict[str, int] = {}
+        counts["clients"] = cur.execute(
+            "SELECT COUNT(*) FROM clients WHERE id = ?", (client_id,)
+        ).fetchone()[0]
+        counts["agents"] = cur.execute(
+            "SELECT COUNT(*) FROM agents WHERE client_id = ?", (client_id,)
+        ).fetchone()[0]
+        counts["agent_config_revisions"] = cur.execute(
+            "SELECT COUNT(*) FROM agent_config_revisions WHERE agent_id IN "
+            "(SELECT id FROM agents WHERE client_id = ?) OR agent_id LIKE ?",
+            (client_id, f"{client_id}-%"),
+        ).fetchone()[0]
+        counts["client_config_revisions"] = cur.execute(
+            "SELECT COUNT(*) FROM client_config_revisions WHERE client_id = ?", (client_id,)
+        ).fetchone()[0]
+        counts["leads"] = cur.execute(
+            "SELECT COUNT(*) FROM leads WHERE client_id = ?", (client_id,)
+        ).fetchone()[0]
+        counts["call_sessions"] = cur.execute(
+            "SELECT COUNT(*) FROM call_sessions WHERE client_id = ?", (client_id,)
+        ).fetchone()[0]
+        counts["transcript_turns"] = cur.execute(
+            "SELECT COUNT(*) FROM transcript_turns WHERE id LIKE ?", (f"{client_id}-%",)
+        ).fetchone()[0]
+        counts["call_analyses"] = cur.execute(
+            "SELECT COUNT(*) FROM call_analyses WHERE client_id = ?", (client_id,)
+        ).fetchone()[0]
+        counts["lead_profile_facts"] = cur.execute(
+            "SELECT COUNT(*) FROM lead_profile_facts WHERE id LIKE ?", (f"{client_id}-%",)
+        ).fetchone()[0]
+        counts["lead_interest_history"] = cur.execute(
+            "SELECT COUNT(*) FROM lead_interest_history WHERE id LIKE ?", (f"{client_id}-%",)
+        ).fetchone()[0]
+        counts["lead_custom_fields"] = cur.execute(
+            "SELECT COUNT(*) FROM lead_custom_fields WHERE client_id = ?", (client_id,)
+        ).fetchone()[0]
+        counts["scheduled_calls"] = cur.execute(
+            "SELECT COUNT(*) FROM scheduled_calls WHERE client_id = ?", (client_id,)
+        ).fetchone()[0]
+        conn.close()
+        return counts
+
+    def test_upgrade_deletes_qora_demo_and_preserves_other_tenants(self, tmp_path):
+        """upgrade head deletes every qora-demo row and leaves quintana-seguros intact.
+
+        GIVEN two tenants seeded with a client, agent, both revision types,
+        a lead, a call session, and one row in every table that references
+        either the client, the lead, or the call session
+        WHEN alembic upgrade head runs through 20261003_0020
+        THEN every qora-demo row in every table is gone
+        AND every quintana-seguros row in every table is untouched
+        """
+        from alembic import command
+
+        db_file = tmp_path / "delete_qora_demo.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "20261003_0019")
+        self._seed_tenant(db_file, "qora-demo")
+        self._seed_tenant(db_file, "quintana-seguros")
+
+        command.upgrade(cfg, "head")
+
+        demo_counts = self._counts_by_client(db_file, "qora-demo")
+        assert all(count == 0 for count in demo_counts.values()), (
+            f"qora-demo rows must all be deleted, got: {demo_counts}"
+        )
+
+        quintana_counts = self._counts_by_client(db_file, "quintana-seguros")
+        assert all(count == 1 for count in quintana_counts.values()), (
+            f"quintana-seguros rows must all survive untouched, got: {quintana_counts}"
+        )
+
+    def test_upgrade_is_idempotent_on_rerun(self, tmp_path):
+        """Re-running upgrade() after qora-demo is already gone deletes nothing more.
+
+        GIVEN the migration has already run once and qora-demo rows are gone
+        WHEN its upgrade() function is invoked again against the same DB
+        THEN quintana-seguros rows are still untouched and no error is raised
+        """
+        import sqlite3
+        from alembic import command
+
+        db_file = tmp_path / "delete_qora_demo_idempotent.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "20261003_0019")
+        self._seed_tenant(db_file, "qora-demo")
+        self._seed_tenant(db_file, "quintana-seguros")
+        command.upgrade(cfg, "head")
+
+        import importlib.util
+
+        module_path = VERSIONS_DIR / "20261003_0020_delete_qora_demo_tenant.py"
+        spec = importlib.util.spec_from_file_location("delete_qora_demo_rerun", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        from alembic.runtime.migration import MigrationContext
+        from alembic.operations import Operations
+        from sqlalchemy import create_engine
+
+        sync_engine = create_engine(f"sqlite:///{db_file}")
+        with sync_engine.connect() as connection:
+            context = MigrationContext.configure(connection)
+            with context.begin_transaction():
+                operations = Operations(context)
+                with Operations.context(operations):
+                    module.upgrade()
+        sync_engine.dispose()
+
+        demo_counts = self._counts_by_client(db_file, "qora-demo")
+        assert all(count == 0 for count in demo_counts.values()), (
+            f"re-run must not resurrect any qora-demo row, got: {demo_counts}"
+        )
+        quintana_counts = self._counts_by_client(db_file, "quintana-seguros")
+        assert all(count == 1 for count in quintana_counts.values()), (
+            f"re-run must not touch quintana-seguros rows, got: {quintana_counts}"
+        )
+
+    def test_downgrade_is_a_documented_noop(self, tmp_path):
+        """downgrade() does not restore any deleted qora-demo row (irreversible by design)."""
+        from alembic import command
+
+        db_file = tmp_path / "delete_qora_demo_downgrade.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "20261003_0019")
+        self._seed_tenant(db_file, "qora-demo")
+        command.upgrade(cfg, "head")
+
+        command.downgrade(cfg, "20261003_0019")
+
+        demo_counts = self._counts_by_client(db_file, "qora-demo")
+        assert all(count == 0 for count in demo_counts.values()), (
+            "downgrade must not resurrect any deleted qora-demo row"
+        )

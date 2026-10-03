@@ -24,7 +24,6 @@ if TYPE_CHECKING:
     from app.voice.context import VoiceSessionContext
     from app.voice.session import ConversationState
 
-import httpx as _httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -41,7 +40,6 @@ from app.calls.service import (
     create_session,
     schedule_user_turn_persist,
 )
-from app.core.access import require_superadmin
 from app.core.database import get_session as db_session
 from app.leads.service import get_lead
 from app.prompts.loader import PromptLoader
@@ -73,50 +71,6 @@ SAFE_CONTEXT_RENDER_FAILURE_PROMPT = (
 )
 
 router = APIRouter(prefix="/voice", tags=["voice"])
-
-
-# ---------------------------------------------------------------------------
-# Signed URL endpoint — generates a WebSocket signed URL for the demo
-# ---------------------------------------------------------------------------
-
-
-@router.get("/signed-url", dependencies=[Depends(require_superadmin)])
-async def get_signed_url(request: Request):
-    """Generate a signed URL for ElevenLabs WebSocket connection.
-
-    Using signed URL forces WebSocket (not WebRTC) regardless of agent settings.
-    Superadmin-only: each signed URL opens a billable ElevenLabs session on the
-    platform account. The public demo uses /api/v1/demo/context instead.
-    """
-    try:
-        settings = request.app.state.settings
-        api_key = settings.elevenlabs_api_key.get_secret_value()
-        agent_id = settings.elevenlabs_agent_id
-    except AttributeError:
-        from app.core.config import Settings
-
-        s = Settings()
-        api_key = s.elevenlabs_api_key.get_secret_value()
-        agent_id = s.elevenlabs_agent_id
-
-    if not agent_id:
-        raise HTTPException(
-            status_code=400, detail="ELEVENLABS_AGENT_ID not configured in .env"
-        )
-
-    async with _httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id={agent_id}",
-            headers={"xi-api-key": api_key},
-            timeout=10.0,
-        )
-        if resp.status_code != 200:
-            raise HTTPException(
-                status_code=resp.status_code, detail=f"ElevenLabs error: {resp.text}"
-            )
-
-        data = resp.json()
-        return {"signed_url": data.get("signed_url")}
 
 
 # ---------------------------------------------------------------------------

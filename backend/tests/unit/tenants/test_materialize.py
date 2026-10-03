@@ -25,10 +25,11 @@ async def materialize_db(tmp_path: Path):
     await _init_db_with_migrations(db_module, settings)
 
     async with db_module.async_session_factory() as session:
-        from app.tenants.service import seed_quintana, seed_qora_demo
+        from app.tenants.service import seed_quintana
+        from tests.helpers.second_tenant import seed_second_tenant
 
         await seed_quintana(session)
-        await seed_qora_demo(session)
+        await seed_second_tenant(session)
         await session.commit()
 
     yield db_module
@@ -41,7 +42,7 @@ async def test_materialize_agent_config_stamps_standard_version(materialize_db):
     from app.tenants.service import resolve_single_active_agent
 
     async with materialize_db.async_session_factory() as session:
-        agent = await resolve_single_active_agent(session, "qora-demo")
+        agent = await resolve_single_active_agent(session, "acme-widgets")
         assert agent.materialized_standard_version is None
 
         await materialize_agent_config(session, agent)
@@ -55,7 +56,7 @@ async def test_materialize_agent_config_returns_effective_config(materialize_db)
     from app.tenants.service import resolve_single_active_agent
 
     async with materialize_db.async_session_factory() as session:
-        agent = await resolve_single_active_agent(session, "qora-demo")
+        agent = await resolve_single_active_agent(session, "acme-widgets")
         effective = await materialize_agent_config(session, agent)
 
         assert effective.fields["voice_id"].value == agent.voice_id

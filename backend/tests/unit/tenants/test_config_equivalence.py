@@ -3,8 +3,8 @@ criterion, design.md D19).
 
 materialize_agent_config() must leave every Agent.* config column unchanged
 for every agent seeded/created today, EXCEPT the THREE documented exceptions
-below (empirically verified against the current seed_quintana/seed_qora_demo/
-create_agent fixtures — this is deliberately wider than D19's original single
+below (empirically verified against the current seed_quintana/create_agent
+fixtures — this is deliberately wider than D19's original single
 "voicemail_detection_enabled" example, which did not anticipate the other two):
 
   - voicemail_detection_enabled: NULL -> AgentConfigStandard.voicemail_detection_enabled
@@ -15,8 +15,8 @@ create_agent fixtures — this is deliberately wider than D19's original single
     system_prompt differs from the raw Agent.system_prompt column. Two cases:
       (a) a brand-new agent with no system_prompt at all: NULL -> "" (the
           AgentConfigV1/V2 empty-string coercion already used elsewhere).
-      (b) jaumpablo/qora-explainer: the Agent column holds the legacy DB-seed
-          constant, but the active revision's agent-override captures
+      (b) jaumpablo: the Agent column holds the legacy DB-seed constant, but
+          the active revision's agent-override captures
           _resolve_seed_system_prompt()'s filesystem-file content (design.md
           D6's "filesystem wins over the DB column" priority, which
           PromptLoader.render_for_agent() ALREADY applies at call time today).
@@ -26,8 +26,7 @@ create_agent fixtures — this is deliberately wider than D19's original single
 Every other mirrored column must be unchanged (tools_enabled is compared as
 a decoded list — see materialize.snapshot_mirrored_fields — since JSON
 dumps separator formatting differs for an identical list value) for every
-agent produced by seed_quintana, seed_qora_demo, and a plain
-tenant_service.create_agent() call.
+agent produced by seed_quintana and a plain tenant_service.create_agent() call.
 """
 
 from __future__ import annotations
@@ -65,10 +64,9 @@ async def equivalence_db(tmp_path: Path):
     await _init_db_with_migrations(db_module, settings)
 
     async with db_module.async_session_factory() as session:
-        from app.tenants.service import create_agent, seed_qora_demo, seed_quintana
+        from app.tenants.service import create_agent, seed_quintana
 
         await seed_quintana(session)
-        await seed_qora_demo(session)
         # Plain create_agent() call, per task 5.1's "+ a plain create_agent".
         await create_agent(
             session,
@@ -90,9 +88,9 @@ async def test_effective_config_unchanged_for_every_existing_agent(equivalence_d
 
     async with equivalence_db.async_session_factory() as session:
         agents = []
-        for client_id in ("quintana-seguros", "qora-demo"):
+        for client_id in ("quintana-seguros",):
             agents.extend(await list_agents_for_client(session, client_id))
-        assert len(agents) >= 3, "expected seed_quintana + seed_qora_demo + plain create_agent"
+        assert len(agents) >= 2, "expected seed_quintana + plain create_agent"
 
         for agent in agents:
             before = snapshot_mirrored_fields(agent)
@@ -132,7 +130,7 @@ async def test_documented_exceptions_actually_occur(equivalence_db):
     observed: set[str] = set()
     async with equivalence_db.async_session_factory() as session:
         agents = []
-        for client_id in ("quintana-seguros", "qora-demo"):
+        for client_id in ("quintana-seguros",):
             agents.extend(await list_agents_for_client(session, client_id))
 
         for agent in agents:

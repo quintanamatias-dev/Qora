@@ -45,8 +45,8 @@ async def _ensure_active_revision(
 
     Idempotent: a no-op when agent.active_revision_id is already set.
     Defaults (source='import', note='seeded revision 1 ...') preserve the
-    seeder call sites (seed_quintana/seed_qora_demo); create_agent() overrides
-    source/note since a freshly-created agent is an API write, not an import.
+    seeder call site (seed_quintana); create_agent() overrides source/note
+    since a freshly-created agent is an API write, not an import.
 
     system_prompt falls back to '' (not None) when the agent has neither a
     filesystem file nor a DB system_prompt yet — AgentConfigV1.system_prompt
@@ -72,7 +72,7 @@ async def _ensure_active_revision(
         config=config,
         source=source,
         created_by=created_by,
-        note=note or "seeded revision 1 (seed_quintana/seed_qora_demo)",
+        note=note or "seeded revision 1 (seed_quintana)",
     )
 
 
@@ -502,130 +502,6 @@ async def seed_quintana(session: AsyncSession) -> None:
     agent = await _resolve_single_active_agent_or_none(session, "quintana-seguros")
     if agent is not None:
         await _ensure_active_revision(session, agent)
-
-
-_QORA_EXPLAINER_SYSTEM_PROMPT = """\
-Sos Mariano, el agente demo de la plataforma Qora. Tu objetivo es explicar Qora de manera \
-clara y directa: qué hace, cómo funciona y qué resuelve para las empresas.
-
-Respondé en turnos cortos y hablados: 1 o 2 frases, máximo 25 palabras por turno. Usá solo \
-hechos disponibles en tu contexto. No inventes precios, integraciones ni roadmap no confirmados.
-
-Hablá en el idioma del usuario. Español rioplatense con voseo; en inglés, cálido y preciso.\
-"""
-
-# Mariano voice on ElevenLabs — configure EL agent in dashboard, not via voice_id override
-_QORA_DEMO_VOICE_ID = "4wDRKlxcHNOFO5kBvE81"
-
-# Deterministic per-agent TTS values for qora-demo.
-# These are the single source of truth — set on the Agent row so they are visible
-# and editable via the Agent API. Not hardcoded in the browser or EL dashboard.
-# Values chosen to match the Settings defaults (not the old browser ad-hoc values).
-_QORA_DEMO_TTS_SPEED: float = 0.95
-_QORA_DEMO_TTS_STABILITY: float = 0.40
-_QORA_DEMO_TTS_SIMILARITY_BOOST: float = 0.75
-
-# Seed lead notes for qora-demo. Jorge is a commercial manager evaluating Qora as a platform
-# to automate voice-agent follow-up for his sales team. Notes must remain free of any
-# insurance-domain wording so the agent does not leak domain context into the conversation.
-_QORA_DEMO_SEED_LEAD_NOTES = (
-    "Gerente comercial evaluando Qora para automatizar el seguimiento de leads con agentes de voz. "
-    "Maneja un equipo de 8 asesores y quiere reducir el tiempo entre el primer contacto y la "
-    "respuesta calificada. Ya probó otro CRM pero no tenía llamadas automáticas. "
-    "Quiere ver la demo para entender cómo funciona la voz y si se integra con su sistema actual."
-)
-
-
-async def seed_qora_demo(session: AsyncSession) -> None:
-    """Seed the Qora Demo client + qora-explainer agent + demo lead if they don't exist.
-
-    Idempotent: calling this multiple times has no effect if the records exist.
-    The canonical agent prompt is the filesystem file:
-        backend/clients/qora-demo/agents/qora-explainer/system-prompt.md
-    The DB system_prompt seeded here is a legacy fallback — PromptLoader.render_for_agent()
-    prefers the filesystem file when it exists.
-    The agent slug is 'qora-explainer'; voice is configured via ElevenLabs dashboard.
-    Sets elevenlabs_agent_id from Settings.elevenlabs_agent_id if configured.
-    Seeded lead: Demo Visitor — used by the demo page conversation flow.
-    """
-    from app.core.config import Settings
-
-    settings = Settings()
-
-    # The canonical ElevenLabs agent ID for Qora Demo.
-    # Settings.elevenlabs_agent_id defaults to this value; the env var can override it.
-    _CORRECT_EL_AGENT_ID = "agent_8201kra4wjhve0srcwgbtwfetr5n"
-    el_agent_id = settings.elevenlabs_agent_id or _CORRECT_EL_AGENT_ID
-
-    existing = await get_client(session, "qora-demo")
-    if existing is None:
-        # create_client() auto-creates a default agent; we override it with the correct
-        # agent name and system_prompt via system_prompt_override on create_client.
-        await create_client(
-            session,
-            id="qora-demo",
-            name="Qora Demo",
-            agent_name="qora-explainer",
-            voice_id=_QORA_DEMO_VOICE_ID,
-            system_prompt_override=_QORA_EXPLAINER_SYSTEM_PROMPT,
-            model="gpt-4o",
-            temperature=0.7,
-            max_tokens=400,
-            tools_enabled="[]",
-        )
-        # Note: create_client() auto-creates the default Agent with the correct name and
-        # system_prompt (passed via system_prompt_override → system_prompt on Agent).
-
-        # Always set elevenlabs_agent_id, TTS values, and EL config on the newly seeded agent.
-        agent = await _resolve_single_active_agent_or_none(session, "qora-demo")
-        if agent is not None:
-            agent.elevenlabs_agent_id = el_agent_id
-            agent.tts_speed = _QORA_DEMO_TTS_SPEED
-            agent.tts_stability = _QORA_DEMO_TTS_STABILITY
-            agent.tts_similarity_boost = _QORA_DEMO_TTS_SIMILARITY_BOOST
-            # sdd/elevenlabs-config: seed demo agent with voicemail detection + max duration
-            agent.voicemail_detection_enabled = True
-            agent.max_call_duration_seconds = 120
-            await session.flush()
-            await _ensure_active_revision(session, agent)
-    else:
-        # AD-2: Idempotent corrections — update elevenlabs_agent_id and system_prompt
-        # if they are missing or stale (e.g. old Quintana agent ID, stale system_prompt).
-        agent = await _resolve_single_active_agent_or_none(session, "qora-demo")
-        if agent is not None:
-            updated = False
-            if agent.elevenlabs_agent_id != el_agent_id:
-                agent.elevenlabs_agent_id = el_agent_id
-                updated = True
-            # Fix stale system_prompt if it no longer matches the current constant
-            if agent.system_prompt != _QORA_EXPLAINER_SYSTEM_PROMPT:
-                agent.system_prompt = _QORA_EXPLAINER_SYSTEM_PROMPT
-                updated = True
-            # sdd/elevenlabs-config: idempotently set EL config fields if missing
-            if agent.voicemail_detection_enabled is None:
-                agent.voicemail_detection_enabled = True
-                updated = True
-            if agent.max_call_duration_seconds is None:
-                agent.max_call_duration_seconds = 120
-                updated = True
-            if updated:
-                await session.flush()
-            # Task 1.5: backfill revision 1 for agents seeded before this change.
-            await _ensure_active_revision(session, agent)
-
-    # Idempotently seed the demo lead for qora-demo.
-    # Jorge is a broker/sales manager evaluating Qora as a potential customer.
-    from app.leads.service import list_leads_for_client, create_lead
-
-    existing_leads = await list_leads_for_client(session, "qora-demo")
-    if not existing_leads:
-        await create_lead(
-            session,
-            client_id="qora-demo",
-            name="Jorge Ramírez",
-            phone="+54 11 5555-1234",
-            notes=_QORA_DEMO_SEED_LEAD_NOTES,
-        )
 
 
 # ---------------------------------------------------------------------------

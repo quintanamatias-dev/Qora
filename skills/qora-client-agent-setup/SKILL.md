@@ -61,7 +61,7 @@ backend/clients/{client-id}/
 | Voicemail behavior | Set `voicemail_detection_enabled=True` on Agent + add `<voicemail_detection>` section in `system-prompt.md` instructing immediate call termination |
 | Webhook auth needed | Generate secret, set `QORA_WEBHOOK_SECRET` in `.env`, set in ElevenLabs Security panel, then enable `QORA_WEBHOOK_AUTH_ENABLED=true` |
 
-## Complete Setup: 5 Phases, 40 Steps
+## Complete Setup: 5 Phases, 41 Steps
 
 Full reference: `docs/agent-setup-checklist.md`
 
@@ -77,31 +77,30 @@ Full reference: `docs/agent-setup-checklist.md`
 8. **Outbound only**: Add phone number resource (SIP trunk in Phone Numbers panel), copy the `phone_number_id`
 9. Set post-call webhook: `https://{host}/api/v1/calls/elevenlabs-postcall` + copy webhook secret
 
-### Phase 2 — Environment Variables (8 steps)
+### Phase 2 — Environment Variables (7 steps)
 
 10. `OPENAI_API_KEY` — set if not already present
 11. `ELEVENLABS_API_KEY` — set if not already present
 12. `QORA_API_KEY` — set if not already present
-13. `QORA_DEMO_CLIENT_ID` / `QORA_DEMO_AGENT_ID` — set to new client/agent if this is the demo
-14. **Outbound only**: `ENABLE_OUTBOUND_CALLS=true`
-15. **Outbound only**: `ELEVENLABS_PHONE_NUMBER_ID={pnum_...}` (from step 8)
-16. **Webhook auth**: `QORA_WEBHOOK_SECRET={generated}` + `QORA_WEBHOOK_AUTH_ENABLED=true`
-17. Per-client CRM key, e.g. `{CLIENT_NAME}_AIRTABLE_API_KEY`
+13. **Outbound only**: `ENABLE_OUTBOUND_CALLS=true`
+14. **Outbound only**: `ELEVENLABS_PHONE_NUMBER_ID={pnum_...}` (from step 8)
+15. **Webhook auth**: `QORA_WEBHOOK_SECRET={generated}` + `QORA_WEBHOOK_AUTH_ENABLED=true`
+16. Per-client CRM key, e.g. `{CLIENT_NAME}_AIRTABLE_API_KEY`
 
 ### Phase 3 — Qora DB: Client + Agent Records (12 steps)
 
-18. Create `Client` row: `id={client_id}`, `name`, `voice_id`, `is_active=True`
-19. Set scheduler/recontact fields if outbound: `scheduler_enabled=True`, `scheduler_max_attempts`, `scheduler_cooldown_minutes`, `scheduler_allowed_hours_start/end`, `scheduler_timezone`
-20. **C6**: Set `scheduler_backoff_multiplier` (float, default `1.0`). Use `1.0` for flat delay, higher values for escalating recontact delays. Example: Quintana uses `1.5`.
-21. Set `next_action_*` fields if using next-action pipeline
-22. Set `analysis_language` (default: `"Spanish"`)
-23. Create `Agent` row: `client_id`, `slug`, `name`, `voice_id`, `is_default=True`, `is_active=True`
-24. Set `elevenlabs_agent_id` on Agent (from step 1)
-25. Set `model`, `temperature`, `max_tokens`
-26. Set `tools_enabled` (JSON array of tool names)
-27. **Outbound only**: Set `elevenlabs_phone_number_id` on Agent (from step 8)
-28. Set TTS fields: `tts_speed`, `tts_stability`, `tts_similarity_boost`, `tts_model`
-29. **Outbound/C6**: Set `voicemail_detection_enabled=True` on Agent to enable ElevenLabs voicemail detection tool. Sync via `POST /agents/{id}/sync-elevenlabs` after setting.
+17. Create `Client` row: `id={client_id}`, `name`, `voice_id`, `is_active=True`
+18. Set scheduler/recontact fields if outbound: `scheduler_enabled=True`, `scheduler_max_attempts`, `scheduler_cooldown_minutes`, `scheduler_allowed_hours_start/end`, `scheduler_timezone`
+19. **C6**: Set `scheduler_backoff_multiplier` (float, default `1.0`). Use `1.0` for flat delay, higher values for escalating recontact delays. Example: Quintana uses `1.5`.
+20. Set `next_action_*` fields if using next-action pipeline
+21. Set `analysis_language` (default: `"Spanish"`)
+22. Create `Agent` row: `client_id`, `slug`, `name`, `voice_id`, `is_default=True`, `is_active=True`
+23. Set `elevenlabs_agent_id` on Agent (from step 1)
+24. Set `model`, `temperature`, `max_tokens`
+25. Set `tools_enabled` (JSON array of tool names)
+26. **Outbound only**: Set `elevenlabs_phone_number_id` on Agent (from step 8)
+27. Set TTS fields: `tts_speed`, `tts_stability`, `tts_similarity_boost`, `tts_model`
+28. **Outbound/C6**: Set `voicemail_detection_enabled=True` on Agent to enable ElevenLabs voicemail detection tool. Sync via `POST /agents/{id}/sync-elevenlabs` after setting.
 
 #### Quintana Seguros Recontact Policy Example (C6 reference values)
 
@@ -118,22 +117,22 @@ Full reference: `docs/agent-setup-checklist.md`
 
 ### Phase 4 — Filesystem Content (8 steps)
 
-28. Create `backend/clients/{client_id}/` directory
-29. Create `backend/clients/{client_id}/agents/{agent_slug}/` directory
-30. Write `system-prompt.md` with full agent prompt and `{{variable}}` placeholders
-31. Create `backend/clients/{client_id}/agents/{agent_slug}/skills/` directory
-32. Write `skills/registry.yaml` (at minimum: `skills: []`)
-33. Write any runtime knowledge files as `*.agent-skill.md`
-34. Write `crm.yaml` if CRM integration is needed (see `backend/clients/quintana-seguros/crm.yaml` as template)
-35. Seed at least one lead for demo/testing
+29. Create `backend/clients/{client_id}/` directory
+30. Create `backend/clients/{client_id}/agents/{agent_slug}/` directory
+31. Write `system-prompt.md` with full agent prompt and `{{variable}}` placeholders
+32. Create `backend/clients/{client_id}/agents/{agent_slug}/skills/` directory
+33. Write `skills/registry.yaml` (at minimum: `skills: []`)
+34. Write any runtime knowledge files as `*.agent-skill.md`
+35. Write `crm.yaml` if CRM integration is needed (see `backend/clients/quintana-seguros/crm.yaml` as template)
+36. Seed at least one lead for testing
 
 ### Phase 5 — Verification (6 steps)
 
-36. Verify ngrok/public host is reachable: `curl https://{host}/api/v1/health` → 200
-37. Test initiation webhook: `curl "https://{host}/api/v1/voice/initiation?client_id={client_id}"` → returns dynamic variables
-38. Test Custom LLM route: `curl -X POST https://{host}/api/v1/voice/{client_id}/custom-llm/chat/completions -d '{}'` → 422 (missing `messages`)
-39. Run browser demo and confirm backend logs hit `/{client_id}/custom-llm/chat/completions`
-40. **Outbound only**: Send one test call via scheduler or API, confirm `scheduled_calls` row transitions to `completed`
+37. Verify ngrok/public host is reachable: `curl https://{host}/api/v1/health` → 200
+38. Test initiation webhook: `curl "https://{host}/api/v1/voice/initiation?client_id={client_id}"` → returns dynamic variables
+39. Test Custom LLM route: `curl -X POST https://{host}/api/v1/voice/{client_id}/custom-llm/chat/completions -d '{}'` → 422 (missing `messages`)
+40. Trigger a test conversation from the ElevenLabs dashboard and confirm backend logs hit `/{client_id}/custom-llm/chat/completions`
+41. **Outbound only**: Send one test call via scheduler or API, confirm `scheduled_calls` row transitions to `completed`
 
 ## Outbound Call Setup (Detailed)
 
@@ -180,7 +179,7 @@ Return: client_id, agent_slug, elevenlabs_agent_id, Custom LLM URL, initiation w
 
 ## References
 
-- `docs/agent-setup-checklist.md` — full 40-step checklist with provider dependency table.
+- `docs/agent-setup-checklist.md` — full step-by-step checklist with provider dependency table.
 - `docs/elevenlabs-setup.md` — ElevenLabs dashboard configuration detail (webhook auth, soft timeout, background audio, tools, KB).
 - `docs/telephony/operator-checklist.md` — Telnyx + ElevenLabs SIP trunk setup for outbound.
 - `docs/architecture.md` — Qora system architecture, auth layers, data flow.

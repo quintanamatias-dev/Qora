@@ -37,10 +37,11 @@ async def resync_app(tmp_path: Path):
     await _init_db_with_migrations(db_module, settings)
 
     async with db_module.async_session_factory() as session:
-        from app.tenants.service import seed_qora_demo, seed_quintana
+        from app.tenants.service import seed_quintana
+        from tests.helpers.second_tenant import seed_second_tenant
 
         await seed_quintana(session)
-        await seed_qora_demo(session)
+        await seed_second_tenant(session)
         await session.commit()
 
     from app.admin.standards_router import router as admin_standards_router
@@ -66,7 +67,7 @@ async def _get_agent_ids() -> dict[str, str]:
 
     ids = {}
     async with db_module.async_session_factory() as session:
-        for client_id in ("quintana-seguros", "qora-demo"):
+        for client_id in ("quintana-seguros", "acme-widgets"):
             agent = await resolve_single_active_agent(session, client_id)
             ids[client_id] = agent.id
     return ids

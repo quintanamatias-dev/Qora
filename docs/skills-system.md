@@ -52,7 +52,7 @@ backend/clients/{client_id}/agents/{agent_slug}/skills/
 skills:
   - name: Qora-info
     description: "Complete information about the Qora platform: identity, capabilities, use cases, and demo limits"
-    trigger_hint: "When the user asks about Qora, its capabilities, how it works, pricing, integrations, or the Mariano demo"
+    trigger_hint: "When the user asks about Qora, its capabilities, how it works, pricing, or integrations"
     filler_text: "Dejame buscar esa informacion..."
 
   - name: product-auto
@@ -174,25 +174,30 @@ The `client_id` and `agent_slug` are **always explicit parameters** — never ra
 
 ---
 
-## Example: Qora Demo Agent
+## Example: Quintana Seguros Leads Agent
 
-The `qora-demo / qora-explainer` agent has one skill configured:
+The `quintana-seguros / leads-agent` agent has two skills configured:
 
 **`registry.yaml`**:
 ```yaml
 skills:
-  - name: Qora-info
-    description: "Informacion completa sobre la plataforma Qora: identidad, funcionamiento, capacidades, casos de uso y limites del demo"
-    trigger_hint: "Cuando el usuario pregunte sobre Qora, sus capacidades, como funciona, precios, integraciones o el demo de Mariano"
+  - name: auto-insurance-knowledge
+    description: "Tipos de cobertura de auto en Argentina, rol de Quintana como broker, aseguradoras con las que trabaja, factores que afectan el precio, y flujo post-llamada de recoleccion de datos."
+    trigger_hint: "Cuando el lead pregunta sobre coberturas, tipos de seguro, si es obligatorio, que aseguradoras trabajan, que diferencia hay entre todo riesgo y terceros, o que pasa despues de la llamada."
     filler_text: "Dejame buscar esa informacion..."
+
+  - name: lead-qualification
+    description: "Guia de recoleccion de datos para cotizacion de auto: que datos pedir, por que, como preguntar, orden recomendado, manejo de respuestas incompletas, y senales de lead no interesado."
+    trigger_hint: "Cuando necesitas orientacion sobre que dato recolectar, como preguntar por un dato, como manejar un 'no se', o como cerrar con un lead que no esta interesado."
+    filler_text: "Un momento, consulto..."
 ```
 
-**Skill file**: `backend/clients/qora-demo/agents/qora-explainer/skills/Qora-info.agent-skill.md`
+**Skill file**: `backend/clients/quintana-seguros/agents/leads-agent/skills/auto-insurance-knowledge.agent-skill.md`
 
-**Flow when a user asks "How does Qora work?"**:
-1. Agent detects the trigger (Qora platform question)
+**Flow when a lead asks "Que coberturas tienen?"**:
+1. Agent detects the trigger (coverage question)
 2. Streams `"Dejame buscar esa informacion..."` to TTS
-3. Calls `load_skill("Qora-info")`
-4. Receives the full `Qora-info.agent-skill.md` content
+3. Calls `load_skill("auto-insurance-knowledge")`
+4. Receives the full `auto-insurance-knowledge.agent-skill.md` content
 5. Caches it in `ConversationState`
-6. Answers with detailed Qora platform knowledge
+6. Answers with detailed coverage knowledge

@@ -44,7 +44,6 @@ Edit `.env` (at the repo root) and fill in:
 |----------|----------|-------------|
 | `OPENAI_API_KEY` | ✅ | Your OpenAI API key (GPT-4o) |
 | `ELEVENLABS_API_KEY` | ✅ | Your ElevenLabs API key |
-| `ELEVENLABS_AGENT_ID` | ✅ | The ID of your ElevenLabs Conversational AI agent |
 | `DATABASE_URL` | Optional | Default: `sqlite+aiosqlite:///./qora.db` |
 | `LOG_LEVEL` | Optional | Default: `INFO` |
 
@@ -55,8 +54,6 @@ Edit `.env` (at the repo root) and fill in:
 | `QORA_API_KEY` | ✅ (all environments) | Admin Bearer token — protects all admin routes. Local dev can use any non-placeholder value (e.g. `dev-key`). Generate a strong key for staging/production: `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` |
 | `QORA_ENV` | Optional | Default: `development`. Set `production` for deployment; startup then refuses insecure webhook auth, wildcard CORS, or enabled API docs. |
 | `QORA_DOCS_ENABLED` | Optional | Toggle `/docs` and `/redoc`. Default: `true`. Must be `false` in production. |
-| `QORA_DEMO_CLIENT_ID` | Required for demo | `client_id` of the demo tenant in your DB (e.g. `qora-demo`). Enables `/api/v1/demo/*` endpoints. |
-| `QORA_DEMO_AGENT_ID` | Required for demo | Agent UUID for the demo tenant. |
 | `QORA_SESSION_TTL_SECONDS` | Optional | In-memory session TTL in seconds. Default: `14400` (4 hours). |
 | `QORA_WEBHOOK_SECRET` | Required if webhook auth enabled | Shared secret for `X-Webhook-Secret` header validation. Must match ElevenLabs agent setting. |
 | `QORA_WEBHOOK_AUTH_ENABLED` | Optional | Enable ElevenLabs webhook authentication. Default: `false`. When `true`, `QORA_WEBHOOK_SECRET` must be set or startup fails. |
@@ -180,8 +177,6 @@ curl http://localhost:8000/api/v1/health
 
 Expected: `{"status": "healthy", "uptime_seconds": ..., "version": "0.1.0"}`
 
-The demo UI is available at: **http://localhost:8000/demo/**
-
 ---
 
 ## 5. Expose via ngrok
@@ -233,14 +228,11 @@ In the [ElevenLabs dashboard](https://elevenlabs.io/app/conversational-ai):
 
 ---
 
-## 7. Run the Demo
+## 7. Run a Call
 
-1. Open **http://localhost:8000/demo/** in your browser
-2. The **ElevenLabs Agent ID** field is pre-filled — verify it matches your agent
-3. Select a **Lead** from the dropdown
-4. Click **🎙️ Iniciar Conversación**
-5. Allow microphone access when prompted
-6. Talk to Jaumpablo!
+1. In the [ElevenLabs dashboard](https://elevenlabs.io/app/conversational-ai), trigger a test conversation with your agent (or place an outbound call if configured)
+2. Watch the backend logs for the custom-LLM webhook requests
+3. Check the transcript via `curl -H "Authorization: Bearer <YOUR_KEY>" http://localhost:8000/api/v1/calls?client_id=quintana-seguros`
 
 ---
 
@@ -285,8 +277,6 @@ curl -H "Authorization: Bearer <YOUR_KEY>" \
 curl -H "Authorization: Bearer <YOUR_KEY>" \
   "http://localhost:8000/api/v1/calls?client_id=acme-corp"
 
-# Demo context (public — no auth needed)
-curl http://localhost:8000/api/v1/demo/context
 ```
 
 **401 response** when key is wrong or missing:
@@ -327,11 +317,7 @@ sqlite3 qora.db "SELECT id FROM clients;"
 ngrok disconnected or the server crashed. Check:
 1. `ngrok` is still running — restart if needed
 2. The server is still running at port 8000
-3. Click **🔄 Reconectar** in the demo UI
-
-### `ELEVENLABS_AGENT_ID not configured`
-
-Add `ELEVENLABS_AGENT_ID=agent_xxxxxxxxxxxxxxxx` to your `.env` file.
+3. Reconnect from the ElevenLabs client
 
 ### Import errors on startup
 

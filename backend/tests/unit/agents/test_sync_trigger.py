@@ -46,8 +46,12 @@ async def agents_app(tmp_path: Path):
     await _init_db_with_migrations(db_module, settings)
 
     async with db_module.async_session_factory() as sess:
-        from app.tenants.service import seed_qora_demo
-        await seed_qora_demo(sess)
+        from app.tenants.service import seed_quintana, resolve_single_active_agent
+        await seed_quintana(sess)
+        # The default agent needs an elevenlabs_agent_id bound so sync tests
+        # exercise the real HTTP call path instead of being skipped.
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
+        agent.elevenlabs_agent_id = "agent_8201kra4wjhve0srcwgbtwfetr5n"
         await sess.commit()
 
     from app.agents.router import router as agents_router
@@ -67,13 +71,13 @@ async def agents_app(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Helper: get an existing agent ID from qora-demo
+# Helper: get an existing agent ID from quintana-seguros
 # ---------------------------------------------------------------------------
 
 
-async def _get_qora_demo_agent_id(agents_app: AsyncClient) -> str:
-    """Return the UUID of the qora-demo agent via the agents API."""
-    resp = await agents_app.get("/api/v1/clients/qora-demo/agents")
+async def _get_quintana_agent_id(agents_app: AsyncClient) -> str:
+    """Return the UUID of the quintana-seguros agent via the agents API."""
+    resp = await agents_app.get("/api/v1/clients/quintana-seguros/agents")
     assert resp.status_code == 200
     agents = resp.json()
     assert len(agents) >= 1
@@ -88,7 +92,7 @@ async def _get_qora_demo_agent_id(agents_app: AsyncClient) -> str:
 @pytest.mark.asyncio
 async def test_create_agent_with_el_id_and_soft_timeout_fires_sync(agents_app):
     """GIVEN AgentCreate with elevenlabs_agent_id and soft_timeout_seconds
-    WHEN POST /api/v1/clients/qora-demo/agents is called
+    WHEN POST /api/v1/clients/quintana-seguros/agents is called
     THEN sync_to_elevenlabs is scheduled (sync is triggered)
 
     We test the behavior by patching sync_to_elevenlabs with an AsyncMock.
@@ -98,7 +102,7 @@ async def test_create_agent_with_el_id_and_soft_timeout_fires_sync(agents_app):
     mock_sync = AsyncMock()
     with patch("app.agents.router.sync_to_elevenlabs", mock_sync):
         resp = await agents_app.post(
-            "/api/v1/clients/qora-demo/agents",
+            "/api/v1/clients/quintana-seguros/agents",
             json={
                 "slug": "test-agent-sync",
                 "name": "Test Agent Sync",
@@ -124,7 +128,7 @@ async def test_create_agent_without_el_id_does_not_fire_sync(agents_app):
     mock_sync = AsyncMock()
     with patch("app.agents.router.sync_to_elevenlabs", mock_sync):
         resp = await agents_app.post(
-            "/api/v1/clients/qora-demo/agents",
+            "/api/v1/clients/quintana-seguros/agents",
             json={
                 "slug": "test-agent-no-el",
                 "name": "Test Agent No EL",
@@ -153,7 +157,7 @@ async def test_create_agent_with_elevenlabs_binding_fires_sync(agents_app):
     mock_sync = AsyncMock()
     with patch("app.agents.router.sync_to_elevenlabs", mock_sync):
         resp = await agents_app.post(
-            "/api/v1/clients/qora-demo/agents",
+            "/api/v1/clients/quintana-seguros/agents",
             json={
                 "slug": "test-agent-no-timeout",
                 "name": "Test Agent No Timeout",
@@ -176,15 +180,15 @@ async def test_create_agent_with_elevenlabs_binding_fires_sync(agents_app):
 @pytest.mark.asyncio
 async def test_update_agent_with_soft_timeout_fires_sync(agents_app):
     """GIVEN PATCH on an agent that has elevenlabs_agent_id, updating soft_timeout_seconds
-    WHEN PATCH /api/v1/clients/qora-demo/agents/{agent_id} is called
+    WHEN PATCH /api/v1/clients/quintana-seguros/agents/{agent_id} is called
     THEN sync_to_elevenlabs is scheduled (sync triggered)
     """
-    agent_id = await _get_qora_demo_agent_id(agents_app)
+    agent_id = await _get_quintana_agent_id(agents_app)
 
     mock_sync = AsyncMock()
     with patch("app.agents.router.sync_to_elevenlabs", mock_sync):
         resp = await agents_app.patch(
-            f"/api/v1/clients/qora-demo/agents/{agent_id}",
+            f"/api/v1/clients/quintana-seguros/agents/{agent_id}",
             json={"soft_timeout_seconds": 4.0},
         )
         import asyncio as _asyncio
@@ -199,12 +203,12 @@ async def test_update_agent_without_soft_timeout_fields_does_not_fire_sync(agent
     WHEN PATCH is called
     THEN sync_to_elevenlabs is NOT called
     """
-    agent_id = await _get_qora_demo_agent_id(agents_app)
+    agent_id = await _get_quintana_agent_id(agents_app)
 
     mock_sync = AsyncMock()
     with patch("app.agents.router.sync_to_elevenlabs", mock_sync):
         resp = await agents_app.patch(
-            f"/api/v1/clients/qora-demo/agents/{agent_id}",
+            f"/api/v1/clients/quintana-seguros/agents/{agent_id}",
             json={"name": "Updated Name"},
         )
         import asyncio as _asyncio
@@ -251,12 +255,12 @@ async def test_background_sync_updates_status_to_synced(agents_app, tmp_path):
     )
 
     # Get the agent ID
-    resp = await agents_app.get("/api/v1/clients/qora-demo/agents")
+    resp = await agents_app.get("/api/v1/clients/quintana-seguros/agents")
     agent_id = resp.json()[0]["agent_id"]
 
     # Set soft timeout + keep existing elevenlabs_agent_id via patch
     await agents_app.patch(
-        f"/api/v1/clients/qora-demo/agents/{agent_id}",
+        f"/api/v1/clients/quintana-seguros/agents/{agent_id}",
         json={"soft_timeout_seconds": 3.0},
     )
 
@@ -301,12 +305,12 @@ async def test_background_sync_updates_status_to_error_when_el_down(agents_app, 
         side_effect=_always_503
     )
 
-    resp = await agents_app.get("/api/v1/clients/qora-demo/agents")
+    resp = await agents_app.get("/api/v1/clients/quintana-seguros/agents")
     agent_id = resp.json()[0]["agent_id"]
 
     # Ensure soft_timeout_seconds is set
     await agents_app.patch(
-        f"/api/v1/clients/qora-demo/agents/{agent_id}",
+        f"/api/v1/clients/quintana-seguros/agents/{agent_id}",
         json={"soft_timeout_seconds": 3.0},
     )
 
@@ -336,7 +340,7 @@ async def test_background_sync_skipped_outcome_leaves_status_unchanged(agents_ap
 
     # Create an agent without EL ID
     create_resp = await agents_app.post(
-        "/api/v1/clients/qora-demo/agents",
+        "/api/v1/clients/quintana-seguros/agents",
         json={
             "slug": "no-el-agent",
             "name": "No EL Agent",

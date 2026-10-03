@@ -44,8 +44,12 @@ async def sync_app(tmp_path: Path):
     await _init_db_with_migrations(db_module, settings)
 
     async with db_module.async_session_factory() as sess:
-        from app.tenants.service import seed_qora_demo
-        await seed_qora_demo(sess)
+        from app.tenants.service import seed_quintana, resolve_single_active_agent
+        await seed_quintana(sess)
+        # The default agent needs an elevenlabs_agent_id bound so sync-elevenlabs
+        # tests exercise the real HTTP call path instead of being skipped.
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
+        agent.elevenlabs_agent_id = "agent_8201kra4wjhve0srcwgbtwfetr5n"
         await sess.commit()
 
     from app.agents.router import router as agents_router
@@ -64,9 +68,9 @@ async def sync_app(tmp_path: Path):
     await db_module.close_db()
 
 
-async def _get_qora_demo_agent_id(client: AsyncClient) -> str:
-    """Return the UUID of the qora-demo default agent."""
-    resp = await client.get("/api/v1/clients/qora-demo/agents")
+async def _get_quintana_agent_id(client: AsyncClient) -> str:
+    """Return the UUID of the quintana-seguros default agent."""
+    resp = await client.get("/api/v1/clients/quintana-seguros/agents")
     assert resp.status_code == 200
     return resp.json()[0]["agent_id"]
 
@@ -85,11 +89,11 @@ async def test_resync_endpoint_returns_synced_on_success(sync_app):
     AND DB is updated with sync_status="synced"
     """
     client, db_module = sync_app
-    agent_id = await _get_qora_demo_agent_id(client)
+    agent_id = await _get_quintana_agent_id(client)
 
     # Set soft timeout so sync won't be skipped
     await client.patch(
-        f"/api/v1/clients/qora-demo/agents/{agent_id}",
+        f"/api/v1/clients/quintana-seguros/agents/{agent_id}",
         json={"soft_timeout_seconds": 3.0},
     )
 
@@ -112,7 +116,7 @@ async def test_resync_endpoint_returns_synced_on_success(sync_app):
     ).mock(side_effect=_echo_get)
 
     resp = await client.post(
-        f"/api/v1/clients/qora-demo/agents/{agent_id}/sync-elevenlabs"
+        f"/api/v1/clients/quintana-seguros/agents/{agent_id}/sync-elevenlabs"
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -131,7 +135,7 @@ async def test_resync_endpoint_returns_skipped_when_no_el_agent_id(sync_app):
 
     # Create a fresh agent without EL ID
     create_resp = await client.post(
-        "/api/v1/clients/qora-demo/agents",
+        "/api/v1/clients/quintana-seguros/agents",
         json={
             "slug": "no-el-id-agent",
             "name": "No EL ID Agent",
@@ -143,7 +147,7 @@ async def test_resync_endpoint_returns_skipped_when_no_el_agent_id(sync_app):
     agent_id = create_resp.json()["agent_id"]
 
     resp = await client.post(
-        f"/api/v1/clients/qora-demo/agents/{agent_id}/sync-elevenlabs"
+        f"/api/v1/clients/quintana-seguros/agents/{agent_id}/sync-elevenlabs"
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -159,7 +163,7 @@ async def test_resync_endpoint_returns_404_for_unknown_agent(sync_app):
     """
     client, _ = sync_app
     resp = await client.post(
-        "/api/v1/clients/qora-demo/agents/00000000-0000-0000-0000-000000000000/sync-elevenlabs"
+        "/api/v1/clients/quintana-seguros/agents/00000000-0000-0000-0000-000000000000/sync-elevenlabs"
     )
     assert resp.status_code == 404
 
@@ -171,7 +175,7 @@ async def test_resync_endpoint_returns_404_for_unknown_client(sync_app):
     THEN 404 is returned
     """
     client, _ = sync_app
-    agent_id = await _get_qora_demo_agent_id(client)
+    agent_id = await _get_quintana_agent_id(client)
     resp = await client.post(
         f"/api/v1/clients/ghost-client/agents/{agent_id}/sync-elevenlabs"
     )
@@ -187,11 +191,11 @@ async def test_resync_endpoint_returns_error_when_el_api_down(sync_app):
     AND DB is updated with elevenlabs_sync_status="error"
     """
     client, db_module = sync_app
-    agent_id = await _get_qora_demo_agent_id(client)
+    agent_id = await _get_quintana_agent_id(client)
 
     # Set soft_timeout_seconds so sync won't be skipped
     await client.patch(
-        f"/api/v1/clients/qora-demo/agents/{agent_id}",
+        f"/api/v1/clients/quintana-seguros/agents/{agent_id}",
         json={"soft_timeout_seconds": 3.0},
     )
 
@@ -204,7 +208,7 @@ async def test_resync_endpoint_returns_error_when_el_api_down(sync_app):
     ).mock(side_effect=_always_503)
 
     resp = await client.post(
-        f"/api/v1/clients/qora-demo/agents/{agent_id}/sync-elevenlabs"
+        f"/api/v1/clients/quintana-seguros/agents/{agent_id}/sync-elevenlabs"
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -251,7 +255,7 @@ async def test_agent_create_with_soft_timeout_updates_sync_status(sync_app):
     )
 
     resp = await client.post(
-        "/api/v1/clients/qora-demo/agents",
+        "/api/v1/clients/quintana-seguros/agents",
         json={
             "slug": "agent-sync-test",
             "name": "Agent Sync Test",
@@ -294,7 +298,7 @@ async def test_agent_save_when_el_api_down_saves_agent_sync_status_error(sync_ap
     )
 
     resp = await client.post(
-        "/api/v1/clients/qora-demo/agents",
+        "/api/v1/clients/quintana-seguros/agents",
         json={
             "slug": "agent-el-down",
             "name": "Agent EL Down",
@@ -334,11 +338,11 @@ async def test_resync_endpoint_with_all_three_config_groups_patch_body(sync_app)
     """
     import json as _json
     client, db_module = sync_app
-    agent_id = await _get_qora_demo_agent_id(client)
+    agent_id = await _get_quintana_agent_id(client)
 
-    # Set all three config groups on the agent (qora-demo already has voicemail+max_duration from seed)
+    # Set all three config groups on the agent
     await client.patch(
-        f"/api/v1/clients/qora-demo/agents/{agent_id}",
+        f"/api/v1/clients/quintana-seguros/agents/{agent_id}",
         json={
             "soft_timeout_seconds": 3.0,
             "voicemail_detection_enabled": True,
@@ -363,7 +367,7 @@ async def test_resync_endpoint_with_all_three_config_groups_patch_body(sync_app)
     ).mock(side_effect=echo_get)
 
     resp = await client.post(
-        f"/api/v1/clients/qora-demo/agents/{agent_id}/sync-elevenlabs"
+        f"/api/v1/clients/quintana-seguros/agents/{agent_id}/sync-elevenlabs"
     )
     assert resp.status_code == 200
     assert resp.json()["sync_status"] == "synced"
@@ -417,7 +421,7 @@ async def test_agent_create_with_voicemail_and_max_duration_triggers_sync(sync_a
     )
 
     resp = await client.post(
-        "/api/v1/clients/qora-demo/agents",
+        "/api/v1/clients/quintana-seguros/agents",
         json={
             "slug": "agent-vm-test",
             "name": "Agent VM Test",
@@ -463,7 +467,7 @@ async def test_resync_endpoint_with_only_voicemail_sends_only_voicemail_block(sy
 
     # Create an agent with only voicemail set
     create_resp = await client.post(
-        "/api/v1/clients/qora-demo/agents",
+        "/api/v1/clients/quintana-seguros/agents",
         json={
             "slug": "agent-vm-only",
             "name": "Agent VM Only",
@@ -493,7 +497,7 @@ async def test_resync_endpoint_with_only_voicemail_sends_only_voicemail_block(sy
     ).mock(side_effect=echo_get)
 
     resp = await client.post(
-        f"/api/v1/clients/qora-demo/agents/{agent_id}/sync-elevenlabs"
+        f"/api/v1/clients/quintana-seguros/agents/{agent_id}/sync-elevenlabs"
     )
     assert resp.status_code == 200
     assert resp.json()["sync_status"] == "synced"

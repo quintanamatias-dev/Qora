@@ -1,9 +1,9 @@
 """Phase 1 (agent-config-revisions-routing) — Task 1.5: seeders activate revision 1.
 
-Covers: seed_quintana() and seed_qora_demo() must create + activate an
-AgentConfigRevision (revision_number=1) for every agent they seed, so a
-fresh (non-migrated) DB matches the migrated-production invariant that every
-agent has a non-null active_revision_id.
+Covers: seed_quintana() must create + activate an AgentConfigRevision
+(revision_number=1) for every agent it seeds, so a fresh (non-migrated) DB
+matches the migrated-production invariant that every agent has a non-null
+active_revision_id.
 """
 
 from __future__ import annotations
@@ -57,19 +57,6 @@ async def test_seed_quintana_creates_active_revision_for_every_agent(
     config = json.loads(revision.config)
     assert config["voice_id"] == agent.voice_id
     assert config["model"] == agent.model
-
-
-async def test_seed_qora_demo_creates_active_revision_for_every_agent(
-    session: AsyncSession,
-):
-    """seed_qora_demo() creates + activates a revision 1 for qora-explainer."""
-    from app.tenants.service import seed_qora_demo, resolve_single_active_agent
-
-    await seed_qora_demo(session)
-
-    agent = await resolve_single_active_agent(session, "qora-demo")
-    assert agent is not None
-    assert agent.active_revision_id is not None
 
 
 async def test_seed_quintana_revision_activation_is_idempotent(session: AsyncSession):

@@ -654,7 +654,7 @@ async def test_create_client_scheduler_defaults_when_omitted(clients_app: AsyncC
 
 
 # ---------------------------------------------------------------------------
-# qora-demo-agent-admin-fix — Task 1.1 + 1.2: Optional client_id + collision dedup
+# acme-widgets-agent-admin-fix — Task 1.1 + 1.2: Optional client_id + collision dedup
 # ---------------------------------------------------------------------------
 
 
@@ -663,16 +663,16 @@ async def test_create_client_without_client_id_auto_generates_slug(
 ):
     """POST /clients without client_id auto-generates slug from name.
 
-    'Qora Demo' → 'qora-demo'
+    'Acme Widgets' → 'acme-widgets'
     """
     response = await clients_app.post(
         "/api/v1/clients",
-        json={"name": "Qora Demo"},
+        json={"name": "Acme Widgets"},
     )
     assert response.status_code == 201
     data = response.json()
-    assert data["client_id"] == "qora-demo"
-    assert data["name"] == "Qora Demo"
+    assert data["client_id"] == "acme-widgets"
+    assert data["name"] == "Acme Widgets"
     assert data["is_active"] is True
 
 
@@ -694,23 +694,23 @@ async def test_create_client_slug_collision_appends_suffix(
 ):
     """POST /clients with slug collision yields slug with -2 suffix.
 
-    First 'Qora Demo' → 'qora-demo'. Second distinct name slugifies to 'qora-demo-2'.
+    First 'Acme Widgets' → 'acme-widgets'. Second distinct name slugifies to 'acme-widgets-2'.
     """
-    # First: creates qora-demo
+    # First: creates acme-widgets
     r1 = await clients_app.post(
         "/api/v1/clients",
-        json={"name": "Qora Demo"},
+        json={"name": "Acme Widgets"},
     )
     assert r1.status_code == 201
-    assert r1.json()["client_id"] == "qora-demo"
+    assert r1.json()["client_id"] == "acme-widgets"
 
     # Second: generated slug collides, but name stays unique.
     r2 = await clients_app.post(
         "/api/v1/clients",
-        json={"name": "Qora-Demo"},
+        json={"name": "Acme-Widgets"},
     )
     assert r2.status_code == 201
-    assert r2.json()["client_id"] == "qora-demo-2"
+    assert r2.json()["client_id"] == "acme-widgets-2"
 
 
 async def test_create_client_multiple_collisions_increment_suffix(
@@ -718,17 +718,17 @@ async def test_create_client_multiple_collisions_increment_suffix(
 ):
     """POST /clients with double collision yields -3 suffix.
 
-    Existing slugs qora-demo and qora-demo-2 → third request yields qora-demo-3.
+    Existing slugs acme-widgets and acme-widgets-2 → third request yields acme-widgets-3.
     """
-    await clients_app.post("/api/v1/clients", json={"name": "Qora Demo"})
-    await clients_app.post("/api/v1/clients", json={"name": "Qora-Demo"})
+    await clients_app.post("/api/v1/clients", json={"name": "Acme Widgets"})
+    await clients_app.post("/api/v1/clients", json={"name": "Acme-Widgets"})
 
     r3 = await clients_app.post(
         "/api/v1/clients",
-        json={"name": "Qora_Demo"},
+        json={"name": "Acme_Widgets"},
     )
     assert r3.status_code == 201
-    assert r3.json()["client_id"] == "qora-demo-3"
+    assert r3.json()["client_id"] == "acme-widgets-3"
 
 
 async def test_create_client_name_with_special_chars_slugified(

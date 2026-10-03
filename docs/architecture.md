@@ -74,10 +74,6 @@ ElevenLabs voice webhook endpoints (initiation, custom-LLM, post-call) optionall
 QORA_ALLOWED_ORIGINS=https://app.example.com,https://admin.example.com
 ```
 
-### Demo public endpoints
-
-`/api/v1/demo/*` routes are intentionally auth-exempt. Server-side scope isolation ensures they only return data for the tenant configured in `QORA_DEMO_CLIENT_ID`. The browser never sees `QORA_API_KEY` or `QORA_WEBHOOK_SECRET`.
-
 ---
 
 ## Component Diagram
@@ -85,7 +81,7 @@ QORA_ALLOWED_ORIGINS=https://app.example.com,https://admin.example.com
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        USER (Browser)                        │
-│              Demo UI — /demo/ (index.html)                  │
+│                  ElevenLabs Agent (voice UI)                 │
 └──────────────────────────┬──────────────────────────────────┘
                            │ WebSocket (wss://api.elevenlabs.io)
                            │ + conversation_initiation_client_data
@@ -157,16 +153,6 @@ QORA_ALLOWED_ORIGINS=https://app.example.com,https://admin.example.com
 ```
 
 ## Components
-
-### Demo UI (`app/static/index.html`)
-
-A single-page browser application. It connects to ElevenLabs via WebSocket using a signed URL (fetched from `/api/v1/voice/signed-url`). It sends microphone audio as PCM chunks, receives TTS audio and transcript events, and displays the conversation in real time.
-
-The demo page does **not** own prompt, model, or voice-tuning defaults. It reads the selected agent configuration from Qora and sends only safe ElevenLabs runtime overrides generated from that agent state.
-
-**WebSocket close handling:**
-- Code `1000` → "Conversación finalizada" (clean end)
-- Code `1006` or other → "Se perdió la conexión" + reconnect button
 
 ### Admin UI (`frontend/src/features/admin`)
 
@@ -315,24 +301,9 @@ Background tick (`scheduler_tick()`) runs every minute and dispatches pending `S
 
 **Do not add new runtime knobs to the browser.** Browser UI may display and forward resolved values, but the source belongs to the Agent row or filesystem prompt/skill files above.
 
-### Qora Demo Agent (`qora-demo / qora-explainer`)
+### Agent Routing and Configuration
 
-The Qora explainer demo is configured as:
-
-```text
-backend/clients/qora-demo/agents/qora-explainer/
-├── system-prompt.md                         ← behavior / soul: Mariano
-└── skills/
-    ├── registry.yaml                        ← skill registry
-    └── Qora-info.agent-skill.md             ← factual Qora knowledge
-```
-
-Important behavior decisions:
-- The agent is **Mariano**, not Sofia.
-- It presents itself when the call starts because the intended flow is outbound-style: Qora/ElevenLabs initiates contact.
-- It must not know or mention client-specific agents from other tenants.
-- It speaks in short, semi-formal Rioplatense Spanish by default.
-- Qora-info is knowledge, not personality; `system-prompt.md` is the dominant behavior contract.
+Agents are routed and configured explicitly — never through an implicit "default" flag. Live calls use an agent-scoped custom-LLM route, and the active configuration for a given call is resolved through versioned revisions with Qora standard → client → agent inheritance (see `openspec/changes/agent-config-revisions-routing/design.md` and `openspec/changes/agent-config-inheritance/design.md`, D17–D19).
 
 Voice tuning constraints:
 - `tts_speed` must stay in the ElevenLabs-safe range `0.7–1.2`.
@@ -362,7 +333,6 @@ Active tenant configuration is seeded via `seed_*()` functions in `backend/app/t
 - `seed_quintana()` — creates `quintana-seguros` client and default agent.
   Prompt and knowledge content is embedded as `_QUINTANA_SYSTEM_PROMPT` and `_QUINTANA_KNOWLEDGE_BASE` string constants.
   Uses a **non-overwrite guard**: fields are only set if currently missing or blank (`None` or empty string), protecting any admin UI edits.
-- `seed_qora_demo()` — creates the Qora demo client + `qora-explainer` agent. The canonical prompt is at `backend/clients/qora-demo/agents/qora-explainer/system-prompt.md`; the DB field is a legacy fallback.
 
 ### Soft Delete
 

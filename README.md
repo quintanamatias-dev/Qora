@@ -220,14 +220,13 @@ This starts:
 - Backend: `http://localhost:8000`
 - ngrok tunnel to the backend for ElevenLabs webhooks
 - Frontend: `http://localhost:5173`
-- Voice demo: `http://localhost:8000/demo/`
 
 **TL;DR:**
 
 ```bash
 # 1. Configure environment (from repo root — .env.example lives here)
 cp .env.example .env
-# Required: OPENAI_API_KEY, ELEVENLABS_API_KEY, ELEVENLABS_AGENT_ID
+# Required: OPENAI_API_KEY, ELEVENLABS_API_KEY
 # Auth:     QORA_API_KEY (admin Bearer token — generate with python3 -c "import secrets; print(secrets.token_urlsafe(32))")
 
 # Validate before starting
@@ -246,9 +245,6 @@ python scripts/migrate.py
 
 # 4. Run
 uvicorn app.main:app --reload
-
-# 5. Open demo
-open http://localhost:8000/demo/
 ```
 
 > See [`docs/running-locally.md`](docs/running-locally.md) for full env var reference including auth, demo, webhook secret, and CORS settings.

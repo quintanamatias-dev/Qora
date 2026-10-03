@@ -1361,7 +1361,6 @@ class TestLifespanWithExecutorEnabled:
             patch.object(db_module_real, "close_db", AsyncMock()),
             # Patch seed functions at their source modules
             patch("app.tenants.service.seed_quintana", AsyncMock()),
-            patch("app.tenants.service.seed_qora_demo", AsyncMock()),
             patch("app.leads.service.seed_leads", AsyncMock()),
             # Patch background coroutines at their source modules
             patch("app.sweeper.stale_session_sweeper", _never_coroutine),
@@ -1425,7 +1424,6 @@ class TestLifespanWithExecutorEnabled:
             patch.object(db_module_real, "init_db", AsyncMock()),
             patch.object(db_module_real, "close_db", AsyncMock()),
             patch("app.tenants.service.seed_quintana", AsyncMock()),
-            patch("app.tenants.service.seed_qora_demo", AsyncMock()),
             patch("app.leads.service.seed_leads", AsyncMock()),
             patch("app.sweeper.stale_session_sweeper", _never_coroutine),
             patch("app.scheduler.service.scheduler_tick", _never_coroutine),
