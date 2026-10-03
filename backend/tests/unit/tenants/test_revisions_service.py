@@ -52,11 +52,12 @@ async def session(tmp_path: Path):
 
 
 async def _seed_two_agents(session: AsyncSession):
-    """Seed quintana-seguros (2 agents) + qora-demo (1 agent) for isolation tests."""
-    from app.tenants.service import seed_quintana, seed_qora_demo
+    """Seed quintana-seguros (1 agent) + a second distinct tenant for isolation tests."""
+    from app.tenants.service import seed_quintana
+    from tests.helpers.second_tenant import seed_second_tenant
 
     await seed_quintana(session)
-    await seed_qora_demo(session)
+    await seed_second_tenant(session)
     await session.commit()
 
 
@@ -108,7 +109,7 @@ async def test_create_revision_monotonic_independent_across_agents(
 
     await _seed_two_agents(session)
     agent_a = await resolve_single_active_agent(session, "quintana-seguros")
-    agent_b = await resolve_single_active_agent(session, "qora-demo")
+    agent_b = await resolve_single_active_agent(session, "acme-widgets")
     assert agent_a is not None and agent_b is not None
 
     config = AgentConfigV1(**_FULL_CONFIG)
@@ -233,7 +234,7 @@ async def test_revision_of_another_agent_is_not_readable(session: AsyncSession):
 
     await _seed_two_agents(session)
     agent_a = await resolve_single_active_agent(session, "quintana-seguros")
-    agent_b = await resolve_single_active_agent(session, "qora-demo")
+    agent_b = await resolve_single_active_agent(session, "acme-widgets")
     assert agent_a is not None and agent_b is not None
 
     revision_a = await revisions_service.get_active_revision(
@@ -254,7 +255,7 @@ async def test_revision_of_another_agent_is_not_activatable(session: AsyncSessio
 
     await _seed_two_agents(session)
     agent_a = await resolve_single_active_agent(session, "quintana-seguros")
-    agent_b = await resolve_single_active_agent(session, "qora-demo")
+    agent_b = await resolve_single_active_agent(session, "acme-widgets")
     assert agent_a is not None and agent_b is not None
 
     revision_a = await revisions_service.get_active_revision(
@@ -275,7 +276,7 @@ async def test_rollback_across_tenant_boundary_is_rejected(session: AsyncSession
 
     await _seed_two_agents(session)
     agent_a = await resolve_single_active_agent(session, "quintana-seguros")
-    agent_b = await resolve_single_active_agent(session, "qora-demo")
+    agent_b = await resolve_single_active_agent(session, "acme-widgets")
     assert agent_a is not None and agent_b is not None
 
     revision_a = await revisions_service.get_active_revision(
@@ -418,7 +419,7 @@ async def test_client_revision_of_another_client_is_not_readable(session: AsyncS
     )
 
     leaked = await revisions_service.get_client_revision(
-        session, "qora-demo", revision_a.id
+        session, "acme-widgets", revision_a.id
     )
     assert leaked is None
 

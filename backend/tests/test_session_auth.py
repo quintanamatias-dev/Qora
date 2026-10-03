@@ -7,21 +7,17 @@ They drive the design of:
   - get_authorized_session() FastAPI dep (app.core.auth)
   - ConversationState.auth field (app.voice.session)
   - AuthorizedSession binding in initiation (app.voice.initiation)
-  - Demo router endpoints (app.demo.router)
   - Tool scope guard in dispatcher (app.tools.dispatcher)
   - Zero-DB guarantee on per-turn hot path (instrumented)
 
 Test plan derived from design.md testing strategy and spec scenarios:
   - session-auth-binding
   - tenant-isolation
-  - demo-scoped-credentials
-  - demo-agent-selection (adjacent)
 
 Structure:
   TestAuthorizedSession         — Unit: dataclass + factory
   TestGetAuthorizedSession      — Unit: FastAPI dep lookup
   TestConversationStateAuth     — Unit: ConversationState.auth field
-  TestDemoRouter                — Integration: demo context/leads endpoints
   TestToolScopeDispatcher       — Unit: scope guard in dispatch_tool
   TestTenantIsolation           — Unit: cross-tenant tool call blocked
   TestZeroDbHotPath             — Instrumented: zero DB on custom-LLM turn
@@ -69,7 +65,7 @@ class TestAuthorizedSession:
         from app.core.auth import create_authorized_session
 
         session = create_authorized_session(
-            client_id="qora-demo",
+            client_id="demo-client",
             agent_id="agent-1",
             lead_id="lead-1",
             session_id="sess-1",
@@ -84,7 +80,7 @@ class TestAuthorizedSession:
         from app.core.auth import create_authorized_session
 
         session = create_authorized_session(
-            client_id="qora-demo",
+            client_id="demo-client",
             agent_id="agent-1",
             lead_id="lead-1",
             session_id="sess-1",
@@ -290,90 +286,6 @@ class TestConversationStateAuth:
 
         assert conv.auth is auth
         assert conv.auth.client_id == "client-1"
-
-
-# ---------------------------------------------------------------------------
-# TestDemoRouter — Integration: demo context/leads endpoints
-# ---------------------------------------------------------------------------
-
-
-class TestDemoRouter:
-    """Integration tests for GET /api/v1/demo/context and GET /api/v1/demo/leads."""
-
-    def _get_app(self, demo_client_id="qora-demo", demo_agent_id="agent-demo-el"):
-        """Build a test app with demo env vars configured."""
-        import os
-        with patch.dict(os.environ, {
-            "QORA_DEMO_CLIENT_ID": demo_client_id,
-            "QORA_DEMO_AGENT_ID": demo_agent_id,
-            "QORA_API_KEY": "test-key",
-        }):
-            from app.main import create_app
-            return create_app()
-
-    def test_demo_context_is_auth_exempt(self):
-        """GET /api/v1/demo/context returns 200 without any Authorization header."""
-        from app.main import app
-        client = TestClient(app, raise_server_exceptions=False)
-        # Must NOT require auth — public endpoint
-        response = client.get("/api/v1/demo/context")
-        # 200 means the endpoint exists and is accessible (we may get 503 if DB not seeded
-        # but NOT 401 — that would mean the endpoint is auth-protected, which is wrong)
-        assert response.status_code != 401, (
-            f"/api/v1/demo/context must be auth-exempt; got 401"
-        )
-
-    def test_demo_leads_is_auth_exempt(self):
-        """GET /api/v1/demo/leads returns a non-401 without Authorization header."""
-        from app.main import app
-        client = TestClient(app, raise_server_exceptions=False)
-        response = client.get("/api/v1/demo/leads")
-        # Must NOT be 401
-        assert response.status_code != 401, (
-            f"/api/v1/demo/leads must be auth-exempt; got 401"
-        )
-
-    def test_demo_context_response_does_not_contain_api_key(self):
-        """GET /api/v1/demo/context response body must never include the API key value."""
-        from app.main import app
-        import os
-        test_key = "super-secret-qora-api-key-NEVER-EXPOSE"
-        with patch.dict(os.environ, {"QORA_API_KEY": test_key}):
-            client = TestClient(app, raise_server_exceptions=False)
-            response = client.get("/api/v1/demo/context")
-            response_text = response.text
-            assert test_key not in response_text, (
-                "API key must NEVER appear in /api/v1/demo/context response"
-            )
-
-    def test_demo_context_returns_expected_shape(self):
-        """GET /api/v1/demo/context returns JSON with elevenlabs_agent_id, client_name, agent_name."""
-        from app.main import app
-        client = TestClient(app, raise_server_exceptions=False)
-        response = client.get("/api/v1/demo/context")
-        # Acceptable responses: 200 (configured) or 503/404 (demo not configured in test env)
-        # NOT 401, NOT 500 with key leakage
-        if response.status_code == 200:
-            data = response.json()
-            assert "elevenlabs_agent_id" in data, "response must have elevenlabs_agent_id key"
-            assert "client_name" in data, "response must have client_name key"
-            assert "agent_name" in data, "response must have agent_name key"
-            # Keys we must NOT expose
-            assert "api_key" not in data
-            assert "qora_api_key" not in data
-            assert "secret" not in data
-
-    def test_demo_leads_scoped_to_demo_client(self):
-        """GET /api/v1/demo/leads must not expose leads from other clients."""
-        from app.main import app
-        client = TestClient(app, raise_server_exceptions=False)
-        response = client.get("/api/v1/demo/leads")
-        if response.status_code == 200:
-            leads = response.json()
-            # All returned leads should belong to the demo client
-            # (we can't assert client_id here without knowing the seeded demo client,
-            # but we assert the response shape is a list)
-            assert isinstance(leads, list), "demo leads must be a list"
 
 
 # ---------------------------------------------------------------------------

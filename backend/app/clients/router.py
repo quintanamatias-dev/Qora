@@ -69,7 +69,7 @@ def _slugify_client_id(name: str) -> str:
     """Convert a display name to an ASCII URL slug.
 
     Examples:
-        'Qora Demo' → 'qora-demo'
+        'Acme Widgets' → 'acme-widgets'
         'Acme Corp!' → 'acme-corp'
         '  Spaces  ' → 'spaces'
     """

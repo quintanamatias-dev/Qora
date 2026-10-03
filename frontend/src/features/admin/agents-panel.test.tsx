@@ -124,8 +124,8 @@ describe('computeReadinessChecklist', () => {
   const readyAgent: Agent = {
     agent_id: 'a1',
     client_id: 'c1',
-    slug: 'qora-explainer',
-    name: 'Qora Explainer',
+    slug: 'leads-agent',
+    name: 'Leads Agent',
     voice_id: 'v1',
     model: 'gpt-4o',
     system_prompt: 'You are Sofia, an insurance agent.',

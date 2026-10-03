@@ -21,11 +21,10 @@ from pydantic import SecretStr
 
 @pytest_asyncio.fixture
 async def revisions_app(tmp_path: Path):
-    """Isolated FastAPI app with agents router + seeded qora-demo agent.
+    """Isolated FastAPI app with agents router + a seeded second-tenant agent.
 
-    qora-explainer has elevenlabs_agent_id bound (seed_qora_demo), so sync
-    triggers; ElevenLabsService.sync_agent_config is mocked so no outbound
-    HTTP call is made.
+    ElevenLabsService.sync_agent_config is mocked throughout so no outbound
+    HTTP call is made regardless of elevenlabs_agent_id.
     """
     from app.core.config import Settings
     from app.core import database as db_module
@@ -39,9 +38,10 @@ async def revisions_app(tmp_path: Path):
     await _init_db_with_migrations(db_module, settings)
 
     async with db_module.async_session_factory() as session:
-        from app.tenants.service import seed_qora_demo, seed_quintana
+        from app.tenants.service import seed_quintana
+        from tests.helpers.second_tenant import seed_second_tenant
 
-        await seed_qora_demo(session)
+        await seed_second_tenant(session)
         await seed_quintana(session)
         await session.commit()
 
@@ -62,8 +62,8 @@ async def revisions_app(tmp_path: Path):
     await db_module.close_db()
 
 
-async def _get_demo_agent_id(client: AsyncClient) -> str:
-    response = await client.get("/api/v1/clients/qora-demo/agents")
+async def _get_second_tenant_agent_id(client: AsyncClient) -> str:
+    response = await client.get("/api/v1/clients/acme-widgets/agents")
     response.raise_for_status()
     agents = response.json()
     assert len(agents) == 1
@@ -76,8 +76,8 @@ async def _get_demo_agent_id(client: AsyncClient) -> str:
 
 
 async def test_patch_agent_config_creates_and_activates_revision(revisions_app):
-    agent_id = await _get_demo_agent_id(revisions_app)
-    base_url = f"/api/v1/clients/qora-demo/agents/{agent_id}"
+    agent_id = await _get_second_tenant_agent_id(revisions_app)
+    base_url = f"/api/v1/clients/acme-widgets/agents/{agent_id}"
 
     with patch(
         "app.elevenlabs.service.ElevenLabsService.sync_agent_config",
@@ -98,8 +98,8 @@ async def test_patch_agent_config_creates_and_activates_revision(revisions_app):
 
 
 async def test_patch_agent_config_rejects_invalid_merged_config(revisions_app):
-    agent_id = await _get_demo_agent_id(revisions_app)
-    base_url = f"/api/v1/clients/qora-demo/agents/{agent_id}"
+    agent_id = await _get_second_tenant_agent_id(revisions_app)
+    base_url = f"/api/v1/clients/acme-widgets/agents/{agent_id}"
 
     response = await revisions_app.patch(
         f"{base_url}/config", json={"tts_speed": 99.0}
@@ -113,8 +113,8 @@ async def test_patch_agent_config_rejects_invalid_merged_config(revisions_app):
 
 
 async def test_list_revisions_returns_ordered_history(revisions_app):
-    agent_id = await _get_demo_agent_id(revisions_app)
-    base_url = f"/api/v1/clients/qora-demo/agents/{agent_id}"
+    agent_id = await _get_second_tenant_agent_id(revisions_app)
+    base_url = f"/api/v1/clients/acme-widgets/agents/{agent_id}"
 
     with patch(
         "app.elevenlabs.service.ElevenLabsService.sync_agent_config",
@@ -132,8 +132,8 @@ async def test_list_revisions_returns_ordered_history(revisions_app):
 
 
 async def test_get_single_revision(revisions_app):
-    agent_id = await _get_demo_agent_id(revisions_app)
-    base_url = f"/api/v1/clients/qora-demo/agents/{agent_id}"
+    agent_id = await _get_second_tenant_agent_id(revisions_app)
+    base_url = f"/api/v1/clients/acme-widgets/agents/{agent_id}"
 
     list_response = await revisions_app.get(f"{base_url}/revisions")
     revision_id = list_response.json()[0]["id"]
@@ -144,16 +144,16 @@ async def test_get_single_revision(revisions_app):
 
 
 async def test_get_single_revision_404_for_unknown_id(revisions_app):
-    agent_id = await _get_demo_agent_id(revisions_app)
-    base_url = f"/api/v1/clients/qora-demo/agents/{agent_id}"
+    agent_id = await _get_second_tenant_agent_id(revisions_app)
+    base_url = f"/api/v1/clients/acme-widgets/agents/{agent_id}"
 
     response = await revisions_app.get(f"{base_url}/revisions/does-not-exist")
     assert response.status_code == 404
 
 
 async def test_revision_of_another_agent_is_unreachable_via_api(revisions_app):
-    """Tenant isolation at the API layer: quintana's revision is invisible via qora-demo's agent_id."""
-    qora_agent_id = await _get_demo_agent_id(revisions_app)
+    """Tenant isolation at the API layer: quintana's revision is invisible via acme-widgets's agent_id."""
+    second_tenant_agent_id = await _get_second_tenant_agent_id(revisions_app)
 
     quintana_response = await revisions_app.get(
         "/api/v1/clients/quintana-seguros/agents"
@@ -166,7 +166,7 @@ async def test_revision_of_another_agent_is_unreachable_via_api(revisions_app):
     quintana_revision_id = quintana_revisions.json()[0]["id"]
 
     leaked = await revisions_app.get(
-        f"/api/v1/clients/qora-demo/agents/{qora_agent_id}/revisions/{quintana_revision_id}"
+        f"/api/v1/clients/acme-widgets/agents/{second_tenant_agent_id}/revisions/{quintana_revision_id}"
     )
     assert leaked.status_code == 404
 
@@ -177,8 +177,8 @@ async def test_revision_of_another_agent_is_unreachable_via_api(revisions_app):
 
 
 async def test_rollback_endpoint_activates_new_revision(revisions_app):
-    agent_id = await _get_demo_agent_id(revisions_app)
-    base_url = f"/api/v1/clients/qora-demo/agents/{agent_id}"
+    agent_id = await _get_second_tenant_agent_id(revisions_app)
+    base_url = f"/api/v1/clients/acme-widgets/agents/{agent_id}"
 
     revisions_before = (await revisions_app.get(f"{base_url}/revisions")).json()
     revision_1_id = revisions_before[-1]["id"]
@@ -207,8 +207,8 @@ async def test_rollback_endpoint_activates_new_revision(revisions_app):
 
 
 async def test_patch_agent_config_enqueues_el_sync(revisions_app):
-    agent_id = await _get_demo_agent_id(revisions_app)
-    base_url = f"/api/v1/clients/qora-demo/agents/{agent_id}"
+    agent_id = await _get_second_tenant_agent_id(revisions_app)
+    base_url = f"/api/v1/clients/acme-widgets/agents/{agent_id}"
 
     mock_sync = AsyncMock(return_value=AsyncMock(outcome="synced", error_detail=None))
     with patch(
@@ -225,8 +225,8 @@ async def test_patch_agent_config_enqueues_el_sync(revisions_app):
 
 
 async def test_rollback_also_triggers_sync(revisions_app):
-    agent_id = await _get_demo_agent_id(revisions_app)
-    base_url = f"/api/v1/clients/qora-demo/agents/{agent_id}"
+    agent_id = await _get_second_tenant_agent_id(revisions_app)
+    base_url = f"/api/v1/clients/acme-widgets/agents/{agent_id}"
 
     revisions_before = (await revisions_app.get(f"{base_url}/revisions")).json()
     revision_1_id = revisions_before[-1]["id"]
@@ -250,8 +250,8 @@ async def test_rollback_also_triggers_sync(revisions_app):
 
 
 async def test_legacy_patch_agent_also_creates_revision(revisions_app):
-    agent_id = await _get_demo_agent_id(revisions_app)
-    base_url = f"/api/v1/clients/qora-demo/agents/{agent_id}"
+    agent_id = await _get_second_tenant_agent_id(revisions_app)
+    base_url = f"/api/v1/clients/acme-widgets/agents/{agent_id}"
 
     revisions_before = (await revisions_app.get(f"{base_url}/revisions")).json()
     count_before = len(revisions_before)
@@ -274,8 +274,8 @@ async def test_legacy_patch_writes_sparse_v2_revision_without_repinning_dropped_
     V1 snapshot — a field the agent previously dropped (inherits) must stay
     dropped, not get re-pinned as an agent override by an unrelated field edit.
     """
-    agent_id = await _get_demo_agent_id(revisions_app)
-    base_url = f"/api/v1/clients/qora-demo/agents/{agent_id}"
+    agent_id = await _get_second_tenant_agent_id(revisions_app)
+    base_url = f"/api/v1/clients/acme-widgets/agents/{agent_id}"
 
     # Promote to V2 overrides, explicitly dropping the `model` override (null
     # removes it — the agent now inherits `model` from client/standard).
@@ -304,8 +304,8 @@ async def test_legacy_patch_writes_sparse_v2_revision_without_repinning_dropped_
 
 
 async def test_legacy_patch_of_non_config_field_creates_no_revision(revisions_app):
-    agent_id = await _get_demo_agent_id(revisions_app)
-    base_url = f"/api/v1/clients/qora-demo/agents/{agent_id}"
+    agent_id = await _get_second_tenant_agent_id(revisions_app)
+    base_url = f"/api/v1/clients/acme-widgets/agents/{agent_id}"
 
     revisions_before = (await revisions_app.get(f"{base_url}/revisions")).json()
     count_before = len(revisions_before)
@@ -321,8 +321,8 @@ async def test_legacy_patch_of_non_config_field_creates_no_revision(revisions_ap
 async def test_legacy_patch_removing_required_field_returns_422_and_no_change(
     revisions_app,
 ):
-    agent_id = await _get_demo_agent_id(revisions_app)
-    base_url = f"/api/v1/clients/qora-demo/agents/{agent_id}"
+    agent_id = await _get_second_tenant_agent_id(revisions_app)
+    base_url = f"/api/v1/clients/acme-widgets/agents/{agent_id}"
 
     before = await revisions_app.get(base_url)
     voice_id_before = before.json()["voice_id"]

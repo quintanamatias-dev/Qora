@@ -284,16 +284,6 @@ class TestStaticFilesMountLogic:
             "The frontend StaticFiles mount must be conditional on _FRONTEND_DIR existing"
         )
 
-    def test_html_true_for_spa_routing(self):
-        """The frontend mount must use html=True for React Router deep-link fallback."""
-        main_path = _REPO_ROOT / "backend" / "app" / "main.py"
-        content = main_path.read_text()
-        # Check both the frontend section has html=True
-        # We look for the pattern near _FRONTEND_DIR
-        assert "html=True" in content, (
-            "StaticFiles mount for frontend must use html=True for SPA fallback routing"
-        )
-
     def test_catch_all_route_for_spa_deeplinks(self):
         """A catch-all route must exist to serve index.html for SPA deep links.
 
@@ -452,14 +442,6 @@ class TestDockerfileTriangulation:
 
 class TestStaticFilesMountTriangulation:
     """Edge cases for the conditional StaticFiles mount in main.py."""
-
-    def test_demo_mount_still_present(self):
-        """The existing /demo StaticFiles mount must NOT be removed."""
-        main_path = _REPO_ROOT / "backend" / "app" / "main.py"
-        content = main_path.read_text()
-        assert 'app.mount("/demo"' in content, (
-            "The /demo StaticFiles mount must remain intact — it serves the voice demo page"
-        )
 
     def test_frontend_mount_named_for_identification(self):
         """The frontend StaticFiles mounts must include 'frontend' in their names."""

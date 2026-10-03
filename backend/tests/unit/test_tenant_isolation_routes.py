@@ -151,7 +151,6 @@ _SUPERADMIN_ONLY = [
     ("POST", f"/api/v1/clients/{OWN}/integrations/airtable/connect"),
     ("DELETE", f"/api/v1/clients/{OWN}/integrations/airtable/disconnect"),
     ("POST", "/api/v1/calls/some-conversation/end"),
-    ("GET", "/api/v1/voice/signed-url"),
 ]
 
 
@@ -204,7 +203,7 @@ async def test_foreign_lead_history_does_not_leak_sessions(tenant_user, world):
 class TestAdminRoutesRequireAuth:
     """Named so conftest does not install the test auth bypass."""
 
-    @pytest.mark.parametrize("path", ["/api/v1/tenants/quintana-seguros", "/api/v1/voice/signed-url"])
+    @pytest.mark.parametrize("path", ["/api/v1/tenants/quintana-seguros"])
     async def test_route_rejects_anonymous_caller(self, world, path):
         from app.main import api_v1_router
 

@@ -96,7 +96,7 @@ class ConnectIntegrationPayload(BaseModel):
 
     base_id: str
     table_id: str
-    api_key_env: str  # Name of the env var (e.g., "QORA_DEMO_AIRTABLE_API_KEY")
+    api_key_env: str  # Name of the env var (e.g., "ACME_AIRTABLE_API_KEY")
 
 
 class AirtableFieldResponse(BaseModel):

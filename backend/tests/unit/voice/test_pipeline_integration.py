@@ -1,7 +1,7 @@
 """Integration tests for the full dynamic-agent-skills pipeline — Phase 3, Tasks 3.1 & 3.4.
 
 Tests:
-- 3.1: build_voice_context() with real registry fixture (qora-demo/qora-explainer)
+- 3.1: build_voice_context() with real registry fixture (quintana-seguros/leads-agent)
        - skills_index appears in assembled system content
        - skills_content is None
        - jaumpablo (empty registry) → skills_index is None
@@ -60,15 +60,15 @@ def _make_client(client_id: str) -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
-# Task 3.1a — build_voice_context() with qora-demo/qora-explainer real registry
+# Task 3.1a — build_voice_context() with quintana-seguros/leads-agent real registry
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_build_voice_context_qora_explainer_has_skills_index():
-    """build_voice_context() with real qora-demo/qora-explainer registry returns skills_index.
+async def test_build_voice_context_leads_agent_has_skills_index():
+    """build_voice_context() with real quintana-seguros/leads-agent registry returns skills_index.
 
-    GIVEN qora-demo/qora-explainer has a valid registry.yaml on disk (Qora-info skill)
+    GIVEN quintana-seguros/leads-agent has a valid registry.yaml on disk (auto-insurance-knowledge skill)
     WHEN build_voice_context() is called (PromptLoader uses real clients dir)
     THEN skills_index is not None and contains '## Available Skills'
     AND skills_content is None (registry mode)
@@ -76,8 +76,8 @@ async def test_build_voice_context_qora_explainer_has_skills_index():
     from app.voice.context import build_voice_context
     from app.prompts.loader import PromptLoader
 
-    agent = _make_agent("qora-demo", "qora-explainer")
-    client = _make_client("qora-demo")
+    agent = _make_agent("quintana-seguros", "leads-agent")
+    client = _make_client("quintana-seguros")
     mock_db = AsyncMock()
 
     # Use real PromptLoader (real filesystem) but mock only render_for_agent
@@ -87,7 +87,7 @@ async def test_build_voice_context_qora_explainer_has_skills_index():
         MockLoader.return_value = real_loader
 
         # Mock render_for_agent so no DB is needed
-        real_loader.render_for_agent = AsyncMock(return_value="You are Mariano, the Qora demo agent.")
+        real_loader.render_for_agent = AsyncMock(return_value="You are a leads agent.")
 
         result = await build_voice_context(
             agent=agent,
@@ -97,7 +97,7 @@ async def test_build_voice_context_qora_explainer_has_skills_index():
         )
 
     assert result.skills_index is not None, (
-        "qora-explainer has a registry.yaml — skills_index must be populated"
+        "leads-agent has a registry.yaml — skills_index must be populated"
     )
     assert "## Available Skills" in result.skills_index, (
         "skills_index must contain '## Available Skills' header"
@@ -108,19 +108,19 @@ async def test_build_voice_context_qora_explainer_has_skills_index():
 
 
 @pytest.mark.asyncio
-async def test_build_voice_context_qora_explainer_index_contains_skill_name():
-    """skills_index contains 'Qora-info' from the real registry.yaml.
+async def test_build_voice_context_leads_agent_index_contains_skill_name():
+    """skills_index contains 'auto-insurance-knowledge' from the real registry.yaml.
 
-    GIVEN qora-demo/qora-explainer registry.yaml lists 'Qora-info'
+    GIVEN quintana-seguros/leads-agent registry.yaml lists 'auto-insurance-knowledge'
     WHEN build_voice_context() assembles the context
-    THEN skills_index contains 'Qora-info'
+    THEN skills_index contains 'auto-insurance-knowledge'
     AND skills_index contains 'load_skill' instruction
     """
     from app.voice.context import build_voice_context
     from app.prompts.loader import PromptLoader
 
-    agent = _make_agent("qora-demo", "qora-explainer")
-    client = _make_client("qora-demo")
+    agent = _make_agent("quintana-seguros", "leads-agent")
+    client = _make_client("quintana-seguros")
     mock_db = AsyncMock()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
@@ -135,8 +135,8 @@ async def test_build_voice_context_qora_explainer_index_contains_skill_name():
             client=client,
         )
 
-    assert "Qora-info" in (result.skills_index or ""), (
-        "skills_index must contain 'Qora-info' from the real registry entry"
+    assert "auto-insurance-knowledge" in (result.skills_index or ""), (
+        "skills_index must contain 'auto-insurance-knowledge' from the real registry entry"
     )
     assert "load_skill" in (result.skills_index or ""), (
         "skills_index must contain load_skill instruction"
@@ -144,19 +144,19 @@ async def test_build_voice_context_qora_explainer_index_contains_skill_name():
 
 
 @pytest.mark.asyncio
-async def test_build_voice_context_qora_explainer_registry_entries_populated():
+async def test_build_voice_context_leads_agent_registry_entries_populated():
     """build_voice_context() populates skill_registry_entries from real registry.
 
-    GIVEN qora-demo/qora-explainer has a valid registry.yaml
+    GIVEN quintana-seguros/leads-agent has a valid registry.yaml
     WHEN build_voice_context() is called
     THEN skill_registry_entries is a non-empty tuple
-    AND the first entry has name='Qora-info'
+    AND the first entry has name='auto-insurance-knowledge'
     """
     from app.voice.context import build_voice_context
     from app.prompts.loader import PromptLoader
 
-    agent = _make_agent("qora-demo", "qora-explainer")
-    client = _make_client("qora-demo")
+    agent = _make_agent("quintana-seguros", "leads-agent")
+    client = _make_client("quintana-seguros")
     mock_db = AsyncMock()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
@@ -171,11 +171,11 @@ async def test_build_voice_context_qora_explainer_registry_entries_populated():
             client=client,
         )
 
-    assert len(result.skill_registry_entries) == 1, (
-        "qora-explainer registry has exactly 1 skill — Qora-info"
+    assert len(result.skill_registry_entries) == 2, (
+        "leads-agent registry has exactly 2 skills — auto-insurance-knowledge, lead-qualification"
     )
-    assert result.skill_registry_entries[0].name == "Qora-info", (
-        "The registry entry name must match the file stem: 'Qora-info'"
+    assert result.skill_registry_entries[0].name == "auto-insurance-knowledge", (
+        "The registry entry name must match the file stem: 'auto-insurance-knowledge'"
     )
 
 
@@ -185,21 +185,21 @@ async def test_build_voice_context_qora_explainer_registry_entries_populated():
 
 
 @pytest.mark.asyncio
-async def test_assembled_system_content_contains_skills_index_for_qora_explainer():
+async def test_assembled_system_content_contains_skills_index_for_leads_agent():
     """_assemble_context_system_content includes the skills_index block.
 
     GIVEN build_voice_context() returned a context with skills_index populated
     WHEN _assemble_context_system_content(ctx) is called
     THEN the assembled content contains '## Available Skills'
-    AND 'Qora-info' appears in the result
+    AND 'auto-insurance-knowledge' appears in the result
     AND the system prompt appears BEFORE the skills block
     """
     from app.voice.context import build_voice_context
     from app.voice.webhook import _assemble_context_system_content
     from app.prompts.loader import PromptLoader
 
-    agent = _make_agent("qora-demo", "qora-explainer", system_prompt="You are Mariano.")
-    client = _make_client("qora-demo")
+    agent = _make_agent("quintana-seguros", "leads-agent", system_prompt="You are Mariano.")
+    client = _make_client("quintana-seguros")
     mock_db = AsyncMock()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
@@ -219,7 +219,7 @@ async def test_assembled_system_content_contains_skills_index_for_qora_explainer
     assert "## Available Skills" in assembled, (
         "Assembled system content must contain '## Available Skills' when registry is present"
     )
-    assert "Qora-info" in assembled, (
+    assert "auto-insurance-knowledge" in assembled, (
         "Assembled content must contain the skill name from the registry"
     )
     assert "You are Mariano." in assembled, (
@@ -320,21 +320,21 @@ async def test_assembled_content_no_skills_block_for_jaumpablo():
 
 @pytest.mark.asyncio
 async def test_full_tool_flow_load_skill_returns_real_file_content():
-    """Full tool-call flow: LLM calls load_skill → handler reads real Qora-info file.
+    """Full tool-call flow: LLM calls load_skill → handler reads real auto-insurance-knowledge file.
 
-    GIVEN qora-demo/qora-explainer registry with 'Qora-info' skill
-    AND the real Qora-info.agent-skill.md file exists on disk
-    WHEN dispatch_tool is called with tool_name='load_skill', skill_name='Qora-info'
+    GIVEN quintana-seguros/leads-agent registry with 'auto-insurance-knowledge' skill
+    AND the real auto-insurance-knowledge.agent-skill.md file exists on disk
+    WHEN dispatch_tool is called with tool_name='load_skill', skill_name='auto-insurance-knowledge'
     THEN the result contains the file content
-    AND the content includes real text from Qora-info.agent-skill.md
+    AND the content includes real text from auto-insurance-knowledge.agent-skill.md
     """
     from app.prompts.skill_loader import load_skill_registry
     from app.tools.dispatcher import dispatch_tool
 
     # Load real registry entries (no mocking)
     registry_entries = await load_skill_registry(
-        client_id="qora-demo",
-        agent_slug="qora-explainer",
+        client_id="quintana-seguros",
+        agent_slug="leads-agent",
         clients_dir=_CLIENTS_DIR,
     )
 
@@ -344,22 +344,22 @@ async def test_full_tool_flow_load_skill_returns_real_file_content():
 
     result = await dispatch_tool(
         tool_name="load_skill",
-        tool_args={"skill_name": "Qora-info"},
-        client_id="qora-demo",
+        tool_args={"skill_name": "auto-insurance-knowledge"},
+        client_id="quintana-seguros",
         lead_id=None,
-        agent_slug="qora-explainer",
+        agent_slug="leads-agent",
         registry_entries=registry_entries,
         clients_dir=_CLIENTS_DIR,
     )
 
     # dispatch_tool('load_skill') returns plain string (WARNING-2 fix)
     assert isinstance(result, str), f"Expected plain string, got {type(result)}: {result!r}"
-    assert "error" not in result.lower() or "Qora" in result, (
+    assert "error" not in result.lower() or "Quintana" in result, (
         f"Expected success (skill content), got error: {result}"
     )
-    # The real file contains 'Qora' in its content
-    assert "Qora" in result, (
-        "Content must come from the real Qora-info.agent-skill.md file"
+    # The real file contains 'Quintana' in its content
+    assert "Quintana" in result, (
+        "Content must come from the real auto-insurance-knowledge.agent-skill.md file"
     )
 
 
@@ -367,7 +367,7 @@ async def test_full_tool_flow_load_skill_returns_real_file_content():
 async def test_full_tool_flow_load_skill_filler_emitted_with_real_registry():
     """Full flow: SSE stream emits registry filler_text before file is read.
 
-    GIVEN qora-demo/qora-explainer registry with 'Qora-info' entry
+    GIVEN quintana-seguros/leads-agent registry with 'auto-insurance-knowledge' entry
     WHEN _stream_llm_response processes a load_skill ToolCallDelta
     THEN the filler_text from the registry ('Dejame buscar esa informacion...')
          is emitted to SSE BEFORE the skill file is read
@@ -377,15 +377,15 @@ async def test_full_tool_flow_load_skill_filler_emitted_with_real_registry():
     from app.voice.webhook import _stream_llm_response
 
     registry_entries = await load_skill_registry(
-        client_id="qora-demo",
-        agent_slug="qora-explainer",
+        client_id="quintana-seguros",
+        agent_slug="leads-agent",
         clients_dir=_CLIENTS_DIR,
     )
 
     # Verify the real registry entry has a filler_text
     assert registry_entries, "Registry must have entries"
-    qora_info_entry = next(e for e in registry_entries if e.name == "Qora-info")
-    expected_filler = qora_info_entry.filler_text  # e.g. "Dejame buscar esa informacion..."
+    skill_entry = next(e for e in registry_entries if e.name == "auto-insurance-knowledge")
+    expected_filler = skill_entry.filler_text  # e.g. "Dejame buscar esa informacion..."
 
     execution_order: list[str] = []
 
@@ -393,7 +393,7 @@ async def test_full_tool_flow_load_skill_filler_emitted_with_real_registry():
         yield ToolCallDelta(
             tool_call_id="call-real-001",
             function_name="load_skill",
-            function_args=json.dumps({"skill_name": "Qora-info"}),
+            function_args=json.dumps({"skill_name": "auto-insurance-knowledge"}),
         )
         yield StreamDone()
 
@@ -413,7 +413,7 @@ async def test_full_tool_flow_load_skill_filler_emitted_with_real_registry():
             tools=None,
             temperature=0.7,
             max_tokens=300,
-            client_id="qora-demo",
+            client_id="quintana-seguros",
             lead_id=None,
             session_id=None,
             conversation_id=None,

@@ -106,7 +106,7 @@ async def two_agent_app_client(tmp_path: Path):
 
 @pytest_asyncio.fixture
 async def single_agent_app_client(tmp_path: Path):
-    """qora-demo with exactly one active agent."""
+    """quintana-seguros with exactly one active agent (just the default seed)."""
     from app.core.config import Settings
     from app.core import database as db_module
 
@@ -121,9 +121,9 @@ async def single_agent_app_client(tmp_path: Path):
 
     assert db_module.async_session_factory is not None
     async with db_module.async_session_factory() as sess:
-        from app.tenants.service import seed_qora_demo
+        from app.tenants.service import seed_quintana
 
-        await seed_qora_demo(sess)
+        await seed_quintana(sess)
         await sess.commit()
 
     from app.voice.webhook import router as webhook_router
@@ -228,12 +228,12 @@ async def test_legacy_path_route_succeeds_for_single_active_agent_client(
 
     with capture_logs() as cap:
         response = await single_agent_app_client.post(
-            "/api/v1/voice/qora-demo/custom-llm/chat/completions",
+            "/api/v1/voice/quintana-seguros/custom-llm/chat/completions",
             json=_valid_body(lead_id="", conversation_id="conv-legacy-single-001"),
         )
 
     assert response.status_code == 200, response.text
     legacy_logs = [e for e in cap if e.get("event") == "custom_llm_legacy_route_used"]
     assert legacy_logs, f"Expected custom_llm_legacy_route_used log, got: {[e.get('event') for e in cap]}"
-    assert legacy_logs[0].get("client_id") == "qora-demo"
+    assert legacy_logs[0].get("client_id") == "quintana-seguros"
     assert "route" in legacy_logs[0]

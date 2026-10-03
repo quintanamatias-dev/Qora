@@ -21,7 +21,6 @@ Registers all domain routers:
 - /api/v1/calls (calls admin/debug router)
 - /api/v1/tenants (backward-compat read-only alias)
 - /api/v1/health
-- /demo (voice call simulator static page)
 
 NOTE: The admin UI is served exclusively by the React/Vite frontend at
       http://localhost:5173/admin. The previous /admin static mount has been
@@ -143,11 +142,10 @@ async def lifespan(app: FastAPI):
 
     # 4. Seed data
     async with db_module.async_session_factory() as session:
-        from app.tenants.service import seed_quintana, seed_qora_demo
+        from app.tenants.service import seed_quintana
         from app.leads.service import seed_leads
 
         await seed_quintana(session)
-        await seed_qora_demo(session)
         await seed_leads(session)
         await session.commit()
 
@@ -286,7 +284,6 @@ from app.scheduler.router import router as scheduler_router  # noqa: E402
 from app.analytics.router import router as analytics_router  # noqa: E402
 from app.integrations.crm_router import router as crm_router  # noqa: E402
 from app.integrations.crm_config_router import router as crm_config_router  # noqa: E402
-from app.demo.router import router as demo_router  # noqa: E402
 from app.outbound.router import router as outbound_router  # noqa: E402 — C2 outbound trigger
 from app.entitlements.router import router as entitlements_router  # noqa: E402
 from app.auth.router import router as auth_router  # noqa: E402
@@ -306,7 +303,6 @@ api_v1_router.include_router(scheduler_router)  # /api/v1/scheduler — Phase 6
 api_v1_router.include_router(analytics_router)  # /api/v1/analytics — Issue #37
 api_v1_router.include_router(crm_router)  # /api/v1/clients/{client_id}/crm/import
 api_v1_router.include_router(crm_config_router)  # /api/v1/clients/{client_id}/integrations
-api_v1_router.include_router(demo_router)  # /api/v1/demo — public demo endpoints (Phase B5 PR #2)
 api_v1_router.include_router(outbound_router)  # /api/v1/clients/{id}/leads/{id}/call — C2 outbound
 api_v1_router.include_router(entitlements_router)  # /api/v1/clients/{id}/entitlements + /entitlements/plans
 api_v1_router.include_router(auth_router)  # /api/v1/auth — WorkOS AuthKit login
@@ -422,14 +418,6 @@ def create_app(docs_enabled: bool | None = None) -> FastAPI:
 app = create_app()
 
 # ---------------------------------------------------------------------------
-# Static files — demo page (voice call simulator)
-# ---------------------------------------------------------------------------
-
-_STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
-if os.path.isdir(_STATIC_DIR):
-    app.mount("/demo", StaticFiles(directory=_STATIC_DIR, html=True), name="demo")
-
-# ---------------------------------------------------------------------------
 # Admin redirect — single source of truth is the React/Vite frontend
 # ---------------------------------------------------------------------------
 # Hitting the backend /admin URL used to 404 after the static mount was removed.
@@ -454,7 +442,7 @@ async def redirect_to_frontend_admin(request: Request):
 # Static frontend — Docker production build
 # ---------------------------------------------------------------------------
 # Serves the React SPA built by the Dockerfile Node stage.
-# API routes (/api/v1/*, /demo/*, /docs, /admin) registered above take priority.
+# API routes (/api/v1/*, /docs, /admin) registered above take priority.
 #
 # Strategy: mount static assets (JS/CSS/images) via StaticFiles on /assets,
 # /fonts, /images then use a FastAPI catch-all route (/{full_path:path}) to

@@ -28,9 +28,10 @@ async def effective_config_app(tmp_path: Path):
     await _init_db_with_migrations(db_module, settings)
 
     async with db_module.async_session_factory() as session:
-        from app.tenants.service import seed_qora_demo, seed_quintana
+        from app.tenants.service import seed_quintana
+        from tests.helpers.second_tenant import seed_second_tenant
 
-        await seed_qora_demo(session)
+        await seed_second_tenant(session)
         await seed_quintana(session)
         await session.commit()
 
@@ -51,8 +52,10 @@ async def effective_config_app(tmp_path: Path):
     await db_module.close_db()
 
 
-async def _get_demo_agent_id(client: AsyncClient) -> str:
-    response = await client.get("/api/v1/clients/qora-demo/agents")
+async def _get_second_tenant_agent_id(client: AsyncClient) -> str:
+    from tests.helpers.second_tenant import SECOND_TENANT_CLIENT_ID
+
+    response = await client.get(f"/api/v1/clients/{SECOND_TENANT_CLIENT_ID}/agents")
     response.raise_for_status()
     agents = response.json()
     assert len(agents) == 1
@@ -63,10 +66,11 @@ async def test_effective_config_endpoint_returns_value_and_provenance_per_field(
     effective_config_app,
 ):
     from app.tenants.field_policy import FIELD_POLICY
+    from tests.helpers.second_tenant import SECOND_TENANT_CLIENT_ID
 
-    agent_id = await _get_demo_agent_id(effective_config_app)
+    agent_id = await _get_second_tenant_agent_id(effective_config_app)
     response = await effective_config_app.get(
-        f"/api/v1/clients/qora-demo/agents/{agent_id}/effective-config"
+        f"/api/v1/clients/{SECOND_TENANT_CLIENT_ID}/agents/{agent_id}/effective-config"
     )
     assert response.status_code == 200
     body = response.json()
@@ -85,7 +89,7 @@ async def test_effective_config_endpoint_returns_value_and_provenance_per_field(
 
 
 async def test_effective_config_endpoint_is_tenant_isolated(effective_config_app):
-    agent_id = await _get_demo_agent_id(effective_config_app)
+    agent_id = await _get_second_tenant_agent_id(effective_config_app)
     response = await effective_config_app.get(
         f"/api/v1/clients/quintana-seguros/agents/{agent_id}/effective-config"
     )
@@ -93,7 +97,9 @@ async def test_effective_config_endpoint_is_tenant_isolated(effective_config_app
 
 
 async def test_effective_config_endpoint_404_for_missing_agent(effective_config_app):
+    from tests.helpers.second_tenant import SECOND_TENANT_CLIENT_ID
+
     response = await effective_config_app.get(
-        "/api/v1/clients/qora-demo/agents/does-not-exist/effective-config"
+        f"/api/v1/clients/{SECOND_TENANT_CLIENT_ID}/agents/does-not-exist/effective-config"
     )
     assert response.status_code == 404

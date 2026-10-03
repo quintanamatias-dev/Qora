@@ -80,8 +80,6 @@ class Settings(BaseSettings):
     # ElevenLabs
     # ------------------------------------------------------------------
     elevenlabs_api_key: SecretStr
-    elevenlabs_agent_id: str = "agent_8201kra4wjhve0srcwgbtwfetr5n"  # Qora Demo agent
-    elevenlabs_voice_id: str = "4wDRKlxcHNOFO5kBvE81"  # Melisa (Sofia — Qora demo)
     elevenlabs_model: str = "eleven_v4_turbo"
     elevenlabs_stability: float = 0.4
     elevenlabs_speed: float = 0.95
@@ -136,11 +134,6 @@ class Settings(BaseSettings):
 
     # Toggle OpenAPI docs (/docs + /redoc). Default True for dev; set False in prod.
     qora_docs_enabled: bool = True
-
-    # Demo identity — used by PR #2 (Session Auth + Demo).
-    # Declared here so Settings is the single source of truth.
-    qora_demo_client_id: str | None = None
-    qora_demo_agent_id: str | None = None
 
     # Session TTL — used by PR #2 AuthorizedSession lifecycle cleanup.
     qora_session_ttl_seconds: int = 14400  # 4 hours default
