@@ -232,3 +232,45 @@ export const DIMENSION_LABELS: Record<string, Record<LabelLocale, string>> = {
 export function resolveLabel(code: string, locale: LabelLocale): string {
   return DIMENSION_LABELS[code]?.[locale] ?? code
 }
+
+/**
+ * Minimal shape this module needs from AnalysisProfileResponse (api/types.ts) —
+ * kept local so this config module has no dependency on the api layer.
+ */
+export interface DimensionLabelProfile {
+  products: { id: string; label_es: string; label_en: string }[]
+  need_tags: { id: string; label_es: string; label_en: string }[]
+}
+
+export type DimensionKind = 'product' | 'need'
+
+/**
+ * Resolve a display label for a client-specific product/need-tag id.
+ *
+ * Resolution order: the client's analysis profile (when provided and the id
+ * is present in it) → the static DIMENSION_LABELS map → the raw id. Pure —
+ * callers own fetching the profile (see api/hooks.ts useAnalysisProfile).
+ *
+ * @param kind    - 'product' or 'need' catalog entry
+ * @param id      - Stable backend id for the product/need tag
+ * @param locale  - Target locale ('es' | 'en')
+ * @param profile - The client's resolved analysis profile, if loaded
+ */
+export function getDimensionLabel(
+  kind: DimensionKind,
+  id: string,
+  locale: LabelLocale,
+  profile?: DimensionLabelProfile | null
+): string {
+  if (profile) {
+    const entries = kind === 'product' ? profile.products : profile.need_tags
+    const match = entries.find((entry) => entry.id === id)
+    if (match) {
+      return locale === 'en' ? match.label_en : match.label_es
+    }
+    console.warn(
+      `[dimension-labels] "${id}" not found in client analysis profile; falling back to static map`
+    )
+  }
+  return resolveLabel(id, locale)
+}

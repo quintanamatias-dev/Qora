@@ -379,6 +379,37 @@ export interface CallMetricsResponse {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Analysis Profile — client-specific product/need-tag label catalog
+// GET /api/v1/clients/{client_id}/analysis-profile
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface AnalysisProfileProductEntry {
+  id: string
+  label_es: string
+  label_en: string
+  description: string | null
+}
+
+export interface AnalysisProfileNeedTagEntry {
+  id: string
+  label_es: string
+  label_en: string
+}
+
+export interface AnalysisProfileResponse {
+  id: string
+  client_id: string
+  revision_number: number
+  vertical: string
+  products: AnalysisProfileProductEntry[]
+  need_tags: AnalysisProfileNeedTagEntry[]
+  source: string
+  created_by: string
+  created_at: string
+  note: string | null
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Client
 // ──────────────────────────────────────────────────────────────────────────────
 

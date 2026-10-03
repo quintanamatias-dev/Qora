@@ -14,8 +14,8 @@
  * TDD Layer: Unit (pure function, no side effects, no mocks needed)
  */
 
-import { describe, it, expect } from 'vitest'
-import { resolveLabel, DIMENSION_LABELS } from './dimension-labels'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { resolveLabel, getDimensionLabel, DIMENSION_LABELS, type DimensionLabelProfile } from './dimension-labels'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Scenario: Spanish client sees Spanish display labels
@@ -241,6 +241,89 @@ describe('DIMENSION_LABELS — NEED_TAGS codes registered', () => {
 // COMPARANDO_OPCIONES previously had no label and rendered raw in the UI.
 // This list MUST stay in sync with the backend NEED_TAGS allowlist.
 // ──────────────────────────────────────────────────────────────────────────────
+
+// ───────────────────────────────────────────────────────────────────────────────
+// getDimensionLabel — analysis-profiles Phase 5.1: profile-sourced labels
+// with a fallback to the static DIMENSION_LABELS map.
+// ───────────────────────────────────────────────────────────────────────────────
+
+function makeProfile(overrides: Partial<DimensionLabelProfile> = {}): DimensionLabelProfile {
+  return {
+    products: [{ id: 'auto_todo_riesgo', label_es: 'Auto Full Personalizado', label_en: 'Custom Full Auto' }],
+    need_tags: [{ id: 'precio_competitivo', label_es: 'Precio a medida', label_en: 'Tailored price' }],
+    ...overrides,
+  }
+}
+
+describe('getDimensionLabel — uses the fetched profile when available', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('prefers the profile label for a product id present in the profile', () => {
+    const profile = makeProfile()
+    expect(getDimensionLabel('product', 'auto_todo_riesgo', 'es', profile)).toBe('Auto Full Personalizado')
+    expect(getDimensionLabel('product', 'auto_todo_riesgo', 'en', profile)).toBe('Custom Full Auto')
+  })
+
+  it('prefers the profile label for a need-tag id present in the profile', () => {
+    const profile = makeProfile()
+    expect(getDimensionLabel('need', 'precio_competitivo', 'es', profile)).toBe('Precio a medida')
+  })
+})
+
+describe('getDimensionLabel — falls back to the static map on fetch failure', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('falls back to the static map when no profile was fetched (undefined)', () => {
+    // Simulates a fetch failure / not-yet-loaded profile: no profile is passed.
+    expect(getDimensionLabel('product', 'auto_todo_riesgo', 'es', undefined)).toBe('Auto todo riesgo')
+  })
+
+  it('falls back to the static map when the id is missing from a loaded profile', () => {
+    const profile = makeProfile({ products: [] })
+    expect(getDimensionLabel('product', 'auto_todo_riesgo', 'es', profile)).toBe('Auto todo riesgo')
+  })
+
+  it('falls back to the raw id when neither the profile nor the static map has it', () => {
+    const profile = makeProfile({ products: [] })
+    expect(getDimensionLabel('product', 'totally_unknown_id', 'es', profile)).toBe('totally_unknown_id')
+  })
+})
+
+describe('getDimensionLabel — logs a console warning on fallback', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('warns exactly once when a loaded profile is missing the requested id', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const profile = makeProfile({ products: [] })
+
+    getDimensionLabel('product', 'auto_todo_riesgo', 'es', profile)
+
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not warn when no profile was provided at all', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    getDimensionLabel('product', 'auto_todo_riesgo', 'es', undefined)
+
+    expect(warnSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not warn when the profile contains the requested id', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const profile = makeProfile()
+
+    getDimensionLabel('product', 'auto_todo_riesgo', 'es', profile)
+
+    expect(warnSpy).not.toHaveBeenCalled()
+  })
+})
 
 describe('DIMENSION_LABELS — backend NEED_TAGS allowlist fully covered', () => {
   // Mirrors backend NEED_TAGS (catalog.py). Includes the uppercase comparison
