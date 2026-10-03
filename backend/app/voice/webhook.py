@@ -45,7 +45,13 @@ from app.core.access import require_superadmin
 from app.core.database import get_session as db_session
 from app.leads.service import get_lead
 from app.prompts.loader import PromptLoader
-from app.tenants.service import get_client, get_default_agent
+from app.tenants.service import (
+    AmbiguousAgentError,
+    NoActiveAgentError,
+    get_agent_for_client,
+    get_client,
+    resolve_single_active_agent,
+)
 from app.tools.registry import (
     TOOL_DEFINITIONS,
     TOOL_FILLER_PHRASES,
@@ -719,13 +725,14 @@ async def custom_llm_webhook(
     structlog.get_logger().warning(
         "custom_llm_legacy_route_used",
         client_id=client_id,
+        route="/custom-llm/chat/completions",
         conversation_id=conversation_id,
         source=client_id_source,
         migration_hint=f"Use path-based route: /api/v1/voice/{client_id}/custom-llm/chat/completions",
     )
 
     return await _process_custom_llm_request(
-        body=body, client_id=client_id, request=request
+        body=body, client_id=client_id, request=request, agent_id=None
     )
 
 
@@ -790,8 +797,60 @@ async def custom_llm_path_route(
         model=body.model,
     )
 
+    # D2: this route carries no agent_id — it is a legacy client-keyed route and
+    # must be observable ahead of its removal (agent-routing spec: Legacy Route
+    # Deprecation Observability).
+    logger.warning(
+        "custom_llm_legacy_route_used",
+        client_id=client_id,
+        route="/{client_id}/custom-llm/chat/completions",
+        conversation_id=conversation_id,
+        migration_hint=f"Use agent-scoped route: /api/v1/voice/{client_id}/agents/{{agent_id}}/custom-llm/chat/completions",
+    )
+
     return await _process_custom_llm_request(
-        body=body, client_id=client_id, request=request
+        body=body, client_id=client_id, request=request, agent_id=None
+    )
+
+
+# ---------------------------------------------------------------------------
+# Agent-scoped route (D1) — client_id AND agent_id resolved from the URL path
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{client_id}/agents/{agent_id}/custom-llm")
+@router.post("/{client_id}/agents/{agent_id}/custom-llm/chat/completions")
+async def custom_llm_agent_scoped_route(
+    client_id: str,
+    agent_id: str,
+    body: CustomLLMRequest,
+    request: Request,
+    _webhook_auth: None = Depends(require_webhook_secret),
+):
+    """Handle ElevenLabs Custom LLM webhook with both client_id and agent_id in the URL path.
+
+    Both client_id and agent_id are resolved from the path — never from is_default.
+    Every agent belonging to a client is independently reachable via its own path,
+    regardless of how many other agents that client has (agent-routing spec D1).
+
+    Returns:
+        StreamingResponse with Content-Type: text/event-stream.
+
+    Raises:
+        404: If client_id does not match any registered tenant, or if agent_id
+            does not belong to client_id (tenant isolation).
+        403: If the tenant exists but is inactive.
+    """
+    structlog.get_logger().info(
+        "custom_llm_agent_scoped_request",
+        client_id=client_id,
+        agent_id=agent_id,
+        message_count=len(body.messages),
+        model=body.model,
+    )
+
+    return await _process_custom_llm_request(
+        body=body, client_id=client_id, request=request, agent_id=agent_id
     )
 
 
@@ -857,24 +916,35 @@ def _assemble_context_system_content(
 
 
 async def _process_custom_llm_request(
-    *, body: CustomLLMRequest, client_id: str, request: Request
+    *,
+    body: CustomLLMRequest,
+    client_id: str,
+    request: Request,
+    agent_id: str | None = None,
 ) -> StreamingResponse:
-    """Shared handler for both legacy and path-based routes.
+    """Shared handler for legacy, path-based, and agent-scoped routes.
 
     Performs tenant lookup, prompt loading, session management, and SSE streaming.
-    Both routes call this after resolving client_id.
+    Every route calls this after resolving client_id (and, for the agent-scoped
+    route, agent_id).
 
     Args:
         body: Parsed CustomLLMRequest from ElevenLabs.
         client_id: Resolved tenant identifier (from path or body).
         request: FastAPI Request object (for settings access).
+        agent_id: Resolved agent identifier from the agent-scoped route's URL path.
+            None on legacy/path-based routes, which fall back to the D2 fail-closed
+            single-active-agent resolution instead of a default-agent lookup.
 
     Returns:
         StreamingResponse with SSE chunks.
 
     Raises:
-        404: If client_id does not match any registered tenant.
+        404: If client_id does not match any registered tenant, or if agent_id
+            does not belong to client_id.
         403: If the tenant is inactive.
+        409: If agent_id is None and the client has zero or more than one active
+            agent (D2 fail-closed — ElevenLabs needs a non-2xx, not a silent pick).
     """
     extra = body.elevenlabs_extra_body
     lead_id = extra.lead_id or body.lead_id or (body.model_extra or {}).get("lead_id")
@@ -1022,8 +1092,33 @@ async def _process_custom_llm_request(
                     detail={"error": "Tenant disabled"},
                 )
 
-            # Phase 7: resolve default Agent for this client (DD-6)
-            agent = await get_default_agent(db, client_id)
+            # agent-routing D1/D2: resolve from the path-scoped agent_id when present,
+            # else fail-closed to the client's sole active agent — never is_default.
+            if agent_id is not None:
+                agent = await get_agent_for_client(db, client_id, agent_id)
+                if agent is None:
+                    structlog.get_logger().warning(
+                        "agent_scoped_lookup_failed",
+                        client_id=client_id,
+                        agent_id=agent_id,
+                    )
+                    raise HTTPException(
+                        status_code=404,
+                        detail={"error": "agent not found for this client"},
+                    )
+            else:
+                try:
+                    agent = await resolve_single_active_agent(db, client_id)
+                except (NoActiveAgentError, AmbiguousAgentError) as exc:
+                    structlog.get_logger().warning(
+                        "legacy_route_agent_resolution_failed",
+                        client_id=client_id,
+                        error=str(exc),
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail={"error": str(exc)},
+                    ) from exc
 
             # Load lead context (optional)
             if lead_id:

@@ -1,9 +1,11 @@
-"""Unit tests for agent_id propagation in call session service — Phase 7 (Task 3.1 RED).
+"""Unit tests for agent_id propagation in call session service.
 
 Covers:
 - create_session() with explicit agent_id stores it on CallSession
-- create_session() without agent_id resolves to default agent for client
-- create_session() without agent_id and no default agent raises ValueError
+- create_session() without agent_id resolves the client's sole active agent
+  (agent-config-revisions-routing D2 fail-closed resolution, not is_default)
+- create_session() without agent_id raises when the client has zero active
+  agents, or more than one (ambiguous) — never a silent pick
 """
 
 from __future__ import annotations
@@ -100,12 +102,12 @@ async def test_create_session_without_agent_id_resolves_default(seeded_db):
     assert cs.agent_id == expected_agent_id
 
 
-async def test_create_session_no_default_agent_raises(tmp_path: Path):
-    """create_session() without agent_id raises ValueError when client has no active default agent.
+async def test_create_session_no_active_agent_raises(tmp_path: Path):
+    """create_session() without agent_id raises when the client has zero active agents.
 
-    This simulates a pre-migration client that has no default agent, or a client whose
-    only default agent was deactivated. We force this by deactivating the auto-created
-    default agent before attempting create_session().
+    This simulates a pre-migration client that has no active agent, or a client whose
+    only agent was deactivated. We force this by deactivating the auto-created
+    agent before attempting create_session().
     """
     from pydantic import SecretStr
     from app.core.config import Settings
@@ -140,7 +142,7 @@ async def test_create_session_no_default_agent_raises(tmp_path: Path):
             lead_id="ghost-lead-001",
         )
 
-        # Deactivate the auto-created default agent to simulate "no default agent"
+        # Deactivate the auto-created agent to simulate "zero active agents"
         default_agent = await get_default_agent(sess, "no-agent-client")
         assert default_agent is not None
         await sess.execute(
@@ -151,8 +153,9 @@ async def test_create_session_no_default_agent_raises(tmp_path: Path):
 
     async with db_module.async_session_factory() as sess:
         from app.calls.service import create_session
+        from app.tenants.service import NoActiveAgentError
 
-        with pytest.raises(ValueError, match="default agent"):
+        with pytest.raises(NoActiveAgentError):
             await create_session(
                 sess,
                 client_id="no-agent-client",
@@ -160,3 +163,33 @@ async def test_create_session_no_default_agent_raises(tmp_path: Path):
             )
 
     await db_module.close_db()
+
+
+async def test_create_session_without_agent_id_fails_closed_for_multi_agent_client(
+    seeded_db,
+):
+    """create_session() without agent_id raises when the client has 2+ active agents.
+
+    Never silently picks one — agent-routing spec "Explicit Agent Identification
+    on Every Call-Creating Path" scenario.
+    """
+    from app.calls.service import create_session
+    from app.tenants.service import AmbiguousAgentError, create_agent
+
+    async with seeded_db.async_session_factory() as sess:
+        await create_agent(
+            sess,
+            client_id="quintana-seguros",
+            slug="second-agent",
+            name="Second",
+            voice_id="v-second",
+        )
+        await sess.commit()
+
+    async with seeded_db.async_session_factory() as sess:
+        with pytest.raises(AmbiguousAgentError):
+            await create_session(
+                sess,
+                client_id="quintana-seguros",
+                lead_id="agent-test-lead-001",
+            )

@@ -54,7 +54,8 @@ async def create_session(
 ) -> CallSession:
     """Create a new call session with status=initiated.
 
-    If agent_id is not provided, the client's default agent is resolved automatically.
+    If agent_id is not provided, the client's sole active agent is resolved
+    (agent-config-revisions-routing D2 fail-closed resolution — never is_default).
 
     Args:
         session: Active async DB session.
@@ -62,25 +63,21 @@ async def create_session(
         lead_id: Lead being called.
         elevenlabs_conversation_id: Optional ElevenLabs conversation ID.
         session_id: Optional pre-generated UUID (uses uuid4 if not provided).
-        agent_id: Optional Agent UUID. When None, resolved from client's default agent.
+        agent_id: Optional Agent UUID. When None, resolved via resolve_single_active_agent.
 
     Returns:
         Persisted CallSession instance.
 
     Raises:
-        ValueError: If agent_id is None and the client has no default agent.
+        NoActiveAgentError: agent_id is None and the client has zero active agents.
+        AmbiguousAgentError: agent_id is None and the client has 2+ active agents.
     """
     resolved_agent_id = agent_id
     if resolved_agent_id is None:
-        from app.tenants.service import get_default_agent
+        from app.tenants.service import resolve_single_active_agent
 
-        default_agent = await get_default_agent(session, client_id)
-        if default_agent is None:
-            raise ValueError(
-                f"No default agent found for client {client_id!r}. "
-                "Cannot create CallSession without an agent_id."
-            )
-        resolved_agent_id = default_agent.id
+        resolved_agent = await resolve_single_active_agent(session, client_id)
+        resolved_agent_id = resolved_agent.id
 
     cs = CallSession(
         id=session_id or str(uuid.uuid4()),

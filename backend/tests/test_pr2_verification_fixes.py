@@ -208,7 +208,7 @@ class TestFinding1DirectPathAuthBinding:
         with (
             patch("app.voice.webhook.db_session", _mock_db_session),
             patch("app.voice.webhook.get_client", AsyncMock(return_value=mock_client)),
-            patch("app.voice.webhook.get_default_agent", AsyncMock(return_value=mock_agent)),
+            patch("app.voice.webhook.resolve_single_active_agent", AsyncMock(return_value=mock_agent)),
             patch("app.voice.webhook.build_voice_context", AsyncMock(return_value=ctx)),
             patch("app.voice.webhook.create_session", AsyncMock(return_value=mock_session_obj)),
             patch("app.voice.session.session_store.create", side_effect=_capturing_create),

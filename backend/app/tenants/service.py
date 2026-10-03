@@ -751,6 +751,87 @@ async def get_default_agent(session: AsyncSession, client_id: str) -> Agent | No
     return result.scalar_one_or_none()
 
 
+class AgentResolutionError(Exception):
+    """Base error for fail-closed agent resolution (agent-routing spec D2/D3).
+
+    Never raised by anything that consults is_default — that flag no longer
+    gates reachability.
+    """
+
+
+class NoActiveAgentError(AgentResolutionError):
+    """Raised when a client has zero active agents."""
+
+
+class AmbiguousAgentError(AgentResolutionError):
+    """Raised when a client has more than one active agent and no agent_id
+    was given to disambiguate.
+    """
+
+
+async def resolve_single_active_agent(session: AsyncSession, client_id: str) -> Agent:
+    """Fail-closed agent resolution for agent_id-less call sites (agent-routing D2).
+
+    Succeeds only when client_id has exactly one active agent. Never reads
+    is_default — a client with two active agents is ambiguous even if neither
+    (or one) is flagged is_default.
+
+    Args:
+        session: Active async DB session.
+        client_id: The client whose active agent is being resolved.
+
+    Returns:
+        The sole active Agent for client_id.
+
+    Raises:
+        NoActiveAgentError: client_id has zero active agents.
+        AmbiguousAgentError: client_id has more than one active agent.
+    """
+    result = await session.execute(
+        select(Agent).where(
+            Agent.client_id == client_id,
+            Agent.is_active == True,  # noqa: E712
+        )
+    )
+    active_agents = list(result.scalars().all())
+    if len(active_agents) == 0:
+        raise NoActiveAgentError(
+            f"no_active_agent: client {client_id!r} has zero active agents."
+        )
+    if len(active_agents) > 1:
+        raise AmbiguousAgentError(
+            f"ambiguous_agent: client {client_id!r} has {len(active_agents)} active "
+            "agents; an explicit agent_id is required."
+        )
+    return active_agents[0]
+
+
+async def get_agent_for_client(
+    session: AsyncSession, client_id: str, agent_id: str
+) -> Agent | None:
+    """Fetch an active Agent by id, scoped to client_id (tenant isolation).
+
+    Returns None when the agent does not exist, is inactive, or belongs to a
+    different client — callers must never fall back to a guessed agent on None.
+
+    Args:
+        session: Active async DB session.
+        client_id: The client the agent must belong to.
+        agent_id: The Agent UUID to fetch.
+
+    Returns:
+        The matching active Agent, or None.
+    """
+    result = await session.execute(
+        select(Agent).where(
+            Agent.id == agent_id,
+            Agent.client_id == client_id,
+            Agent.is_active == True,  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 # ---------------------------------------------------------------------------
 # New Agent service functions (Phase 7)
 # ---------------------------------------------------------------------------

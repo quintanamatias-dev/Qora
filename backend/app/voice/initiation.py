@@ -20,7 +20,13 @@ from app.core.database import get_session as db_session
 from app.leads.service import get_lead, transition_lead_status
 from app.leads.service import InvalidTransitionError
 from app.memory import build_memory_context
-from app.tenants.service import get_client, get_default_agent
+from app.tenants.service import (
+    AmbiguousAgentError,
+    NoActiveAgentError,
+    get_client,
+    resolve_single_active_agent,
+)
+from sqlalchemy import select
 from app.voice.context import build_voice_context
 from app.voice.session import session_store
 
@@ -93,6 +99,7 @@ async def initiation_webhook(
     resolved_conversation_id = (
         _body_fallback.conversation_id if _body_fallback else None
     )
+    resolved_agent_id_param = _body_fallback.agent_id if _body_fallback else None
 
     if not resolved_client_id:
         raise HTTPException(status_code=422, detail="client_id is required")
@@ -106,8 +113,46 @@ async def initiation_webhook(
                 detail={"error": "client not found"},
             )
 
-        # Phase 7: resolve default Agent to get agent_name (and other config)
-        agent = await get_default_agent(session, resolved_client_id)
+        # agent-routing D1: resolve the Qora agent from the EL agent_id first — never
+        # from is_default. Falls back to the D2 fail-closed single-active-agent path
+        # when EL supplies no agent_id, or supplies one with no matching Agent row
+        # (e.g. a placeholder/test id) — same safe fallback as "no agent_id".
+        agent = None
+        if resolved_agent_id_param:
+            from app.tenants.models import Agent as _Agent
+
+            _el_result = await session.execute(
+                select(_Agent).where(
+                    _Agent.elevenlabs_agent_id == resolved_agent_id_param,
+                    _Agent.is_active == True,  # noqa: E712
+                )
+            )
+            agent = _el_result.scalar_one_or_none()
+            if agent is not None and agent.client_id != resolved_client_id:
+                logger.warning(
+                    "initiation_agent_client_mismatch",
+                    agent_id=resolved_agent_id_param,
+                    agent_client_id=agent.client_id,
+                    resolved_client_id=resolved_client_id,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail={"error": "agent does not belong to the resolved client"},
+                )
+
+        if agent is None:
+            try:
+                agent = await resolve_single_active_agent(session, resolved_client_id)
+            except (NoActiveAgentError, AmbiguousAgentError) as exc:
+                logger.warning(
+                    "initiation_agent_resolution_failed",
+                    client_id=resolved_client_id,
+                    error=str(exc),
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail={"error": str(exc)},
+                ) from exc
 
         # Default empty variables (CAP-2: unknown lead still gets empty strings)
         lead_name = ""
