@@ -122,6 +122,12 @@ class Agent(Base):
         nullable=True,
         default=None,
     )
+    # agent-config-inheritance (D19): STANDARD_VERSION active when this agent's
+    # Agent.* columns were last derived by materialize_agent_config(). NULL until
+    # the agent has been materialized by a 1b write/propagation path.
+    materialized_standard_version: Mapped[str | None] = mapped_column(
+        String, nullable=True, default=None
+    )
 
     __table_args__ = (
         # Enforce that slug is unique per client (not globally)
@@ -178,8 +184,52 @@ class AgentConfigRevision(Base):
         )
 
 
+class ClientConfigRevision(Base):
+    """Immutable, versioned client-level configuration overrides (design.md D11).
+
+    Rows are insert-only: no UPDATE or DELETE path exists anywhere in the
+    service layer. revision_number is monotonically increasing per client_id,
+    starting at 1. config stores sparse overrides only (ClientConfigV1-shaped
+    JSON) — fields the client has actually set, not a full copy of the
+    AgentConfigStandard.
+    """
+
+    __tablename__ = "client_config_revisions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid4)
+    client_id: Mapped[str] = mapped_column(
+        String, ForeignKey("clients.id"), nullable=False, index=True
+    )
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    # ClientConfigV1-shaped sparse JSON payload, stored as TEXT (same pattern
+    # as AgentConfigRevision.config).
+    config: Mapped[str] = mapped_column(Text, nullable=False)
+    schema_version: Mapped[str] = mapped_column(String, nullable=False, default="v1")
+    # One of: "import", "api", "rollback".
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    created_by: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    note: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "client_id",
+            "revision_number",
+            name="uq_client_config_revisions_client_number",
+        ),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<ClientConfigRevision id={self.id!r} client_id={self.client_id!r} "
+            f"revision_number={self.revision_number!r} source={self.source!r}>"
+        )
+
+
 class Client(Base):
-    """Represents a tenant/broker that uses QORA.
+    """Represents a tenant/broker that uses QORA."
 
     One client == one insurance broker (e.g., Quintana Seguros).
     id is a human-readable slug: "quintana-seguros".
@@ -302,6 +352,16 @@ class Client(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+    # agent-config-inheritance (D11): single pointer to this client's active
+    # ClientConfigRevision. NULL until the import migration (or an explicit
+    # PATCH /clients/{client_id}/config) activates one.
+    active_config_revision_id: Mapped[str | None] = mapped_column(
+        String,
+        ForeignKey("client_config_revisions.id"),
+        nullable=True,
+        default=None,
     )
 
     def __repr__(self) -> str:  # pragma: no cover

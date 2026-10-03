@@ -69,6 +69,7 @@ async def test_create_agent_persists_elevenlabs_phone_number_id(client):
         "slug": "phone-agent",
         "name": "Phone Agent",
         "voice_id": "voice-abc123",
+        "goal": "Book a demo call.",
         "elevenlabs_phone_number_id": "phnum_123",
     }
     resp = await client.post(_BASE, json=payload)

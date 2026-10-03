@@ -12,18 +12,30 @@ Uses existing `tenants` SQLAlchemy models — no new DB models created.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.clients.schemas import ClientCreate, ClientResponse, ClientUpdate
+from app.clients.schemas import (
+    ClientConfigRevisionResponse,
+    ClientCreate,
+    ClientResponse,
+    ClientUpdate,
+)
 from app.core.access import require_client_access, require_superadmin
 from app.core.auth import CallerIdentity, require_api_key
-from app.tenants.models import Agent, Client
+from app.elevenlabs.service import sync_to_elevenlabs
+from app.tenants.client_config_schema import ClientConfigPatch, ClientConfigV1
+from app.tenants.materialize import materialize_agent_config, snapshot_mirrored_fields
+from app.tenants.models import Agent, Client, ClientConfigRevision
 import app.tenants.service as tenant_service
+from app.tenants import revisions_service
 
 router = APIRouter(
     prefix="/clients",
@@ -153,6 +165,9 @@ async def create_client(
             scheduler_timezone=payload.scheduler_timezone,
             scheduler_backoff_multiplier=payload.scheduler_backoff_multiplier,
         )
+        # agent-config-inheritance D11/D18: service.create_client() bootstraps
+        # the client's initial empty config revision — every caller (seeders,
+        # service, this router) gets it from one place.
         await session.commit()
     except IntegrityError:
         await session.rollback()
@@ -348,3 +363,239 @@ async def delete_client(
     )
     agent_count = count_result.scalar_one() or 0
     return _client_to_response(client, agent_count=agent_count)
+
+
+# ---------------------------------------------------------------------------
+# Client config revisions (agent-config-inheritance D11)
+# ---------------------------------------------------------------------------
+
+
+def _client_revision_to_response(
+    revision: ClientConfigRevision,
+) -> ClientConfigRevisionResponse:
+    return ClientConfigRevisionResponse(
+        id=revision.id,
+        client_id=revision.client_id,
+        revision_number=revision.revision_number,
+        config=json.loads(revision.config),
+        schema_version=revision.schema_version,
+        source=revision.source,
+        created_by=revision.created_by,
+        created_at=revision.created_at,
+        note=revision.note,
+    )
+
+
+async def _materialize_and_propagate(
+    session: AsyncSession, request: Request, client_id: str
+) -> None:
+    """design.md D19/task 5.5: after a client config revision is activated,
+    re-materialize every ACTIVE agent of that client and trigger the
+    existing EL sync (fire-and-forget, same mechanism agents/router.py uses)
+    for agents whose mirrored columns actually changed and that have an
+    elevenlabs_agent_id. Agents with no column change are left alone — an
+    unrelated client-level edit must not fan out a sync storm.
+    """
+    agents = await tenant_service.list_agents_for_client(session, client_id)
+    agents_to_sync: list[str] = []
+    for agent in agents:
+        before = snapshot_mirrored_fields(agent)
+        await materialize_agent_config(session, agent)
+        after = snapshot_mirrored_fields(agent)
+        changed = any(before[field] != after[field] for field in before)
+        if changed and agent.elevenlabs_agent_id:
+            agents_to_sync.append(agent.id)
+
+    await session.commit()
+
+    if agents_to_sync:
+        settings = request.app.state.settings
+        for agent_id in agents_to_sync:
+            asyncio.create_task(sync_to_elevenlabs(agent_id=agent_id, settings=settings))
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/v1/clients/{client_id}/config
+# ---------------------------------------------------------------------------
+
+
+@router.patch(
+    "/{client_id}/config",
+    response_model=ClientConfigRevisionResponse,
+    dependencies=[Depends(require_superadmin)],
+)
+async def patch_client_config(
+    client_id: str,
+    payload: ClientConfigPatch,
+    request: Request,
+    caller: CallerIdentity = Depends(require_client_access),
+    session: AsyncSession = Depends(get_db_session),
+) -> ClientConfigRevisionResponse:
+    """Partial config update merged over the active sparse revision, then
+    validated as ClientConfigV1 before a new revision is created and activated.
+
+    A field explicitly set to null removes that override (inherit from the
+    standard/agent again).
+
+    Returns:
+        200: The newly-activated ClientConfigRevisionResponse.
+        404: If the client does not exist.
+        422: If the merged config fails ClientConfigV1 validation (locked or
+             agent_required field present, or a value out of range).
+    """
+    client = await session.get(Client, client_id)
+    if client is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "client not found", "client_id": client_id},
+        )
+
+    active = await revisions_service.get_active_client_revision(session, client_id)
+    base_config = json.loads(active.config) if active is not None else {}
+    base_config.pop("schema_version", None)
+
+    patch_data = payload.model_dump(exclude_unset=True, exclude={"note"})
+    merged = {**base_config, **patch_data}
+    # A field explicitly set to null removes the override entirely.
+    merged = {k: v for k, v in merged.items() if v is not None}
+
+    try:
+        validated = ClientConfigV1(**merged)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "invalid_config", "detail": str(exc)},
+        ) from exc
+
+    revision = await revisions_service.create_client_revision(
+        session,
+        client=client,
+        config=validated,
+        source="api",
+        created_by=caller.email or "api",
+        note=payload.note,
+    )
+
+    await session.commit()
+    await session.refresh(revision)
+
+    await _materialize_and_propagate(session, request, client_id)
+
+    return _client_revision_to_response(revision)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/clients/{client_id}/revisions
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{client_id}/revisions", response_model=list[ClientConfigRevisionResponse]
+)
+async def list_client_config_revisions(
+    client_id: str,
+    session: AsyncSession = Depends(get_db_session),
+) -> list[ClientConfigRevisionResponse]:
+    """Return every config revision for a client, newest first.
+
+    Returns:
+        200: List of ClientConfigRevisionResponse.
+        404: If the client does not exist.
+    """
+    client = await session.get(Client, client_id)
+    if client is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "client not found", "client_id": client_id},
+        )
+
+    revisions = await revisions_service.list_client_revisions(session, client_id)
+    return [_client_revision_to_response(r) for r in revisions]
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/clients/{client_id}/revisions/{revision_id}
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{client_id}/revisions/{revision_id}",
+    response_model=ClientConfigRevisionResponse,
+)
+async def get_client_config_revision(
+    client_id: str,
+    revision_id: str,
+    session: AsyncSession = Depends(get_db_session),
+) -> ClientConfigRevisionResponse:
+    """Return a single config revision by id, scoped to this client.
+
+    Returns:
+        200: ClientConfigRevisionResponse.
+        404: If the client or revision does not exist (or the revision
+             belongs to another client — identical response, no probing signal).
+    """
+    client = await session.get(Client, client_id)
+    if client is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "client not found", "client_id": client_id},
+        )
+
+    revision = await revisions_service.get_client_revision(
+        session, client_id, revision_id
+    )
+    if revision is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "revision not found", "revision_id": revision_id},
+        )
+    return _client_revision_to_response(revision)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/clients/{client_id}/revisions/{revision_id}/rollback
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{client_id}/revisions/{revision_id}/rollback",
+    response_model=ClientConfigRevisionResponse,
+    dependencies=[Depends(require_superadmin)],
+)
+async def rollback_client_config(
+    client_id: str,
+    revision_id: str,
+    request: Request,
+    caller: CallerIdentity = Depends(require_client_access),
+    session: AsyncSession = Depends(get_db_session),
+) -> ClientConfigRevisionResponse:
+    """Roll back to a prior client config revision: creates a NEW revision
+    (source="rollback") copying the target's sparse config, then activates it.
+    The target row is never reactivated or mutated.
+
+    Returns:
+        200: The newly-created rollback ClientConfigRevisionResponse.
+        404: If the client or target revision does not exist.
+    """
+    client = await session.get(Client, client_id)
+    if client is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "client not found", "client_id": client_id},
+        )
+
+    new_revision = await revisions_service.rollback_client_revision(
+        session, client_id, revision_id, created_by=caller.email or "api"
+    )
+    if new_revision is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "revision not found", "revision_id": revision_id},
+        )
+
+    await session.commit()
+    await session.refresh(new_revision)
+
+    await _materialize_and_propagate(session, request, client_id)
+
+    return _client_revision_to_response(new_revision)

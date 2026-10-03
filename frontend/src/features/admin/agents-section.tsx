@@ -13,7 +13,7 @@
  * All existing functionality preserved — only the client selector is removed.
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Card,
   Input,
@@ -34,10 +34,13 @@ import {
   useCreateAgent,
   useUpdateAgent,
   useDeactivateAgent,
+  useAgentEffectiveConfig,
+  usePatchAgentConfig,
 } from '@/api/hooks'
 import type { Agent } from '@/api/types'
 import { computeReadinessChecklist } from './agents-panel'
 import { AgentRevisionsPanel } from './agent-revisions-panel'
+import { ConfigFieldProvenance } from './config-field-provenance'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -80,12 +83,16 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
   const [toast, setToast] = useState<ToastState | null>(null)
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
 
+  const effectiveConfigQuery = useAgentEffectiveConfig(clientId, editingAgent?.agent_id ?? '')
+  const patchConfigMutation = usePatchAgentConfig(clientId, editingAgent?.agent_id ?? '')
+
   // Create form state
   const [createForm, setCreateForm] = useState({
     slug: '',
     name: '',
     voice_id: '',
     model: 'gpt-4o',
+    goal: '',
     system_prompt: '',
     tools_enabled: [...DEFAULT_TOOLS],
     tts_speed: 0.95,
@@ -97,6 +104,7 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
   const [editForm, setEditForm] = useState({
     name: '',
     voice_id: '',
+    goal: '',
     system_prompt: '',
     tools_enabled: [...AVAILABLE_TOOLS],
     elevenlabs_agent_id: '',
@@ -107,6 +115,19 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
     tts_stability: 0.4,
     tts_similarity_boost: 0.75,
   })
+
+  // Populate the Goal field once the effective config loads — goal has no
+  // inherited value at any other level (design.md D13), so it is read
+  // exclusively from GET .../effective-config, not from the Agent response.
+  useEffect(() => {
+    const goalField = effectiveConfigQuery.data?.fields.goal
+    if (editingAgent && goalField) {
+      setEditForm((f) => ({
+        ...f,
+        goal: typeof goalField.value === 'string' ? goalField.value : '',
+      }))
+    }
+  }, [editingAgent, effectiveConfigQuery.data])
 
   function showToast(message: string, status: 'success' | 'error') {
     setToast({ message, status })
@@ -136,7 +157,7 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
 
   function handleCreateSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!clientId || !createForm.slug.trim() || !createForm.name.trim()) return
+    if (!clientId || !createForm.slug.trim() || !createForm.name.trim() || !createForm.goal.trim()) return
 
     createAgentMutation.mutate(
       {
@@ -144,6 +165,7 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
         name: createForm.name.trim(),
         voice_id: createForm.voice_id.trim(),
         model: createForm.model.trim() || 'gpt-4o',
+        goal: createForm.goal.trim(),
         system_prompt: createForm.system_prompt.trim() || null,
         tools_enabled: createForm.tools_enabled,
         tts_speed: createForm.tts_speed,
@@ -158,6 +180,7 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
             name: '',
             voice_id: '',
             model: 'gpt-4o',
+            goal: '',
             system_prompt: '',
             tools_enabled: [...DEFAULT_TOOLS],
             tts_speed: 0.95,
@@ -179,6 +202,7 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
     setEditForm({
       name: agent.name,
       voice_id: agent.voice_id,
+      goal: '',
       system_prompt: agent.system_prompt ?? '',
       tools_enabled: [...agent.tools_enabled],
       elevenlabs_agent_id: agent.elevenlabs_agent_id ?? '',
@@ -199,31 +223,56 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
     e.preventDefault()
     if (!editingAgent) return
 
-    updateAgentMutation.mutate(
+    // Config fields (design.md D13/D18) go through the sparse-override
+    // endpoint first — it is the only path that can write `goal`, and keeps
+    // every agent-overridable field's write path uniform.
+    patchConfigMutation.mutate(
       {
-        agentId: editingAgent.agent_id,
-        payload: {
-          name: editForm.name || undefined,
-          voice_id: editForm.voice_id || undefined,
-          system_prompt: editForm.system_prompt || null,
-          tools_enabled: editForm.tools_enabled,
-          elevenlabs_agent_id: editForm.elevenlabs_agent_id || null,
-          knowledge_base: editForm.knowledge_base || null,
-          temperature: editForm.temperature,
-          max_tokens: editForm.max_tokens,
-          tts_speed: editForm.tts_speed,
-          tts_stability: editForm.tts_stability,
-          tts_similarity_boost: editForm.tts_similarity_boost,
-        },
+        goal: editForm.goal.trim() || null,
+        system_prompt: editForm.system_prompt || null,
+        voice_id: editForm.voice_id || null,
+        tools_enabled: editForm.tools_enabled,
+        temperature: editForm.temperature,
+        max_tokens: editForm.max_tokens,
+        tts_speed: editForm.tts_speed,
+        tts_stability: editForm.tts_stability,
+        tts_similarity_boost: editForm.tts_similarity_boost,
       },
       {
         onSuccess: () => {
-          showToast('Agent updated successfully', 'success')
-          setEditingAgent(null)
+          updateAgentMutation.mutate(
+            {
+              agentId: editingAgent.agent_id,
+              payload: {
+                name: editForm.name || undefined,
+                elevenlabs_agent_id: editForm.elevenlabs_agent_id || null,
+                knowledge_base: editForm.knowledge_base || null,
+              },
+            },
+            {
+              onSuccess: () => {
+                showToast('Agent updated successfully', 'success')
+                setEditingAgent(null)
+              },
+              onError: (err) => {
+                showToast(`Error updating agent: ${err.message}`, 'error')
+              },
+            },
+          )
         },
         onError: (err) => {
-          showToast(`Error updating agent: ${err.message}`, 'error')
+          showToast(`Error updating agent config: ${err.message}`, 'error')
         },
+      },
+    )
+  }
+
+  function handleResetField(fieldName: string) {
+    patchConfigMutation.mutate(
+      { [fieldName]: null },
+      {
+        onSuccess: () => showToast('Field reset to inherited value', 'success'),
+        onError: (err) => showToast(`Error resetting field: ${err.message}`, 'error'),
       },
     )
   }
@@ -252,10 +301,21 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
       {editingAgent && (
         <Card className="border-teal-line bg-teal-faint/40">
           <div className="mb-4">
-            <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-ink-3">
-              Edit Agent
-            </p>
+            <div className="flex items-center gap-2">
+              <p className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-ink-3">
+                Edit Agent
+              </p>
+              {effectiveConfigQuery.data?.config_incomplete && (
+                <Badge status="warning">Incomplete</Badge>
+              )}
+            </div>
             <code className="text-teal font-mono text-xs mt-0.5 block">{editingAgent.slug}</code>
+            {effectiveConfigQuery.data?.config_incomplete && (
+              <p className="text-xs text-warning mt-1">
+                Missing required field(s):{' '}
+                {effectiveConfigQuery.data.missing_required_fields.join(', ')}
+              </p>
+            )}
           </div>
 
           {/* Config Revisions */}
@@ -326,17 +386,23 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
                 value={editForm.name}
                 onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
               />
-              <div>
-                <Input
-                  label="Voice ID"
-                  value={editForm.voice_id}
-                  onChange={(e) => setEditForm((f) => ({ ...f, voice_id: e.target.value }))}
-                />
-                <p className="text-xs text-ink-3 mt-1">
-                  Voice for ElevenLabs conversational agents is configured in the{' '}
-                  <span className="font-medium">ElevenLabs dashboard</span>, not here.
-                </p>
-              </div>
+              <ConfigFieldProvenance
+                fieldName="voice_id"
+                label="Voice ID"
+                effectiveConfig={effectiveConfigQuery.data}
+              >
+                <div>
+                  <Input
+                    label="Voice ID"
+                    value={editForm.voice_id}
+                    onChange={(e) => setEditForm((f) => ({ ...f, voice_id: e.target.value }))}
+                  />
+                  <p className="text-xs text-ink-3 mt-1">
+                    Voice for ElevenLabs conversational agents is configured in the{' '}
+                    <span className="font-medium">ElevenLabs dashboard</span>, not here.
+                  </p>
+                </div>
+              </ConfigFieldProvenance>
             </div>
 
             <Input
@@ -346,13 +412,33 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
               placeholder="el_xxxxxxxxxxxxxx"
             />
 
-            <Textarea
+            <ConfigFieldProvenance
+              fieldName="system_prompt"
               label="System Prompt"
-              value={editForm.system_prompt}
-              onChange={(e) => setEditForm((f) => ({ ...f, system_prompt: e.target.value }))}
-              minRows={4}
-              placeholder="System prompt for the agent…"
-            />
+              effectiveConfig={effectiveConfigQuery.data}
+            >
+              <Textarea
+                label="System Prompt"
+                value={editForm.system_prompt}
+                onChange={(e) => setEditForm((f) => ({ ...f, system_prompt: e.target.value }))}
+                minRows={4}
+                placeholder="System prompt for the agent…"
+              />
+            </ConfigFieldProvenance>
+
+            <ConfigFieldProvenance
+              fieldName="goal"
+              label="Goal"
+              effectiveConfig={effectiveConfigQuery.data}
+            >
+              <Textarea
+                label="Goal"
+                value={editForm.goal}
+                onChange={(e) => setEditForm((f) => ({ ...f, goal: e.target.value }))}
+                minRows={2}
+                placeholder="What should this agent accomplish on a call?"
+              />
+            </ConfigFieldProvenance>
 
             <Textarea
               label="Knowledge Base"
@@ -363,28 +449,42 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
             />
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Input
+              <ConfigFieldProvenance
+                fieldName="temperature"
                 label="Temperature"
-                type="number"
-                min={0}
-                max={2}
-                step={0.1}
-                value={String(editForm.temperature)}
-                onChange={(e) =>
-                  setEditForm((f) => ({ ...f, temperature: parseFloat(e.target.value) || 0.7 }))
-                }
-              />
-              <Input
+                effectiveConfig={effectiveConfigQuery.data}
+                onReset={handleResetField}
+              >
+                <Input
+                  label="Temperature"
+                  type="number"
+                  min={0}
+                  max={2}
+                  step={0.1}
+                  value={String(editForm.temperature)}
+                  onChange={(e) =>
+                    setEditForm((f) => ({ ...f, temperature: parseFloat(e.target.value) || 0.7 }))
+                  }
+                />
+              </ConfigFieldProvenance>
+              <ConfigFieldProvenance
+                fieldName="max_tokens"
                 label="Max Tokens"
-                type="number"
-                min={1}
-                max={8192}
-                step={1}
-                value={String(editForm.max_tokens)}
-                onChange={(e) =>
-                  setEditForm((f) => ({ ...f, max_tokens: parseInt(e.target.value, 10) || 512 }))
-                }
-              />
+                effectiveConfig={effectiveConfigQuery.data}
+                onReset={handleResetField}
+              >
+                <Input
+                  label="Max Tokens"
+                  type="number"
+                  min={1}
+                  max={8192}
+                  step={1}
+                  value={String(editForm.max_tokens)}
+                  onChange={(e) =>
+                    setEditForm((f) => ({ ...f, max_tokens: parseInt(e.target.value, 10) || 512 }))
+                  }
+                />
+              </ConfigFieldProvenance>
             </div>
 
             <div>
@@ -395,63 +495,91 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
                 Adjust how the voice sounds during live calls. Changes take effect on the next call.
               </p>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <div>
+                <ConfigFieldProvenance
+                  fieldName="tts_speed"
+                  label="Speed"
+                  effectiveConfig={effectiveConfigQuery.data}
+                  onReset={handleResetField}
+                >
+                  <div>
+                    <Input
+                      label="Speed"
+                      type="number"
+                      min={0.7}
+                      max={1.2}
+                      step={0.05}
+                      value={String(editForm.tts_speed)}
+                      onChange={(e) =>
+                        setEditForm((f) => ({ ...f, tts_speed: parseFloat(e.target.value) || 0.95 }))
+                      }
+                    />
+                    <p className="text-xs text-ink-3 mt-1">EL range: 0.7 – 1.2</p>
+                  </div>
+                </ConfigFieldProvenance>
+                <ConfigFieldProvenance
+                  fieldName="tts_stability"
+                  label="Stability"
+                  effectiveConfig={effectiveConfigQuery.data}
+                  onReset={handleResetField}
+                >
                   <Input
-                    label="Speed"
+                    label="Stability"
                     type="number"
-                    min={0.7}
-                    max={1.2}
+                    min={0}
+                    max={1}
                     step={0.05}
-                    value={String(editForm.tts_speed)}
+                    value={String(editForm.tts_stability)}
                     onChange={(e) =>
-                      setEditForm((f) => ({ ...f, tts_speed: parseFloat(e.target.value) || 0.95 }))
+                      setEditForm((f) => ({ ...f, tts_stability: parseFloat(e.target.value) || 0.4 }))
                     }
                   />
-                  <p className="text-xs text-ink-3 mt-1">EL range: 0.7 – 1.2</p>
-                </div>
-                <Input
-                  label="Stability"
-                  type="number"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={String(editForm.tts_stability)}
-                  onChange={(e) =>
-                    setEditForm((f) => ({ ...f, tts_stability: parseFloat(e.target.value) || 0.4 }))
-                  }
-                />
-                <Input
+                </ConfigFieldProvenance>
+                <ConfigFieldProvenance
+                  fieldName="tts_similarity_boost"
                   label="Similarity boost"
-                  type="number"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={String(editForm.tts_similarity_boost)}
-                  onChange={(e) =>
-                    setEditForm((f) => ({
-                      ...f,
-                      tts_similarity_boost: parseFloat(e.target.value) || 0.75,
-                    }))
-                  }
-                />
+                  effectiveConfig={effectiveConfigQuery.data}
+                  onReset={handleResetField}
+                >
+                  <Input
+                    label="Similarity boost"
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={String(editForm.tts_similarity_boost)}
+                    onChange={(e) =>
+                      setEditForm((f) => ({
+                        ...f,
+                        tts_similarity_boost: parseFloat(e.target.value) || 0.75,
+                      }))
+                    }
+                  />
+                </ConfigFieldProvenance>
               </div>
             </div>
 
-            <div>
-              <p className="text-xs font-medium uppercase tracking-widest text-ink-3 mb-2">
-                Tools Enabled
-              </p>
-              <div className="flex flex-wrap gap-4">
-                {AVAILABLE_TOOLS.map((tool) => (
-                  <Checkbox
-                    key={tool}
-                    label={tool}
-                    checked={editForm.tools_enabled.includes(tool)}
-                    onChange={() => toggleEditTool(tool)}
-                  />
-                ))}
+            <ConfigFieldProvenance
+              fieldName="tools_enabled"
+              label="Tools Enabled"
+              effectiveConfig={effectiveConfigQuery.data}
+              onReset={handleResetField}
+            >
+              <div>
+                <p className="text-xs font-medium uppercase tracking-widest text-ink-3 mb-2">
+                  Tools Enabled
+                </p>
+                <div className="flex flex-wrap gap-4">
+                  {AVAILABLE_TOOLS.map((tool) => (
+                    <Checkbox
+                      key={tool}
+                      label={tool}
+                      checked={editForm.tools_enabled.includes(tool)}
+                      onChange={() => toggleEditTool(tool)}
+                    />
+                  ))}
+                </div>
               </div>
-            </div>
+            </ConfigFieldProvenance>
             <div className="flex gap-2 justify-end">
               <Button type="button" variant="tertiary" size="sm" onClick={handleEditCancel}>
                 Cancel
@@ -460,9 +588,9 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
                 type="submit"
                 variant="primary"
                 size="sm"
-                disabled={updateAgentMutation.isPending}
+                disabled={updateAgentMutation.isPending || patchConfigMutation.isPending}
               >
-                {updateAgentMutation.isPending ? 'Saving…' : 'Save'}
+                {updateAgentMutation.isPending || patchConfigMutation.isPending ? 'Saving…' : 'Save'}
               </Button>
             </div>
           </form>
@@ -616,6 +744,14 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
               onChange={(e) => setCreateForm((f) => ({ ...f, model: e.target.value }))}
             />
           </div>
+          <Textarea
+            label="Goal"
+            value={createForm.goal}
+            onChange={(e) => setCreateForm((f) => ({ ...f, goal: e.target.value }))}
+            minRows={2}
+            placeholder="What should this agent accomplish on a call?"
+            required
+          />
           <Textarea
             label="System Prompt"
             value={createForm.system_prompt}

@@ -291,6 +291,7 @@ from app.outbound.router import router as outbound_router  # noqa: E402 — C2 o
 from app.entitlements.router import router as entitlements_router  # noqa: E402
 from app.auth.router import router as auth_router  # noqa: E402
 from app.auth.access_router import router as auth_access_router  # noqa: E402
+from app.admin.standards_router import router as admin_standards_router  # noqa: E402
 
 api_v1_router.include_router(clients_router)  # /api/v1/clients — full CRUD
 api_v1_router.include_router(
@@ -310,6 +311,7 @@ api_v1_router.include_router(outbound_router)  # /api/v1/clients/{id}/leads/{id}
 api_v1_router.include_router(entitlements_router)  # /api/v1/clients/{id}/entitlements + /entitlements/plans
 api_v1_router.include_router(auth_router)  # /api/v1/auth — WorkOS AuthKit login
 api_v1_router.include_router(auth_access_router)  # /api/v1/clients/{id}/access — superadmin org/invite API
+api_v1_router.include_router(admin_standards_router)  # /api/v1/admin/standards/resync — platform-wide superadmin
 
 
 # ---------------------------------------------------------------------------

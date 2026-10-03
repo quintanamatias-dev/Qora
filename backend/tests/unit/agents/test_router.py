@@ -34,12 +34,14 @@ _VALID_AGENT = {
     "slug": "test-agent",
     "name": "Test Agent",
     "voice_id": "voice-abc123",
+    "goal": "Book a demo call.",
 }
 
 _VALID_AGENT_2 = {
     "slug": "second-agent",
     "name": "Second Agent",
     "voice_id": "voice-xyz789",
+    "goal": "Book a demo call.",
 }
 
 _BASE = "/api/v1/clients/test-client/agents"
@@ -196,6 +198,15 @@ async def test_create_agent_client_not_found_returns_404(
     assert data["detail"]["error"] == "client not found"
 
 
+async def test_create_agent_without_goal_returns_422(agents_app: AsyncClient):
+    """agent-config-inheritance D18/task 4.3: a brand-new agent always requires
+    every agent_required field (system_prompt, goal, voice_id) — no grandfathering.
+    """
+    payload = {k: v for k, v in _VALID_AGENT.items() if k != "goal"}
+    response = await agents_app.post(_BASE, json=payload)
+    assert response.status_code == 422
+
+
 async def test_create_agent_duplicate_slug_returns_409(agents_app: AsyncClient):
     """POST with duplicate slug for same client returns 409 Conflict."""
     # Create first agent
@@ -223,6 +234,34 @@ async def test_create_agent_invalid_tools_returns_422(agents_app: AsyncClient):
 # ---------------------------------------------------------------------------
 # Task 3.1: GET single — /api/v1/clients/{client_id}/agents/{agent_id}
 # ---------------------------------------------------------------------------
+
+
+async def test_grandfathered_agent_marked_incomplete_in_api_response(
+    agents_app: AsyncClient,
+):
+    """agent-config-inheritance D18/task 4.4: an agent lacking `goal` on its
+    active revision (the default bootstrap agent, created before `goal`
+    existed as a concept) is marked config_incomplete with goal listed.
+    """
+    list_response = await agents_app.get(_BASE)
+    agents = list_response.json()
+    bootstrap_agent = next(a for a in agents if a["slug"] == "test-client-agent")
+    assert bootstrap_agent["config_incomplete"] is True
+    assert "goal" in bootstrap_agent["missing_required_fields"]
+
+
+async def test_complete_agent_marked_not_incomplete_in_api_response(
+    agents_app: AsyncClient,
+):
+    create_resp = await agents_app.post(_BASE, json=_VALID_AGENT)
+    assert create_resp.status_code == 201
+    agent_id = create_resp.json()["agent_id"]
+
+    response = await agents_app.get(f"{_BASE}/{agent_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["config_incomplete"] is False
+    assert data["missing_required_fields"] == []
 
 
 async def test_get_agent_returns_200(agents_app: AsyncClient):

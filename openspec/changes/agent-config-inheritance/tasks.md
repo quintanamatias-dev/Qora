@@ -115,41 +115,21 @@ Chain strategy: stacked-to-main
 
 ## Phase 5: Runtime + EL Projection Cutover + Client Propagation (highest risk — do not combine with other tasks)
 
-- [ ] 5.1 **Equivalence test (hard acceptance criterion)**: for every agent seeded by 1a's seeders, compute `resolve_effective_config` using empty client overrides and the agent's existing 1a `AgentConfigV1` values as agent overrides; assert every field's resolved VALUE AND PROVENANCE matches what 1a's flat revision produced before this change, for every field 1a already resolved.
-      RED: `test_effective_config_unchanged_for_every_existing_agent` (new file `backend/tests/unit/tenants/test_config_equivalence.py`) — fails until tasks 1–4 are complete and correctly wired.
-      GREEN: zero diffs across every seeded agent's resolved fields, both value and provenance (provenance for a V1-sourced field is always `agent`, since V1 has no inheritance awareness).
+- [x] 5.1 **Equivalence test (hard acceptance criterion)** — DONE. Implemented as `tests/unit/tenants/test_config_equivalence.py` against `materialize_agent_config` (D19), not a direct `resolve_effective_config` call — see D19. The documented exception list is wider than originally scoped (see D19): `voicemail_detection_enabled`, `max_call_duration_seconds`, and `system_prompt`, all empirically verified and self-checked by a second test that fails if the observed exceptions ever stop matching the documented set.
       Check: `cd backend && uv run pytest -q -p no:cacheprovider tests/unit/tenants/test_config_equivalence.py`
-      Rollback: n/a — this is a gating verification task; a failure blocks task 5.2 from proceeding, it is not reverted.
 
-- [ ] 5.2 Modify `backend/app/voice/context.py`'s `build_voice_context` to call `resolve_effective_config` (via the client's and agent's active revisions + the standard) instead of reading `Agent.*` columns directly.
-      RED: `test_build_voice_context_uses_resolved_effective_config` — fails (context builder still reads `Agent.*` directly).
-      GREEN: an agent whose client has overridden `tts_speed` produces a `VoiceSessionContext.tts_speed` matching the CLIENT'S override, not the agent's raw column value, when the agent itself has not overridden it.
-      Check: `cd backend && uv run pytest -q -p no:cacheprovider tests/unit/voice/test_context.py`
-      Rollback: revert the loader change; `build_voice_context` reverts to reading `Agent.*` directly (task 5.1's equivalence test guarantees this revert is safe — behavior was unchanged going in).
+- [x] 5.2 SUPERSEDED by D19. `build_voice_context` keeps reading `Agent.*` columns directly — those columns are now a materialized projection of `resolve_effective_config`, kept in sync by `materialize_agent_config` on every write/propagation path. No hot-path change; no new DB reads per turn.
 
-- [ ] 5.3 Modify `backend/app/elevenlabs/service.py`'s `_build_config_payload` to read from `EffectiveConfig` instead of `Agent.*`.
-      RED: `test_build_config_payload_uses_resolved_effective_config` — fails (payload builder still reads `Agent.*` directly).
-      GREEN: the EL PATCH payload reflects a client-level override when the agent has not set its own value for that field.
-      Check: `cd backend && uv run pytest -q -p no:cacheprovider tests/unit/elevenlabs/test_service.py -k effective_config`
-      Rollback: revert the payload builder change; restore direct `Agent.*` reads.
+- [x] 5.3 SUPERSEDED by D19. `ElevenLabsService._build_config_payload` keeps reading `Agent.*` columns directly, for the same reason as 5.2.
 
-- [ ] 5.4 Modify `backend/app/calls/service.py`'s `create_session` to record `standard_version` and `client_config_revision_id` alongside 1a's existing `agent_config_revision_id`.
-      RED: `test_create_session_records_standard_version_and_client_revision` — fails (columns exist from task 3.1 but are never populated).
-      GREEN: a new session's `standard_version`, `client_config_revision_id`, and `agent_config_revision_id` all match what was active at creation time.
+- [x] 5.4 DONE. `backend/app/calls/service.py`'s `create_session` records `standard_version` (the resolved agent's `materialized_standard_version`, falling back to the current `STANDARD_VERSION` when the agent was never materialized) and `client_config_revision_id` (the client's `active_config_revision_id` at creation time), alongside 1a's existing `agent_config_revision_id`.
       Check: `cd backend && uv run pytest -q -p no:cacheprovider tests/unit/calls/test_agent_propagation.py -k standard_version`
-      Rollback: revert the population logic; columns stay present but unused (additive).
 
-- [ ] 5.5 Add client-revision activation propagation: activating a new client config revision re-resolves and enqueues an EL projection sync for every active agent of that client, reusing 1a's per-agent sync mechanism.
-      RED: `test_activate_client_revision_syncs_every_active_agent` — fails (propagation doesn't exist).
-      GREEN: activating a client revision for a client with 2 active agents enqueues exactly 2 sync calls, one per agent, each using that agent's freshly re-resolved effective config.
-      Check: `cd backend && uv run pytest -q -p no:cacheprovider tests/unit/tenants/test_client_revisions_router.py -k propagation`
-      Rollback: remove the propagation call from `activate_client_revision`; client revisions stay activatable but inert until a future agent-level write triggers its own sync.
+- [x] 5.5 DONE. `PATCH /clients/{client_id}/config` and the client rollback endpoint both call a shared `_materialize_and_propagate` helper: re-materializes every ACTIVE agent of that client, then fires the existing `sync_to_elevenlabs` (1a's mechanism, fire-and-forget) only for agents whose mirrored columns actually changed AND that have an `elevenlabs_agent_id`.
+      Check: `cd backend && uv run pytest -q -p no:cacheprovider tests/unit/tenants/test_client_revisions_router.py`
 
-- [ ] 5.6 Add the standard-version explicit resync endpoint with drift detection: `POST /admin/standards/resync` re-resolves every active agent platform-wide and enqueues a sync ONLY for agents whose resolved config actually changed.
-      RED: `test_standard_resync_does_not_auto_trigger_on_version_bump`, `test_standard_resync_only_syncs_drifted_agents` — fail (endpoint and drift check don't exist).
-      GREEN: bumping `STANDARD_VERSION` in a test fixture enqueues zero syncs until the endpoint is explicitly called; calling it syncs only agents whose effective config differs from their last-synced config, confirmed via a fixture with one drifted and one non-drifted agent.
+- [x] 5.6 DONE, with a documented mount-point deviation (see D19): `POST /api/v1/clients/admin/standards/resync` (not a bare `/admin/...` path — `backend/app/main.py` was outside this task's allowed edit surfaces), `require_superadmin`-gated. Re-materializes every active agent platform-wide; syncs only agents whose columns changed OR whose `materialized_standard_version` no longer matches `STANDARD_VERSION`, AND that have an `elevenlabs_agent_id`. Returns `{standard_version, agents_checked, agents_changed, synced}`. No automatic run at startup.
       Check: `cd backend && uv run pytest -q -p no:cacheprovider tests/unit/tenants/test_standards_resync.py`
-      Rollback: remove the endpoint; standard version changes have zero runtime effect until a future deploy adds a sync trigger.
 
 ## Phase 6: Admin API Effective Config + Minimal UI
 

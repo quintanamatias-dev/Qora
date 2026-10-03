@@ -103,6 +103,7 @@ async def test_create_agent_with_el_id_and_soft_timeout_fires_sync(agents_app):
                 "slug": "test-agent-sync",
                 "name": "Test Agent Sync",
                 "voice_id": "voice-123",
+                "goal": "Book a demo call.",
                 "elevenlabs_agent_id": "el-test-agent-id",
                 "soft_timeout_seconds": 3.0,
             },
@@ -128,6 +129,7 @@ async def test_create_agent_without_el_id_does_not_fire_sync(agents_app):
                 "slug": "test-agent-no-el",
                 "name": "Test Agent No EL",
                 "voice_id": "voice-123",
+                "goal": "Book a demo call.",
                 "soft_timeout_seconds": 3.0,
             },
         )
@@ -156,6 +158,7 @@ async def test_create_agent_with_elevenlabs_binding_fires_sync(agents_app):
                 "slug": "test-agent-no-timeout",
                 "name": "Test Agent No Timeout",
                 "voice_id": "voice-123",
+                "goal": "Book a demo call.",
                 "elevenlabs_agent_id": "el-test-agent-id",
             },
         )
@@ -338,6 +341,7 @@ async def test_background_sync_skipped_outcome_leaves_status_unchanged(agents_ap
             "slug": "no-el-agent",
             "name": "No EL Agent",
             "voice_id": "voice-xxx",
+            "goal": "Book a demo call.",
             "soft_timeout_seconds": 3.0,
             # No elevenlabs_agent_id
         },

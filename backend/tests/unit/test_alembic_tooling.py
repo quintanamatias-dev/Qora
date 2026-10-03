@@ -777,7 +777,7 @@ class TestRealMigrationExecution:
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
         # PR3 transcript finalization fields: 20260625_0003
         # C2 outbound telephony: 20260702_0004
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017"}
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"alembic_version should contain a known Qora revision. "
             f"Got: {versions}. Known: {_KNOWN_REVISIONS}"
@@ -961,7 +961,7 @@ class TestRealMigrationExecution:
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
         # PR3 transcript finalization fields: 20260625_0003
         # C2 outbound telephony: 20260702_0004
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017"}
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"Stamp head did not record a known Qora revision. Got: {versions}. "
             f"Known revisions: {_KNOWN_REVISIONS}"
@@ -2282,6 +2282,133 @@ class TestAgentConfigRevisionsSchemaMigration:
         conn.close()
 
 
+class TestClientConfigRevisionsSchemaMigration:
+    """agent-config-inheritance Task 3.2: client_config_revisions + clients.active_config_revision_id."""
+
+    def test_client_config_revisions_schema_migration_creates_table(self, tmp_path):
+        """alembic upgrade head creates client_config_revisions + clients.active_config_revision_id.
+
+        GIVEN a fresh SQLite DB
+        WHEN alembic upgrade head runs through the new revision
+        THEN client_config_revisions exists with the columns the model declares
+        AND clients.active_config_revision_id exists as a nullable column
+        """
+        import sqlite3
+        from alembic import command
+
+        db_file = tmp_path / "client_config_revisions_schema.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "head")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cur.fetchall()}
+        assert "client_config_revisions" in tables
+
+        cur.execute("PRAGMA table_info(client_config_revisions)")
+        columns = {row[1] for row in cur.fetchall()}
+        expected = {
+            "id",
+            "client_id",
+            "revision_number",
+            "config",
+            "schema_version",
+            "source",
+            "created_by",
+            "created_at",
+            "note",
+        }
+        assert expected.issubset(columns), f"Missing columns: {expected - columns}"
+
+        cur.execute("PRAGMA table_info(clients)")
+        clients_columns = {row[1]: row for row in cur.fetchall()}
+        assert "active_config_revision_id" in clients_columns
+        # PRAGMA table_info: (cid, name, type, notnull, dflt_value, pk)
+        assert clients_columns["active_config_revision_id"][3] == 0, (
+            "clients.active_config_revision_id must be nullable"
+        )
+        conn.close()
+
+    def test_client_config_revisions_schema_migration_downgrade(self, tmp_path):
+        """Downgrading past 20261003_0018 removes client_config_revisions +
+        active_config_revision_id. Targets that revision explicitly (not
+        "head"/"-1") because 20261003_0019 (agent-config-inheritance task
+        5.4/D19, standard_version tracking) became the new head afterwards —
+        "-1" from head now only undoes 0019, not this migration.
+        """
+        import sqlite3
+        from alembic import command
+
+        db_file = tmp_path / "client_config_revisions_downgrade.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "20261002_0017")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cur.fetchall()}
+        assert "client_config_revisions" not in tables
+
+        cur.execute("PRAGMA table_info(clients)")
+        clients_columns = {row[1] for row in cur.fetchall()}
+        assert "active_config_revision_id" not in clients_columns
+        conn.close()
+
+    def test_client_config_revisions_import_creates_empty_activated_revision_per_client(
+        self, tmp_path
+    ):
+        """Every existing client gets an empty, activated revision 1 — no behavior change."""
+        import sqlite3
+        from alembic import command
+
+        db_file = tmp_path / "client_config_revisions_import.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "20261002_0017")
+
+        conn = sqlite3.connect(str(db_file))
+        conn.execute(
+            "INSERT INTO clients (id, name, agent_name, voice_id, model, temperature, "
+            "max_tokens, tools_enabled, is_active, scheduler_enabled, scheduler_max_attempts, "
+            "scheduler_cooldown_minutes, scheduler_allowed_hours_start, scheduler_allowed_hours_end, "
+            "scheduler_retry_on_outcomes, scheduler_timezone, analysis_language, plan, "
+            "created_at, scheduler_backoff_multiplier, next_action_max_attempts, "
+            "next_action_min_interest_for_followup, next_action_close_on_hard_rejection) "
+            "VALUES ('acme', 'Acme', 'Jaumpablo', 'voice-1', 'gpt-4.1-mini', 0.7, 300, '[]', "
+            "1, 0, 3, 60, 9, 20, '[]', 'America/Argentina/Buenos_Aires', 'Spanish', 'pilot', "
+            "'2026-10-03T00:00:00+00:00', 1.0, 5, 40, 1)"
+        )
+        conn.commit()
+        conn.close()
+
+        command.upgrade(cfg, "head")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT active_config_revision_id FROM clients WHERE id = 'acme'"
+        )
+        active_id = cur.fetchone()[0]
+        assert active_id is not None
+
+        cur.execute(
+            "SELECT revision_number, config, source FROM client_config_revisions "
+            "WHERE id = ?",
+            (active_id,),
+        )
+        row = cur.fetchone()
+        assert row is not None
+        revision_number, config, source = row
+        assert revision_number == 1
+        assert source == "import"
+        import json as _json
+
+        assert _json.loads(config) == {"schema_version": "v1"}
+        conn.close()
+
+
 class TestCallSessionAgentConfigRevisionMigration:
     """Phase 5 D4: call_sessions.agent_config_revision_id."""
 
@@ -2312,7 +2439,7 @@ class TestCallSessionAgentConfigRevisionMigration:
 
         db_file = tmp_path / "call_session_agent_config_revision_downgrade.db"
         cfg = _make_agent_config_revisions_alembic_config(db_file)
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "20261002_0017")
         command.downgrade(cfg, "-1")
 
         conn = sqlite3.connect(str(db_file))
@@ -2332,61 +2459,49 @@ class TestImportAgentConfigRevisionMigration:
     """Task 1.4: one source=import revision per agent, filesystem wins."""
 
     def _seed_agents(self, db_file: Path) -> None:
-        """Insert a Client + two Agents directly via the ORM (test setup only —
-        the migration itself never imports app modules; this helper may).
+        """Insert a Client + two Agents directly via raw SQL — intentionally NOT
+        the live ORM models, which may have gained columns (e.g.
+        Client.active_config_revision_id, agent-config-inheritance D11) that
+        do not exist yet at this migration's pinned schema state (20261002_0014).
         """
-        import asyncio
         import json as _json
+        import sqlite3
 
-        async def _seed() -> None:
-            from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-            from sqlalchemy.orm import sessionmaker
-            from app.tenants.models import Client, Agent
-
-            engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
-            session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-            async with session_factory() as session:
-                session.add(
-                    Client(
-                        id="quintana-seguros",
-                        name="Quintana Seguros",
-                        agent_name="Jaumpablo",
-                        voice_id="v1",
-                    )
-                )
-                # Has a real filesystem system-prompt.md — file must win over this
-                # deliberately stale DB value.
-                session.add(
-                    Agent(
-                        id="agent-file-1",
-                        client_id="quintana-seguros",
-                        slug="jaumpablo",
-                        name="Jaumpablo",
-                        voice_id="v1",
-                        system_prompt="DB STALE PROMPT",
-                        model="gpt-4o",
-                        tts_model="eleven_flash_v2_5",
-                        tools_enabled=_json.dumps(["get_lead_details"]),
-                    )
-                )
-                # No matching filesystem file for this slug — DB column must win.
-                session.add(
-                    Agent(
-                        id="agent-no-file-1",
-                        client_id="quintana-seguros",
-                        slug="no-file-agent",
-                        name="NoFile",
-                        voice_id="v2",
-                        system_prompt="DB PROMPT WINS",
-                        model="gpt-4o",
-                        tts_model="eleven_flash_v2_5",
-                        tools_enabled=_json.dumps(["get_lead_details"]),
-                    )
-                )
-                await session.commit()
-            await engine.dispose()
-
-        asyncio.run(_seed())
+        conn = sqlite3.connect(str(db_file))
+        conn.execute(
+            "INSERT INTO clients (id, name, agent_name, voice_id, model, temperature, "
+            "max_tokens, tools_enabled, is_active, scheduler_enabled, scheduler_max_attempts, "
+            "scheduler_cooldown_minutes, scheduler_allowed_hours_start, scheduler_allowed_hours_end, "
+            "scheduler_retry_on_outcomes, scheduler_timezone, analysis_language, plan, "
+            "created_at, scheduler_backoff_multiplier, next_action_max_attempts, "
+            "next_action_min_interest_for_followup, next_action_close_on_hard_rejection) "
+            "VALUES ('quintana-seguros', 'Quintana Seguros', 'Jaumpablo', 'v1', 'gpt-4.1-mini', "
+            "0.7, 300, '[]', 1, 0, 3, 60, 9, 20, '[]', 'America/Argentina/Buenos_Aires', "
+            "'Spanish', 'pilot', '2026-10-02T00:00:00+00:00', 1.0, 5, 40, 1)"
+        )
+        # Has a real filesystem system-prompt.md — file must win over this
+        # deliberately stale DB value.
+        conn.execute(
+            "INSERT INTO agents (id, client_id, slug, name, voice_id, system_prompt, model, "
+            "temperature, max_tokens, tools_enabled, tts_speed, tts_stability, "
+            "tts_similarity_boost, tts_model, is_active, is_default, created_at) "
+            "VALUES ('agent-file-1', 'quintana-seguros', 'jaumpablo', 'Jaumpablo', 'v1', "
+            "'DB STALE PROMPT', 'gpt-4o', 0.7, 300, :tools, 0.95, 0.4, 0.75, "
+            "'eleven_flash_v2_5', 1, 0, '2026-10-02T00:00:00+00:00')",
+            {"tools": _json.dumps(["get_lead_details"])},
+        )
+        # No matching filesystem file for this slug — DB column must win.
+        conn.execute(
+            "INSERT INTO agents (id, client_id, slug, name, voice_id, system_prompt, model, "
+            "temperature, max_tokens, tools_enabled, tts_speed, tts_stability, "
+            "tts_similarity_boost, tts_model, is_active, is_default, created_at) "
+            "VALUES ('agent-no-file-1', 'quintana-seguros', 'no-file-agent', 'NoFile', 'v2', "
+            "'DB PROMPT WINS', 'gpt-4o', 0.7, 300, :tools, 0.95, 0.4, 0.75, "
+            "'eleven_flash_v2_5', 1, 0, '2026-10-02T00:00:00+00:00')",
+            {"tools": _json.dumps(["get_lead_details"])},
+        )
+        conn.commit()
+        conn.close()
 
     def test_import_migration_creates_revision_1_per_agent(self, tmp_path):
         """Each agent gets exactly one active, source=import revision.

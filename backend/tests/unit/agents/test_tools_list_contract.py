@@ -26,7 +26,7 @@ def test_agent_create_accepts_list_of_tools():
     """AgentCreate.tools_enabled must accept a list[str], not a JSON string."""
     from app.agents.schemas import AgentCreate
 
-    agent = AgentCreate(
+    agent = AgentCreate(goal="Book a demo call.", 
         slug="list-tools-agent",
         name="List Tools Agent",
         voice_id="voice-abc",
@@ -44,7 +44,7 @@ def test_agent_create_default_tools_is_list():
     """
     from app.agents.schemas import AgentCreate
 
-    agent = AgentCreate(slug="def-tools", name="Default Tools", voice_id="v-123")
+    agent = AgentCreate(goal="Book a demo call.", slug="def-tools", name="Default Tools", voice_id="v-123")
     assert isinstance(agent.tools_enabled, list)
     assert "get_lead_details" in agent.tools_enabled
     # Phase 2: legacy tools removed from defaults
@@ -60,7 +60,7 @@ def test_agent_create_invalid_tool_in_list_raises_validation_error():
     from app.agents.schemas import AgentCreate
 
     with pytest.raises(ValidationError) as exc_info:
-        AgentCreate(
+        AgentCreate(goal="Book a demo call.", 
             slug="test",
             name="Test",
             voice_id="v1",
@@ -171,6 +171,7 @@ async def test_post_agent_with_list_tools_returns_201(tools_list_app: AsyncClien
             "slug": "list-agent",
             "name": "List Agent",
             "voice_id": "voice-abc",
+            "goal": "Book a demo call.",
             "tools_enabled": ["get_lead_details"],
         },
     )
@@ -191,6 +192,7 @@ async def test_post_agent_with_full_tool_list_returns_201(tools_list_app: AsyncC
             "slug": "full-tools-agent",
             "name": "Full Tools Agent",
             "voice_id": "voice-full",
+            "goal": "Book a demo call.",
             "tools_enabled": [
                 "get_lead_details",
                 "get_lead_profile",

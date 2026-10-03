@@ -274,3 +274,24 @@ class ClientResponse(BaseModel):
     plan: str = "pilot"
 
     model_config = {"from_attributes": True}
+
+
+class ClientConfigRevisionResponse(BaseModel):
+    """Response shape for client config revision endpoints (design.md D11).
+
+    config is returned as a dict (deserialized from the DB TEXT column), and
+    is sparse — it contains only the fields this client has explicitly
+    overridden, not every field from the Qora standard.
+    """
+
+    id: str
+    client_id: str
+    revision_number: int
+    config: dict
+    schema_version: str
+    source: str
+    created_by: str
+    created_at: datetime
+    note: str | None = None
+
+    model_config = {"from_attributes": True}

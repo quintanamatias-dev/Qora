@@ -105,6 +105,7 @@ async def test_admin_create_agent_and_verify_list(admin_app: AsyncClient):
             "slug": "second-agent",
             "name": "Second Agent",
             "voice_id": "voice-second",
+            "goal": "Book a demo call.",
             # Phase 2: register_interest removed; use capture_data instead
             "tools_enabled": ["get_lead_details", "capture_data"],
         },
@@ -146,6 +147,7 @@ async def test_admin_full_lifecycle_deactivate_original_keeps_new_agent_active(
             "slug": "new-default",
             "name": "New Default",
             "voice_id": "voice-new",
+            "goal": "Book a demo call.",
         },
     )
     assert create_resp.status_code == 201

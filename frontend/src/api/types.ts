@@ -492,6 +492,10 @@ export interface Agent {
   tts_speed: number
   tts_stability: number
   tts_similarity_boost: number
+  // agent-config-inheritance D18/task 4.4 — grandfathering visibility.
+  // Optional: older MSW fixtures/tests may omit them.
+  config_incomplete?: boolean
+  missing_required_fields?: string[]
 }
 
 export interface CreateAgentPayload {
@@ -499,6 +503,8 @@ export interface CreateAgentPayload {
   name: string
   voice_id: string
   model: string
+  // agent-config-inheritance: required at creation, no grandfathering for new agents.
+  goal: string
   system_prompt?: string | null
   tools_enabled: string[]
   elevenlabs_agent_id?: string | null
@@ -518,12 +524,14 @@ export interface UpdateAgentPayload {
   tools_enabled?: string[]
   elevenlabs_agent_id?: string | null
   knowledge_base?: string | null
-  temperature?: number
-  max_tokens?: number
+  // Nullable so "Reset to inherited" can explicitly clear an agent-level
+  // override (design.md D18 — a null value removes an override).
+  temperature?: number | null
+  max_tokens?: number | null
   // Voice tuning
-  tts_speed?: number
-  tts_stability?: number
-  tts_similarity_boost?: number
+  tts_speed?: number | null
+  tts_stability?: number | null
+  tts_similarity_boost?: number | null
 }
 
 /** A single item in the agent readiness checklist */
@@ -536,6 +544,43 @@ export interface ReadinessCheck {
 // Agent Config Revisions
 // Mirrors backend AgentConfigRevisionResponse — GET/POST .../revisions[...]
 // ──────────────────────────────────────────────────────────────────────────────
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Effective Config (agent-config-inheritance D13)
+// Mirrors backend EffectiveConfigResponse — GET .../agents/{id}/effective-config
+// ──────────────────────────────────────────────────────────────────────────────
+
+export type EffectiveFieldProvenance = 'standard' | 'client' | 'agent'
+
+export type EffectiveFieldPolicy = 'locked' | 'overridable' | 'client_only' | 'agent_required'
+
+export interface EffectiveConfigField {
+  value: unknown
+  provenance: EffectiveFieldProvenance
+  policy: EffectiveFieldPolicy
+}
+
+export interface EffectiveConfig {
+  fields: Record<string, EffectiveConfigField>
+  standard_version: string
+  config_incomplete: boolean
+  missing_required_fields: string[]
+}
+
+/** Sparse PATCH body for PATCH .../agents/{agentId}/config — every field optional; null removes an override (inherit again). */
+export interface AgentConfigPatchPayload {
+  goal?: string | null
+  system_prompt?: string | null
+  voice_id?: string | null
+  tools_enabled?: string[] | null
+  temperature?: number | null
+  max_tokens?: number | null
+  tts_speed?: number | null
+  tts_stability?: number | null
+  tts_similarity_boost?: number | null
+  tts_model?: string | null
+  note?: string | null
+}
 
 export type AgentConfigRevisionSource = 'import' | 'api' | 'rollback'
 

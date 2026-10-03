@@ -26,7 +26,7 @@ def test_agent_create_minimal_valid():
     """AgentCreate accepts minimal required fields with correct defaults."""
     from app.agents.schemas import AgentCreate
 
-    agent = AgentCreate(slug="main-agent", name="Main Agent", voice_id="voice-123")
+    agent = AgentCreate(goal="Book a demo call.", slug="main-agent", name="Main Agent", voice_id="voice-123")
 
     assert agent.slug == "main-agent"
     assert agent.name == "Main Agent"
@@ -62,7 +62,7 @@ def test_agent_create_custom_values():
     """AgentCreate accepts all fields when provided."""
     from app.agents.schemas import AgentCreate
 
-    agent = AgentCreate(
+    agent = AgentCreate(goal="Book a demo call.", 
         slug="custom-agent",
         name="Custom",
         voice_id="v-abc",
@@ -102,7 +102,7 @@ def test_agent_create_valid_slugs(slug: str):
     """AgentCreate accepts valid slugs."""
     from app.agents.schemas import AgentCreate
 
-    agent = AgentCreate(slug=slug, name="Test", voice_id="v1")
+    agent = AgentCreate(goal="Book a demo call.", slug=slug, name="Test", voice_id="v1")
     assert agent.slug == slug
 
 
@@ -123,7 +123,7 @@ def test_agent_create_invalid_slug_raises_422(bad_slug: str):
     from app.agents.schemas import AgentCreate
 
     with pytest.raises(ValidationError):
-        AgentCreate(slug=bad_slug, name="Test", voice_id="v1")
+        AgentCreate(goal="Book a demo call.", slug=bad_slug, name="Test", voice_id="v1")
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +136,7 @@ def test_agent_create_invalid_tool_raises_422():
     from app.agents.schemas import AgentCreate
 
     with pytest.raises(ValidationError) as exc_info:
-        AgentCreate(
+        AgentCreate(goal="Book a demo call.", 
             slug="test",
             name="Test",
             voice_id="v1",
@@ -152,7 +152,7 @@ def test_agent_create_valid_subset_of_tools():
     from app.agents.schemas import AgentCreate
 
     # Phase 2: register_interest no longer a valid tool name; use capture_data instead
-    agent = AgentCreate(
+    agent = AgentCreate(goal="Book a demo call.", 
         slug="test",
         name="Test",
         voice_id="v1",
@@ -167,7 +167,7 @@ def test_agent_create_invalid_tool_name_string_raises_422():
     from app.agents.schemas import AgentCreate
 
     with pytest.raises(ValidationError):
-        AgentCreate(
+        AgentCreate(goal="Book a demo call.", 
             slug="test",
             name="Test",
             voice_id="v1",
@@ -180,7 +180,7 @@ def test_agent_create_tools_not_a_list_raises_422():
     from app.agents.schemas import AgentCreate
 
     with pytest.raises(ValidationError):
-        AgentCreate(
+        AgentCreate(goal="Book a demo call.", 
             slug="test",
             name="Test",
             voice_id="v1",
@@ -272,7 +272,7 @@ def test_agent_create_elevenlabs_agent_id_defaults_to_none():
     """AgentCreate defaults elevenlabs_agent_id to None when not provided."""
     from app.agents.schemas import AgentCreate
 
-    agent = AgentCreate(slug="main", name="Main", voice_id="v1")
+    agent = AgentCreate(goal="Book a demo call.", slug="main", name="Main", voice_id="v1")
     assert agent.elevenlabs_agent_id is None
 
 
@@ -280,7 +280,7 @@ def test_agent_create_accepts_elevenlabs_agent_id():
     """AgentCreate accepts a non-null elevenlabs_agent_id string."""
     from app.agents.schemas import AgentCreate
 
-    agent = AgentCreate(
+    agent = AgentCreate(goal="Book a demo call.", 
         slug="main", name="Main", voice_id="v1", elevenlabs_agent_id="el_abc123"
     )
     assert agent.elevenlabs_agent_id == "el_abc123"
@@ -480,7 +480,7 @@ def test_agent_create_tts_defaults():
     """AgentCreate defaults: tts_speed=0.95, tts_stability=0.4, tts_similarity_boost=0.75."""
     from app.agents.schemas import AgentCreate
 
-    agent = AgentCreate(slug="tts-default", name="TTS Agent", voice_id="v1")
+    agent = AgentCreate(goal="Book a demo call.", slug="tts-default", name="TTS Agent", voice_id="v1")
 
     assert agent.tts_speed == 0.95
     assert agent.tts_stability == 0.4
@@ -491,7 +491,7 @@ def test_agent_create_tts_custom_values():
     """AgentCreate accepts explicit TTS values within valid ranges."""
     from app.agents.schemas import AgentCreate
 
-    agent = AgentCreate(
+    agent = AgentCreate(goal="Book a demo call.", 
         slug="tts-custom",
         name="Custom TTS",
         voice_id="v1",
@@ -527,7 +527,7 @@ def test_agent_create_tts_out_of_range_raises_422(field: str, value: float):
     from app.agents.schemas import AgentCreate
 
     with pytest.raises(ValidationError) as exc_info:
-        AgentCreate(
+        AgentCreate(goal="Book a demo call.", 
             slug="tts-bad",
             name="Bad TTS",
             voice_id="v1",
@@ -605,7 +605,7 @@ def test_agent_create_tool_config_defaults_to_none():
     """AgentCreate defaults tool_config to None when not provided."""
     from app.agents.schemas import AgentCreate
 
-    agent = AgentCreate(slug="main", name="Main", voice_id="v1")
+    agent = AgentCreate(goal="Book a demo call.", slug="main", name="Main", voice_id="v1")
     assert agent.tool_config is None
 
 
@@ -620,7 +620,7 @@ def test_agent_create_accepts_valid_tool_config():
             "required": ["lead_id", "marca"],
         }
     }
-    agent = AgentCreate(
+    agent = AgentCreate(goal="Book a demo call.", 
         slug="main",
         name="Main",
         voice_id="v1",
@@ -635,7 +635,7 @@ def test_agent_create_tool_config_extra_unknown_key_is_accepted():
     from app.agents.schemas import AgentCreate
 
     config = {"unknown_key": {"some": "value"}}
-    agent = AgentCreate(
+    agent = AgentCreate(goal="Book a demo call.", 
         slug="main",
         name="Main",
         voice_id="v1",
@@ -734,7 +734,7 @@ def test_capture_data_is_valid_tool_name():
 
     assert "capture_data" in QORA_TOOL_NAMES
 
-    agent = AgentCreate(
+    agent = AgentCreate(goal="Book a demo call.", 
         slug="test",
         name="Test",
         voice_id="v1",
@@ -806,7 +806,7 @@ def test_legacy_tools_rejected_in_api_create():
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError) as exc_info:
-        AgentCreate(
+        AgentCreate(goal="Book a demo call.", 
             slug="test",
             name="Test",
             voice_id="v1",
@@ -825,7 +825,7 @@ def test_agent_create_soft_timeout_fields_default_to_none():
     """AgentCreate defaults all soft timeout fields to None when not provided."""
     from app.agents.schemas import AgentCreate
 
-    agent = AgentCreate(slug="main", name="Main", voice_id="v1")
+    agent = AgentCreate(goal="Book a demo call.", slug="main", name="Main", voice_id="v1")
 
     assert agent.soft_timeout_seconds is None
     assert agent.soft_timeout_message is None
@@ -836,7 +836,7 @@ def test_agent_create_accepts_soft_timeout_fields():
     """AgentCreate accepts soft_timeout_seconds, message, and use_llm."""
     from app.agents.schemas import AgentCreate
 
-    agent = AgentCreate(
+    agent = AgentCreate(goal="Book a demo call.", 
         slug="timeout-agent",
         name="Timeout Agent",
         voice_id="v1",
@@ -854,7 +854,7 @@ def test_agent_create_soft_timeout_seconds_range_valid_lower():
     """AgentCreate accepts soft_timeout_seconds=0.5 (lower bound)."""
     from app.agents.schemas import AgentCreate
 
-    agent = AgentCreate(slug="t", name="T", voice_id="v1", soft_timeout_seconds=0.5)
+    agent = AgentCreate(goal="Book a demo call.", slug="t", name="T", voice_id="v1", soft_timeout_seconds=0.5)
     assert agent.soft_timeout_seconds == 0.5
 
 
@@ -862,7 +862,7 @@ def test_agent_create_soft_timeout_seconds_range_valid_upper():
     """AgentCreate accepts soft_timeout_seconds=8.0 (upper bound)."""
     from app.agents.schemas import AgentCreate
 
-    agent = AgentCreate(slug="t", name="T", voice_id="v1", soft_timeout_seconds=8.0)
+    agent = AgentCreate(goal="Book a demo call.", slug="t", name="T", voice_id="v1", soft_timeout_seconds=8.0)
     assert agent.soft_timeout_seconds == 8.0
 
 
@@ -872,7 +872,7 @@ def test_agent_create_soft_timeout_seconds_below_min_raises():
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError) as exc_info:
-        AgentCreate(slug="t", name="T", voice_id="v1", soft_timeout_seconds=0.1)
+        AgentCreate(goal="Book a demo call.", slug="t", name="T", voice_id="v1", soft_timeout_seconds=0.1)
 
     assert "soft_timeout_seconds" in str(exc_info.value)
 
@@ -883,7 +883,7 @@ def test_agent_create_soft_timeout_seconds_above_max_raises():
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError) as exc_info:
-        AgentCreate(slug="t", name="T", voice_id="v1", soft_timeout_seconds=9.0)
+        AgentCreate(goal="Book a demo call.", slug="t", name="T", voice_id="v1", soft_timeout_seconds=9.0)
 
     assert "soft_timeout_seconds" in str(exc_info.value)
 

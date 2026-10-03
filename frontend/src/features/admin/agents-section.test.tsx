@@ -18,7 +18,28 @@ import { MemoryRouter } from 'react-router'
 import { http, HttpResponse } from 'msw'
 import { server } from '../../../tests/mocks/server'
 import { AgentsSection } from './agents-section'
-import type { AgentConfigRevision } from '@/api/types'
+import type { AgentConfigRevision, EffectiveConfig } from '@/api/types'
+
+/** Minimal effective-config fixture — overridden per-test via server.use(). */
+function effectiveConfigFixture(overrides?: Partial<EffectiveConfig['fields']>): EffectiveConfig {
+  return {
+    standard_version: '2026-10-02.1',
+    config_incomplete: false,
+    missing_required_fields: [],
+    fields: {
+      system_prompt: { value: 'You are a helpful insurance agent.', provenance: 'agent', policy: 'agent_required' },
+      goal: { value: null, provenance: 'agent', policy: 'agent_required' },
+      voice_id: { value: 'voice-001', provenance: 'agent', policy: 'agent_required' },
+      temperature: { value: 0.7, provenance: 'standard', policy: 'overridable' },
+      max_tokens: { value: 512, provenance: 'standard', policy: 'overridable' },
+      tts_speed: { value: 0.95, provenance: 'standard', policy: 'overridable' },
+      tts_stability: { value: 0.4, provenance: 'standard', policy: 'overridable' },
+      tts_similarity_boost: { value: 0.75, provenance: 'standard', policy: 'overridable' },
+      tools_enabled: { value: ['get_lead_details'], provenance: 'standard', policy: 'overridable' },
+      ...overrides,
+    },
+  }
+}
 
 beforeEach(() => {
   // Default: no revisions yet — avoids noisy MSW "unmatched request" warnings
@@ -26,6 +47,9 @@ beforeEach(() => {
   // the same edit panel without caring about revision history.
   server.use(
     http.get('/api/v1/clients/:clientId/agents/:agentId/revisions', () => HttpResponse.json([])),
+    http.get('/api/v1/clients/:clientId/agents/:agentId/effective-config', () =>
+      HttpResponse.json(effectiveConfigFixture()),
+    ),
   )
 })
 
@@ -338,5 +362,155 @@ describe('AgentsSection revisions panel', () => {
     await waitFor(() => {
       expect(screen.getByText(/active: revision 3/i)).toBeInTheDocument()
     })
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Phase 6 (agent-config-inheritance): effective config — provenance, locked
+// fields, completeness, Goal field, reset-to-inherited
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('AgentsSection effective config', () => {
+  it('requires a Goal field in the create form and includes it in the create payload', async () => {
+    let capturedBody: Record<string, unknown> | null = null
+    server.use(
+      http.post('/api/v1/clients/:clientId/agents', async ({ request }) => {
+        capturedBody = (await request.json()) as Record<string, unknown>
+        return HttpResponse.json(
+          { ...capturedBody, agent_id: 'agent-new', client_id: 'demo-client' },
+          { status: 201 },
+        )
+      }),
+    )
+    renderAgentsSection('demo-client')
+    await waitFor(() => {
+      expect(screen.queryByTestId('agents-loading')).not.toBeInTheDocument()
+    })
+
+    const goalInput = screen.getByLabelText(/^goal$/i)
+    expect(goalInput).toBeRequired()
+
+    await userEvent.type(screen.getByLabelText('Slug'), 'new-agent')
+    await userEvent.type(screen.getByLabelText('Name'), 'New Agent')
+    await userEvent.type(screen.getByLabelText('Voice ID'), 'voice-xyz')
+    await userEvent.type(goalInput, 'Qualify leads for auto insurance')
+    await userEvent.click(screen.getByRole('button', { name: /create agent/i }))
+
+    await waitFor(() => {
+      expect(capturedBody).not.toBeNull()
+    })
+    expect(capturedBody?.goal).toBe('Qualify leads for auto insurance')
+  })
+
+  it('renders a provenance badge per config field in the edit form', async () => {
+    server.use(
+      http.get('/api/v1/clients/:clientId/agents/:agentId/effective-config', () =>
+        HttpResponse.json(
+          effectiveConfigFixture({
+            temperature: { value: 0.5, provenance: 'client', policy: 'overridable' },
+            tts_speed: { value: 1.0, provenance: 'agent', policy: 'overridable' },
+          }),
+        ),
+      ),
+    )
+    await openFirstAgentEditPanel()
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Client').length).toBeGreaterThan(0)
+    })
+    expect(screen.getAllByText('Agent').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Qora standard').length).toBeGreaterThan(0)
+  })
+
+  it('renders a locked config field as read-only, not merely disabled', async () => {
+    server.use(
+      http.get('/api/v1/clients/:clientId/agents/:agentId/effective-config', () =>
+        HttpResponse.json(
+          effectiveConfigFixture({
+            temperature: { value: 0.7, provenance: 'standard', policy: 'locked' },
+          }),
+        ),
+      ),
+    )
+    await openFirstAgentEditPanel()
+
+    await waitFor(() => {
+      expect(screen.getByText(/locked by qora standard/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByRole('spinbutton', { name: /temperature/i })).not.toBeInTheDocument()
+  })
+
+  it('shows an Incomplete badge and the missing fields when config_incomplete', async () => {
+    server.use(
+      http.get('/api/v1/clients/:clientId/agents/:agentId/effective-config', () =>
+        HttpResponse.json({
+          ...effectiveConfigFixture(),
+          config_incomplete: true,
+          missing_required_fields: ['goal'],
+        }),
+      ),
+    )
+    await openFirstAgentEditPanel()
+
+    await waitFor(() => {
+      expect(screen.getByText(/incomplete/i)).toBeInTheDocument()
+    })
+    expect(screen.getByText(/missing required field.*goal/i)).toBeInTheDocument()
+  })
+
+  it('renders a Goal field in the edit form, populated from the effective config', async () => {
+    server.use(
+      http.get('/api/v1/clients/:clientId/agents/:agentId/effective-config', () =>
+        HttpResponse.json(
+          effectiveConfigFixture({
+            goal: { value: 'Close more policies', provenance: 'agent', policy: 'agent_required' },
+          }),
+        ),
+      ),
+    )
+    await openFirstAgentEditPanel()
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^goal$/i)).toHaveValue('Close more policies')
+    })
+  })
+
+  it('shows a Reset to inherited button for an agent-overridden overridable field, and it sends null for that field', async () => {
+    let capturedBody: Record<string, unknown> | null = null
+    server.use(
+      http.get('/api/v1/clients/:clientId/agents/:agentId/effective-config', () =>
+        HttpResponse.json(
+          effectiveConfigFixture({
+            tts_speed: { value: 1.1, provenance: 'agent', policy: 'overridable' },
+          }),
+        ),
+      ),
+      http.patch('/api/v1/clients/:clientId/agents/:agentId/config', async ({ request }) => {
+        capturedBody = (await request.json()) as Record<string, unknown>
+        return HttpResponse.json({
+          id: 'rev-x',
+          agent_id: 'agent-001',
+          revision_number: 5,
+          config: {},
+          schema_version: 'v2',
+          source: 'api',
+          created_by: 'admin@qora.ai',
+          created_at: '2026-01-22T00:00:00Z',
+          note: null,
+          elevenlabs_sync_status: 'skipped',
+        })
+      }),
+    )
+    await openFirstAgentEditPanel()
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /reset to inherited/i }).length).toBeGreaterThan(0)
+    })
+    await userEvent.click(screen.getAllByRole('button', { name: /reset to inherited/i })[0])
+
+    await waitFor(() => {
+      expect(capturedBody).not.toBeNull()
+    })
+    expect(capturedBody).toMatchObject({ tts_speed: null })
   })
 })

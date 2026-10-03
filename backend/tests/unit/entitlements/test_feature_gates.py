@@ -113,7 +113,12 @@ class TestAgentLimit:
 
     @staticmethod
     def _agent(slug: str) -> dict:
-        return {"slug": slug, "name": slug.title(), "voice_id": "voice-1"}
+        return {
+            "slug": slug,
+            "name": slug.title(),
+            "voice_id": "voice-1",
+            "goal": "Book a demo call.",
+        }
 
     async def test_agent_creation_blocked_at_plan_limit(self, admin):
         http, set_plan = admin

@@ -297,6 +297,142 @@ class ClientConfigRevision(Base):
 
 **Total**: ~1,850 changed lines across 7 reviewable units, each within or near the 400-line-per-PR target. Task 5 is the highest-risk unit (behavioral cutover gated on the equivalence test) and should not be combined with any other task in a single PR.
 
+## D18 — Phase 4 write model: V1→V2 promotion, write-time grandfathering, create_client bootstrap, goal required for new agents
+
+Phase 4 implementation refines D12/D14 with four decisions made during
+implementation, all additive to the existing agent-config-revisions-routing
+(1a) write path:
+
+1. **Agent revisions written from now on are `AgentConfigV2`** (sparse,
+   every field optional; `locked`/`client_only` fields are rejected as
+   unregistered — 422 listing them) via the dedicated
+   `PATCH /agents/{id}/config` endpoint and its `create_agent_config_revision`
+   service function. The LEGACY `PATCH /agents/{id}` endpoint (full-column
+   update, no override semantics) is left writing `AgentConfigV1` full
+   snapshots unchanged — it has no concept of "override" to begin with, and
+   rewriting it to resolve/diff against the standard is Phase 5 (runtime
+   cutover) territory, not Phase 4. `AgentConfigV1` rows remain readable
+   forever, unmigrated (D12 unchanged).
+2. **V1→V2 promotion on first write**: when the active agent revision is V1
+   (or absent), the new V2 revision starts from every non-None V1 value,
+   dropping any `locked`/`client_only` key, as explicit agent overrides, then
+   applies the patch. A patch value of `null` removes an override (inherit).
+   This guarantees no behavior change for existing agents on their first V2
+   write.
+3. **Grandfathering is a WRITE-time relaxation, not just a read-time one**
+   (relaxes the original D14 text, which required every new revision to
+   include the missing field even for grandfathered agents): an existing
+   agent whose required field (in practice, only `goal`) was already missing
+   BEFORE a given write may keep omitting it on that write — the field simply
+   stays missing, it is not force-filled or rejected for that reason alone.
+   Once a required field has a non-null value, no later write may null it
+   back out (422, exact field list). This is computed per-write by comparing
+   the field's presence in the previous active revision's overrides against
+   the post-patch merged result — no separate "is this agent grandfathered"
+   flag is stored. A brand-new agent (`POST /agents`, no prior revision) is
+   never grandfathered: every `agent_required` field must be present.
+   Rationale: the original D14 text would have turned grandfathering into a
+   trap — any unrelated config write for an old agent would be blocked on an
+   unrelated field nobody asked about yet. The admin API's `config_incomplete`
+   / `missing_required_fields` (computed purely from the current active
+   revision, independent of write history) keeps the gap visible without
+   blocking unrelated writes.
+4. **Transitional mirror, always**: every agent-config write (`.../config`
+   PATCH and rollback) resolves `EffectiveConfig` (standard + the client's
+   active sparse revision, defaulting to no overrides when the client has
+   none + the agent's own overrides, V1 or V2) and mirrors it onto the legacy
+   `Agent.*` columns, so the runtime — still reading those columns until the
+   Phase 5 cutover — behaves identically regardless of which level a field's
+   effective value came from.
+5. **`create_client` bootstraps its own empty client revision** (moved from
+   `clients/router.py` into `tenants/service.py`'s `create_client()`), so
+   every caller — seeders, the router, future service callers — gets the
+   guarantee in one place, matching the "every agent must have one" pattern
+   already established for agent revisions.
+6. **`AgentCreate.goal` is a required field** (no default) for the public
+   `POST /agents` API, enforced naturally by Pydantic rather than a custom
+   check — consistent with `voice_id`'s existing required-ness. `system_prompt`
+   remains optional at this API surface (unchanged from 1a): making it
+   required as well is a materially larger, separately-scoped change (dozens
+   of existing call sites across the test suite construct agents without a
+   system prompt, relying on the existing `"" ` fallback), and no production
+   agent's recorded field policy depends on it being enforced at creation
+   time today. `tenants.service.create_agent()`'s internal signature grew an
+   optional `goal` parameter so the API path can thread it through, but
+   `create_client()`'s own bootstrap-agent call (and the seeders) do not pass
+   one — that bootstrap agent is simply `config_incomplete=True` from the
+   start, exactly like any other legacy agent, until explicitly configured.
+
+## D19 — Phase 5: materialized effective config instead of rewiring the hot path
+
+Phase 4 already mirrors every agent-config write's resolved `EffectiveConfig`
+onto the legacy `Agent.*` columns (`_resolve_effective_for_agent` /
+`_mirror_effective_config_to_agent`, D18 decision #4). D19 makes that the
+official model for the remainder of Phase 5, superseding the original plan
+(tasks 5.2/5.3) to rewire `build_voice_context` and
+`ElevenLabsService._build_config_payload` to call `resolve_effective_config`
+directly on every turn/sync.
+
+**Decision**: `Agent.*` config columns are a MATERIALIZED projection of
+`resolve_effective_config(standard, client active revision, agent active
+revision)`. A single function, `tenants/materialize.materialize_agent_config
+(session, agent) -> EffectiveConfig`, is the sole derivation point: it
+resolves, mirrors the result onto `Agent.*`, and stamps
+`agent.materialized_standard_version`. Every write path
+(`agents/router.py`) and every propagation path (client-config PATCH/
+rollback, the standard resync endpoint) calls it instead of
+resolving/mirroring inline. The voice hot path (`voice/context.py`, the
+webhook) and `ElevenLabsService._build_config_payload` are UNCHANGED — they
+keep reading `Agent.*` columns directly.
+
+**Rejected**: resolving `EffectiveConfig` per turn inside
+`build_voice_context` (tasks 5.2/5.3 as originally scoped). This would add a
+client-revision + agent-revision DB read to every voice turn and every EL
+sync call, for a resolution that is already fully captured by the mirrored
+columns the moment any config-affecting event happens (an agent write, a
+client write, or an explicit standard resync) — strictly larger blast radius
+and latency risk in the call path for no behavioral gain.
+
+**Rationale**: one derivation point (the resolver stays pure, called from
+exactly one place); the hot path's existing column reads are untouched, so
+there is zero new latency or behavior risk on a live call; and the
+equivalence test (5.1) becomes a direct, literal column-diff check instead
+of an indirect runtime-behavior comparison.
+
+**Empirically widened exception list (5.1)**: materializing every agent
+seeded by `seed_quintana`/`seed_qora_demo` (+ a plain `create_agent()`) was
+verified to change THREE Agent.* columns, not the single
+`voicemail_detection_enabled` example in D15/D19's original framing:
+
+- `voicemail_detection_enabled`: `NULL` -> standard `True`, for any agent
+  that never had it set explicitly.
+- `max_call_duration_seconds`: `NULL` -> standard `120`, same NULL-carrying
+  agents.
+- `system_prompt`: changes whenever the agent's active revision's
+  agent-override `system_prompt` differs from the raw `Agent.system_prompt`
+  column — either `NULL` -> `""` for a brand-new agent with none set, or
+  (jaumpablo, qora-explainer) the DB-seed-constant column text being
+  replaced by the filesystem `system-prompt.md` content that
+  `_resolve_seed_system_prompt()` already prefers when building each
+  seeder's active revision. `PromptLoader.render_for_agent()` already serves
+  the filesystem content at call time (D6) regardless of the column value,
+  so this materialization does not change runtime behavior — it only makes
+  the column match what is already served.
+
+See `tests/unit/tenants/test_config_equivalence.py` for the exhaustive,
+self-verifying exception list (a test asserts the observed exceptions equal
+the documented set, so a future seeder change that resolves the divergence
+is caught instead of leaving dead documentation).
+
+**Deviation — standard resync endpoint mount point**: task 5.6 named the
+route `POST /admin/standards/resync`. `backend/app/main.py` (where a bare
+`/admin` router would need to be registered) was outside this task's
+allowed edit surfaces. The endpoint is mounted on the existing clients
+router instead (the only allowed-surface router with no client-id-scoped
+dependency), giving the reachable path
+`POST /api/v1/clients/admin/standards/resync`, still gated by
+`require_superadmin`. Revisit the exact path if/when `main.py` is in scope.
+
 ## Open Questions
 
 - [ ] Should `language` (conversation) ever get a per-agent override path, and if so, is it a Qora-reviewed field-policy exception (per D16) or a self-service toggle gated by a client-level "allow multilingual agents" flag? Not blocking tasks 1–6; resolve before building any UI affordance for it.
