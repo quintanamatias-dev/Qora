@@ -13,7 +13,7 @@ Branch `feat/config-phase1a`, stacked on `design/config-phase1`. The user asked 
 - [x] 5. Phase 4b: scheduler, recontact, `schedule_followup`, outbound, calls and lead preview take an explicit agent.
 - [x] 6. Phase 5: ElevenLabs projection sets the agent-scoped custom-LLM URL.
 - [x] 7. Phase 6: admin UI without "default agent" and with a revisions list plus rollback.
-- [ ] 8. Full backend and frontend suites green; phase 7 (production rollout) prepared and waiting for the user.
+- [x] 8. Full backend and frontend suites green; phase 7 (production rollout) prepared and waiting for the user.
 
 ## Evidence
 
@@ -27,6 +27,8 @@ Branch `feat/config-phase1a`, stacked on `design/config-phase1`. The user asked 
 - Task 5: `get_default_agent` / `set_default_agent` deleted (grep is clean). `POST /agents/{id}/make-default` removed (the frontend button 404s until task 7). `is_default` removed from `AgentCreate`, kept as deprecated in the response. Deactivate guard: a client's last active agent cannot be deactivated. Scheduler, tool, outbound, calls and lead preview take the agent from the session or schedule, or an explicit `agent_id`, else `resolve_single_active_agent`; HTTP 404 for none, 409 for ambiguous; background paths log and skip. Outbound and lead preview require `agent_id` only when the client has more than one active agent (D2). RED/GREEN for most units; outbound and lead tests were written right after the code (worker disclosed it). Worker full suite: 3850 passed. Seeders skip ambiguous clients and create nothing. Follow-up: seeders still write Agent.* columns at boot without a revision.
 - Task 6: the first worker stalled 30 min on a grep with no changes; relaunched with the locations already found. New setting `PUBLIC_BASE_URL` (no such setting existed; the URL was set by hand in ElevenLabs). The sync does a GET, then a PATCH that replaces only `custom_llm.url` with `{base}/api/v1/voice/{client}/agents/{agent}/custom-llm`, keeping secrets and headers; the URL is covered by drift detection; it skips with `elevenlabs_custom_llm_url_skipped` when the base is unset or the GET fails. Migration `20261002_0017`: `call_sessions.agent_config_revision_id`, stamped in `create_session`. RED observed. Worker full suite: 3859 passed. **Rollout:** set `PUBLIC_BASE_URL=https://qora-app-production.up.railway.app` in Railway before re-syncing.
 - Task 7: `737530c`. The "Make default" action and "Default" badge are gone; new shared `AgentRevisionsPanel` (active revision, ElevenLabs sync badge, history, rollback with an inline confirm) in agents-section.tsx and agents-panel.tsx. RED observed; frontend 885/885 passed, lint and tsc clean.
+
+- Task 8 (verifier): backend 3859 passed; Alembic upgrade from empty to 0017, downgrade to 0013 and upgrade again all OK; frontend 885 passed, lint and tsc clean; grep for default-agent symbols returns 0 matches. Parent ran the migrations on a copy of the local `qora.db` with real data: all 3 agents got revision 1, and the imported prompts match the files exactly (leads-agent 14782 chars, jaumpablo 5583).
 
 ## Production rollout (task 8, waits for the user)
 
