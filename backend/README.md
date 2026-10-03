@@ -221,6 +221,46 @@ Browser (Demo UI)
 | GET | `/docs` | Swagger UI |
 | GET | `/redoc` | ReDoc UI |
 
+## Data MCP + Onboarding Harness
+
+Two internal-only developer tools, additive to the HTTP API above, both running in-process against the same `DATABASE_URL`:
+
+### `python -m app.mcp` — read-only data MCP server
+
+Starts a stdio MCP server exposing `list_clients`, `get_client`, `list_agents`, `get_agent` (effective config + per-field provenance), `list_leads`, `get_lead`, `list_calls`, `get_call`. No write tools. Tenant-data tools (`list_leads`/`get_lead`/`list_calls`/`get_call`) require `client_id` — never default to a cross-tenant view. No tool ever returns a secret-shaped field.
+
+```bash
+DATABASE_URL=sqlite+aiosqlite:///./qora.db uv run python -m app.mcp
+```
+
+To register it in Claude Code or Codex as a stdio MCP server, point the launcher at `uv run python -m app.mcp` with `cwd` set to this `backend/` directory and `DATABASE_URL` set in its `env`. Both tools launch it as a local subprocess — no network transport is exposed.
+
+### `python -m app.onboarding` / `POST /api/v1/admin/onboarding` — onboarding harness
+
+Automates the DB-and-filesystem provisioning steps of `skills/qora-client-agent-setup/SKILL.md` (client row, agent row + revision 1, analysis profile, CRM integration row) from one declarative spec (`app/onboarding/spec.py`). The CLI and the admin endpoint call the same `app/onboarding/service.py:run_onboarding` function, so they can never diverge.
+
+- **Never-secrets guarantee**: the spec schema (`extra="forbid"`) has no field that accepts a credential value. A CRM secret, if needed, is set afterward via the existing `PUT /clients/{client_id}/integrations/{provider}/secret` endpoint.
+- **client_id required**: every spec names an explicit `client_id` and `agent_slug`.
+- **Idempotent**: re-running an identical spec reports `already_exists` per entity instead of duplicating or erroring.
+
+```bash
+# Validate only — writes nothing
+uv run python -m app.onboarding path/to/spec.yaml --dry-run
+
+# Provision
+uv run python -m app.onboarding path/to/spec.yaml
+```
+
+```bash
+# Equivalent via the admin API (superadmin only)
+curl -X POST https://{host}/api/v1/admin/onboarding \
+  -H "Authorization: Bearer $QORA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"spec": { ... }, "dry_run": true}'
+```
+
+The result is a checklist naming every automated step's outcome plus the manual ElevenLabs-dashboard steps (Phase 1/5 of the skill) the harness does not and cannot automate.
+
 ## ElevenLabs Agent Configuration
 
 To connect a new ElevenLabs agent to QORA's multi-tenant backend, see the setup guide:
