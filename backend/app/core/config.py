@@ -102,6 +102,12 @@ class Settings(BaseSettings):
     debug: bool = False
     frontend_url: str = "http://localhost:5173"
 
+    # Public base URL of this deployment (no trailing slash), e.g.
+    # "https://qora-app-production.up.railway.app". Used to build agent-scoped
+    # ElevenLabs custom-LLM webhook URLs (agent-config-revisions-routing D-projection).
+    # None disables the URL override — ElevenLabs dashboard config is left untouched.
+    public_base_url: str | None = None
+
     # ------------------------------------------------------------------
     # Filler
     # ------------------------------------------------------------------

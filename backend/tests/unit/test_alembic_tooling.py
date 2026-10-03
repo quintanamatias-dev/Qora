@@ -777,7 +777,7 @@ class TestRealMigrationExecution:
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
         # PR3 transcript finalization fields: 20260625_0003
         # C2 outbound telephony: 20260702_0004
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016"}
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"alembic_version should contain a known Qora revision. "
             f"Got: {versions}. Known: {_KNOWN_REVISIONS}"
@@ -961,7 +961,7 @@ class TestRealMigrationExecution:
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
         # PR3 transcript finalization fields: 20260625_0003
         # C2 outbound telephony: 20260702_0004
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016"}
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"Stamp head did not record a known Qora revision. Got: {versions}. "
             f"Known revisions: {_KNOWN_REVISIONS}"
@@ -2279,6 +2279,47 @@ class TestAgentConfigRevisionsSchemaMigration:
         cur.execute("PRAGMA table_info(agents)")
         agents_columns = {row[1] for row in cur.fetchall()}
         assert "active_revision_id" not in agents_columns
+        conn.close()
+
+
+class TestCallSessionAgentConfigRevisionMigration:
+    """Phase 5 D4: call_sessions.agent_config_revision_id."""
+
+    def test_call_session_agent_config_revision_migration_adds_column(self, tmp_path):
+        """alembic upgrade head adds call_sessions.agent_config_revision_id (nullable)."""
+        import sqlite3
+        from alembic import command
+
+        db_file = tmp_path / "call_session_agent_config_revision.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "head")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(call_sessions)")
+        columns = {row[1]: row for row in cur.fetchall()}
+        assert "agent_config_revision_id" in columns
+        # PRAGMA table_info: (cid, name, type, notnull, dflt_value, pk)
+        assert columns["agent_config_revision_id"][3] == 0, (
+            "call_sessions.agent_config_revision_id must be nullable"
+        )
+        conn.close()
+
+    def test_call_session_agent_config_revision_migration_downgrade(self, tmp_path):
+        """alembic downgrade -1 removes call_sessions.agent_config_revision_id."""
+        import sqlite3
+        from alembic import command
+
+        db_file = tmp_path / "call_session_agent_config_revision_downgrade.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "-1")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(call_sessions)")
+        columns = {row[1] for row in cur.fetchall()}
+        assert "agent_config_revision_id" not in columns
         conn.close()
 
 

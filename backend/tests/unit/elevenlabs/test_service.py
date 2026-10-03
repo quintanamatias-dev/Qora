@@ -53,6 +53,8 @@ def _make_agent(
     tts_speed: float | None = None,
     tts_stability: float | None = None,
     tts_similarity_boost: float | None = None,
+    client_id: str = "test-client",
+    agent_db_id: str = "agent-db-id-1",
 ):
     """Return a mock agent object mirroring the Agent model fields we need.
 
@@ -73,12 +75,15 @@ def _make_agent(
     agent.tts_speed = tts_speed
     agent.tts_stability = tts_stability
     agent.tts_similarity_boost = tts_similarity_boost
+    agent.client_id = client_id
+    agent.id = agent_db_id
     return agent
 
 
-def _make_settings(api_key: str = "test-xi-api-key"):
+def _make_settings(api_key: str = "test-xi-api-key", public_base_url: str | None = None):
     settings = MagicMock()
     settings.elevenlabs_api_key = SecretStr(api_key)
+    settings.public_base_url = public_base_url
     return settings
 
 
@@ -704,3 +709,271 @@ async def test_sync_agent_config_5xx_retry_exhausted_returns_error():
     assert isinstance(result, SyncResult)
     assert result.outcome == "error"
     assert result.error_detail is not None
+
+
+# ===========================================================================
+# agent-config-revisions-routing Phase 5 (task 5.1): agent-scoped custom_llm URL
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_sync_agent_config_sets_agent_scoped_custom_llm_url():
+    """GIVEN public_base_url is set AND the EL agent currently uses custom-llm
+    WHEN sync_agent_config runs
+    THEN the PATCH payload's custom_llm.url is the agent-scoped route.
+    """
+    import json as _json
+    from app.elevenlabs.service import ElevenLabsService, SyncResult
+
+    agent = _make_agent(
+        elevenlabs_agent_id="el-abc123",
+        soft_timeout_seconds=None,
+        soft_timeout_message=None,
+        soft_timeout_use_llm=None,
+        client_id="quintana-seguros",
+        agent_db_id="leads-agent-id",
+    )
+    settings = _make_settings(public_base_url="https://qora-app-production.up.railway.app")
+
+    pre_patch_config = {
+        "conversation_config": {
+            "agent": {
+                "prompt": {
+                    "llm": "custom-llm",
+                    "custom_llm": {
+                        "url": "https://old-host/api/v1/voice/quintana-seguros/custom-llm",
+                        "api_key": {"secret_id": "secret-123"},
+                        "request_headers": [{"name": "X-Foo", "value": "bar"}],
+                    },
+                }
+            }
+        }
+    }
+
+    captured: dict = {}
+
+    respx.get("https://api.elevenlabs.io/v1/convai/agents/el-abc123").mock(
+        return_value=httpx.Response(200, json=pre_patch_config)
+    )
+
+    def _patch_capture(request):
+        captured["body"] = _json.loads(request.content)
+        return httpx.Response(200, json={"ok": True})
+
+    respx.patch("https://api.elevenlabs.io/v1/convai/agents/el-abc123").mock(
+        side_effect=_patch_capture
+    )
+
+    service = ElevenLabsService(settings=settings)
+    result = await service.sync_agent_config(agent)
+
+    assert isinstance(result, SyncResult)
+    custom_llm = captured["body"]["conversation_config"]["agent"]["prompt"]["custom_llm"]
+    assert custom_llm["url"] == (
+        "https://qora-app-production.up.railway.app/api/v1/voice/"
+        "quintana-seguros/agents/leads-agent-id/custom-llm"
+    )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_sync_agent_config_custom_llm_url_preserves_secrets_and_headers():
+    """The custom_llm override must not wipe api_key / request_headers from the
+    CURRENT live config — only the url leaf is replaced.
+    """
+    import json as _json
+    from app.elevenlabs.service import ElevenLabsService
+
+    agent = _make_agent(
+        elevenlabs_agent_id="el-abc123",
+        soft_timeout_seconds=None,
+        soft_timeout_message=None,
+        soft_timeout_use_llm=None,
+        client_id="quintana-seguros",
+        agent_db_id="leads-agent-id",
+    )
+    settings = _make_settings(public_base_url="https://qora-app-production.up.railway.app")
+
+    pre_patch_config = {
+        "conversation_config": {
+            "agent": {
+                "prompt": {
+                    "llm": "custom-llm",
+                    "custom_llm": {
+                        "url": "https://old-host/custom-llm",
+                        "api_key": {"secret_id": "secret-123"},
+                        "request_headers": [{"name": "X-Foo", "value": "bar"}],
+                    },
+                }
+            }
+        }
+    }
+
+    captured: dict = {}
+    respx.get("https://api.elevenlabs.io/v1/convai/agents/el-abc123").mock(
+        return_value=httpx.Response(200, json=pre_patch_config)
+    )
+
+    def _patch_capture(request):
+        captured["body"] = _json.loads(request.content)
+        return httpx.Response(200, json={"ok": True})
+
+    respx.patch("https://api.elevenlabs.io/v1/convai/agents/el-abc123").mock(
+        side_effect=_patch_capture
+    )
+
+    service = ElevenLabsService(settings=settings)
+    await service.sync_agent_config(agent)
+
+    custom_llm = captured["body"]["conversation_config"]["agent"]["prompt"]["custom_llm"]
+    assert custom_llm["api_key"] == {"secret_id": "secret-123"}
+    assert custom_llm["request_headers"] == [{"name": "X-Foo", "value": "bar"}]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_sync_agent_config_skips_custom_llm_url_without_public_base_url():
+    """GIVEN public_base_url is unset WHEN sync_agent_config runs THEN the custom_llm
+    block is left untouched by the service (no url override applied).
+    """
+    from app.elevenlabs.service import ElevenLabsService
+    import json as _json
+
+    agent = _make_agent(
+        elevenlabs_agent_id="el-abc123",
+        voicemail_detection_enabled=True,
+        client_id="quintana-seguros",
+        agent_db_id="leads-agent-id",
+    )
+    settings = _make_settings(public_base_url=None)
+
+    captured: dict = {}
+
+    def _patch_capture(request):
+        captured["body"] = _json.loads(request.content)
+        return httpx.Response(200, json={"ok": True})
+
+    respx.patch("https://api.elevenlabs.io/v1/convai/agents/el-abc123").mock(
+        side_effect=_patch_capture
+    )
+    # Read-back verification GET (post-PATCH) still happens — echo the sent config.
+    respx.get("https://api.elevenlabs.io/v1/convai/agents/el-abc123").mock(
+        side_effect=lambda request: httpx.Response(
+            200, json={"conversation_config": captured["body"]["conversation_config"]}
+        )
+    )
+
+    service = ElevenLabsService(settings=settings)
+    await service.sync_agent_config(agent)
+
+    prompt = captured["body"].get("conversation_config", {}).get("agent", {}).get("prompt", {})
+    assert "custom_llm" not in prompt
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_sync_agent_config_skips_custom_llm_url_when_readback_fails():
+    """GIVEN public_base_url is set but the pre-PATCH GET fails WHEN sync_agent_config
+    runs THEN the url override is skipped but the rest of the sync still proceeds.
+    """
+    import json as _json
+    from app.elevenlabs.service import ElevenLabsService, SyncResult
+
+    agent = _make_agent(
+        elevenlabs_agent_id="el-abc123",
+        voicemail_detection_enabled=True,
+        client_id="quintana-seguros",
+        agent_db_id="leads-agent-id",
+    )
+    settings = _make_settings(public_base_url="https://qora-app-production.up.railway.app")
+
+    captured: dict = {}
+    call_count = {"get": 0}
+
+    def _get_side_effect(request):
+        call_count["get"] += 1
+        if call_count["get"] == 1:
+            return httpx.Response(500, json={"error": "boom"})
+        return httpx.Response(
+            200, json={"conversation_config": captured["body"]["conversation_config"]}
+        )
+
+    respx.get("https://api.elevenlabs.io/v1/convai/agents/el-abc123").mock(
+        side_effect=_get_side_effect
+    )
+
+    def _patch_capture(request):
+        captured["body"] = _json.loads(request.content)
+        return httpx.Response(200, json={"ok": True})
+
+    respx.patch("https://api.elevenlabs.io/v1/convai/agents/el-abc123").mock(
+        side_effect=_patch_capture
+    )
+
+    service = ElevenLabsService(settings=settings)
+    result = await service.sync_agent_config(agent)
+
+    assert isinstance(result, SyncResult)
+    prompt = captured["body"].get("conversation_config", {}).get("agent", {}).get("prompt", {})
+    assert "custom_llm" not in prompt
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_sync_agent_config_flags_drift_when_custom_llm_url_differs():
+    """The custom_llm.url leaf participates in drift detection like any other
+    sent field: if the post-PATCH readback reports a different url, outcome='drift'.
+    """
+    from app.elevenlabs.service import ElevenLabsService, SyncResult
+
+    agent = _make_agent(
+        elevenlabs_agent_id="el-abc123",
+        soft_timeout_seconds=None,
+        soft_timeout_message=None,
+        soft_timeout_use_llm=None,
+        client_id="quintana-seguros",
+        agent_db_id="leads-agent-id",
+    )
+    settings = _make_settings(public_base_url="https://qora-app-production.up.railway.app")
+
+    pre_patch_config = {
+        "conversation_config": {
+            "agent": {"prompt": {"llm": "custom-llm", "custom_llm": {"url": "https://old-host/custom-llm"}}}
+        }
+    }
+    respx.patch("https://api.elevenlabs.io/v1/convai/agents/el-abc123").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+
+    get_call_count = {"n": 0}
+
+    def _get_side_effect(request):
+        get_call_count["n"] += 1
+        if get_call_count["n"] == 1:
+            return httpx.Response(200, json=pre_patch_config)
+        # Post-PATCH readback reports a STALE url — provider did not apply it.
+        return httpx.Response(
+            200,
+            json={
+                "conversation_config": {
+                    "agent": {
+                        "prompt": {
+                            "llm": "custom-llm",
+                            "custom_llm": {"url": "https://old-host/custom-llm"},
+                        }
+                    }
+                }
+            },
+        )
+
+    respx.get("https://api.elevenlabs.io/v1/convai/agents/el-abc123").mock(
+        side_effect=_get_side_effect
+    )
+
+    service = ElevenLabsService(settings=settings)
+    result = await service.sync_agent_config(agent)
+
+    assert isinstance(result, SyncResult)
+    assert result.outcome == "drift"
+    assert any("custom_llm.url" in f for f in result.drift_fields)

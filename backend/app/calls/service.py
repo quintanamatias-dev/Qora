@@ -73,11 +73,20 @@ async def create_session(
         AmbiguousAgentError: agent_id is None and the client has 2+ active agents.
     """
     resolved_agent_id = agent_id
+    resolved_agent = None
     if resolved_agent_id is None:
         from app.tenants.service import resolve_single_active_agent
 
         resolved_agent = await resolve_single_active_agent(session, client_id)
         resolved_agent_id = resolved_agent.id
+    else:
+        from app.tenants.models import Agent
+
+        resolved_agent = await session.get(Agent, resolved_agent_id)
+
+    agent_config_revision_id = (
+        resolved_agent.active_revision_id if resolved_agent is not None else None
+    )
 
     cs = CallSession(
         id=session_id or str(uuid.uuid4()),
@@ -86,6 +95,7 @@ async def create_session(
         elevenlabs_conversation_id=elevenlabs_conversation_id,
         status="initiated",
         agent_id=resolved_agent_id,
+        agent_config_revision_id=agent_config_revision_id,
     )
     session.add(cs)
     await session.flush()

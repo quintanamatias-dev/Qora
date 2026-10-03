@@ -193,3 +193,50 @@ async def test_create_session_without_agent_id_fails_closed_for_multi_agent_clie
                 client_id="quintana-seguros",
                 lead_id="agent-test-lead-001",
             )
+
+
+async def test_create_session_records_agent_config_revision_id(seeded_db):
+    """create_session() stamps agent_config_revision_id from the resolved agent's
+    active_revision_id (agent-config-revisions-routing D4).
+    """
+    from app.calls.service import create_session
+    from app.tenants.service import resolve_single_active_agent
+
+    async with seeded_db.async_session_factory() as sess:
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
+        assert agent.active_revision_id is not None, (
+            "seed_quintana must activate a revision for every seeded agent"
+        )
+        expected_revision_id = agent.active_revision_id
+        agent_id = agent.id
+
+    async with seeded_db.async_session_factory() as sess:
+        cs = await create_session(
+            sess,
+            client_id="quintana-seguros",
+            lead_id="agent-test-lead-001",
+            agent_id=agent_id,
+        )
+        await sess.commit()
+
+    assert cs.agent_config_revision_id == expected_revision_id
+
+
+async def test_create_session_without_agent_id_records_resolved_revision(seeded_db):
+    """create_session() without agent_id stamps the AUTO-RESOLVED agent's revision."""
+    from app.calls.service import create_session
+    from app.tenants.service import resolve_single_active_agent
+
+    async with seeded_db.async_session_factory() as sess:
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
+        expected_revision_id = agent.active_revision_id
+
+    async with seeded_db.async_session_factory() as sess:
+        cs = await create_session(
+            sess,
+            client_id="quintana-seguros",
+            lead_id="agent-test-lead-001",
+        )
+        await sess.commit()
+
+    assert cs.agent_config_revision_id == expected_revision_id

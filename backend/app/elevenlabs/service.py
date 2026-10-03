@@ -102,14 +102,21 @@ class ElevenLabsService:
         if agent.elevenlabs_agent_id is None:
             return SyncResult(outcome="skipped")
 
-        payload = _build_config_payload(agent)
-        if not payload:
-            # All config fields are NULL — nothing to configure
-            return SyncResult(outcome="skipped")
-
         url = f"{_ELEVENLABS_BASE_URL}/convai/agents/{agent.elevenlabs_agent_id}"
         api_key = self._settings.elevenlabs_api_key.get_secret_value()
         headers = {"xi-api-key": api_key, "Content-Type": "application/json"}
+
+        payload = _build_config_payload(agent)
+        payload = await _apply_custom_llm_url_override(
+            payload=payload,
+            agent=agent,
+            settings=self._settings,
+            url=url,
+            headers=headers,
+        )
+        if not payload:
+            # All config fields are NULL — nothing to configure
+            return SyncResult(outcome="skipped")
 
         patch_result = await _patch_with_retry(
             url=url,
@@ -884,6 +891,75 @@ async def _fetch_agent_config(
         )
         return None
     return body
+
+
+async def _apply_custom_llm_url_override(
+    *,
+    payload: dict,
+    agent,
+    settings,
+    url: str,
+    headers: dict,
+) -> dict:
+    """Overlay conversation_config.agent.prompt.custom_llm.url onto payload.
+
+    Only applies when settings.public_base_url is configured AND the agent's live
+    ElevenLabs config currently uses the custom-llm provider (checked via a GET
+    before the PATCH). Reuses the CURRENT custom_llm block so secrets/headers
+    configured in the EL dashboard are preserved — only the url leaf is replaced.
+
+    Any skip path (no public_base_url, GET failure, not custom-llm) is logged and
+    returns payload unchanged — never raises.
+
+    Spec: agent-config-revisions-routing — Phase 5 task 5.1.
+    """
+    public_base_url = getattr(settings, "public_base_url", None)
+    if not public_base_url:
+        logger.info(
+            "elevenlabs_custom_llm_url_skipped",
+            elevenlabs_agent_id=agent.elevenlabs_agent_id,
+            reason="no_public_base_url",
+        )
+        return payload
+
+    current = await _fetch_agent_config(
+        url=url, headers=headers, elevenlabs_agent_id=agent.elevenlabs_agent_id
+    )
+    if current is None:
+        logger.info(
+            "elevenlabs_custom_llm_url_skipped",
+            elevenlabs_agent_id=agent.elevenlabs_agent_id,
+            reason="readback_failed",
+        )
+        return payload
+
+    current_cc = current.get("conversation_config") or {}
+    current_agent = current_cc.get("agent") or {}
+    current_prompt = current_agent.get("prompt") or {}
+    if current_prompt.get("llm") != "custom-llm":
+        logger.info(
+            "elevenlabs_custom_llm_url_skipped",
+            elevenlabs_agent_id=agent.elevenlabs_agent_id,
+            reason="not_custom_llm",
+        )
+        return payload
+
+    current_custom_llm = current_prompt.get("custom_llm") or {}
+    new_custom_llm = dict(current_custom_llm)
+    new_custom_llm["url"] = (
+        f"{public_base_url}/api/v1/voice/{agent.client_id}/agents/{agent.id}/custom-llm"
+    )
+
+    if "conversation_config" not in payload:
+        payload["conversation_config"] = {}
+    cc = payload["conversation_config"]
+    if "agent" not in cc:
+        cc["agent"] = {}
+    if "prompt" not in cc["agent"]:
+        cc["agent"]["prompt"] = {}
+    cc["agent"]["prompt"]["custom_llm"] = new_custom_llm
+
+    return payload
 
 
 async def _verify_synced_config(
