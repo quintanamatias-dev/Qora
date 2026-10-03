@@ -274,6 +274,108 @@ class ClientAnalysisProfileRevision(Base):
         )
 
 
+class SkillPackage(Base):
+    """A named collection of skills owned by Qora or by one client (skill-packages, P4-D1).
+
+    Exactly one row has owner_type="qora" (client_id NULL) — the Qora-wide
+    default package. Every client that has skills gets its own
+    owner_type="client" row, scoped by client_id.
+    """
+
+    __tablename__ = "skill_packages"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid4)
+    owner_type: Mapped[str] = mapped_column(String, nullable=False)  # "qora" | "client"
+    client_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("clients.id"), nullable=True, index=True, default=None
+    )
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<SkillPackage id={self.id!r} owner_type={self.owner_type!r} "
+            f"client_id={self.client_id!r}>"
+        )
+
+
+class Skill(Base):
+    """A named slot within a SkillPackage, scoped to a general or agent section
+    (skill-packages, P4-D1).
+
+    unique(package_id, slug, agent_id) allows the same slug to exist once as a
+    general-section skill and once per agent-section skill within one package.
+    active_revision_id is non-null once the skill has at least one revision —
+    NULL only transiently between row creation and its first SkillRevision insert.
+    """
+
+    __tablename__ = "skills"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid4)
+    package_id: Mapped[str] = mapped_column(
+        String, ForeignKey("skill_packages.id"), nullable=False, index=True
+    )
+    slug: Mapped[str] = mapped_column(String, nullable=False)
+    section: Mapped[str] = mapped_column(String, nullable=False)  # "general" | "agent"
+    agent_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("agents.id"), nullable=True, index=True, default=None
+    )
+    active_revision_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("skill_revisions.id"), nullable=True, default=None
+    )
+
+    __table_args__ = (
+        UniqueConstraint("package_id", "slug", "agent_id", name="uq_skills_package_slug_agent"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<Skill id={self.id!r} slug={self.slug!r} section={self.section!r}>"
+
+
+class SkillRevision(Base):
+    """Immutable, versioned skill content (skill-packages, P4-D1).
+
+    Rows are insert-only: no UPDATE or DELETE path exists anywhere in the
+    service layer. revision_number is monotonically increasing per skill_id,
+    starting at 1. Fields mirror SkillRegistryEntry plus content_md — the
+    full markdown body a load_skill tool call returns.
+    """
+
+    __tablename__ = "skill_revisions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid4)
+    skill_id: Mapped[str] = mapped_column(
+        String, ForeignKey("skills.id"), nullable=False, index=True
+    )
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_md: Mapped[str] = mapped_column(Text, nullable=False)
+    filler_text: Mapped[str] = mapped_column(Text, nullable=False)
+    trigger_hint: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    # One of: "import", "api", "rollback".
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    created_by: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    note: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+
+    __table_args__ = (
+        UniqueConstraint("skill_id", "revision_number", name="uq_skill_revisions_skill_number"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<SkillRevision id={self.id!r} skill_id={self.skill_id!r} "
+            f"revision_number={self.revision_number!r} source={self.source!r}>"
+        )
+
+
 class ClientIntegration(Base):
     """Per-client, non-secret CRM integration config (client-integrations-secrets, P3-D1).
 
