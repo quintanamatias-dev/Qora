@@ -1007,11 +1007,21 @@ async def _process_custom_llm_request(
         _registry_entries = list(ctx.skill_registry_entries)
         _agent_tool_config_resolved = ctx.agent_tool_config
 
-        # Load CRM config for capture_data field_type_map (FIX-7)
+        # Load CRM config for capture_data field_type_map (FIX-7).
+        # HOT PATH: zero DB queries for subsequent turns of a cached conversation.
+        # Try the IntegrationStore cache first (client-integrations-secrets P3-D5)
+        # — on a cache hit, this is a pure in-memory read with no session open at
+        # all. Only a cold cache / expired TTL falls back to opening a session.
         try:
-            from app.integrations.crm_config import CRMConfigLoader as _CRMConfigLoaderFP
+            from app.integrations.integration_store import get_default_store as _get_default_store_fp
 
-            _crm_config_resolved = await _CRMConfigLoaderFP.load_async(client_id)
+            _store_fp = _get_default_store_fp()
+            _hit, _crm_config_resolved = _store_fp.peek_cached(client_id, "airtable")
+            if not _hit:
+                async with db_session() as _crm_db_fp:
+                    _crm_config_resolved = await _store_fp.get(
+                        _crm_db_fp, client_id, provider="airtable"
+                    )
         except Exception:
             _crm_config_resolved = None
 
@@ -1101,9 +1111,13 @@ async def _process_custom_llm_request(
                         _registry_entries = list(lazy_ctx.skill_registry_entries)
                         _agent_tool_config_resolved = lazy_ctx.agent_tool_config
                         try:
-                            from app.integrations.crm_config import CRMConfigLoader as _CRMCfgLazyBuild
+                            from app.integrations.integration_store import (
+                                get_default_store as _get_default_store_lazy,
+                            )
 
-                            _crm_config_resolved = await _CRMCfgLazyBuild.load_async(client_id)
+                            _crm_config_resolved = await _get_default_store_lazy().get(
+                                db, client_id, provider="airtable"
+                            )
                         except Exception:
                             _crm_config_resolved = None
                     except Exception as exc:
@@ -1144,9 +1158,13 @@ async def _process_custom_llm_request(
                     _registry_entries = list(new_ctx.skill_registry_entries)
                     _agent_tool_config_resolved = new_ctx.agent_tool_config
                     try:
-                        from app.integrations.crm_config import CRMConfigLoader as _CRMCfgNewSession
+                        from app.integrations.integration_store import (
+                            get_default_store as _get_default_store_new,
+                        )
 
-                        _crm_config_resolved = await _CRMCfgNewSession.load_async(client_id)
+                        _crm_config_resolved = await _get_default_store_new().get(
+                            db, client_id, provider="airtable"
+                        )
                     except Exception:
                         _crm_config_resolved = None
                 except Exception as exc:
@@ -1222,9 +1240,13 @@ async def _process_custom_llm_request(
                         _agent_tool_config_resolved = _fallback_tool_config
 
                         # Load CRM config — provides field_definitions for capture_data (FIX-1, FIX-7)
-                        from app.integrations.crm_config import CRMConfigLoader as _CRMConfigLoader
+                        from app.integrations.integration_store import (
+                            get_default_store as _get_default_store_per_turn,
+                        )
 
-                        _crm_config_per_turn = await _CRMConfigLoader.load_async(client_id)
+                        _crm_config_per_turn = await _get_default_store_per_turn().get(
+                            db, client_id, provider="airtable"
+                        )
                         _crm_config_resolved = _crm_config_per_turn
                         tools = _build_tool_definitions(
                             enabled_tool_names,

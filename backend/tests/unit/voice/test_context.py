@@ -48,6 +48,21 @@ def make_agent(
     return agent
 
 
+def make_db() -> AsyncMock:
+    """AsyncMock db session that resolves IntegrationStore's query to "no row".
+
+    client-integrations-secrets P3-D5: build_voice_context now reads CRM config
+    via IntegrationStore (a real DB query) instead of the filesystem loader.
+    Tests that don't care about CRM config need the query to resolve cleanly
+    to "not configured" (None), matching the old missing-crm.yaml behavior.
+    """
+    db = AsyncMock()
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none = MagicMock(return_value=None)
+    db.execute = AsyncMock(return_value=execute_result)
+    return db
+
+
 def make_lead(
     name: str = "Carlos Méndez",
     car_make: str = "Toyota",
@@ -199,7 +214,7 @@ async def test_build_voice_context_returns_voice_session_context():
     agent = make_agent()
     lead = make_lead()
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         mock_instance = MockLoader.return_value
@@ -230,7 +245,7 @@ async def test_build_voice_context_system_prompt_from_render_for_agent():
     agent = make_agent()
     lead = make_lead()
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     expected_prompt = "You are Aria, agent for Acme Seguros."
 
@@ -268,7 +283,7 @@ async def test_build_voice_context_skills_index_from_load_agent_skills():
     agent = make_agent(client_id="acme", slug="aria")
     lead = make_lead()
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     expected_index = "## Available Skills\n| qora-info | Qora details | when needed |"
 
@@ -299,7 +314,7 @@ async def test_build_voice_context_misc_notes_from_extracted_facts():
     lead = make_lead(extracted_facts={"misc_notes": "Cliente mencionó granizo"})
     agent = make_agent()
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         mock_instance = MockLoader.return_value
@@ -325,7 +340,7 @@ async def test_build_voice_context_lead_profile_contains_lead_name():
     lead = make_lead(name="María López", car_make="Honda", car_model="Civic", car_year=2020)
     agent = make_agent()
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader, \
          patch("app.leads.lead_custom_fields_service.get_all", new=AsyncMock(
@@ -358,7 +373,7 @@ async def test_build_voice_context_skips_lead_profile_when_effective_prompt_has_
     lead = make_lead(name="María López", car_make="Honda", car_model="Civic", car_year=2020)
     agent = make_agent(system_prompt="Static DB prompt without lead vars")
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         mock_instance = MockLoader.return_value
@@ -388,7 +403,7 @@ async def test_build_voice_context_keeps_misc_notes_as_single_channel():
     lead = make_lead(extracted_facts={"misc_notes": "Cliente prefiere WhatsApp"})
     agent = make_agent(system_prompt="Static DB prompt")
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         mock_instance = MockLoader.return_value
@@ -420,7 +435,7 @@ async def test_build_voice_context_no_lead_returns_empty_misc_and_profile():
 
     agent = make_agent()
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         mock_instance = MockLoader.return_value
@@ -447,7 +462,7 @@ async def test_build_voice_context_model_temperature_max_tokens_from_agent():
 
     agent = make_agent(model="gpt-4o-mini", temperature=0.5, max_tokens=500)
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         mock_instance = MockLoader.return_value
@@ -484,7 +499,7 @@ async def test_build_voice_context_propagates_render_for_agent_exception():
 
     agent = make_agent()
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         mock_instance = MockLoader.return_value
@@ -509,7 +524,7 @@ async def test_build_voice_context_no_silent_exception_swallowing():
 
     agent = make_agent()
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         mock_instance = MockLoader.return_value
@@ -600,7 +615,7 @@ async def test_build_voice_context_reads_tts_from_agent():
 
     agent = make_agent_with_tts(tts_speed=0.9, tts_stability=0.5, tts_similarity_boost=0.8)
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         mock_instance = MockLoader.return_value
@@ -636,7 +651,7 @@ async def test_build_voice_context_tts_falls_back_to_defaults_when_agent_columns
     agent.tts_stability = None
     agent.tts_similarity_boost = None
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         mock_instance = MockLoader.return_value
@@ -674,7 +689,7 @@ async def test_build_voice_context_load_skill_injected_when_registry_has_entries
 
     agent = make_agent(tools_enabled="[]")  # Empty tools list in DB
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     registry_entry = SkillRegistryEntry(
         name="qora-info",
@@ -715,7 +730,7 @@ async def test_build_voice_context_load_skill_not_injected_when_registry_empty()
 
     agent = make_agent(tools_enabled="[]")
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         mock_instance = MockLoader.return_value
@@ -751,7 +766,7 @@ async def test_build_voice_context_load_skill_alongside_crm_tools():
 
     agent = make_agent(tools_enabled='["get_lead_details"]')
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     registry_entry = SkillRegistryEntry(
         name="qora-info",
@@ -809,7 +824,7 @@ async def test_build_voice_context_passes_tool_config_for_capture_data():
     agent = make_agent(tools_enabled='["capture_data"]')
     agent.tool_config = json.dumps(tool_config_dict)  # stored as JSON TEXT in DB
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         mock_instance = MockLoader.return_value
@@ -847,7 +862,7 @@ async def test_build_voice_context_excludes_capture_data_when_tool_config_missin
     agent = make_agent(tools_enabled='["capture_data"]')
     agent.tool_config = None  # NULL — no config stored
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         mock_instance = MockLoader.return_value
@@ -870,6 +885,87 @@ async def test_build_voice_context_excludes_capture_data_when_tool_config_missin
         )
 
 
+# ---------------------------------------------------------------------------
+# client-integrations-secrets Phase 4.4 — CRM config read via IntegrationStore
+# (a real client_integrations row, not a crm.yaml fixture file)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_build_voice_context_reads_crm_custom_fields_from_db(tmp_path):
+    """build_voice_context's capture_data schema comes from a DB-seeded
+    client_integrations row (IntegrationStore), not a filesystem crm.yaml.
+    """
+    import json
+
+    from pydantic import SecretStr
+
+    from app.core.config import Settings
+    from app.core import database as db_module
+    from app.tenants.models import ClientIntegration
+    from app.tenants.service import seed_quintana
+    from app.voice.context import build_voice_context
+    from tests.helpers.migrations import init_db_with_migrations
+
+    settings = Settings(
+        openai_api_key=SecretStr("sk-test"),
+        elevenlabs_api_key=SecretStr("el-test"),
+        database_url=f"sqlite+aiosqlite:///{tmp_path}/context_crm_test.db",
+    )
+    await init_db_with_migrations(db_module, settings)
+
+    try:
+        async with db_module.async_session_factory() as sess:
+            await seed_quintana(sess)
+            sess.add(
+                ClientIntegration(
+                    client_id="quintana-seguros",
+                    provider="airtable",
+                    enabled=True,
+                    config=json.dumps(
+                        {
+                            "base_id": "appXXXXXXXXXXXXXX",
+                            "table_id": "tblYYYYYYYYYYYYYY",
+                            "match_field": "phone",
+                            "field_mappings": [],
+                            "legacy_env_var_name": "QUINTANA_AIRTABLE_API_KEY",
+                            "custom_fields": [
+                                {"field_key": "car_make", "field_type": "string", "label": "Car Make"},
+                            ],
+                        }
+                    ),
+                    status="ok",
+                    created_by="test",
+                    updated_by="test",
+                )
+            )
+            await sess.commit()
+
+        agent = make_agent(client_id="quintana-seguros", tools_enabled='["capture_data"]')
+        agent.tool_config = None
+        client = make_client(id="quintana-seguros")
+
+        async with db_module.async_session_factory() as sess:
+            with patch("app.voice.context.PromptLoader") as MockLoader:
+                mock_instance = MockLoader.return_value
+                mock_instance.render_for_agent = AsyncMock(return_value="prompt")
+                mock_instance.load_agent_skills = AsyncMock(return_value="")
+                mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
+
+                result = await build_voice_context(
+                    agent=agent,
+                    lead=None,
+                    db=sess,
+                    client=client,
+                )
+    finally:
+        await db_module.close_db()
+
+    assert result.tools is not None
+    capture_def = next(t for t in result.tools if t["function"]["name"] == "capture_data")
+    assert "car_make" in capture_def["function"]["parameters"]["properties"]
+
+
 @pytest.mark.asyncio
 async def test_build_voice_context_logs_and_continues_when_skills_index_fails():
     """Skill index loading failure must not block system prompt construction."""
@@ -877,7 +973,7 @@ async def test_build_voice_context_logs_and_continues_when_skills_index_fails():
 
     agent = make_agent()
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader, patch(
         "app.voice.context.logger"
@@ -914,7 +1010,7 @@ async def test_build_voice_context_logs_and_continues_when_registry_entries_fail
 
     agent = make_agent()
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader, patch(
         "app.voice.context.logger"
@@ -952,7 +1048,7 @@ async def test_build_voice_context_logs_malformed_tools_enabled_json():
 
     agent = make_agent(tools_enabled="not-json")
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader, patch(
         "app.voice.context.logger"
@@ -987,7 +1083,7 @@ async def test_build_voice_context_logs_tool_helper_import_error():
 
     agent = make_agent(tools_enabled='["get_lead_details"]', tool_config={"capture_data": {}})
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
     original_import = builtins.__import__
 
     def import_with_registry_failure(name, globals=None, locals=None, fromlist=(), level=0):

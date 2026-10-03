@@ -180,6 +180,34 @@ async def dispatch_tool(
 
     # --- capture_data is handled separately — requires agent_tool_config or crm_config ---
     if tool_name == "capture_data":
+        # client-integrations-secrets P3-D4: when a CRM integration is configured
+        # but its credential cannot resolve (degraded), surface a clear tool error
+        # to the LLM instead of silently building a schema that can never sync.
+        if crm_config is not None:
+
+            async def _check_crm_degraded(sess: AsyncSession) -> bool:
+                from app.integrations.crm_config import CredentialResolutionError
+
+                try:
+                    api_key = await crm_config.resolve_api_key_async(sess, client_id)
+                except CredentialResolutionError:
+                    return True
+                return api_key is None
+
+            if session is not None:
+                is_degraded = await _check_crm_degraded(session)
+            else:
+                from app.core.database import get_session as _get_session
+
+                async with _get_session() as _new_session:
+                    is_degraded = await _check_crm_degraded(_new_session)
+
+            if is_degraded:
+                return {
+                    "error": "crm_unavailable",
+                    "detail": "CRM integration unavailable for this client",
+                }
+
         # Resolve effective tool_config and field_type_map.
         # Priority 1: CRMConfig.custom_fields → build synthetic tool_config + field_type_map
         # Priority 2: agent_tool_config (legacy JSON column)

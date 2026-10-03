@@ -401,9 +401,9 @@ async def build_voice_context(
         agent_tool_config = parse_agent_tool_config(agent)
 
         # Load CRM config — provides field_definitions for capture_data schema (FIX-1)
-        from app.integrations.crm_config import CRMConfigLoader as _CRMConfigLoader
+        from app.integrations.integration_store import get_default_store as _get_default_store
 
-        _crm_config = await _CRMConfigLoader.load_async(client_id)
+        _crm_config = await _get_default_store().get(db, client_id, provider="airtable")
 
         tools = _build_tool_definitions(
             enabled_names,

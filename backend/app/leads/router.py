@@ -343,11 +343,11 @@ async def get_lead_by_id(
     # same batch helper (single-element id list) so list and detail agree.
     schedule_map = await _batch_next_scheduled_call_at(session, [lead_id])
 
-    # Phase A: load CRM config for quote_fields metadata (best-effort, None if no crm.yaml)
+    # Phase A: load CRM config for quote_fields metadata (best-effort, None if unconfigured)
     crm_config = None
     try:
-        from app.integrations.crm_config import CRMConfigLoader
-        crm_config = await CRMConfigLoader.load_async(lead.client_id)
+        from app.integrations.integration_store import get_default_store
+        crm_config = await get_default_store().get(session, lead.client_id)
     except Exception:
         logger.warning("lead_detail_crm_config_load_failed", lead_id=lead_id, client_id=lead.client_id)
 

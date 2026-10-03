@@ -122,15 +122,6 @@ async def lifespan(app: FastAPI):
     # Must run before DB init so Sentry captures any startup exceptions.
     init_sentry(settings)
 
-    # 2b. Validate per-client CRM integration credentials (B8).
-    # Scans backend/clients/*/crm.yaml; hard-fails if any active integration
-    # references an env var that is missing or is a weak placeholder.
-    # Global Qora credentials are already validated by Settings() above.
-    from app.core.credentials import validate_all_integration_credentials  # noqa: E402
-
-    validate_all_integration_credentials()
-    logger.info("tenant_credentials_validated")
-
     # 3. Init database
     # Schema is guaranteed by the pre-start migration command
     # (python scripts/migrate.py / alembic upgrade head).
@@ -138,6 +129,18 @@ async def lifespan(app: FastAPI):
     from app.core import database as db_module
 
     await db_module.init_db(settings)
+
+    # 3b. Validate per-client CRM integration credentials (client-integrations-secrets P3-D4).
+    # Recomputes and persists every client_integrations row's status (ok/degraded/disabled)
+    # from the DB. A missing/invalid per-client CRM credential no longer sys.exit()s — it is
+    # logged at ERROR and persisted as status=degraded so one client's misconfiguration cannot
+    # take down every other client's calls. Global Qora credentials are already validated
+    # (hard-fail, unchanged) by Settings() above.
+    from app.core.credentials import validate_all_integration_credentials  # noqa: E402
+
+    async with db_module.async_session_factory() as credentials_session:
+        await validate_all_integration_credentials(credentials_session)
+    logger.info("tenant_credentials_validated")
     logger.info("db_initialized", url=settings.database_url)
 
     # 4. Seed data

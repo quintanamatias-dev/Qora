@@ -1354,8 +1354,8 @@ class TestLifespanWithExecutorEnabled:
             patch("app.main.Settings") as MockSettings,
             # Patch logging setup at main.py module level
             patch("app.main.setup_logging"),
-            # Patch credentials validator at its source module
-            patch("app.core.credentials.validate_all_integration_credentials"),
+            # Patch credentials validator at its source module (now async — client-integrations-secrets task 6)
+            patch("app.core.credentials.validate_all_integration_credentials", AsyncMock()),
             # Patch db functions at the real database module (lifespan does local import)
             patch.object(db_module_real, "init_db", AsyncMock()),
             patch.object(db_module_real, "close_db", AsyncMock()),
@@ -1420,7 +1420,7 @@ class TestLifespanWithExecutorEnabled:
             patch("app.jobs.executor.executor", mock_executor),
             patch("app.main.Settings") as MockSettings,
             patch("app.main.setup_logging"),
-            patch("app.core.credentials.validate_all_integration_credentials"),
+            patch("app.core.credentials.validate_all_integration_credentials", AsyncMock()),
             patch.object(db_module_real, "init_db", AsyncMock()),
             patch.object(db_module_real, "close_db", AsyncMock()),
             patch("app.tenants.service.seed_quintana", AsyncMock()),

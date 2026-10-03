@@ -3,8 +3,8 @@
 Design decisions (design.md):
 - sync_lead() is the single public entry point; called via asyncio.create_task (Phase 3)
 - Reads lead from SQLite (authoritative source) — no Airtable reads in call path (CS-7)
-- Loads CRMConfig via CRMConfigLoader; returns silently if no crm.yaml (FM-4)
-- Resolves API key at call time via config.resolve_api_key() (FM-3)
+- Loads CRMConfig via IntegrationStore; returns silently if not configured (FM-4)
+- Resolves API key at call time via config.resolve_api_key_async() (FM-3, P3-D3)
 - Maps lead fields using FieldMapper from field_mapping.py (FM-5/FM-6)
 - Delegates upsert to adapter via CRMPort interface (CS-3/CS-6)
 - All CRM failures are swallowed after logging — call analysis unaffected (CS-5)
@@ -21,12 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.integrations.adapters.airtable import AirtableUpsertError, make_adapter
-from app.integrations.crm_config import (
-    CRMConfigLoader,
-    CredentialResolutionError,
-    ConfigValidationError,
-)
+from app.integrations.crm_config import ConfigValidationError, CredentialResolutionError
 from app.integrations.field_mapping import FieldMapper, MappingError
+from app.integrations.integration_store import get_default_store
 from app.leads.service import get_lead
 
 logger = logging.getLogger(__name__)
@@ -64,27 +61,37 @@ async def sync_lead(
     # structured logging for the expected/known failure modes; this outer guard
     # catches everything else (CS-5).
     try:
-        # 1. Load config — None means no crm.yaml → silent no-op (FM-4)
+        # 1. Load config — None means not configured → silent no-op (FM-4)
         try:
-            config = await CRMConfigLoader.load_async(client_id)
+            config = await get_default_store().get(db_session, client_id, provider="airtable")
         except ConfigValidationError as exc:
             logger.error(
-                "CRM sync skipped: invalid crm.yaml",
+                "CRM sync skipped: invalid client_integrations config",
                 extra={"client_id": client_id, "lead_id": lead_id, "error": str(exc)},
             )
             return
 
         if config is None:
-            # No crm.yaml for this client — normal; no log needed
+            # No CRM integration configured for this client — normal; no log needed
             return
 
-        # 2. Resolve credentials — fail fast if env var missing (FM-3)
+        # 2. Resolve credentials (P3-D3: DB -> legacy env -> None)
         try:
-            api_key = config.resolve_api_key()
+            api_key = await config.resolve_api_key_async(db_session, client_id)
         except CredentialResolutionError as exc:
             logger.error(
                 "CRM sync skipped: credential resolution failed",
                 extra={"client_id": client_id, "lead_id": lead_id, "error": str(exc)},
+            )
+            return
+
+        if api_key is None:
+            # P3-D4: config exists but the credential is unresolvable — degraded.
+            # Log + skip; never crash the background sync.
+            logger.error(
+                "CRM sync skipped: CRM integration unavailable for this client "
+                "(credential did not resolve)",
+                extra={"client_id": client_id, "lead_id": lead_id},
             )
             return
 

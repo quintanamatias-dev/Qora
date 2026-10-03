@@ -237,6 +237,17 @@ class Settings(BaseSettings):
     # Absolute session lifetime in hours. Must be >= 1.
     qora_auth_session_ttl_hours: int = 12
 
+    # ------------------------------------------------------------------
+    # Client secrets encryption (client-integrations-secrets, P3-D2)
+    # ------------------------------------------------------------------
+    # Comma-separated Fernet keys (first key encrypts new values, every key
+    # is tried on decrypt — MultiFernet rotation support). None disables DB
+    # secret storage entirely: writes return 503, reads fall back to the
+    # legacy env var (P3-D3). Malformed key strings are NOT validated here —
+    # they fail at SecretCrypto construction time (app.core.crypto), not at
+    # Settings load, per design.md P3-D2.
+    qora_secrets_master_key: SecretStr | None = None
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

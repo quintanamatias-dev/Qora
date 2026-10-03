@@ -172,7 +172,7 @@ class TestLifespanCallsTenantValidation:
         mini_app = FastAPI()
 
         with (
-            patch("app.core.credentials.validate_all_integration_credentials") as mock_validate,
+            patch("app.core.credentials.validate_all_integration_credentials", new_callable=AsyncMock) as mock_validate,
             patch("app.main.Settings") as mock_settings_cls,
             patch("app.main.setup_logging"),
             patch("app.core.database.init_db", new_callable=AsyncMock),
@@ -226,7 +226,7 @@ class TestLifespanCallsTenantValidation:
         )
 
         with (
-            patch("app.core.credentials.validate_all_integration_credentials") as mock_validate,
+            patch("app.core.credentials.validate_all_integration_credentials", new_callable=AsyncMock) as mock_validate,
             patch("app.main.Settings") as mock_settings_cls,
             patch("app.main.setup_logging"),
             patch("app.core.database.init_db", new_callable=AsyncMock),
@@ -241,7 +241,9 @@ class TestLifespanCallsTenantValidation:
             mock_sf.return_value = _make_mock_session()
 
             # Simulate credentials.validate_all_integration_credentials() detecting
-            # a missing or placeholder env var and calling sys.exit().
+            # a missing or placeholder env var and calling sys.exit(). This legacy
+            # scenario is preserved as a pure wiring test (the mock controls the
+            # side effect regardless of the real implementation's current behavior).
             mock_validate.side_effect = SystemExit(_invalid_cred_message)
 
             with pytest.raises(SystemExit) as exc_info:

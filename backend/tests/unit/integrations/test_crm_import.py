@@ -11,9 +11,23 @@ All external I/O (Airtable calls, DB) is mocked. No live network.
 
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+
+def _mock_store(config):
+    """Patch target for crm_import_service.get_default_store returning a
+    fresh IntegrationStore-shaped mock whose .get() resolves to `config`.
+    client-integrations-secrets Phase 4.1: replaces CRMConfigLoader.load mocks.
+    """
+    mock_store = MagicMock()
+    mock_store.get = AsyncMock(return_value=config)
+    return patch(
+        "app.integrations.crm_import_service.get_default_store",
+        return_value=mock_store,
+    )
 
 
 # ===========================================================================
@@ -319,32 +333,29 @@ field_mappings:
         mock_db.flush = AsyncMock()
         mock_db.add = MagicMock()
 
-        with patch(
-            "app.integrations.crm_import_service.CRMConfigLoader.load",
-        ) as mock_load, patch(
+        from app.integrations.crm_config import CRMConfig, CRMFieldDef
+
+        mock_config = MagicMock(spec=CRMConfig)
+        mock_config.provider = "airtable"
+        mock_config.base_id = "appTEST"
+        mock_config.table_id = "tblTEST"
+        mock_config.field_mappings = [
+            CRMFieldDef(source="name", target="Nombre Completo", type="string"),
+            CRMFieldDef(source="phone", target="Teléfono", type="phone"),
+        ]
+        mock_config.status_mapping = None
+        mock_config.import_status_mapping = None
+        mock_config.resolve_api_key_async = AsyncMock(return_value="pat_test")
+
+        with _mock_store(mock_config), patch(
             "app.integrations.crm_import_service.AirtableAdapter"
         ) as MockAdapter:
-            from app.integrations.crm_config import CRMConfig, CRMFieldDef
-
-            mock_config = MagicMock(spec=CRMConfig)
-            mock_config.provider = "airtable"
-            mock_config.base_id = "appTEST"
-            mock_config.table_id = "tblTEST"
-            mock_config.field_mappings = [
-                CRMFieldDef(source="name", target="Nombre Completo", type="string"),
-                CRMFieldDef(source="phone", target="Teléfono", type="phone"),
-            ]
-            mock_config.status_mapping = None
-            mock_config.import_status_mapping = None
-            mock_config.resolve_api_key.return_value = "pat_test"
-            mock_load.return_value = mock_config
-
             mock_adapter_instance = AsyncMock()
             mock_adapter_instance.fetch_records = AsyncMock(return_value=mock_records)
             MockAdapter.return_value = mock_adapter_instance
 
             result = await crm_import_service.import_leads_from_crm(
-                "test-client", mock_db, clients_root=tmp_path
+                "test-client", mock_db
             )
 
         assert hasattr(result, "created")
@@ -383,7 +394,7 @@ field_mappings:
         ]
         mock_config.status_mapping = None
         mock_config.import_status_mapping = None
-        mock_config.resolve_api_key.return_value = "pat_test"
+        mock_config.resolve_api_key_async = AsyncMock(return_value="pat_test")
 
         mock_db = AsyncMock()
         mock_scalar = MagicMock()
@@ -392,10 +403,7 @@ field_mappings:
         mock_db.flush = AsyncMock()
         mock_db.add = MagicMock()
 
-        with patch(
-            "app.integrations.crm_import_service.CRMConfigLoader.load",
-            return_value=mock_config,
-        ), patch(
+        with _mock_store(mock_config), patch(
             "app.integrations.crm_import_service.AirtableAdapter"
         ) as MockAdapter:
             mock_adapter_instance = AsyncMock()
@@ -450,7 +458,7 @@ field_mappings:
         ]
         mock_config.status_mapping = None
         mock_config.import_status_mapping = None
-        mock_config.resolve_api_key.return_value = "pat_test"
+        mock_config.resolve_api_key_async = AsyncMock(return_value="pat_test")
 
         mock_db = AsyncMock()
         mock_scalar = MagicMock()
@@ -459,10 +467,7 @@ field_mappings:
         mock_db.flush = AsyncMock()
         mock_db.add = MagicMock()
 
-        with patch(
-            "app.integrations.crm_import_service.CRMConfigLoader.load",
-            return_value=mock_config,
-        ), patch(
+        with _mock_store(mock_config), patch(
             "app.integrations.crm_import_service.AirtableAdapter"
         ) as MockAdapter:
             mock_adapter_instance = AsyncMock()
@@ -518,7 +523,7 @@ field_mappings:
         ]
         mock_config.status_mapping = None
         mock_config.import_status_mapping = None
-        mock_config.resolve_api_key.return_value = "pat_test"
+        mock_config.resolve_api_key_async = AsyncMock(return_value="pat_test")
 
         mock_db = AsyncMock()
         mock_scalar = MagicMock()
@@ -527,10 +532,7 @@ field_mappings:
         mock_db.flush = AsyncMock()
         mock_db.add = MagicMock()
 
-        with patch(
-            "app.integrations.crm_import_service.CRMConfigLoader.load",
-            return_value=mock_config,
-        ), patch(
+        with _mock_store(mock_config), patch(
             "app.integrations.crm_import_service.AirtableAdapter"
         ) as MockAdapter:
             mock_adapter_instance = AsyncMock()
@@ -584,7 +586,7 @@ field_mappings:
         ]
         mock_config.status_mapping = None
         mock_config.import_status_mapping = None
-        mock_config.resolve_api_key.return_value = "pat_test"
+        mock_config.resolve_api_key_async = AsyncMock(return_value="pat_test")
 
         mock_db = AsyncMock()
         mock_scalar = MagicMock()
@@ -593,10 +595,7 @@ field_mappings:
         mock_db.flush = AsyncMock()
         mock_db.add = MagicMock()
 
-        with patch(
-            "app.integrations.crm_import_service.CRMConfigLoader.load",
-            return_value=mock_config,
-        ), patch(
+        with _mock_store(mock_config), patch(
             "app.integrations.crm_import_service.AirtableAdapter"
         ) as MockAdapter:
             mock_adapter_instance = AsyncMock()
@@ -640,7 +639,7 @@ field_mappings:
         ]
         mock_config.status_mapping = None
         mock_config.import_status_mapping = None
-        mock_config.resolve_api_key.return_value = "pat_test"
+        mock_config.resolve_api_key_async = AsyncMock(return_value="pat_test")
 
         mock_db = AsyncMock()
         mock_scalar = MagicMock()
@@ -655,10 +654,7 @@ field_mappings:
 
         mock_db.add = MagicMock(side_effect=capture_add)
 
-        with patch(
-            "app.integrations.crm_import_service.CRMConfigLoader.load",
-            return_value=mock_config,
-        ), patch(
+        with _mock_store(mock_config), patch(
             "app.integrations.crm_import_service.AirtableAdapter"
         ) as MockAdapter:
             mock_adapter_instance = AsyncMock()
@@ -681,10 +677,7 @@ field_mappings:
 
         mock_db = AsyncMock()
 
-        with patch(
-            "app.integrations.crm_import_service.CRMConfigLoader.load",
-            return_value=None,
-        ):
+        with _mock_store(None):
             result = await crm_import_service.import_leads_from_crm(
                 "no-config-client", mock_db
             )
@@ -722,15 +715,12 @@ field_mappings:
         ]
         mock_config.status_mapping = None
         mock_config.import_status_mapping = None
-        mock_config.resolve_api_key.return_value = "pat_test"
+        mock_config.resolve_api_key_async = AsyncMock(return_value="pat_test")
 
         mock_db = AsyncMock()
         mock_db.add = MagicMock()
 
-        with patch(
-            "app.integrations.crm_import_service.CRMConfigLoader.load",
-            return_value=mock_config,
-        ), patch(
+        with _mock_store(mock_config), patch(
             "app.integrations.crm_import_service.AirtableAdapter"
         ) as MockAdapter:
             mock_adapter_instance = AsyncMock()
@@ -956,7 +946,7 @@ class TestPhoneNormalizationDuringCRMImport:
         ]
         config.import_status_mapping = None
         config.custom_fields = []
-        config.resolve_api_key.return_value = "test-key"
+        config.resolve_api_key_async = AsyncMock(return_value="test-key")
         records = [
             {"id": "rec-valid", "fields": {"Teléfono": "011 15 5555-0101"}},
             {"id": "rec-invalid", "fields": {"Teléfono": "011 5555-0101"}},
@@ -966,9 +956,9 @@ class TestPhoneNormalizationDuringCRMImport:
         db.add = MagicMock()
         db.flush = AsyncMock()
 
-        with patch(
-            "app.integrations.crm_import_service.CRMConfigLoader.load", return_value=config
-        ), patch("app.integrations.crm_import_service.AirtableAdapter") as adapter, patch(
+        with _mock_store(config), patch(
+            "app.integrations.crm_import_service.AirtableAdapter"
+        ) as adapter, patch(
             "app.integrations.crm_import_service._find_lead_by_phone", new=AsyncMock(return_value=None)
         ) as find:
             adapter.return_value.fetch_records = AsyncMock(return_value=records)
@@ -1031,7 +1021,7 @@ class TestPhoneNormalizationDuringCRMImport:
         ]
         config.import_status_mapping = None
         config.custom_fields = []
-        config.resolve_api_key.return_value = "test-key"
+        config.resolve_api_key_async = AsyncMock(return_value="test-key")
         records = [
             {
                 "id": "rec-equivalent-first",
@@ -1051,10 +1041,7 @@ class TestPhoneNormalizationDuringCRMImport:
             },
         ]
 
-        with patch(
-            "app.integrations.crm_import_service.CRMConfigLoader.load",
-            return_value=config,
-        ), patch(
+        with _mock_store(config), patch(
             "app.integrations.crm_import_service.AirtableAdapter.fetch_records",
             new=AsyncMock(return_value=records),
         ):

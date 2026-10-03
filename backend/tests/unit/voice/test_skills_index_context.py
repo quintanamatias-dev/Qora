@@ -15,7 +15,20 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+
 import pytest
+def make_db() -> AsyncMock:
+    """AsyncMock db session that resolves IntegrationStore's query to "no row".
+
+    client-integrations-secrets P3-D5: build_voice_context now reads CRM config
+    via IntegrationStore (a real DB query) instead of the filesystem loader.
+    """
+    db = AsyncMock()
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none = MagicMock(return_value=None)
+    db.execute = AsyncMock(return_value=execute_result)
+    return db
+
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +164,7 @@ async def test_build_voice_context_sets_skills_index_from_load_agent_skills():
 
     agent = make_agent()
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     expected_index = "## Available Skills\n| skill-a | desc | trigger |"
 
@@ -183,7 +196,7 @@ async def test_build_voice_context_skills_content_is_none():
 
     agent = make_agent()
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         mock_instance = MockLoader.return_value
@@ -213,7 +226,7 @@ async def test_build_voice_context_no_registry_skills_index_is_none():
 
     agent = make_agent()
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         mock_instance = MockLoader.return_value
@@ -429,7 +442,7 @@ async def test_build_voice_context_populates_skill_registry_entries():
 
     agent = make_agent()
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     expected_entries = [
         SkillRegistryEntry(
@@ -465,7 +478,7 @@ async def test_build_voice_context_empty_registry_entries_when_no_registry():
 
     agent = make_agent()
     client = make_client()
-    mock_db = AsyncMock()
+    mock_db = make_db()
 
     with patch("app.voice.context.PromptLoader") as MockLoader:
         mock_instance = MockLoader.return_value
