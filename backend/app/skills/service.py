@@ -50,6 +50,24 @@ class ResolvedAgentSkills:
     content_by_slug: dict[str, str]
 
 
+Origin = Literal["qora", "client_general", "agent"]
+
+
+@dataclass(frozen=True)
+class ResolvedSkillDetail:
+    """API-facing shape (task 4): the winning skill for one slug, plus which
+    source won (origin) and its active revision number — fields
+    ResolvedAgentSkills intentionally omits since the runtime loader chain
+    never needed them."""
+
+    slug: str
+    origin: Origin
+    description: str
+    trigger_hint: str
+    filler_text: str
+    active_revision_number: int
+
+
 # ---------------------------------------------------------------------------
 # Revision CRUD — built on revisions_service.py's generic private helpers.
 # ---------------------------------------------------------------------------
@@ -151,12 +169,13 @@ async def _package_skills(
     return list(result.scalars().all())
 
 
-async def resolve_agent_skills(session: AsyncSession, agent: Agent) -> ResolvedAgentSkills:
-    """Qora general + client general + client agent-section, with
-    agent > client-general > qora on slug collision. Dropped lower-priority
-    entries are logged at WARNING, never silently discarded without a
-    trace. Returns the same SkillRegistryEntry shape load_skill_registry()
-    returns today, plus a content lookup by slug.
+async def _resolve_winning_skills(
+    session: AsyncSession, agent: Agent
+) -> dict[str, tuple[Origin, Skill]]:
+    """Shared merge step for resolve_agent_skills / resolve_agent_skills_with_origin:
+    Qora general + client general + client agent-section, with agent >
+    client-general > qora on slug collision. Dropped lower-priority entries
+    are logged at WARNING, never silently discarded without a trace.
     """
     qora_package = (
         await session.execute(select(SkillPackage).where(SkillPackage.owner_type == "qora"))
@@ -178,7 +197,7 @@ async def resolve_agent_skills(session: AsyncSession, agent: Agent) -> ResolvedA
 
     # Merge in increasing-specificity order so the last write per slug wins
     # (agent > client_general > qora, P4-D2).
-    winning_source: dict[str, tuple[str, Skill]] = {}
+    winning_source: dict[str, tuple[Origin, Skill]] = {}
     for source_name, skills in (
         ("qora", qora_skills),
         ("client_general", client_general_skills),
@@ -197,6 +216,18 @@ async def resolve_agent_skills(session: AsyncSession, agent: Agent) -> ResolvedA
                     agent.client_id,
                 )
             winning_source[skill.slug] = (source_name, skill)
+
+    return winning_source
+
+
+async def resolve_agent_skills(session: AsyncSession, agent: Agent) -> ResolvedAgentSkills:
+    """Qora general + client general + client agent-section, with
+    agent > client-general > qora on slug collision. Dropped lower-priority
+    entries are logged at WARNING, never silently discarded without a
+    trace. Returns the same SkillRegistryEntry shape load_skill_registry()
+    returns today, plus a content lookup by slug.
+    """
+    winning_source = await _resolve_winning_skills(session, agent)
 
     entries: list[SkillRegistryEntry] = []
     content_by_slug: dict[str, str] = {}
@@ -217,6 +248,35 @@ async def resolve_agent_skills(session: AsyncSession, agent: Agent) -> ResolvedA
         content_by_slug[slug] = revision.content_md
 
     return ResolvedAgentSkills(entries=entries, content_by_slug=content_by_slug)
+
+
+async def resolve_agent_skills_with_origin(
+    session: AsyncSession, agent: Agent
+) -> list[ResolvedSkillDetail]:
+    """API-facing resolution (task 4): same winning-skill merge as
+    resolve_agent_skills, but returns each winning skill's origin and active
+    revision_number for the GET .../agents/{agent_id}/skills endpoint."""
+    winning_source = await _resolve_winning_skills(session, agent)
+
+    details: list[ResolvedSkillDetail] = []
+    for slug, (origin, skill) in winning_source.items():
+        if skill.active_revision_id is None:
+            continue
+        revision = await session.get(SkillRevision, skill.active_revision_id)
+        if revision is None:
+            continue
+        details.append(
+            ResolvedSkillDetail(
+                slug=slug,
+                origin=origin,
+                description=revision.description,
+                trigger_hint=revision.trigger_hint,
+                filler_text=revision.filler_text,
+                active_revision_number=revision.revision_number,
+            )
+        )
+
+    return details
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +315,12 @@ class AgentSkillsCache:
         ]
         for agent_id in stale_agent_ids:
             self.invalidate_agent(agent_id)
+
+    def invalidate_all(self) -> None:
+        """Clear every cached agent (task 4): a Qora-package write can affect
+        any client's agents, so there is no single client_id to scope to."""
+        self._cache.clear()
+        self._agent_client.clear()
 
 
 _default_skills_cache: AgentSkillsCache | None = None

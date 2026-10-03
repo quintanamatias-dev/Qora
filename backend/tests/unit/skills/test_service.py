@@ -365,3 +365,100 @@ async def test_agent_skills_cache_invalidate_client_clears_all_its_agents(sessio
     cache.invalidate_client("acme")
     fresh = await cache.get(session, agent)
     assert fresh.content_by_slug["x"] == "v2"
+
+
+async def test_agent_skills_cache_invalidate_all_clears_every_agent(session: AsyncSession):
+    from app.skills.service import AgentSkillsCache, create_skill_revision
+
+    _, agent = await _make_client_and_agent(session, "acme", "sales-agent")
+    qora_package = await _make_package(session, owner_type="qora", client_id=None, name="qora")
+    skill = await _make_skill(session, package_id=qora_package.id, slug="x", section="general")
+    await _seed_revision(session, skill=skill, content_md="v1")
+    await session.commit()
+
+    cache = AgentSkillsCache()
+    await cache.get(session, agent)
+
+    await create_skill_revision(
+        session,
+        skill=skill,
+        content_md="v2",
+        filler_text="filler",
+        trigger_hint="hint",
+        description="desc",
+        source="api",
+        created_by="tester",
+    )
+    await session.commit()
+
+    cache.invalidate_all()
+    fresh = await cache.get(session, agent)
+    assert fresh.content_by_slug["x"] == "v2"
+
+
+# ---------------------------------------------------------------------------
+# resolve_agent_skills_with_origin (Task 4 — API-facing origin/revision info)
+# ---------------------------------------------------------------------------
+
+
+async def test_resolve_agent_skills_with_origin_reports_qora_origin(session: AsyncSession):
+    from app.skills.service import resolve_agent_skills_with_origin
+
+    _, agent = await _make_client_and_agent(session, "acme", "sales-agent")
+    qora_package = await _make_package(session, owner_type="qora", client_id=None, name="qora")
+    skill = await _make_skill(session, package_id=qora_package.id, slug="general-knowledge", section="general")
+    await _seed_revision(session, skill=skill, content_md="qora content")
+    await session.commit()
+
+    details = await resolve_agent_skills_with_origin(session, agent)
+
+    assert len(details) == 1
+    assert details[0].slug == "general-knowledge"
+    assert details[0].origin == "qora"
+    assert details[0].active_revision_number == 1
+
+
+async def test_resolve_agent_skills_with_origin_reports_client_general_and_agent_origins(
+    session: AsyncSession,
+):
+    from app.skills.service import resolve_agent_skills_with_origin
+
+    _, agent = await _make_client_and_agent(session, "acme", "sales-agent")
+    client_package = await _make_package(session, owner_type="client", client_id="acme", name="acme")
+
+    general_skill = await _make_skill(
+        session, package_id=client_package.id, slug="hours", section="general"
+    )
+    await _seed_revision(session, skill=general_skill, content_md="hours content")
+
+    agent_skill = await _make_skill(
+        session, package_id=client_package.id, slug="pricing", section="agent", agent_id=agent.id
+    )
+    await _seed_revision(session, skill=agent_skill, content_md="pricing content")
+    await session.commit()
+
+    details = await resolve_agent_skills_with_origin(session, agent)
+
+    by_slug = {d.slug: d for d in details}
+    assert by_slug["hours"].origin == "client_general"
+    assert by_slug["pricing"].origin == "agent"
+
+
+async def test_resolve_agent_skills_with_origin_reflects_latest_revision_number(
+    session: AsyncSession,
+):
+    from app.skills.service import resolve_agent_skills_with_origin
+
+    _, agent = await _make_client_and_agent(session, "acme", "sales-agent")
+    client_package = await _make_package(session, owner_type="client", client_id="acme", name="acme")
+    skill = await _make_skill(
+        session, package_id=client_package.id, slug="pricing", section="agent", agent_id=agent.id
+    )
+    await _seed_revision(session, skill=skill, content_md="v1")
+    await session.commit()
+    await _seed_revision(session, skill=skill, content_md="v2")
+    await session.commit()
+
+    details = await resolve_agent_skills_with_origin(session, agent)
+
+    assert details[0].active_revision_number == 2

@@ -292,6 +292,7 @@ from app.entitlements.router import router as entitlements_router  # noqa: E402
 from app.auth.router import router as auth_router  # noqa: E402
 from app.auth.access_router import router as auth_access_router  # noqa: E402
 from app.admin.standards_router import router as admin_standards_router  # noqa: E402
+from app.skills.router import router as skills_router  # noqa: E402
 
 api_v1_router.include_router(clients_router)  # /api/v1/clients — full CRUD, incl. analysis-profile
 api_v1_router.include_router(
@@ -311,6 +312,7 @@ api_v1_router.include_router(entitlements_router)  # /api/v1/clients/{id}/entitl
 api_v1_router.include_router(auth_router)  # /api/v1/auth — WorkOS AuthKit login
 api_v1_router.include_router(auth_access_router)  # /api/v1/clients/{id}/access — superadmin org/invite API
 api_v1_router.include_router(admin_standards_router)  # /api/v1/admin/standards/resync — platform-wide superadmin
+api_v1_router.include_router(skills_router)  # /api/v1/clients/{client_id}/skill(-package)s — Phase 4 API
 
 
 # ---------------------------------------------------------------------------
