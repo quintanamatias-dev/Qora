@@ -1,59 +1,117 @@
-"""Unit tests for PromptLoader.load_agent_skills() — registry-based mode.
+"""Unit tests for PromptLoader.load_agent_skills() / load_skill_registry_entries()
+/ load_skill_content_by_slug() — skill-packages (P4-D3) runtime cutover.
 
-Phase 1 (dynamic-agent-skills): The old glob-all behavior has been REMOVED.
-load_agent_skills() now returns a registry index block (## Available Skills)
-when registry.yaml is present, or '' when it is absent/empty.
-
-Covers:
-- Registry present → returns ## Available Skills index block
-- No registry.yaml → '' (NO glob-all fallback, even if *.agent-skill.md exist)
-- Empty registry → ''
-- Missing skills directory → ''
-- Old glob-all tests retained as documentation that the behavior no longer works
-  (renamed to describe the new expected behavior)
+DB-backed mode: these methods resolve an agent's skills from skill_packages/
+skills/skill_revisions (via app.skills.service.resolve_agent_skills()) instead
+of parsing registry.yaml. No contributing skills → index text is "".
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
+import pytest_asyncio
+from pydantic import SecretStr
+from sqlalchemy.ext.asyncio import AsyncSession
+
+
+@pytest_asyncio.fixture
+async def session(tmp_path: Path):
+    from app.core.config import Settings
+    from app.core import database as db_module
+    from tests.helpers.migrations import init_db_with_migrations
+
+    settings = Settings(
+        openai_api_key=SecretStr("sk-test"),
+        elevenlabs_api_key=SecretStr("el-test"),
+        database_url=f"sqlite+aiosqlite:///{tmp_path}/load_agent_skills_test.db",
+    )
+    await init_db_with_migrations(db_module, settings)
+
+    assert db_module.async_session_factory is not None
+    async with db_module.async_session_factory() as sess:
+        yield sess
+
+    await db_module.engine.dispose()
+
+
+async def _make_client_and_agent(session: AsyncSession, client_id: str, agent_slug: str):
+    from app.tenants.models import Agent, Client
+
+    client = Client(id=client_id, name=client_id, voice_id="v1")
+    session.add(client)
+    await session.flush()
+
+    agent = Agent(client_id=client_id, slug=agent_slug, name=agent_slug, voice_id="v1")
+    session.add(agent)
+    await session.flush()
+    return client, agent
+
+
+async def _seed_skill(
+    session: AsyncSession,
+    *,
+    agent,
+    slug: str,
+    content_md: str = "content",
+    description: str = "desc",
+    trigger_hint: str = "hint",
+    filler_text: str = "filler",
+):
+    from sqlalchemy import select
+
+    from app.skills.service import create_skill_revision
+    from app.tenants.models import Skill, SkillPackage
+
+    package = (
+        await session.execute(
+            select(SkillPackage).where(
+                SkillPackage.owner_type == "client", SkillPackage.client_id == agent.client_id
+            )
+        )
+    ).scalars().first()
+    if package is None:
+        package = SkillPackage(owner_type="client", client_id=agent.client_id, name=agent.client_id)
+        session.add(package)
+        await session.flush()
+
+    skill = Skill(package_id=package.id, slug=slug, section="agent", agent_id=agent.id)
+    session.add(skill)
+    await session.flush()
+
+    await create_skill_revision(
+        session,
+        skill=skill,
+        content_md=content_md,
+        filler_text=filler_text,
+        trigger_hint=trigger_hint,
+        description=description,
+        source="import",
+        created_by="tester",
+    )
+    await session.commit()
+    return skill
 
 
 # ---------------------------------------------------------------------------
-# New behavior: registry present → index block returned
+# With resolved skills → index block returned
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_load_agent_skills_with_registry_returns_index_block(tmp_path: Path):
-    """With registry.yaml present, load_agent_skills returns ## Available Skills block.
-
-    GIVEN clients/acme/agents/aria/skills/registry.yaml with two entries
-    WHEN load_agent_skills('acme', 'aria') is called
-    THEN returns the formatted ## Available Skills index block (not raw file content)
-    AND the block contains skill names from the registry
-    """
+async def test_load_agent_skills_with_skills_returns_index_block(session: AsyncSession):
+    """With DB-seeded skills, load_agent_skills returns ## Available Skills block."""
     from app.prompts.loader import PromptLoader
 
-    skills_dir = tmp_path / "acme" / "agents" / "aria" / "skills"
-    skills_dir.mkdir(parents=True)
-    (skills_dir / "registry.yaml").write_text(
-        """
-skills:
-  - name: greeting-skill
-    description: Greeting skill content
-    trigger_hint: when starting conversation
-    filler_text: Cargando...
-  - name: objections-skill
-    description: Objections skill content
-    trigger_hint: when user objects to price
-    filler_text: Revisando...
-"""
+    _, agent = await _make_client_and_agent(session, "acme", "aria")
+    await _seed_skill(
+        session, agent=agent, slug="greeting-skill", description="Greeting skill content"
+    )
+    await _seed_skill(
+        session, agent=agent, slug="objections-skill", description="Objections skill content"
     )
 
-    loader = PromptLoader(clients_dir=tmp_path)
-    result = await loader.load_agent_skills("acme", "aria")
+    loader = PromptLoader()
+    result = await loader.load_agent_skills(session, agent)
 
     assert "## Available Skills" in result
     assert "greeting-skill" in result
@@ -61,29 +119,18 @@ skills:
     assert "load_skill" in result
 
 
-@pytest.mark.asyncio
-async def test_load_agent_skills_registry_index_has_both_skill_names(tmp_path: Path):
+async def test_load_agent_skills_index_has_both_skill_names_and_descriptions(
+    session: AsyncSession,
+):
     """Triangulation: both skill names and descriptions appear in the index block."""
     from app.prompts.loader import PromptLoader
 
-    skills_dir = tmp_path / "client1" / "agents" / "bot" / "skills"
-    skills_dir.mkdir(parents=True)
-    (skills_dir / "registry.yaml").write_text(
-        """
-skills:
-  - name: alpha
-    description: Alpha skill description
-    trigger_hint: alpha trigger
-    filler_text: Loading alpha...
-  - name: beta
-    description: Beta skill description
-    trigger_hint: beta trigger
-    filler_text: Loading beta...
-"""
-    )
+    _, agent = await _make_client_and_agent(session, "client1", "bot")
+    await _seed_skill(session, agent=agent, slug="alpha", description="Alpha skill description")
+    await _seed_skill(session, agent=agent, slug="beta", description="Beta skill description")
 
-    loader = PromptLoader(clients_dir=tmp_path)
-    result = await loader.load_agent_skills("client1", "bot")
+    loader = PromptLoader()
+    result = await loader.load_agent_skills(session, agent)
 
     assert "alpha" in result
     assert "Alpha skill description" in result
@@ -92,93 +139,82 @@ skills:
 
 
 # ---------------------------------------------------------------------------
-# New behavior: no registry.yaml → '' (NEVER glob-all)
+# No contributing skills → "" (no filesystem fallback)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_load_agent_skills_missing_directory_returns_empty(tmp_path: Path):
-    """load_agent_skills returns '' when skills directory doesn't exist.
-
-    GIVEN clients/acme/agents/aria/skills/ does not exist
-    WHEN load_agent_skills('acme', 'aria') is called
-    THEN returns ''
-    """
+async def test_load_agent_skills_no_skills_returns_empty(session: AsyncSession):
+    """load_agent_skills returns '' when the agent has no contributing skills."""
     from app.prompts.loader import PromptLoader
 
-    loader = PromptLoader(clients_dir=tmp_path)
-    result = await loader.load_agent_skills("acme", "aria")
+    _, agent = await _make_client_and_agent(session, "acme", "aria")
 
-    assert result == "", f"Expected empty string for missing directory, got: {result!r}"
+    loader = PromptLoader()
+    result = await loader.load_agent_skills(session, agent)
+
+    assert result == "", f"Expected empty string for no skills, got: {result!r}"
 
 
-@pytest.mark.asyncio
-async def test_load_agent_skills_no_registry_returns_empty_even_with_skill_files(tmp_path: Path):
-    """No registry.yaml → '' even when *.agent-skill.md files exist (NO glob-all).
-
-    GIVEN the skills directory has *.agent-skill.md files but NO registry.yaml
-    WHEN load_agent_skills('acme', 'aria') is called
-    THEN returns '' — NO glob-all fallback
-    """
+async def test_load_agent_skills_single_skill_returns_index(session: AsyncSession):
+    """Single resolved skill → ## Available Skills block with one row."""
     from app.prompts.loader import PromptLoader
 
-    skills_dir = tmp_path / "acme" / "agents" / "aria" / "skills"
-    skills_dir.mkdir(parents=True)
-    (skills_dir / "greeting.agent-skill.md").write_text("# Greeting skill content")
-    (skills_dir / "objections.agent-skill.md").write_text("# Objections skill content")
+    _, agent = await _make_client_and_agent(session, "client", "agent")
+    await _seed_skill(session, agent=agent, slug="only-skill", description="The only skill")
 
-    loader = PromptLoader(clients_dir=tmp_path)
-    result = await loader.load_agent_skills("acme", "aria")
-
-    assert result == "", (
-        "Without registry.yaml, load_agent_skills MUST return '' — no glob-all allowed"
-    )
-    assert "# Greeting skill content" not in result
-    assert "# Objections skill content" not in result
-
-
-@pytest.mark.asyncio
-async def test_load_agent_skills_empty_registry_returns_empty(tmp_path: Path):
-    """Empty registry → '' (agent operates without skills).
-
-    GIVEN the skills directory has an empty registry.yaml (skills: [])
-    WHEN load_agent_skills('acme', 'aria') is called
-    THEN returns ''
-    """
-    from app.prompts.loader import PromptLoader
-
-    skills_dir = tmp_path / "acme" / "agents" / "aria" / "skills"
-    skills_dir.mkdir(parents=True)
-    (skills_dir / "registry.yaml").write_text("skills: []\n")
-
-    loader = PromptLoader(clients_dir=tmp_path)
-    result = await loader.load_agent_skills("acme", "aria")
-
-    assert result == "", (
-        f"Expected empty string for empty registry, got: {result!r}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_load_agent_skills_single_entry_returns_index(tmp_path: Path):
-    """Single registry entry → ## Available Skills block with one row."""
-    from app.prompts.loader import PromptLoader
-
-    skills_dir = tmp_path / "client" / "agents" / "agent" / "skills"
-    skills_dir.mkdir(parents=True)
-    (skills_dir / "registry.yaml").write_text(
-        """
-skills:
-  - name: only-skill
-    description: The only skill
-    trigger_hint: when needed
-    filler_text: Loading...
-"""
-    )
-
-    loader = PromptLoader(clients_dir=tmp_path)
-    result = await loader.load_agent_skills("client", "agent")
+    loader = PromptLoader()
+    result = await loader.load_agent_skills(session, agent)
 
     assert "## Available Skills" in result
     assert "only-skill" in result
     assert "load_skill" in result
+
+
+# ---------------------------------------------------------------------------
+# load_skill_registry_entries() — raw entries for allowlist validation
+# ---------------------------------------------------------------------------
+
+
+async def test_load_skill_registry_entries_returns_entries(session: AsyncSession):
+    from app.prompts.loader import PromptLoader
+    from app.prompts.skill_loader import SkillRegistryEntry
+
+    _, agent = await _make_client_and_agent(session, "acme", "aria")
+    await _seed_skill(session, agent=agent, slug="only-skill")
+
+    loader = PromptLoader()
+    entries = await loader.load_skill_registry_entries(session, agent)
+
+    assert len(entries) == 1
+    assert isinstance(entries[0], SkillRegistryEntry)
+    assert entries[0].name == "only-skill"
+
+
+async def test_load_skill_registry_entries_empty_when_no_skills(session: AsyncSession):
+    from app.prompts.loader import PromptLoader
+
+    _, agent = await _make_client_and_agent(session, "acme", "aria")
+
+    loader = PromptLoader()
+    entries = await loader.load_skill_registry_entries(session, agent)
+
+    assert entries == []
+
+
+# ---------------------------------------------------------------------------
+# load_skill_content_by_slug() — DB-sourced content map for the load_skill tool
+# ---------------------------------------------------------------------------
+
+
+async def test_load_skill_content_by_slug_returns_active_revision_content(
+    session: AsyncSession,
+):
+    from app.prompts.loader import PromptLoader
+
+    _, agent = await _make_client_and_agent(session, "acme", "aria")
+    await _seed_skill(session, agent=agent, slug="only-skill", content_md="# Only skill content")
+
+    loader = PromptLoader()
+    content_by_slug = await loader.load_skill_content_by_slug(session, agent)
+
+    assert content_by_slug == {"only-skill": "# Only skill content"}

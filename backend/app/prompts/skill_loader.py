@@ -1,63 +1,42 @@
-"""QORA Skill Registry Loader — Phase 1.
+"""QORA Skill Registry — DB-backed resolver (skill-packages P4-D3 runtime cutover).
 
-Parses registry.yaml from the agent's skills directory and builds the
-## Available Skills index block for injection into the system prompt.
+load_skill_registry() / load_skill_content_by_slug() resolve an agent's
+skills from skill_packages/skills/skill_revisions via
+app.skills.service.resolve_agent_skills(), through the per-process
+AgentSkillsCache (app.skills.service.get_default_skills_cache()). The
+filesystem registry.yaml reader this module used before the skill-packages
+cutover is fully removed — see app.skills.service for the resolution order
+(P4-D2: agent-section > client-general > qora on slug collision) and the
+cache's contract (P4-D3: keyed by agent_id, invalidated explicitly on writes).
 
-Architecture decisions:
-- Registry-only mode: no registry.yaml → no skills. NEVER falls back to
-  globbing *.agent-skill.md files. That old behavior is completely removed.
-- Malformed YAML or missing required fields → log warning + return empty list.
-- build_skills_index([]) → empty string (no block injected into prompt).
-- Multi-tenant isolation enforced by accepting client_id + agent_slug as
-  explicit parameters (never raw filesystem paths).
+An agent with no contributing skills resolves to an empty list — the same
+semantics a missing registry.yaml had before this cutover.
 
-Covers: Phase 1 Tasks 1.1, 1.2.
+build_skills_index() keeps its exact pre-cutover formatting contract: an
+empty entry list returns "" (no block injected into the prompt).
 """
 
 from __future__ import annotations
 
-import asyncio
-import logging
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
-import yaml
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
-logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Default clients directory — same resolution as loader.py
-# ---------------------------------------------------------------------------
-
-_DEFAULT_CLIENTS_DIR = Path(__file__).resolve().parents[2] / "clients"
-
-# ---------------------------------------------------------------------------
-# Required fields for each registry entry
-# ---------------------------------------------------------------------------
-
-_REQUIRED_ENTRY_FIELDS: tuple[str, ...] = (
-    "name",
-    "description",
-    "trigger_hint",
-    "filler_text",
-)
-
-
-# ---------------------------------------------------------------------------
-# SkillRegistryEntry — immutable value object
-# ---------------------------------------------------------------------------
+    from app.tenants.models import Agent
 
 
 @dataclass(frozen=True)
 class SkillRegistryEntry:
-    """One entry from registry.yaml.
+    """One resolved skill. Fields match the pre-cutover registry.yaml schema
+    exactly, so the system prompt index and the load_skill tool contract are
+    unchanged by the DB cutover.
 
-    Fields match the YAML schema exactly:
         name:          Unique skill identifier (used as load_skill argument).
         description:   What the skill contains (shown in system prompt index).
         trigger_hint:  When the LLM should use this skill (shown in index).
-        filler_text:   Phrase emitted to SSE stream before loading (Phase 2).
+        filler_text:   Phrase emitted to SSE stream before loading.
     """
 
     name: str
@@ -66,109 +45,32 @@ class SkillRegistryEntry:
     filler_text: str
 
 
-# ---------------------------------------------------------------------------
-# load_skill_registry() — async YAML parser
-# ---------------------------------------------------------------------------
-
-
 async def load_skill_registry(
-    client_id: str,
-    agent_slug: str,
-    clients_dir: Path | None = None,
+    session: "AsyncSession", agent: "Agent"
 ) -> list[SkillRegistryEntry]:
-    """Parse registry.yaml → list of SkillRegistryEntry objects.
+    """Resolve *agent*'s skills from the DB via the per-process cache.
 
-    Returns an empty list when:
-    - The registry.yaml file does not exist (no glob-all fallback).
-    - The skills: key is absent, null, or an empty list.
-    - The YAML is malformed (logs a warning).
-    - Any entry is missing a required field (logs a warning).
-
-    Args:
-        client_id:   Tenant slug (e.g. "quintana-seguros").
-        agent_slug:  Agent slug (e.g. "jaumpablo").
-        clients_dir: Override for the clients/ root — used in tests via tmp_path.
-
-    Returns:
-        Ordered list of SkillRegistryEntry objects, empty on any error.
+    Returns an empty list when the agent has no contributing skills — the
+    same semantics a missing registry.yaml had before this cutover.
     """
-    base = clients_dir if clients_dir is not None else _DEFAULT_CLIENTS_DIR
-    registry_path = base / client_id / "agents" / agent_slug / "skills" / "registry.yaml"
+    from app.skills.service import get_default_skills_cache
 
-    # File not found → empty (no fallback)
-    exists = await asyncio.to_thread(registry_path.exists)
-    if not exists:
-        return []
+    resolved = await get_default_skills_cache().get(session, agent)
+    return resolved.entries
 
-    raw = await asyncio.to_thread(registry_path.read_text, encoding="utf-8")
 
-    # Parse YAML — malformed → log warning + return empty
-    try:
-        data = yaml.safe_load(raw)
-    except Exception as exc:
-        logger.warning(
-            "skill_registry_yaml_parse_error: client=%s agent=%s error=%s",
-            client_id,
-            agent_slug,
-            exc,
-        )
-        return []
+async def load_skill_content_by_slug(
+    session: "AsyncSession", agent: "Agent"
+) -> dict[str, str]:
+    """Return {skill_name: content_md} for *agent*'s resolved skills.
 
-    # skills: key absent or null
-    if not isinstance(data, dict):
-        logger.warning(
-            "skill_registry_invalid_root: client=%s agent=%s — expected mapping, got %s",
-            client_id,
-            agent_slug,
-            type(data).__name__,
-        )
-        return []
+    Sourced from the same cached resolution load_skill_registry() uses — no
+    extra DB query beyond the first resolution per agent (P4-D3 hot path).
+    """
+    from app.skills.service import get_default_skills_cache
 
-    raw_skills = data.get("skills")
-    if not raw_skills:
-        return []
-
-    if not isinstance(raw_skills, list):
-        logger.warning(
-            "skill_registry_invalid_skills_key: client=%s agent=%s — expected list",
-            client_id,
-            agent_slug,
-        )
-        return []
-
-    # Parse each entry — any missing required field → log warning + return empty
-    entries: list[SkillRegistryEntry] = []
-    for idx, item in enumerate(raw_skills):
-        if not isinstance(item, dict):
-            logger.warning(
-                "skill_registry_entry_not_mapping: client=%s agent=%s entry=%d",
-                client_id,
-                agent_slug,
-                idx,
-            )
-            return []
-
-        missing = [f for f in _REQUIRED_ENTRY_FIELDS if not item.get(f)]
-        if missing:
-            logger.warning(
-                "skill_registry_entry_missing_fields: client=%s agent=%s entry=%d missing=%s",
-                client_id,
-                agent_slug,
-                idx,
-                missing,
-            )
-            return []
-
-        entries.append(
-            SkillRegistryEntry(
-                name=item["name"],
-                description=item["description"],
-                trigger_hint=item["trigger_hint"],
-                filler_text=item["filler_text"],
-            )
-        )
-
-    return entries
+    resolved = await get_default_skills_cache().get(session, agent)
+    return dict(resolved.content_by_slug)
 
 
 # ---------------------------------------------------------------------------

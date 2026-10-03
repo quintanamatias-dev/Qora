@@ -165,6 +165,7 @@ class TestFinding1DirectPathAuthBinding:
         ctx.max_tokens = 300
         ctx.agent_slug = "test-agent"
         ctx.skill_registry_entries = []
+        ctx.skill_content_by_slug = {}
         ctx.agent_tool_config = None
         ctx.profile_facts_block = ""
 
@@ -286,6 +287,7 @@ class TestFinding3ZeroDbHotPathStrengthened:
         ctx.max_tokens = 300
         ctx.agent_slug = "agent-1"
         ctx.skill_registry_entries = []
+        ctx.skill_content_by_slug = {}
         ctx.agent_tool_config = None
         ctx.profile_facts_block = ""
 
@@ -378,6 +380,7 @@ class TestFinding3ZeroDbHotPathStrengthened:
         ctx.max_tokens = 300
         ctx.agent_slug = "agent-proof"
         ctx.skill_registry_entries = []
+        ctx.skill_content_by_slug = {}
         ctx.agent_tool_config = None
         ctx.profile_facts_block = ""
 
@@ -493,6 +496,7 @@ class TestFinding3ZeroDbHotPathStrengthened:
         ctx.max_tokens = 300
         ctx.agent_slug = "agent-scope"
         ctx.skill_registry_entries = []
+        ctx.skill_content_by_slug = {}
         ctx.agent_tool_config = None
         ctx.profile_facts_block = ""
 

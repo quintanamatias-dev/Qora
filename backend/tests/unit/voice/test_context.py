@@ -302,8 +302,8 @@ async def test_build_voice_context_skills_index_from_load_agent_skills():
 
     assert result.skills_index == expected_index
     assert result.skills_content is None  # Always None in registry mode
-    # Verify load_agent_skills was called with correct args
-    mock_instance.load_agent_skills.assert_called_once_with("acme", "aria")
+    # Verify load_agent_skills was called with (db, agent) — skill-packages P4-D3 cutover
+    mock_instance.load_agent_skills.assert_called_once_with(mock_db, agent)
 
 
 @pytest.mark.asyncio

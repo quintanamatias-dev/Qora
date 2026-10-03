@@ -25,7 +25,6 @@ Phase B5 PR #2 (session-auth-binding):
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -130,7 +129,7 @@ async def dispatch_tool(
     *,
     agent_slug: str | None = None,
     registry_entries: "list[SkillRegistryEntry] | None" = None,
-    clients_dir: Path | None = None,
+    content_by_slug: dict[str, str] | None = None,
     agent_tool_config: dict | None = None,
     crm_config: "CRMConfig | None" = None,
     authorized_session: "AuthorizedSession | None" = None,
@@ -146,7 +145,8 @@ async def dispatch_tool(
         agent_slug: Agent slug — required for load_skill routing.
         registry_entries: Parsed registry entries for this session — required for
             load_skill validation (allowlist check).
-        clients_dir: Override clients root — used in tests via tmp_path.
+        content_by_slug: DB-sourced {skill_name: content_md} map resolved once per
+            session — required for load_skill content lookup (skill-packages P4-D3).
         agent_tool_config: Optional per-agent tool config dict (parsed from JSON).
             Required for capture_data routing — passed to the handler for schema
             validation. Ignored for all other tool names.
@@ -266,7 +266,7 @@ async def dispatch_tool(
             agent_slug=agent_slug or "",
             skill_name=skill_name,
             registry_entries=registry_entries or [],
-            clients_dir=clients_dir,
+            content_by_slug=content_by_slug,
         )
         # Unwrap the handler result to a plain string — the LLM needs raw text,
         # not JSON metadata. handle_load_skill returns {"content": ...} on success

@@ -99,17 +99,23 @@ async def _create_revision(
     owner: Any,
     owner_id_attr: str,
     active_pointer_attr: str,
-    config_json: str,
-    schema_version: str,
     source: RevisionSource,
     created_by: str,
     note: str | None = None,
+    **fields: Any,
 ) -> Any:
     """Insert-only revision creation + activation.
 
     revision_number = max(existing for owner.id) + 1, starting at 1. Single
     pointer swap on owner.<active_pointer_attr> — no other revision row is
     touched.
+
+    **fields are the revision's own content columns beyond
+    id/revision_number/source/created_by/note/owner-id — e.g. config+
+    schema_version for the JSON-blob revision tables (agent/client/analysis-
+    profile), or content_md/filler_text/trigger_hint/description for
+    SkillRevision (skill-packages, P4-D1's fourth owner table on this
+    reuse pattern).
     """
     owner_id = owner.id
     next_number = await _next_revision_number(session, model, owner_id_attr, owner_id)
@@ -117,12 +123,11 @@ async def _create_revision(
     revision = model(
         id=str(uuid.uuid4()),
         revision_number=next_number,
-        config=config_json,
-        schema_version=schema_version,
         source=source,
         created_by=created_by,
         note=note,
         **{owner_id_attr: owner_id},
+        **fields,
     )
     session.add(revision)
     await session.flush()
@@ -216,7 +221,7 @@ async def _rollback_to_revision(
         owner=owner,
         owner_id_attr=owner_id_attr,
         active_pointer_attr=active_pointer_attr,
-        config_json=config_json,
+        config=config_json,
         schema_version=schema_version,
         source="rollback",
         created_by=created_by,
@@ -346,7 +351,7 @@ async def create_agent_config_revision(
         owner=agent,
         owner_id_attr="agent_id",
         active_pointer_attr="active_revision_id",
-        config_json=config_json,
+        config=config_json,
         schema_version=schema_version,
         source=source,
         created_by=created_by,
@@ -370,7 +375,7 @@ async def create_revision(
         owner=agent,
         owner_id_attr="agent_id",
         active_pointer_attr="active_revision_id",
-        config_json=config_json,
+        config=config_json,
         schema_version=schema_version,
         source=source,
         created_by=created_by,
@@ -496,7 +501,7 @@ async def create_client_revision(
         owner=client,
         owner_id_attr="client_id",
         active_pointer_attr="active_config_revision_id",
-        config_json=config_json,
+        config=config_json,
         schema_version=schema_version,
         source=source,
         created_by=created_by,
@@ -638,7 +643,7 @@ async def create_analysis_profile_revision(
         owner=client,
         owner_id_attr="client_id",
         active_pointer_attr="active_analysis_profile_revision_id",
-        config_json=config_json,
+        config=config_json,
         schema_version=schema_version,
         source=source,
         created_by=created_by,

@@ -777,7 +777,7 @@ class TestRealMigrationExecution:
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
         # PR3 transcript finalization fields: 20260625_0003
         # C2 outbound telephony: 20260702_0004
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020", "20261003_0021", "20261003_0022", "20261003_0023", "20261003_0024"}
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020", "20261003_0021", "20261003_0022", "20261003_0023", "20261003_0024", "20261003_0025", "20261003_0026"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"alembic_version should contain a known Qora revision. "
             f"Got: {versions}. Known: {_KNOWN_REVISIONS}"
@@ -961,7 +961,7 @@ class TestRealMigrationExecution:
         # Phase B10 (background_jobs) added 20260624_0002 as the new head.
         # PR3 transcript finalization fields: 20260625_0003
         # C2 outbound telephony: 20260702_0004
-        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020", "20261003_0021", "20261003_0022", "20261003_0023", "20261003_0024"}
+        _KNOWN_REVISIONS = {"20241201_0001", "20260624_0002", "20260625_0003", "20260702_0004", "20260703_0005", "20260704_0006", "20260704_0007", "20260706_0008", "20260706_0009", "20260716_0010", "20260727_0011", "20260927_0012", "20260930_0013", "20261002_0014", "20261002_0015", "20261002_0016", "20261002_0017", "20261003_0018", "20261003_0019", "20261003_0020", "20261003_0021", "20261003_0022", "20261003_0023", "20261003_0024", "20261003_0025", "20261003_0026"}
         assert versions[0] in _KNOWN_REVISIONS, (
             f"Stamp head did not record a known Qora revision. Got: {versions}. "
             f"Known revisions: {_KNOWN_REVISIONS}"
@@ -3339,4 +3339,301 @@ class TestCallAnalysisProfileRevisionMigration:
         cur.execute("PRAGMA table_info(call_analyses)")
         columns = {row[1] for row in cur.fetchall()}
         assert "analysis_profile_revision_id" not in columns
+        conn.close()
+
+
+# ===========================================================================
+# skill-packages — Task 1.2: schema migration 20261003_0025
+# ===========================================================================
+
+
+class TestSkillPackagesSchemaMigration:
+    """20261003_0025: skill_packages, skills, skill_revisions tables."""
+
+    def test_skill_packages_schema_migration_creates_tables(self, tmp_path):
+        import sqlite3
+
+        from alembic import command
+
+        db_file = tmp_path / "skill_packages_schema.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "head")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cur.fetchall()}
+        assert {"skill_packages", "skills", "skill_revisions"}.issubset(tables)
+
+        cur.execute("PRAGMA table_info(skill_packages)")
+        columns = {row[1] for row in cur.fetchall()}
+        assert {"id", "owner_type", "client_id", "name", "created_at", "updated_at"}.issubset(
+            columns
+        )
+
+        cur.execute("PRAGMA table_info(skills)")
+        columns = {row[1] for row in cur.fetchall()}
+        assert {
+            "id",
+            "package_id",
+            "slug",
+            "section",
+            "agent_id",
+            "active_revision_id",
+        }.issubset(columns)
+
+        cur.execute("PRAGMA index_list(skills)")
+        indexes = cur.fetchall()
+        unique_index_names = [row[1] for row in indexes if row[2] == 1]
+        found_unique = False
+        for name in unique_index_names:
+            cur.execute(f"PRAGMA index_info({name})")
+            cols = {row[2] for row in cur.fetchall()}
+            if cols == {"package_id", "slug", "agent_id"}:
+                found_unique = True
+        assert found_unique, "skills must have a unique(package_id, slug, agent_id) index"
+
+        cur.execute("PRAGMA table_info(skill_revisions)")
+        columns = {row[1] for row in cur.fetchall()}
+        assert {
+            "id",
+            "skill_id",
+            "revision_number",
+            "content_md",
+            "filler_text",
+            "trigger_hint",
+            "description",
+            "source",
+            "created_by",
+            "created_at",
+            "note",
+        }.issubset(columns)
+
+        conn.close()
+
+    def test_skill_packages_schema_migration_downgrade(self, tmp_path):
+        import sqlite3
+
+        from alembic import command
+
+        db_file = tmp_path / "skill_packages_schema_downgrade.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "20261003_0024")
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cur.fetchall()}
+        assert not {"skill_packages", "skills", "skill_revisions"} & tables
+        conn.close()
+
+
+# ===========================================================================
+# skill-packages — Task 1.3: import migration 20261003_0026
+# ===========================================================================
+
+
+class TestImportAgentSkillsMigration:
+    """20261003_0026: import registry.yaml + *.agent-skill.md into skills rows."""
+
+    def _seed_fixture_tree(self, tmp_path):
+        """Build a tmp clients/ tree matching Quintana's real leads-agent shape."""
+        skills_dir = (
+            tmp_path / "fixture_clients" / "acme" / "agents" / "sales-agent" / "skills"
+        )
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "registry.yaml").write_text(
+            "skills:\n"
+            "  - name: pricing-knowledge\n"
+            '    description: "Pricing tiers and discounts."\n'
+            '    trigger_hint: "When the lead asks about price."\n'
+            '    filler_text: "Let me check that..."\n',
+            encoding="utf-8",
+        )
+        (skills_dir / "pricing-knowledge.agent-skill.md").write_text(
+            "# Pricing Knowledge\n\nTier A: $10. Tier B: $20.\n", encoding="utf-8"
+        )
+        return tmp_path / "fixture_clients"
+
+    def _load_import_module(self, module_name: str):
+        import importlib.util
+
+        module_path = VERSIONS_DIR / "20261003_0026_import_agent_skills.py"
+        spec = importlib.util.spec_from_file_location(module_name, module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def _run_import_upgrade(self, module, db_file: Path) -> None:
+        """Run the import migration's upgrade() directly against db_file (same
+        Operations/MigrationContext pattern as the crm.yaml import's rerun helper).
+        """
+        from alembic.operations import Operations
+        from alembic.runtime.migration import MigrationContext
+        from sqlalchemy import create_engine
+
+        sync_engine = create_engine(f"sqlite:///{db_file}")
+        with sync_engine.connect() as connection:
+            context = MigrationContext.configure(connection)
+            with context.begin_transaction():
+                operations = Operations(context)
+                with Operations.context(operations):
+                    module.upgrade()
+            connection.commit()
+        sync_engine.dispose()
+
+    def test_import_agent_skills_creates_rows_from_fixture(self, tmp_path):
+        import sqlite3
+
+        from alembic import command
+
+        clients_root = self._seed_fixture_tree(tmp_path)
+        module = self._load_import_module("import_agent_skills_fixture")
+        module._CLIENTS_ROOT = clients_root
+
+        db_file = tmp_path / "import_agent_skills.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "20261003_0025")
+
+        conn = sqlite3.connect(str(db_file))
+        conn.execute(
+            "INSERT INTO clients (id, name, voice_id, is_active, created_at) "
+            "VALUES ('acme', 'Acme', 'v1', 1, '2026-10-03T00:00:00+00:00')"
+        )
+        conn.execute(
+            "INSERT INTO agents (id, client_id, slug, name, voice_id, created_at) "
+            "VALUES ('agent-1', 'acme', 'sales-agent', 'Sales Agent', 'v1', "
+            "'2026-10-03T00:00:00+00:00')"
+        )
+        conn.commit()
+        conn.close()
+
+        self._run_import_upgrade(module, db_file)
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM skill_packages WHERE owner_type='client' AND client_id='acme'"
+        )
+        package_row = cur.fetchone()
+        assert package_row is not None
+        package_id = package_row[0]
+
+        cur.execute(
+            "SELECT id, slug, section, agent_id, active_revision_id FROM skills "
+            "WHERE package_id = ?",
+            (package_id,),
+        )
+        skill_rows = cur.fetchall()
+        assert len(skill_rows) == 1
+        skill_id, slug, section, agent_id, active_revision_id = skill_rows[0]
+        assert slug == "pricing-knowledge"
+        assert section == "agent"
+        assert agent_id == "agent-1"
+        assert active_revision_id is not None
+
+        cur.execute(
+            "SELECT content_md, filler_text, trigger_hint, description, source, "
+            "revision_number FROM skill_revisions WHERE id = ?",
+            (active_revision_id,),
+        )
+        rev = cur.fetchone()
+        assert rev[0] == "# Pricing Knowledge\n\nTier A: $10. Tier B: $20.\n"
+        assert rev[1] == "Let me check that..."
+        assert rev[2] == "When the lead asks about price."
+        assert rev[3] == "Pricing tiers and discounts."
+        assert rev[4] == "import"
+        assert rev[5] == 1
+        conn.close()
+
+    def test_import_agent_skills_is_idempotent_on_rerun(self, tmp_path):
+        import sqlite3
+
+        from alembic import command
+
+        clients_root = self._seed_fixture_tree(tmp_path)
+        module = self._load_import_module("import_agent_skills_idempotent")
+        module._CLIENTS_ROOT = clients_root
+
+        db_file = tmp_path / "import_agent_skills_idempotent.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "20261003_0025")
+
+        conn = sqlite3.connect(str(db_file))
+        conn.execute(
+            "INSERT INTO clients (id, name, voice_id, is_active, created_at) "
+            "VALUES ('acme', 'Acme', 'v1', 1, '2026-10-03T00:00:00+00:00')"
+        )
+        conn.execute(
+            "INSERT INTO agents (id, client_id, slug, name, voice_id, created_at) "
+            "VALUES ('agent-1', 'acme', 'sales-agent', 'Sales Agent', 'v1', "
+            "'2026-10-03T00:00:00+00:00')"
+        )
+        conn.commit()
+        conn.close()
+
+        self._run_import_upgrade(module, db_file)
+        # Re-run the import logic's upgrade() a second time directly against
+        # the same DB state to confirm the (package_id, slug, agent_id)
+        # existence check makes this a no-op.
+        self._run_import_upgrade(module, db_file)
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM skill_packages")
+        assert cur.fetchone()[0] == 1
+        cur.execute("SELECT COUNT(*) FROM skills")
+        assert cur.fetchone()[0] == 1
+        cur.execute("SELECT COUNT(*) FROM skill_revisions")
+        assert cur.fetchone()[0] == 1
+        conn.close()
+
+    def test_import_agent_skills_downgrade_clears_tables(self, tmp_path):
+        import sqlite3
+
+        from alembic import command
+        from alembic.operations import Operations
+        from alembic.runtime.migration import MigrationContext
+        from sqlalchemy import create_engine
+
+        clients_root = self._seed_fixture_tree(tmp_path)
+        module = self._load_import_module("import_agent_skills_downgrade")
+        module._CLIENTS_ROOT = clients_root
+
+        db_file = tmp_path / "import_agent_skills_downgrade.db"
+        cfg = _make_agent_config_revisions_alembic_config(db_file)
+        command.upgrade(cfg, "20261003_0025")
+
+        conn = sqlite3.connect(str(db_file))
+        conn.execute(
+            "INSERT INTO clients (id, name, voice_id, is_active, created_at) "
+            "VALUES ('acme', 'Acme', 'v1', 1, '2026-10-03T00:00:00+00:00')"
+        )
+        conn.execute(
+            "INSERT INTO agents (id, client_id, slug, name, voice_id, created_at) "
+            "VALUES ('agent-1', 'acme', 'sales-agent', 'Sales Agent', 'v1', "
+            "'2026-10-03T00:00:00+00:00')"
+        )
+        conn.commit()
+        conn.close()
+
+        self._run_import_upgrade(module, db_file)
+
+        sync_engine = create_engine(f"sqlite:///{db_file}")
+        with sync_engine.connect() as connection:
+            context = MigrationContext.configure(connection)
+            with context.begin_transaction():
+                operations = Operations(context)
+                with Operations.context(operations):
+                    module.downgrade()
+            connection.commit()
+        sync_engine.dispose()
+
+        conn = sqlite3.connect(str(db_file))
+        cur = conn.cursor()
+        for table in ("skill_packages", "skills", "skill_revisions"):
+            cur.execute(f"SELECT COUNT(*) FROM {table}")
+            assert cur.fetchone()[0] == 0
         conn.close()
