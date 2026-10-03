@@ -11,7 +11,7 @@ Branch `feat/config-phase3` from `main` `e828fe0`. Overnight autonomous run (the
 - [x] 3. Phase 4: cut every reader over to the store (import, sync, tools, voice hot path, summarizer) plus the static-import guard.
 - [x] 4. Phase 5: router writes to the DB; write-only secret, status and import-from-env endpoints.
 - [x] 5. Phase 6 + 7.1: boot validation gives a per-client degraded status instead of `sys.exit`; two-client isolation proof; deduplicate the env-name regex.
-- [ ] 6. Full suites green; production rollout notes.
+- [x] 6. Full suites green; production rollout notes.
 
 Deferred on purpose: task 7.2 (delete `backend/clients/*/crm.yaml`). Migration 0022 reads those files at deploy time, so they can only be deleted in a release AFTER production has run 0022.
 
@@ -23,3 +23,12 @@ Deferred on purpose: task 7.2 (delete `backend/clients/*/crm.yaml`). Migration 0
 - Task 3: every reader (import, sync, capture_data tool, voice context, the 4 webhook sites, summarizer) moved to `IntegrationStore`. The webhook fast path checks `peek_cached` and opens a session only on a cache miss. Degraded mode: the tool returns `crm_unavailable`, jobs log and skip. Fixed ruff undefined `CRMConfig` in registry.py. Tests moved from tmp crm.yaml to DB rows; new static guard (excludes crm_config_router.py, phase 5, and leads/router.py:349, still a CRMConfigLoader reader and closed in task 4). Worker full suite: 3879 passed. Parent fix: negative cache, because clients without a CRM were opening a DB session on every turn (new test; its RED was not clean because the stash also removed peek_cached, but GREEN covers the logic); integrations/voice/tools: 474 passed.
 - Task 4: crm_config_router.py now writes to the DB (the request and response contracts are kept; no more crm.yaml writes; the cache is invalidated after every write). New endpoints: PUT `.../{provider}/secret` (write-only, 503 without a master key), GET `.../status` (secret source db/env/missing, no values), POST `.../secrets/import-from-env` (superadmin). `recompute_and_persist_status` added. leads/router.py moved to the store; the guard now allows zero CRMConfigLoader importers (the class stays, as legacy with its own tests). Secret name: reuse `legacy_env_var_name`, else `{provider}_api_key`. Tests check that secrets are never echoed or logged. Worker full suite: 3884 passed.
 - Task 5: `validate_all_integration_credentials` is now async and DB-based. It recomputes and persists each integration's status, logs degraded clients, and never exits; it runs after `init_db` in main.py. The platform credentials (OPENAI, ELEVENLABS, QORA_API_KEY) still hard-fail in `Settings` (a test proves it). Two-client isolation test; startup smoke test with a degraded client; the env-name regex has a single definition (guard test). RED: not captured edit by edit (baseline = the old tests, disclosed). Worker full suite: 3873 passed (the count dropped because obsolete crm.yaml credential tests were rewritten).
+- Task 6 (verifier): backend 3873 passed; frontend 891 passed; Alembic down to 0020 and back up OK. Real-data copy: migrations up to 0022 run, health 200 with no errors, quintana-seguros airtable status `ok`.
+
+## Production rollout (waits for the user; after the phase 1 + demo rollout)
+
+1. Generate a key (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`) and set `QORA_SECRETS_MASTER_KEY` in Railway. Keep a copy somewhere safe: losing it makes the stored secrets unreadable.
+2. Deploy: migrations 0021 and 0022 import the Quintana CRM config from crm.yaml.
+3. `POST /api/v1/clients/quintana-seguros/integrations/airtable/secrets/import-from-env` (superadmin) copies `QUINTANA_AIRTABLE_API_KEY` into the encrypted table.
+4. `GET .../integrations/airtable/status` should show `ok` with source `db`. Then remove `QUINTANA_AIRTABLE_API_KEY` from Railway (optional; it stays a fallback while present).
+5. Next release: delete `backend/clients/*/crm.yaml` (deferred task 7.2) and the legacy `CRMConfigLoader` class.
