@@ -112,8 +112,16 @@ class CRMConfig(BaseModel):
     provider: Literal["airtable"]
     base_id: str
     table_id: str
-    api_key: str           # Renamed from api_key_env; see heuristic above (QR-4)
+    # Optional (client-integrations-secrets P3-D6): DB-sourced configs (via
+    # IntegrationStore) never carry a literal/env-name api_key — only
+    # legacy_env_var_name below. Filesystem-sourced crm.yaml configs always
+    # set this field (required there, enforced by CRMConfigLoader's validation).
+    api_key: str | None = None  # Renamed from api_key_env; see heuristic above (QR-4)
     match_field: str
+    # client-integrations-secrets P3-D6: the legacy env var name a client's
+    # crm.yaml referenced for its API key, carried forward by the one-time
+    # import migration so resolve_client_secret's DB->env fallback can use it.
+    legacy_env_var_name: str | None = None
     field_mappings: list[CRMFieldDef] = Field(default_factory=list)
     # Optional status translation map: Qora status → CRM singleSelect label.
     status_mapping: dict[str, str] | None = None
@@ -125,6 +133,19 @@ class CRMConfig(BaseModel):
     quote_ready_fields: list[str] = Field(default_factory=list)
 
     model_config = {"extra": "ignore"}
+
+    @model_validator(mode="after")
+    def _validate_api_key_or_legacy_env_var_present(self) -> "CRMConfig":
+        """Require at least one credential source (FM-2).
+
+        Filesystem-sourced crm.yaml configs always set api_key; DB-sourced
+        configs built by IntegrationStore always set legacy_env_var_name
+        instead (client-integrations-secrets P3-D6). Missing both means no
+        credential can ever resolve.
+        """
+        if self.api_key is None and self.legacy_env_var_name is None:
+            raise ValueError("api_key (or legacy_env_var_name) is required")
+        return self
 
     @model_validator(mode="after")
     def _validate_no_duplicate_custom_field_keys(self) -> "CRMConfig":
@@ -166,6 +187,11 @@ class CRMConfig(BaseModel):
             CredentialResolutionError: if the env var lookup fails or the
                 resolved value is a known weak placeholder.
         """
+        if self.api_key is None:
+            raise CredentialResolutionError(
+                "CRM config has no literal/env api_key configured; DB-sourced "
+                "configs must use resolve_api_key_async() instead."
+            )
         if _looks_like_env_var_name(self.api_key):
             # Treat as env var name → look up the actual credential
             value = os.environ.get(self.api_key)
@@ -195,9 +221,29 @@ class CRMConfig(BaseModel):
     # ---------------------------------------------------------------------------
 
     @property
-    def api_key_env(self) -> str:
+    def api_key_env(self) -> str | None:
         """Backward-compat alias for api_key — used by existing code that reads api_key_env."""
         return self.api_key
+
+    async def resolve_api_key_async(self, session, client_id: str) -> str | None:
+        """Resolve the API key through the DB -> env -> None order (P3-D3).
+
+        For configs built by IntegrationStore (legacy_env_var_name set, no
+        literal api_key), this is the resolution path to use instead of the
+        synchronous resolve_api_key(). Falls back to resolve_api_key()'s
+        heuristic when a literal/env-name api_key is present (filesystem-
+        sourced crm.yaml configs). Never raises — returns None when neither
+        source resolves, matching resolve_client_secret's contract.
+        """
+        from app.integrations.secrets import resolve_client_secret  # noqa: PLC0415
+
+        if self.legacy_env_var_name:
+            value = await resolve_client_secret(session, client_id, self.legacy_env_var_name)
+            if value is not None:
+                return value
+        if self.api_key is not None:
+            return self.resolve_api_key()
+        return None
 
 
 # ---------------------------------------------------------------------------
