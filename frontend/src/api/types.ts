@@ -472,6 +472,7 @@ export interface Agent {
   system_prompt: string | null
   tools_enabled: string[]
   is_active: boolean
+  /** @deprecated default-agent semantics removed (agent-config-revisions-routing); do not render in the UI. */
   is_default: boolean
   created_at: string
   // ElevenLabs binding + readiness (PR 2 — qora-agent-studio-demo)
@@ -529,6 +530,26 @@ export interface UpdateAgentPayload {
 export interface ReadinessCheck {
   label: string
   ready: boolean
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Agent Config Revisions
+// Mirrors backend AgentConfigRevisionResponse — GET/POST .../revisions[...]
+// ──────────────────────────────────────────────────────────────────────────────
+
+export type AgentConfigRevisionSource = 'import' | 'api' | 'rollback'
+
+export interface AgentConfigRevision {
+  id: string
+  agent_id: string
+  revision_number: number
+  config: Record<string, unknown>
+  schema_version: string
+  source: AgentConfigRevisionSource
+  created_by: string
+  created_at: string
+  note: string | null
+  elevenlabs_sync_status: string | null
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

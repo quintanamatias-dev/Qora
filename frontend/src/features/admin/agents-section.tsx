@@ -5,9 +5,10 @@
  * Takes clientId as a prop (from route params via ClientDetailPage).
  *
  * Features:
- *  1. Agents table with actions (Edit, Default, Deactivate)
+ *  1. Agents table with actions (Edit, Deactivate)
  *  2. Create Agent form
- *  3. Edit Agent inline panel with readiness checklist and voice tuning
+ *  3. Edit Agent inline panel with readiness checklist, voice tuning, and
+ *     config revision history (agent-config-revisions-routing)
  *
  * All existing functionality preserved — only the client selector is removed.
  */
@@ -33,10 +34,10 @@ import {
   useCreateAgent,
   useUpdateAgent,
   useDeactivateAgent,
-  useMakeAgentDefault,
 } from '@/api/hooks'
 import type { Agent } from '@/api/types'
 import { computeReadinessChecklist } from './agents-panel'
+import { AgentRevisionsPanel } from './agent-revisions-panel'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -75,7 +76,6 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
   const createAgentMutation = useCreateAgent(clientId)
   const updateAgentMutation = useUpdateAgent(clientId)
   const deactivateAgentMutation = useDeactivateAgent(clientId)
-  const makeDefaultMutation = useMakeAgentDefault(clientId)
 
   const [toast, setToast] = useState<ToastState | null>(null)
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
@@ -237,15 +237,6 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
     })
   }
 
-  // ── Make Default ───────────────────────────────────────────────────────────
-
-  function handleMakeDefault(agentId: string) {
-    makeDefaultMutation.mutate(agentId, {
-      onSuccess: () => showToast('Agent set as default', 'success'),
-      onError: (err) => showToast(`Error setting default agent: ${err.message}`, 'error'),
-    })
-  }
-
   return (
     <div className="space-y-6 pt-2">
       {/* Toast notification */}
@@ -266,6 +257,9 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
             </p>
             <code className="text-teal font-mono text-xs mt-0.5 block">{editingAgent.slug}</code>
           </div>
+
+          {/* Config Revisions */}
+          <AgentRevisionsPanel clientId={clientId} agentId={editingAgent.agent_id} />
 
           {/* Readiness Checklist */}
           <div className="mb-6 p-4 rounded-md border border-line bg-mist/50">
@@ -554,7 +548,6 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
                       <Badge status={agent.is_active ? 'active' : 'neutral'}>
                         {agent.is_active ? 'Active' : 'Inactive'}
                       </Badge>
-                      {agent.is_default && <Badge status="success">Default</Badge>}
                     </div>
                   </TableCell>
                   <TableCell>
@@ -566,16 +559,6 @@ export function AgentsSection({ clientId }: AgentsSectionProps) {
                       >
                         Edit
                       </Button>
-                      {!agent.is_default && (
-                        <Button
-                          variant="tertiary"
-                          size="sm"
-                          onClick={() => handleMakeDefault(agent.agent_id)}
-                          disabled={makeDefaultMutation.isPending}
-                        >
-                          ★ Default
-                        </Button>
-                      )}
                       {agent.is_active && (
                         <Button
                           variant="tertiary"
