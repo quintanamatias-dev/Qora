@@ -265,3 +265,74 @@ async def test_legacy_patch_agent_also_creates_revision(revisions_app):
     assert len(revisions_after) == count_before + 1
     assert revisions_after[0]["source"] == "api"
     assert revisions_after[0]["config"]["temperature"] == 0.55
+
+
+async def test_legacy_patch_writes_sparse_v2_revision_without_repinning_dropped_override(
+    revisions_app,
+):
+    """gap fix: legacy PATCH must write through the sparse V2 path, not a full
+    V1 snapshot — a field the agent previously dropped (inherits) must stay
+    dropped, not get re-pinned as an agent override by an unrelated field edit.
+    """
+    agent_id = await _get_demo_agent_id(revisions_app)
+    base_url = f"/api/v1/clients/qora-demo/agents/{agent_id}"
+
+    # Promote to V2 overrides, explicitly dropping the `model` override (null
+    # removes it — the agent now inherits `model` from client/standard).
+    with patch(
+        "app.elevenlabs.service.ElevenLabsService.sync_agent_config",
+        AsyncMock(return_value=AsyncMock(outcome="skipped", error_detail=None)),
+    ):
+        setup_response = await revisions_app.patch(
+            f"{base_url}/config", json={"temperature": 0.5, "model": None}
+        )
+    assert setup_response.status_code == 200
+    assert "model" not in setup_response.json()["config"]
+
+    # Legacy PATCH of an unrelated config field (tts_speed) — must not re-pin model.
+    with patch("app.agents.router.sync_to_elevenlabs", AsyncMock()):
+        response = await revisions_app.patch(base_url, json={"tts_speed": 1.1})
+    assert response.status_code == 200
+    assert response.json()["tts_speed"] == 1.1
+
+    revisions = (await revisions_app.get(f"{base_url}/revisions")).json()
+    latest_config = revisions[0]["config"]
+    assert revisions[0]["schema_version"] == "v2"
+    assert "model" not in latest_config
+    assert latest_config["tts_speed"] == 1.1
+    assert latest_config["temperature"] == 0.5
+
+
+async def test_legacy_patch_of_non_config_field_creates_no_revision(revisions_app):
+    agent_id = await _get_demo_agent_id(revisions_app)
+    base_url = f"/api/v1/clients/qora-demo/agents/{agent_id}"
+
+    revisions_before = (await revisions_app.get(f"{base_url}/revisions")).json()
+    count_before = len(revisions_before)
+
+    response = await revisions_app.patch(base_url, json={"name": "Renamed Agent"})
+    assert response.status_code == 200
+    assert response.json()["name"] == "Renamed Agent"
+
+    revisions_after = (await revisions_app.get(f"{base_url}/revisions")).json()
+    assert len(revisions_after) == count_before
+
+
+async def test_legacy_patch_removing_required_field_returns_422_and_no_change(
+    revisions_app,
+):
+    agent_id = await _get_demo_agent_id(revisions_app)
+    base_url = f"/api/v1/clients/qora-demo/agents/{agent_id}"
+
+    before = await revisions_app.get(base_url)
+    voice_id_before = before.json()["voice_id"]
+    revisions_before = (await revisions_app.get(f"{base_url}/revisions")).json()
+    count_before = len(revisions_before)
+
+    response = await revisions_app.patch(base_url, json={"voice_id": None})
+    assert response.status_code == 422
+
+    after = await revisions_app.get(base_url)
+    assert after.json()["voice_id"] == voice_id_before
+    revisions_after = (await revisions_app.get(f"{base_url}/revisions")).json()
+    assert len(revisions_after) == count_before

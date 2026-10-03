@@ -28,7 +28,11 @@ from app.agents.schemas import (
 from app.core.access import require_client_access, require_superadmin
 from app.core.auth import CallerIdentity
 from app.elevenlabs.service import ElevenLabsService, sync_to_elevenlabs
-from app.tenants.agent_config_schema import AgentConfigV1, AgentConfigV2Patch
+from app.tenants.agent_config_schema import (
+    ALLOWED_AGENT_OVERRIDE_FIELDS,
+    AgentConfigV1,
+    AgentConfigV2Patch,
+)
 from app.tenants.config_resolver import EffectiveConfig, resolve_effective_config
 from app.tenants.config_standard import AgentConfigStandard
 from app.tenants.field_policy import AGENT_REQUIRED_FIELDS
@@ -600,49 +604,67 @@ async def update_agent(
 ) -> AgentResponse:
     """Partially update an agent. Only provided fields are updated.
 
-    TRANSITIONAL (design.md D7's "route config fields through revisions" item):
-    a successful update also creates a new AgentConfigRevision (source="api")
-    snapshotting the agent's post-update columns, so the revision history never
-    misses a change made through this legacy column-editing endpoint. This does
-    not change this endpoint's request/response contract.
+    TRANSITIONAL (design.md D7's "route config fields through revisions" item,
+    updated for 1b's sparse V2 model): any changed field that belongs to
+    AgentConfigV2 (design.md D18 agent_required/overridable fields) is routed
+    through the same sparse-patch path as PATCH .../config, so inheritance is
+    preserved instead of re-pinning every field as an explicit agent override.
+    Non-config columns (name, slug, is_active, tool_config, etc.) keep being
+    updated directly. This does not change this endpoint's request/response
+    contract.
 
     Returns:
         200: Updated AgentResponse.
         404: If client or agent does not exist.
+        422: If a changed config field sets a locked/client_only value, or
+             removes a previously-set agent_required field.
     """
     await _require_client(session, client_id)
+    agent = await _require_agent(session, client_id, agent_id)
 
     update_data = payload.model_dump(exclude_unset=True)
     # Track which fields are being changed (for sync trigger decision)
     changed_fields = set(update_data.keys())
+    config_fields = changed_fields & ALLOWED_AGENT_OVERRIDE_FIELDS
+    non_config_data = {k: v for k, v in update_data.items() if k not in config_fields}
 
-    # Serialize tools_enabled list to JSON string for DB storage
-    if "tools_enabled" in update_data and isinstance(
-        update_data["tools_enabled"], list
-    ):
-        update_data["tools_enabled"] = json.dumps(update_data["tools_enabled"])
+    # Validate + write the config part FIRST (design.md D18's sparse-patch
+    # path) so a 422 here leaves no column change applied at all.
+    if config_fields:
+        patch = {k: update_data[k] for k in config_fields}
+        try:
+            await revisions_service.create_agent_config_revision(
+                session,
+                agent=agent,
+                patch=patch,
+                source="api",
+                created_by=caller.email or "api",
+                note="legacy PATCH /agents/{agent_id}",
+            )
+        except revisions_service.AgentConfigWriteError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "invalid_config", "fields": exc.fields, "detail": str(exc)},
+            ) from exc
+
+        effective = await _resolve_effective_for_agent(session, agent)
+        _mirror_effective_config_to_agent(agent, effective)
+
     # Serialize tool_config dict to JSON string for DB storage
-    if "tool_config" in update_data and isinstance(update_data["tool_config"], dict):
-        update_data["tool_config"] = json.dumps(update_data["tool_config"])
-    agent = await tenant_service.update_agent(
-        session, agent_id, client_id, **update_data
-    )
-    if agent is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "agent not found", "agent_id": agent_id},
-        )
+    if "tool_config" in non_config_data and isinstance(
+        non_config_data["tool_config"], dict
+    ):
+        non_config_data["tool_config"] = json.dumps(non_config_data["tool_config"])
 
-    if changed_fields:
-        config = _agent_config_snapshot(agent)
-        await revisions_service.create_revision(
-            session,
-            agent=agent,
-            config=config,
-            source="api",
-            created_by=caller.email or "api",
-            note="legacy PATCH /agents/{agent_id}",
+    if non_config_data:
+        agent = await tenant_service.update_agent(
+            session, agent_id, client_id, **non_config_data
         )
+        if agent is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "agent not found", "agent_id": agent_id},
+            )
 
     await session.commit()
     await session.refresh(agent)
