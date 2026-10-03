@@ -348,8 +348,11 @@ async def test_build_voice_context_lead_profile_contains_lead_name():
 
 
 @pytest.mark.asyncio
-async def test_build_voice_context_skips_lead_profile_when_filesystem_prompt_has_lead_placeholders():
-    """Effective filesystem prompt lead placeholders suppress duplicate lead_profile."""
+async def test_build_voice_context_skips_lead_profile_when_effective_prompt_has_lead_placeholders():
+    """Effective prompt template (active revision or filesystem fallback) with lead
+    placeholders suppresses duplicate lead_profile (design.md D6 — the guard reads
+    get_effective_system_prompt_template(), the same seam render_for_agent() uses).
+    """
     from app.voice.context import build_voice_context
 
     lead = make_lead(name="María López", car_make="Honda", car_model="Civic", car_year=2020)
@@ -362,7 +365,7 @@ async def test_build_voice_context_skips_lead_profile_when_filesystem_prompt_has
         mock_instance.render_for_agent = AsyncMock(return_value="Hola María López")
         mock_instance.load_agent_skills = AsyncMock(return_value="")
         mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
-        mock_instance.load_agent_system_prompt = AsyncMock(
+        mock_instance.get_effective_system_prompt_template = AsyncMock(
             return_value="Hola {{lead_name}}, auto {{car_make}}"
         )
 
@@ -392,7 +395,7 @@ async def test_build_voice_context_keeps_misc_notes_as_single_channel():
         mock_instance.render_for_agent = AsyncMock(return_value="prompt")
         mock_instance.load_agent_skills = AsyncMock(return_value="")
         mock_instance.load_skill_registry_entries = AsyncMock(return_value=[])
-        mock_instance.load_agent_system_prompt = AsyncMock(return_value=None)
+        mock_instance.get_effective_system_prompt_template = AsyncMock(return_value=None)
 
         result = await build_voice_context(
             agent=agent,

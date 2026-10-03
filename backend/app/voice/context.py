@@ -332,10 +332,15 @@ async def build_voice_context(
         profile_facts_count=len(profile_facts_block.splitlines()) if profile_facts_block else 0,
     )
 
-    # Track whether the effective prompt template uses lead vars. Filesystem
-    # prompts are canonical; agent.system_prompt is only the legacy fallback.
+    # Track whether the effective prompt template uses lead vars. The active
+    # revision's system_prompt is canonical (design.md D6); filesystem/
+    # agent.system_prompt are only fallbacks reached via the same seam
+    # render_for_agent() uses, so this guard never diverges from what was
+    # actually rendered.
     try:
-        effective_prompt_template = await loader.load_agent_system_prompt(client_id, agent_slug)
+        effective_prompt_template = await loader.get_effective_system_prompt_template(
+            agent, db
+        )
     except Exception as exc:  # noqa: BLE001 - duplicate guard should not block calls
         logger.warning(
             "voice_context_effective_prompt_load_failed",

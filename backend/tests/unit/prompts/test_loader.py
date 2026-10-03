@@ -1500,3 +1500,118 @@ async def test_build_variables_with_lead_none_does_not_call_get_all(tmp_path: Pa
 
     mock_get_all.assert_not_called()
     assert result["lead_name"] == "el cliente"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 (agent-config-revisions-routing) — render_for_agent reads the active
+# revision instead of the filesystem system-prompt.md at runtime (design.md D6).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_render_for_agent_reads_active_revision_system_prompt(
+    seeded_db_loader, tmp_path
+):
+    """An agent whose active revision's system_prompt differs from its filesystem
+    system-prompt.md renders the REVISION's content, not the file's (task 3.1).
+
+    Uses the real quintana-seguros clients dir, which has a real jaumpablo
+    system-prompt.md on disk, to prove the revision wins over the file.
+    """
+    import pathlib
+
+    from app.prompts.loader import PromptLoader
+    from app.tenants import revisions_service
+    from app.tenants.agent_config_schema import AgentConfigV1
+    from app.tenants.service import build_agent_config_v1_snapshot, get_default_agent
+
+    real_clients_dir = pathlib.Path(__file__).parent.parent.parent.parent / "clients"
+    loader = PromptLoader(clients_dir=real_clients_dir)
+    client = make_client(client_id="quintana-seguros")
+
+    assert seeded_db_loader.async_session_factory is not None
+    async with seeded_db_loader.async_session_factory() as sess:
+        agent = await get_default_agent(sess, "quintana-seguros")
+        assert agent is not None
+
+        revision_prompt = "REVISION PROMPT: hola {{lead_name}}, distinto del archivo."
+        config = AgentConfigV1(
+            **{
+                **build_agent_config_v1_snapshot(agent, revision_prompt),
+            }
+        )
+        await revisions_service.create_revision(
+            sess,
+            agent=agent,
+            config=config,
+            source="api",
+            created_by="test",
+        )
+
+        result = await loader.render_for_agent(agent, None, db=sess, client=client)
+
+    assert "REVISION PROMPT" in result
+    assert "distinto del archivo" in result
+    assert "VENDER" not in result, (
+        "filesystem jaumpablo/system-prompt.md content must NOT be used when an "
+        "active revision is present"
+    )
+
+
+@pytest.mark.asyncio
+async def test_render_for_agent_backfills_missing_active_revision_and_logs_warning(
+    tmp_path: Path,
+):
+    """Self-healing: an agent with no active revision at runtime gets one created
+    and activated on the fly, from current Agent columns (no filesystem file in
+    this isolated tmp_path), and a warning is logged (task 3.1).
+    """
+    from structlog.testing import capture_logs
+
+    from app.core.config import Settings
+    from app.core import database as db_module
+    from app.prompts.loader import PromptLoader
+    from pydantic import SecretStr
+    from tests.helpers.migrations import init_db_with_migrations
+
+    settings = Settings(
+        openai_api_key=SecretStr("sk-test"),
+        elevenlabs_api_key=SecretStr("el-test"),
+        database_url=f"sqlite+aiosqlite:///{tmp_path}/backfill_test.db",
+    )
+    await init_db_with_migrations(db_module, settings)
+
+    assert db_module.async_session_factory is not None
+    try:
+        async with db_module.async_session_factory() as sess:
+            from app.tenants.service import create_client, get_default_agent
+
+            await create_client(
+                sess,
+                id="backfill-client",
+                name="Backfill Client",
+                voice_id="voice-backfill",
+            )
+            agent = await get_default_agent(sess, "backfill-client")
+            assert agent is not None
+            agent.system_prompt = "Legacy DB prompt for backfill test."
+            agent.active_revision_id = None  # simulate a pre-existing agent with no revision
+            await sess.flush()
+
+            client = make_client(client_id="backfill-client")
+            loader = PromptLoader(clients_dir=tmp_path)  # no filesystem file here
+
+            with capture_logs() as cap:
+                result = await loader.render_for_agent(agent, None, db=sess, client=client)
+
+            assert "Legacy DB prompt for backfill test." in result
+            assert agent.active_revision_id is not None, (
+                "render_for_agent must backfill active_revision_id, never silently "
+                "read the file/column without persisting a revision"
+            )
+            assert any(
+                entry.get("event") == "agent_config_revision_missing_backfilled"
+                for entry in cap
+            ), f"expected agent_config_revision_missing_backfilled warning, got: {cap}"
+    finally:
+        await db_module.close_db()

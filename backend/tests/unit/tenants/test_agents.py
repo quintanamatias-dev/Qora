@@ -158,6 +158,45 @@ async def test_duplicate_default_raises(session: AsyncSession):
         )
 
 
+async def test_create_agent_activates_revision_1(session: AsyncSession):
+    """Phase 3 invariant: create_agent() creates + activates revision 1 for every
+    new agent, even when system_prompt is None (coerced to '' in the snapshot),
+    so every agent has a non-null active_revision_id at creation time.
+    """
+    from app.tenants.models import AgentConfigRevision
+    from app.tenants.service import create_agent
+
+    client = await _make_client(session, "broker-revision-check")
+
+    agent = await create_agent(
+        session,
+        client_id=client.id,
+        slug="revision-agent",
+        name="Revision Agent",
+        voice_id="voice-rev",
+    )
+
+    assert agent.active_revision_id is not None
+    revision = await session.get(AgentConfigRevision, agent.active_revision_id)
+    assert revision is not None
+    assert revision.revision_number == 1
+    assert revision.source == "api"
+    assert revision.created_by == "system"
+
+
+async def test_create_client_bootstrapped_agent_has_active_revision(session: AsyncSession):
+    """create_client() auto-creates a default Agent that also has an active revision
+    (create_client delegates to create_agent internally).
+    """
+    from app.tenants.service import get_default_agent
+
+    await _make_client(session, "broker-client-revision-check")
+
+    agent = await get_default_agent(session, "broker-client-revision-check")
+    assert agent is not None
+    assert agent.active_revision_id is not None
+
+
 async def test_two_clients_can_each_have_default(session: AsyncSession):
     """Two different clients may each have their own is_default=True agent.
 

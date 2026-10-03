@@ -31,25 +31,40 @@ def _resolve_seed_system_prompt(
     return db_system_prompt
 
 
-async def _ensure_active_revision(session: AsyncSession, agent: Agent) -> None:
-    """Create + activate a seeded revision 1 for *agent* if it has none yet.
+async def _ensure_active_revision(
+    session: AsyncSession,
+    agent: Agent,
+    *,
+    source: revisions_service.RevisionSource = "import",
+    created_by: str = "system",
+    note: str | None = None,
+) -> None:
+    """Create + activate revision 1 for *agent* if it has none yet.
 
     Idempotent: a no-op when agent.active_revision_id is already set.
+    Defaults (source='import', note='seeded revision 1 ...') preserve the
+    seeder call sites (seed_quintana/seed_qora_demo); create_agent() overrides
+    source/note since a freshly-created agent is an API write, not an import.
+
+    system_prompt falls back to '' (not None) when the agent has neither a
+    filesystem file nor a DB system_prompt yet — AgentConfigV1.system_prompt
+    has no safe None default, and a newly-created agent may legitimately have
+    no prompt until it is configured via PATCH.
     """
     if agent.active_revision_id is not None:
         return
 
     system_prompt = _resolve_seed_system_prompt(
         agent.client_id, agent.slug, agent.system_prompt
-    )
+    ) or ""
     config = AgentConfigV1(**build_agent_config_v1_snapshot(agent, system_prompt))
     await revisions_service.create_revision(
         session,
         agent=agent,
         config=config,
-        source="import",
-        created_by="system",
-        note="seeded revision 1 (seed_quintana/seed_qora_demo)",
+        source=source,
+        created_by=created_by,
+        note=note or "seeded revision 1 (seed_quintana/seed_qora_demo)",
     )
 
 
@@ -694,6 +709,18 @@ async def create_agent(
     )
     session.add(agent)
     await session.flush()
+
+    # agent-config-revisions-routing (D4): every agent must have an active
+    # revision. source='api' distinguishes an API-created agent from a
+    # source='import' bulk migration row; created_by='system' because no
+    # principal is threaded through this call today.
+    await _ensure_active_revision(
+        session,
+        agent,
+        source="api",
+        created_by="system",
+        note="initial revision created with the agent",
+    )
     return agent
 
 
