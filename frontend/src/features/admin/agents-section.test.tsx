@@ -399,7 +399,8 @@ describe('AgentsSection effective config', () => {
     await waitFor(() => {
       expect(capturedBody).not.toBeNull()
     })
-    expect(capturedBody?.goal).toBe('Qualify leads for auto insurance')
+    const body = capturedBody as Record<string, unknown> | null
+    expect(body?.goal).toBe('Qualify leads for auto insurance')
   })
 
   it('renders a provenance badge per config field in the edit form', async () => {
