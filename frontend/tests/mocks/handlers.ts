@@ -349,7 +349,6 @@ const agentsFixture: Agent[] = [
     system_prompt: 'You are a helpful insurance agent.',
     tools_enabled: ['get_lead_details', 'register_interest'],
     is_active: true,
-    is_default: true,
     created_at: '2026-01-01T00:00:00Z',
     // ElevenLabs binding + readiness
     elevenlabs_agent_id: 'el_demo_abc123',
@@ -375,7 +374,6 @@ const agentsFixture: Agent[] = [
     system_prompt: null,
     tools_enabled: ['get_lead_details'],
     is_active: true,
-    is_default: false,
     created_at: '2026-01-10T00:00:00Z',
     // Not yet configured
     elevenlabs_agent_id: null,
@@ -658,7 +656,6 @@ export const handlers = [
       system_prompt: body.system_prompt ?? null,
       tools_enabled: body.tools_enabled ?? [],
       is_active: true,
-      is_default: false,
       created_at: new Date().toISOString(),
       elevenlabs_agent_id: body.elevenlabs_agent_id ?? null,
       knowledge_base: body.knowledge_base ?? null,
@@ -688,13 +685,6 @@ export const handlers = [
     const agent = agentsFixture.find((a) => a.agent_id === params.agentId)
     if (!agent) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
     return HttpResponse.json({ ...agent, is_active: false })
-  }),
-
-  // POST /api/v1/clients/:clientId/agents/:agentId/make-default
-  http.post('/api/v1/clients/:clientId/agents/:agentId/make-default', ({ params }) => {
-    const agent = agentsFixture.find((a) => a.agent_id === params.agentId)
-    if (!agent) return HttpResponse.json({ detail: 'Not found' }, { status: 404 })
-    return HttpResponse.json({ ...agent, is_default: true })
   }),
 
   // GET /api/v1/calls/metrics — returns 500 for error-client, fixture for others
