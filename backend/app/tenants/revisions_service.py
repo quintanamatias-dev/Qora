@@ -247,6 +247,22 @@ class AgentConfigWriteError(ValueError):
         self.fields = fields
 
 
+def decode_agent_revision_config(revision: AgentConfigRevision) -> dict[str, Any]:
+    """Decode a stored agent revision's config JSON into a plain dict.
+
+    Works uniformly for both a V1 full snapshot and a V2 sparse-override set:
+    strips schema_version and returns whatever keys are present in the stored
+    JSON (every field for V1, only the overridden ones for V2). Callers that
+    need an agent's effective system_prompt specifically must still fall back
+    to the materialized agent.system_prompt column when the key is absent —
+    system_prompt is agent_required but a V2 revision may omit it for a
+    grandfathered agent (design.md D18).
+    """
+    data: dict[str, Any] = json.loads(revision.config)
+    data.pop("schema_version", None)
+    return data
+
+
 def _decode_agent_overrides(revision: AgentConfigRevision | None) -> dict[str, Any]:
     """Build the sparse agent-overrides dict to merge the next patch over.
 
