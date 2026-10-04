@@ -51,3 +51,16 @@ Everything ships in ONE release (see the rollout constraint above):
 4. Re-sync both ElevenLabs agents (PATCH `/agents/{id}/config` with a no-op note, or the existing sync trigger). Then GET from ElevenLabs: `custom_llm.url` = `/api/v1/voice/{client}/agents/{agent_id}/custom-llm`, and its secrets and headers are intact.
 5. ElevenLabs simulate-conversation against agent_3001… (Quintana) and agent_4701… (demo); both must answer with their own prompt.
 6. Rollback: PATCH both ElevenLabs agents back to the legacy client URL, then redeploy the previous image. Downgrading the migrations is not needed: they are additive.
+
+## Production rollout — DONE (2026-10-03)
+
+Rolled out together with phases 1b-6 (see odd/tasks/config-phase1b.md):
+- The first deploy failed at the frontend build (`tsc -b` type-checks the test mocks). Fixed in PR #188.
+- Deploy 10ab9346: migrations 0014-0027 OK, health 200.
+- Live bug: a V2 revision broke the voice prompt loader. Mitigated with a rollback, fixed in PR #189, deploy b75cd7ba.
+- The ElevenLabs sync was rejected without `llm` (400). Also fixed in #189.
+- Juanma (`leads-agent` ↔ agent_3001) is on the agent-scoped URL with revision 4 (v2, goal set, synced). The reconciler reports in_sync. simulate-conversation works, including end_call.
+- Deleted the ElevenLabs demo agent agent_4701 (backup JSON in ~/Developer/qora-secrets). Removed the Railway variables ELEVENLABS_AGENT_ID, ELEVENLABS_VOICE_ID and QORA_DEMO_*.
+- Airtable secret imported into the encrypted table (`secret_source=db`). The master key copy is at ~/Developer/qora-secrets/qora-prod-master-key.env.
+
+Next cleanup release: delete crm.yaml and the skill files (already imported), remove the legacy custom-LLM routes and CRMConfigLoader, drop `agents.is_default` and the DEPRECATED Client columns.
