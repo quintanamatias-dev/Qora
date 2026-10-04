@@ -977,3 +977,82 @@ async def test_sync_agent_config_flags_drift_when_custom_llm_url_differs():
     assert isinstance(result, SyncResult)
     assert result.outcome == "drift"
     assert any("custom_llm.url" in f for f in result.drift_fields)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_sync_agent_config_sets_llm_to_custom_llm_alongside_custom_llm_block():
+    """ElevenLabs rejects a PATCH that sets prompt.custom_llm without also
+    setting prompt.llm = "custom-llm" (400: 'custom_llm can only be set if
+    llm is set to CUSTOM_LLM'). The precondition for this override path is
+    that the live agent ALREADY uses custom-llm, so writing prompt.llm back
+    is always correct here and must not be flagged as drift.
+    """
+    import json as _json
+
+    from app.elevenlabs.service import ElevenLabsService, SyncResult
+
+    agent = _make_agent(
+        elevenlabs_agent_id="el-abc123",
+        soft_timeout_seconds=None,
+        soft_timeout_message=None,
+        soft_timeout_use_llm=None,
+        client_id="quintana-seguros",
+        agent_db_id="leads-agent-id",
+    )
+    settings = _make_settings(public_base_url="https://qora-app-production.up.railway.app")
+
+    pre_patch_config = {
+        "conversation_config": {
+            "agent": {
+                "prompt": {
+                    "llm": "custom-llm",
+                    "custom_llm": {"url": "https://old-host/custom-llm"},
+                }
+            }
+        }
+    }
+
+    expected_url = (
+        "https://qora-app-production.up.railway.app/api/v1/voice/"
+        "quintana-seguros/agents/leads-agent-id/custom-llm"
+    )
+    post_patch_config = {
+        "conversation_config": {
+            "agent": {
+                "prompt": {"llm": "custom-llm", "custom_llm": {"url": expected_url}}
+            }
+        }
+    }
+
+    captured: dict = {}
+    get_call_count = {"n": 0}
+
+    def _get_side_effect(request):
+        get_call_count["n"] += 1
+        if get_call_count["n"] == 1:
+            return httpx.Response(200, json=pre_patch_config)
+        return httpx.Response(200, json=post_patch_config)
+
+    respx.get("https://api.elevenlabs.io/v1/convai/agents/el-abc123").mock(
+        side_effect=_get_side_effect
+    )
+
+    def _patch_capture(request):
+        captured["body"] = _json.loads(request.content)
+        return httpx.Response(200, json={"ok": True})
+
+    respx.patch("https://api.elevenlabs.io/v1/convai/agents/el-abc123").mock(
+        side_effect=_patch_capture
+    )
+
+    service = ElevenLabsService(settings=settings)
+    result = await service.sync_agent_config(agent)
+
+    prompt = captured["body"]["conversation_config"]["agent"]["prompt"]
+    assert prompt["llm"] == "custom-llm"
+    assert "custom_llm" in prompt
+    assert isinstance(result, SyncResult)
+    assert result.outcome == "synced", (
+        f"writing prompt.llm back must not be flagged as drift, got: {result}"
+    )

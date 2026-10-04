@@ -239,14 +239,15 @@ class PromptLoader:
                 )
 
             if agent.active_revision_id is not None:
-                from app.tenants.agent_config_schema import AgentConfigV1
                 from app.tenants.models import AgentConfigRevision
+                from app.tenants.revisions_service import decode_agent_revision_config
 
                 revision = await db.get(AgentConfigRevision, agent.active_revision_id)
                 if revision is not None:
-                    config = AgentConfigV1.model_validate_json(revision.config)
-                    if config.system_prompt:
-                        return config.system_prompt
+                    config = decode_agent_revision_config(revision)
+                    system_prompt = config.get("system_prompt") or agent.system_prompt
+                    if system_prompt:
+                        return system_prompt
 
         client_id = getattr(agent, "client_id", None) or "unknown"
         agent_slug = getattr(agent, "slug", None)

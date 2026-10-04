@@ -1615,3 +1615,85 @@ async def test_render_for_agent_backfills_missing_active_revision_and_logs_warni
             ), f"expected agent_config_revision_missing_backfilled warning, got: {cap}"
     finally:
         await db_module.close_db()
+
+
+# ---------------------------------------------------------------------------
+# prod-v2-revisions-el-sync Bug 1 — get_effective_system_prompt_template must
+# be version-aware: AgentConfigV1.model_validate_json(revision.config) raises
+# ValidationError on a V2 sparse-override revision (schema_version "v2").
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_render_for_agent_reads_v2_revision_system_prompt_override(
+    seeded_db_loader, tmp_path
+):
+    """An agent whose active revision is a V2 sparse override (created through
+    the real PATCH /config path) with system_prompt set renders that override,
+    instead of raising ValidationError for 'Input should be v1'.
+    """
+    from app.prompts.loader import PromptLoader
+    from app.tenants import revisions_service
+    from app.tenants.service import resolve_single_active_agent
+
+    loader = PromptLoader(clients_dir=tmp_path)  # no filesystem file here
+    client = make_client(client_id="quintana-seguros")
+
+    assert seeded_db_loader.async_session_factory is not None
+    async with seeded_db_loader.async_session_factory() as sess:
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
+        assert agent is not None
+
+        await revisions_service.create_agent_config_revision(
+            sess,
+            agent=agent,
+            patch={"system_prompt": "V2 OVERRIDE PROMPT for {{lead_name}}."},
+            source="api",
+            created_by="test",
+        )
+        await sess.flush()
+
+        result = await loader.get_effective_system_prompt_template(agent, db=sess)
+
+    assert result is not None
+    assert "V2 OVERRIDE PROMPT" in result
+
+
+@pytest.mark.asyncio
+async def test_render_for_agent_v2_revision_without_system_prompt_falls_back_to_materialized(
+    seeded_db_loader, tmp_path
+):
+    """A V2 revision that omits system_prompt (grandfathered agent, design.md
+    D18) falls back to the materialized agent.system_prompt column instead of
+    raising or returning None.
+    """
+    import json
+
+    from app.prompts.loader import PromptLoader
+    from app.tenants.models import AgentConfigRevision
+    from app.tenants.service import resolve_single_active_agent
+
+    loader = PromptLoader(clients_dir=tmp_path)  # no filesystem file here
+
+    assert seeded_db_loader.async_session_factory is not None
+    async with seeded_db_loader.async_session_factory() as sess:
+        agent = await resolve_single_active_agent(sess, "quintana-seguros")
+        assert agent is not None
+        agent.system_prompt = "MATERIALIZED FALLBACK PROMPT."
+
+        revision = AgentConfigRevision(
+            id="grandfathered-v2-no-prompt",
+            agent_id=agent.id,
+            revision_number=999,
+            config=json.dumps({"schema_version": "v2"}),
+            schema_version="v2",
+            source="api",
+            created_by="test",
+        )
+        sess.add(revision)
+        agent.active_revision_id = revision.id
+        await sess.flush()
+
+        result = await loader.get_effective_system_prompt_template(agent, db=sess)
+
+    assert result == "MATERIALIZED FALLBACK PROMPT."

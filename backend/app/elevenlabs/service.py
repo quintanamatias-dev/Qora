@@ -971,6 +971,11 @@ async def _apply_custom_llm_url_override(
         cc["agent"] = {}
     if "prompt" not in cc["agent"]:
         cc["agent"]["prompt"] = {}
+    # ElevenLabs rejects custom_llm unless llm is explicitly "custom-llm" too
+    # (400: "custom_llm can only be set if llm is set to CUSTOM_LLM"). Safe to
+    # set unconditionally here since current_prompt.get("llm") == "custom-llm"
+    # is already this function's precondition (checked above).
+    cc["agent"]["prompt"]["llm"] = "custom-llm"
     cc["agent"]["prompt"]["custom_llm"] = new_custom_llm
 
     return payload
